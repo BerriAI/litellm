@@ -6,12 +6,14 @@ Includes file_search emulation: the flag must be forwarded on inner aresponses
 calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 """
 
+import json
 from importlib import import_module
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -188,6 +190,104 @@ class TestUseResponsesApiBridgeFlag:
         assert mock_acompletion.call_args.kwargs.get("allowed_openai_params") == [
             "reasoning_effort"
         ]
+
+    @pytest.mark.parametrize(
+        ("provider_config", "allowed_openai_params", "expected_chat_template_kwargs"),
+        [
+            pytest.param(litellm.OpenAIResponsesAPIConfig(), None, None, id="native-config-drops-unknown-param"),
+            pytest.param(
+                litellm.OpenAIResponsesAPIConfig(),
+                ["chat_template_kwargs"],
+                {"thinking": True},
+                id="native-config-keeps-allowed-param",
+            ),
+            pytest.param(None, None, {"thinking": True}, id="no-native-config-keeps-passthrough"),
+        ],
+    )
+    @patch.object(import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config")
+    def test_bridge_forwards_same_params_as_native_dispatch(
+        self,
+        mock_get_config,
+        provider_config,
+        allowed_openai_params,
+        expected_chat_template_kwargs,
+        respx_mock: respx.MockRouter,
+    ):
+        """A deployment-supplied provider-specific kwarg (``chat_template_kwargs``) reaches the
+        provider through the bridge only when the native Responses path would forward it too:
+        never for a provider with a native config, unless the caller allowed it explicitly, and
+        always for a provider without one, whose only Responses path is the bridge."""
+        mock_get_config.return_value = provider_config
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-custom-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        response: Final = litellm.responses(
+            model="openai/my-custom-model",
+            input="Hello",
+            use_chat_completions_api=True,
+            allowed_openai_params=allowed_openai_params,
+            chat_template_kwargs={"thinking": True},
+            drop_params=True,
+            api_key="fake-openai-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert request_body.get("chat_template_kwargs") == expected_chat_template_kwargs
+        assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_keeps_deployment_credentials_while_dropping_unknown_params(self, respx_mock: respx.MockRouter):
+        """Azure has a native Responses config, so its bridged request drops the unknown param but still
+        authenticates with the deployment credential, which the native path reads from the same kwargs."""
+        upstream: Final = respx_mock.post(
+            "https://example-resource.openai.azure.com/openai/deployments/my-deployment/chat/completions",
+            params={"api-version": "2024-10-21"},
+        ).mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-deployment",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        litellm.responses(
+            model="azure/my-deployment",
+            input="Hello",
+            use_chat_completions_api=True,
+            api_base="https://example-resource.openai.azure.com",
+            api_version="2024-10-21",
+            azure_ad_token="fake-azure-ad-token",
+            chat_template_kwargs={"thinking": True},
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        request: Final = upstream.calls[0].request
+        assert request.headers["authorization"] == "Bearer fake-azure-ad-token"
+        assert "chat_template_kwargs" not in json.loads(request.read())
 
     @patch.object(import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses")
     @patch.object(
