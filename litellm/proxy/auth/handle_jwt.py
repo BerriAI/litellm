@@ -51,7 +51,6 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry, global_agent_registry
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -62,6 +61,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.agents import AgentResponse
 
 from .auth_checks import (
     _allowed_routes_check,
@@ -126,6 +126,20 @@ class _UserInfoResponse(Protocol):
     """The OIDC UserInfo endpoint's HTTP response, read for the identity document it carries."""
 
     def json(self) -> dict[str, object]: ...
+
+
+class AgentLookup(Protocol):
+    """The registered-agent lookups a JWT agent claim is matched against."""
+
+    def get_agent_by_id(self, agent_id: str) -> AgentResponse | None: ...
+
+    def get_agent_by_name(self, agent_name: str) -> AgentResponse | None: ...
+
+
+def _global_agent_lookup() -> AgentLookup:
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    return global_agent_registry
 
 
 def _discovery_document(response: _OIDCDiscoveryResponse) -> _OIDCDiscoveryBody:
@@ -1424,7 +1438,7 @@ class JWTAuthManager:
     def resolve_agent_id(
         jwt_handler: JWTHandler,
         jwt_valid_token: Mapping[str, object],
-        agent_registry: AgentRegistry,
+        agent_registry: AgentLookup,
     ) -> str | None:
         agent_claim: Final = jwt_handler.get_agent_claim(token=jwt_valid_token)
         if agent_claim is None:
@@ -2237,7 +2251,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: dict | None = None,
         request_method: str | None = None,
-        agent_registry: AgentRegistry = global_agent_registry,
+        agent_registry: AgentLookup | None = None,
     ) -> JWTAuthBuilderResult:
         """Main authentication and authorization builder"""
         # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
@@ -2298,7 +2312,9 @@ class JWTAuthManager:
                 user_id = object_id
 
         agent_id: Final = JWTAuthManager.resolve_agent_id(
-            jwt_handler=jwt_handler, jwt_valid_token=jwt_valid_token, agent_registry=agent_registry
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_valid_token,
+            agent_registry=agent_registry if agent_registry is not None else _global_agent_lookup(),
         )
 
         # Check admin access
