@@ -13878,6 +13878,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
 
         if strategy == "simple-shuffle":
@@ -13910,6 +13911,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
         verbose_router_logger.info(
@@ -13987,6 +13989,11 @@ class Router:
                 model=model,
                 llm_provider="",
             )
+        pass_through_model_ids: Final = tuple(
+            deployment["model_info"]["id"]
+            for deployment in pass_through_deployments
+            if "id" in deployment.get("model_info", {})
+        )
 
         # 4. Apply health-check and cooldown filtering
         parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
@@ -14024,6 +14031,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=pass_through_model_ids,
             )
 
         # 6. Apply load balancing strategy
@@ -14057,6 +14065,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
 

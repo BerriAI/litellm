@@ -645,6 +645,7 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+    all_deployments_in_cooldown = "All deployments for selected model are in cooldown"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
     no_healthy_deployments = "There are no healthy deployments for this model"
@@ -868,6 +869,11 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
+class RouterErrorTypes(str, enum.Enum):
+    rate_limit_error = "rate_limit_error"
+    all_deployments_in_cooldown = "all_deployments_in_cooldown"
+
+
 class RouterRateLimitError(ValueError):
     def __init__(
         self,
@@ -875,12 +881,25 @@ class RouterRateLimitError(ValueError):
         cooldown_time: float,
         enable_pre_call_checks: bool,
         cooldown_list: list,
+        model_ids: Sequence[str] = (),
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
-        _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
+        self.type = (
+            RouterErrorTypes.all_deployments_in_cooldown.value
+            if self.all_deployments_in_cooldown
+            else RouterErrorTypes.rate_limit_error.value
+        )
+        _reason: Final = (
+            f" {RouterErrors.all_deployments_in_cooldown.value}." if self.all_deployments_in_cooldown else ""
+        )
+        _message: Final = (
+            f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds.{_reason} "
+            f"Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        )
         super().__init__(_message)
 
 
