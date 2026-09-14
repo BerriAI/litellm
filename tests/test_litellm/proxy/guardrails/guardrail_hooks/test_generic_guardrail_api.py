@@ -2002,3 +2002,71 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_tool_calls_from_service(generic_guardrail):
+    """A guardrail service may return modified tool_calls under
+    GUARDRAIL_INTERVENED; they must reach the caller's inputs (#41111)."""
+    modified_tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path": "/tmp/safe.txt"}'},
+        }
+    ]
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "texts": ["safe text"],
+        "tool_calls": modified_tool_calls,
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(generic_guardrail.async_handler, "post", new=AsyncMock(return_value=mock_response)):
+        inputs = {
+            "texts": ["original text"],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "/etc/passwd"}'},
+                }
+            ],
+        }
+        result = await generic_guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="response",
+        )
+
+    assert result["tool_calls"] == modified_tool_calls
+    assert result["texts"] == ["safe text"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_without_tool_calls_in_response_keeps_scanned_tools(generic_guardrail):
+    """No tool_calls in the guardrail response means no modification: the scanned
+    tool calls flow through unchanged and the modification key stays absent."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE"}
+    mock_response.raise_for_status = MagicMock()
+
+    scanned_tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path": "/etc/passwd"}'},
+        }
+    ]
+    with patch.object(generic_guardrail.async_handler, "post", new=AsyncMock(return_value=mock_response)):
+        inputs = {"texts": ["hello"], "tool_calls": scanned_tool_calls}
+        result = await generic_guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="response",
+        )
+
+    assert "tool_calls" not in result

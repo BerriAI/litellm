@@ -168,7 +168,9 @@ class GenericGuardrailAPI(CustomGuardrail):
     {
         "action": "BLOCKED" | "NONE" | "GUARDRAIL_INTERVENED",
         "blocked_reason": str (optional, only if action is BLOCKED),
-        "text": str (optional, modified text if action is GUARDRAIL_INTERVENED)
+        "text": str (optional, modified text if action is GUARDRAIL_INTERVENED),
+        "tool_calls": list (optional, modified tool calls in the same shape they
+            were sent, applied under GUARDRAIL_INTERVENED semantics)
     }
     """
 
@@ -336,6 +338,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
+        if guardrail_response.tool_calls:
+            return_inputs["tool_calls"] = guardrail_response.tool_calls
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs
