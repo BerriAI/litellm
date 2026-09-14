@@ -50,6 +50,7 @@ class _TinyfishLoggingPayload(NamedTuple):
         }
         return handler_result
 
+
 # asyncio tasks are weakly referenced by the loop; hold them until done or they can vanish mid-poll
 _BACKGROUND_BILLING_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: task registry
 
