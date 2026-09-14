@@ -81,8 +81,9 @@ def redact_response_for_custom_logger(result: object, custom_logger: CustomLogge
 
 
 def redact_model_call_details_for_custom_logger(
-    model_call_details: dict[str, object], custom_logger: CustomLogger
-) -> dict[str, object]:
+    model_call_details: dict[str, object],  # mutable-ok: logger hook payload
+    custom_logger: CustomLogger,
+) -> dict[str, object]:  # mutable-ok: logger hook payload
     opted_out: Final = (
         getattr(custom_logger, "message_logging", True) is not True
         or getattr(custom_logger, "turn_off_message_logging", False) is True
