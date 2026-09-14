@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-import json
 from typing import Final
 
-from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
+from ...fixtures import (
+    anthropic_response_body,
+    anthropic_stream_events,
+    aws_event_stream_response,
+    json_response,
+    sse_response,
+)
 from ...models import RouteFixture, RouteSpec, TraceScenario, TraceSuite
 
 COMMON_MAPPINGS: Final = (
@@ -24,6 +29,22 @@ COMMON_MAPPINGS: Final = (
     mapping(rust_span="execute_chat_completions_provider_call"),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
     mapping(rust_span="transform_response", python_frame=r"(?<!async_)transform_response$"),
+    mapping(span="python_logging_pre_call", python_frame=r"Logging\.pre_call$"),
+    mapping(span="python_logging_post_call", python_frame=r"Logging\.post_call$"),
+    mapping(span="python_success_callback", python_frame=r"Logging\.async_success_handler$|Logging\.success_handler$"),
+)
+
+STREAM_MAPPINGS: Final = (
+    mapping(span="python_stream_wrapper", python_frame=r"CustomStreamWrapper\.__init__$"),
+    mapping(span="python_stream_next", python_frame=r"CustomStreamWrapper\.__next__$|CustomStreamWrapper\.__anext__$"),
+    mapping(span="python_stream_chunk", python_frame=r"CustomStreamWrapper\.chunk_creator$"),
+    mapping(span="python_stream_finalize", python_frame=r"CustomStreamWrapper\._finalize_completed_stream$"),
+)
+
+FAILURE_MAPPINGS: Final = (
+    mapping(span="python_exception_mapping", python_frame=r"(?<!_)exception_type$"),
+    mapping(span="python_failure_callback", python_frame=r"Logging\.failure_handler$"),
+    mapping(span="python_async_failure_callback", python_frame=r"Logging\.async_failure_handler$"),
 )
 
 SYNC_MAPPINGS: Final = (
@@ -44,41 +65,23 @@ ASYNC_MAPPINGS: Final = (
 
 
 def _anthropic_fixture(engine: Engine, _base_url: str) -> RouteFixture:
-    response: Final = json.dumps(
-        {
-            "id": "msg_trace",
-            "type": "message",
-            "role": "assistant",
-            "model": "claude-sonnet-5",
-            "content": [{"type": "text", "text": "hello"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 2, "output_tokens": 3},
-        }
-    ).encode()
     return RouteFixture(
         kwargs={
             "model": "anthropic/claude-sonnet-5",
             "messages": [{"role": "user", "content": "hello"}],
             **({"optional_params": {"max_tokens": 16}} if engine == "rust" else {"max_tokens": 16}),
         },
-        provider_responses=(
-            RecordedHttpResponse.from_bytes(
-                200, (HttpHeader(name="content-type", value="application/json"),), response
-            ),
-        ),
+        provider_responses=(json_response(anthropic_response_body()),),
     )
 
 
 def _bedrock_fixture(engine: Engine, _base_url: str) -> RouteFixture:
-    response: Final = json.dumps(
-        {
-            "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
-            "stopReason": "end_turn",
-            "usage": {"inputTokens": 2, "outputTokens": 3, "totalTokens": 5},
-            "metrics": {"latencyMs": 1},
-        }
-    ).encode()
+    response: Final[dict[str, object]] = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 2, "outputTokens": 3, "totalTokens": 5},
+        "metrics": {"latencyMs": 1},
+    }
     credentials: Final = {
         "aws_access_key_id": "test-access",
         "aws_secret_access_key": "test-secret",
@@ -94,11 +97,60 @@ def _bedrock_fixture(engine: Engine, _base_url: str) -> RouteFixture:
                 else {**credentials, "max_tokens": 16}
             ),
         },
+        provider_responses=(json_response(response),),
+    )
+
+
+def _anthropic_stream_fixture(engine: Engine, _base_url: str) -> RouteFixture:
+    fixture: Final = _anthropic_fixture(engine, _base_url)
+    return fixture.derive(
+        kwargs={"stream": True},
+        provider_responses=(sse_response(anthropic_stream_events()),),
+        consume_stream=True,
+    )
+
+
+def _bedrock_stream_fixture(engine: Engine, _base_url: str) -> RouteFixture:
+    fixture: Final = _bedrock_fixture(engine, _base_url)
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockStart": {"contentBlockIndex": 0, "start": {}}},
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hello"}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {"metadata": {"usage": {"inputTokens": 2, "outputTokens": 1, "totalTokens": 3}}},
+    )
+    return fixture.derive(
+        kwargs={"stream": True},
+        provider_responses=(aws_event_stream_response(events),),
+        consume_stream=True,
+    )
+
+
+def _provider_error_fixture(engine: Engine, _base_url: str) -> RouteFixture:
+    fixture: Final = _anthropic_fixture(engine, _base_url)
+    return fixture.derive(
         provider_responses=(
-            RecordedHttpResponse.from_bytes(
-                200, (HttpHeader(name="content-type", value="application/json"),), response
+            json_response(
+                {"type": "error", "error": {"type": "invalid_request_error", "message": "bad request"}},
+                status=400,
             ),
         ),
+        expected_failure=True,
+    )
+
+
+def _stream_error_fixture(engine: Engine, base_url: str) -> RouteFixture:
+    fixture: Final = _anthropic_fixture(engine, base_url)
+    events: Final = (
+        anthropic_stream_events()[0],
+        ("error", {"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}}),
+    )
+    return fixture.derive(
+        kwargs={"stream": True},
+        provider_responses=(sse_response(events),),
+        expected_failure=True,
+        consume_stream=True,
     )
 
 
@@ -132,18 +184,64 @@ TRACE_SUITE: Final = TraceSuite(
     route=SPEC,
     scenarios=(
         TraceScenario(
-            name="anthropic",
+            name="sync-anthropic",
             fixture=_anthropic_fixture,
-            mappings=COMMON_MAPPINGS,
-            sync_mappings=SYNC_MAPPINGS,
-            async_mappings=ASYNC_MAPPINGS,
+            mappings=SYNC_MAPPINGS,
+            asynchronous=False,
         ),
         TraceScenario(
-            name="bedrock",
+            name="async-anthropic",
+            fixture=_anthropic_fixture,
+            mappings=ASYNC_MAPPINGS,
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-anthropic-stream",
+            fixture=_anthropic_stream_fixture,
+            mappings=(*SYNC_MAPPINGS, *STREAM_MAPPINGS),
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-anthropic-stream",
+            fixture=_anthropic_stream_fixture,
+            mappings=(*ASYNC_MAPPINGS, *STREAM_MAPPINGS),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="async-anthropic-provider-error",
+            fixture=_provider_error_fixture,
+            mappings=(*ASYNC_MAPPINGS, *FAILURE_MAPPINGS),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="async-anthropic-stream-error",
+            fixture=_stream_error_fixture,
+            mappings=(*ASYNC_MAPPINGS, *STREAM_MAPPINGS, *FAILURE_MAPPINGS),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-bedrock",
             fixture=_bedrock_fixture,
-            mappings=BEDROCK_COMMON_MAPPINGS,
-            sync_mappings=BEDROCK_SYNC_MAPPINGS,
-            async_mappings=BEDROCK_ASYNC_MAPPINGS,
+            mappings=BEDROCK_SYNC_MAPPINGS,
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-bedrock",
+            fixture=_bedrock_fixture,
+            mappings=BEDROCK_ASYNC_MAPPINGS,
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-bedrock-event-stream",
+            fixture=_bedrock_stream_fixture,
+            mappings=(*BEDROCK_SYNC_MAPPINGS, *STREAM_MAPPINGS),
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-bedrock-event-stream",
+            fixture=_bedrock_stream_fixture,
+            mappings=(*BEDROCK_ASYNC_MAPPINGS, *STREAM_MAPPINGS),
+            asynchronous=True,
         ),
     ),
 )
