@@ -8,7 +8,7 @@ and provide safe, sandboxed functionality for common guardrail operations.
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -16,7 +16,7 @@ from pydantic import JsonValue
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # =============================================================================
@@ -48,6 +48,31 @@ def block(reason: str, detection_info: Mapping[str, object] | None = None) -> di
     result: Final[dict[str, object]] = {"action": "block", "reason": reason}
     if detection_info:
         result["detection_info"] = detection_info
+    return result
+
+
+class FlagResult(TypedDict):
+    action: ReadOnly[Literal["flag"]]
+    reason: ReadOnly[str]
+    metadata: ReadOnly[Mapping[str, object]]
+
+
+def flag(reason: str, metadata: Mapping[str, object] | None = None) -> FlagResult:
+    """
+    Let the request/response proceed unchanged but record a non-blocking violation.
+
+    Args:
+        reason: Human-readable reason for flagging
+        metadata: Optional structured metadata stored alongside the reason
+
+    Returns:
+        Dict indicating the request should be flagged but allowed
+    """
+    result: Final[FlagResult] = {
+        "action": "flag",
+        "reason": reason,
+        "metadata": metadata if metadata is not None else {},
+    }
     return result
 
 
@@ -508,7 +533,7 @@ async def http_request(
 
 
 async def _execute_http_request(
-    client: Any,
+    client: AsyncHTTPHandler,
     method: str,
     url: str,
     headers: dict[str, str] | None,
@@ -787,6 +812,7 @@ def get_custom_code_primitives() -> dict[str, object]:
         # Result types
         "allow": allow,
         "block": block,
+        "flag": flag,
         "modify": modify,
         # Regex
         "regex_match": regex_match,

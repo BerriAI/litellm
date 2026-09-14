@@ -1,21 +1,25 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
+from importlib import import_module
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
+@contextmanager
+def _fake_redisvl_modules(semantic_cache_mock: MagicMock, custom_vectorizer_mock: MagicMock) -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(sys.modules, "redisvl.extensions.llmcache", MagicMock(SemanticCache=semantic_cache_mock))
+        mp.setitem(sys.modules, "redisvl.utils.vectorize", MagicMock(CustomTextVectorizer=custom_vectorizer_mock))
+        yield
+
 
 # Tests for RedisSemanticCache
 def test_redis_semantic_cache_initialization(monkeypatch):
     # Mock the redisvl import
     semantic_cache_mock = MagicMock()
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(CustomTextVectorizer=MagicMock()),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, MagicMock()):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         # Set environment variables
@@ -43,15 +47,7 @@ def test_redis_semantic_cache_get_cache(monkeypatch):
     semantic_cache_mock = MagicMock()
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         # Set environment variables
@@ -109,15 +105,7 @@ def test_redis_semantic_cache_rejects_unscoped_cache_hit(monkeypatch):
     semantic_cache_mock = MagicMock()
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -161,15 +149,7 @@ def test_redis_semantic_cache_set_cache_stores_cache_key_filter(monkeypatch):
     semantic_cache_mock = MagicMock()
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -209,15 +189,7 @@ def test_redis_semantic_cache_uses_isolated_index_for_old_schema(monkeypatch):
     )
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -251,15 +223,7 @@ def test_redis_semantic_cache_overwrites_stale_isolated_index(monkeypatch):
     )
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -291,15 +255,7 @@ def test_redis_semantic_cache_reraises_unexpected_isolated_index_error(monkeypat
     )
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -368,15 +324,15 @@ def test_redis_semantic_cache_builds_filter_expression(monkeypatch):
         def __eq__(self, value):
             return (self.field_name, value)
 
-    with patch.dict("sys.modules", {"redisvl.query.filter": MagicMock(Tag=FakeTag)}):
-        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+    monkeypatch.setitem(sys.modules, "redisvl.query.filter", MagicMock(Tag=FakeTag))
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
-        redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
 
-        assert redis_semantic_cache._get_cache_key_filter_expression("test_key") == (
-            RedisSemanticCache.CACHE_KEY_FIELD_NAME,
-            "test_key",
-        )
+    assert redis_semantic_cache._get_cache_key_filter_expression("test_key") == (
+        RedisSemanticCache.CACHE_KEY_FIELD_NAME,
+        "test_key",
+    )
 
 
 @pytest.mark.asyncio
@@ -385,15 +341,7 @@ async def test_redis_semantic_cache_async_get_cache(monkeypatch):
     semantic_cache_mock = MagicMock()
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         # Set environment variables
@@ -448,15 +396,7 @@ async def test_redis_semantic_cache_async_get_cache_rejects_unscoped_hit(monkeyp
     semantic_cache_mock = MagicMock()
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -498,15 +438,7 @@ async def test_redis_semantic_cache_async_set_cache_stores_cache_key_filter(
     semantic_cache_mock = MagicMock()
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -1254,15 +1186,7 @@ def test_redis_init_defers_redisvl_construction(monkeypatch):
     semantic_cache_mock = MagicMock()
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -1290,15 +1214,7 @@ def test_redis_failed_llmcache_build_is_not_memoized(monkeypatch):
     )
     custom_vectorizer_mock = MagicMock()
 
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
         from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
         monkeypatch.setenv("REDIS_HOST", "localhost")
@@ -1453,7 +1369,7 @@ def test_cache_forwards_semantic_cache_embedding_timeout():
     from litellm.caching.caching import Cache
     from litellm.types.caching import LiteLLMCacheType
 
-    with patch("litellm.caching.caching.RedisSemanticCache") as backend:
+    with patch.object(import_module("litellm.caching.caching"), "RedisSemanticCache") as backend:
         Cache(
             type=LiteLLMCacheType.REDIS_SEMANTIC,
             similarity_threshold=0.8,

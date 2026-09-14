@@ -323,5 +323,37 @@ describe("ViewUserDashboard", () => {
         expect(latest[2]).toBe(1);
       });
     });
+
+    it("sends the toolbar search as the combined search param instead of user_email", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      });
+
+      const searchedUserId = "a6f5c02b-0163-45ce-815f-f88d10e95686";
+      await user.type(screen.getByPlaceholderText("Search by email or ID…"), searchedUserId);
+
+      await waitFor(() => {
+        const latest = userListCall.mock.calls[userListCall.mock.calls.length - 1];
+        expect(latest[11]).toBe(searchedUserId);
+      });
+      const latest = userListCall.mock.calls[userListCall.mock.calls.length - 1];
+      expect(latest[1]).toBeNull();
+      expect(latest[4]).toBeNull();
+      expect(latest[2]).toBe(1);
+    });
+
+    it("replaces the previous rows with the loading state while the search request is pending", async () => {
+      renderDashboard();
+      expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+
+      userListCall.mockReturnValue(new Promise(() => undefined));
+      fireEvent.change(screen.getByPlaceholderText("Search by email or ID…"), { target: { value: "zzznomatch" } });
+
+      expect(await screen.findByText("Loading users…")).toBeInTheDocument();
+      expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+    });
   });
 });

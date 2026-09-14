@@ -1,6 +1,8 @@
 import fcntl
 import importlib.util
+import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -301,33 +303,47 @@ def test_held_slot_context_manager_releases_on_exit(tmp_path: Path, monkeypatch:
         fcntl.flock(probe, fcntl.LOCK_UN)
 
 
-def _make_rule(target: str) -> tuple[list[str], list[str]]:
-    database = subprocess.run(
-        ["make", "--dry-run", "--print-data-base", "info"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    lines = database.splitlines()
-    for index, line in enumerate(lines):
-        if line != f"{target}:" and not line.startswith(f"{target}: "):
-            continue
-        recipe: list[str] = []
-        for follower in lines[index + 1 :]:
-            if follower.startswith("#"):
-                continue
-            if not follower.startswith("\t"):
-                break
-            recipe.append(follower.strip())
-        return line.split(":", 1)[1].split(), recipe
-    raise AssertionError(f"target {target} not found in make database")
-
-
-def test_direct_make_lint_takes_a_slot_before_any_setup() -> None:
-    lint_prerequisites, lint_recipe = _make_rule("lint")
-    assert lint_prerequisites == []
-    assert any("$(GATE_SLOT_LOCK)" in line for line in lint_recipe)
-    inner_prerequisites, _ = _make_rule("lint-inner")
-    assert "lint-install" in inner_prerequisites
-    assert "lint-fetch-base" in inner_prerequisites
+def test_direct_make_lint_takes_a_slot_before_any_setup(tmp_path: Path) -> None:
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    events_file = tmp_path / "setup.jsonl"
+    stderr_file = tmp_path / "make.stderr"
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import fcntl, json, os, pathlib, sys\n"
+        "with (pathlib.Path(os.environ['LITELLM_GATE_SLOT_DIR']) / 'slot-0.lock').open('wb') as slot:\n"
+        "    try:\n"
+        "        fcntl.flock(slot, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "        locked = False\n"
+        "    except BlockingIOError:\n"
+        "        locked = True\n"
+        "with open(os.environ['EVENTS_FILE'], 'a') as events:\n"
+        "    events.write(json.dumps({'phase': sys.argv[1], 'locked': locked}) + '\\n')\n"
+        "if sys.argv[1] == 'base':\n"
+        "    print('HEAD')\n"
+    )
+    (tmp_path / "Makefile").write_text((ROOT / "Makefile").read_text())
+    command = [
+        "make", "-o", "lint-checks", "lint", "MAKE=make -o lint-checks",
+        f"GATE_SLOT_LOCK={shlex.join([sys.executable, str(HELPER)])}",
+        f"UV={shlex.join([sys.executable, str(probe), 'setup'])}",
+        f"UV_RUN={shlex.join([sys.executable, str(probe), 'setup'])}",
+        f"RESOLVE_BASE={shlex.join([sys.executable, str(probe), 'base'])}",
+    ]
+    with (lock_dir / "slot-0.lock").open("wb") as held, stderr_file.open("wb") as stderr:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        process = subprocess.Popen(
+            command, cwd=tmp_path, stdout=subprocess.DEVNULL, stderr=stderr,
+            env={**_env(lock_dir, "1"), "EVENTS_FILE": str(events_file)},
+        )
+        try:
+            assert _wait_until(lambda: "queueing" in stderr_file.read_text(), 10)
+            assert not events_file.exists()
+            fcntl.flock(held, fcntl.LOCK_UN)
+            assert process.wait(timeout=30) == 0, stderr_file.read_text()
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            _reap(process)
+    events = tuple(json.loads(line) for line in events_file.read_text().splitlines())
+    assert {event["phase"] for event in events} == {"setup", "base"}
+    assert all(event["locked"] for event in events)

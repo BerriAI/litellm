@@ -5,7 +5,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -87,7 +87,7 @@ class CheckBatchCost:
             return
         self.batch_processed_support_confirmed = True
 
-    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> Dict[str, Any]:
+    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> dict[str, str | None]:
         """
         Look up user email and key alias by user_id for enriching the S3 callback metadata.
         Returns a dict with user_api_key_user_email and user_api_key_alias (both may be None).
@@ -97,8 +97,10 @@ class CheckBatchCost:
         if not user_id:
             return {}
         try:
-            user_row = await self.prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
+            user_row: prisma_models.LiteLLM_UserTable | None = (
+                await self.prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": user_id}
+                )
             )
             if user_row is None:
                 return {}
@@ -115,8 +117,10 @@ class CheckBatchCost:
         if not api_key:
             return None
         try:
-            key_row = await self.prisma_client.db.litellm_verificationtoken.find_unique(
-                where={"token": api_key}
+            key_row: prisma_models.LiteLLM_VerificationToken | None = (
+                await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                    where={"token": api_key}
+                )
             )
             return getattr(key_row, "key_alias", None) if key_row is not None else None
         except Exception as e:
@@ -128,17 +132,53 @@ class CheckBatchCost:
         if not team_id:
             return None
         try:
-            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row: prisma_models.LiteLLM_TeamTable | None = (
+                await self.prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             return getattr(team_row, "team_alias", None) if team_row is not None else None
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
             return None
 
+    async def _get_org_id(self, job: "LiteLLM_ManagedObjectTable", batch_id: str) -> str | None:
+        org_id = getattr(job, "org_id", None)
+        if org_id:
+            return org_id
+        api_key = getattr(job, "api_key", None)
+        team_id = getattr(job, "team_id", None)
+        if api_key:
+            try:
+                key_row: prisma_models.LiteLLM_VerificationToken | None = (
+                    await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                        where={"token": api_key}
+                    )
+                )
+                key_org_id = getattr(key_row, "organization_id", None) if key_row is not None else None
+                if key_org_id:
+                    return key_org_id
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"CheckBatchCost: could not resolve the key's org for batch {batch_id}, "
+                    f"still trying the team's: {e}"
+                )
+        if not team_id:
+            return None
+        try:
+            team_row: prisma_models.LiteLLM_TeamTable | None = (
+                await self.prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
+            )
+            return getattr(team_row, "organization_id", None) if team_row is not None else None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not resolve the team's org for batch {batch_id}: {e}")
+            return None
+
     async def _build_creator_attribution_metadata(
         self, job: "LiteLLM_ManagedObjectTable", batch_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Rebuild the spend-tracking metadata for the key, team, and tags that created the
         batch so the batch-cost spend log is attributed the same way a non-batch request
@@ -147,14 +187,19 @@ class CheckBatchCost:
         user_api_key_alias; when it has no alias, or the key has since been rotated or
         deleted, the field keeps the creating user's alias that _get_user_info filled in,
         because a resolvable name is more useful on the spend row than a null.
+
+        user_api_key_org_id must be resolved here too: the spend update writer reads it
+        off this metadata to increment organization spend, so leaving it out silently
+        drops batch cost from org accounting for keys and teams that belong to one.
         """
         api_key = getattr(job, "api_key", None)
         team_id = getattr(job, "team_id", None)
         request_tags = getattr(job, "request_tags", None)
 
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, object] = {
             "user_api_key_user_id": job.created_by,
             "user_api_key": api_key,
+            "user_api_key_hash": api_key,
             "user_api_key_team_id": team_id,
             **(await self._get_user_info(batch_id, job.created_by)),
         }
@@ -165,6 +210,9 @@ class CheckBatchCost:
         team_alias = await self._get_team_alias(team_id)
         if team_alias is not None:
             metadata["user_api_key_team_alias"] = team_alias
+        org_id: Final = await self._get_org_id(job, batch_id)
+        if org_id is not None:
+            metadata["user_api_key_org_id"] = org_id
         if isinstance(request_tags, list) and request_tags:
             metadata["tags"] = [tag for tag in request_tags if isinstance(tag, str)]
 
@@ -634,7 +682,7 @@ class CheckBatchCost:
         from litellm.files.main import afile_content
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info, mask_api_base_credentials
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
         )
@@ -798,6 +846,7 @@ class CheckBatchCost:
             function_id=str(uuid.uuid4()),
         )
 
+        deployment_api_base: Final = deployment_info.litellm_params.api_base
         logging_obj.update_environment_variables(
             litellm_params={
                 # set the user-agent header so that S3 callback consumers can easily identify CheckBatchCost callbacks
@@ -806,9 +855,17 @@ class CheckBatchCost:
                         "user-agent": CHECK_BATCH_COST_USER_AGENT,
                     }
                 },
-                "metadata": await self._build_creator_attribution_metadata(job, batch_id),
+                **({"api_base": mask_api_base_credentials(deployment_api_base)} if deployment_api_base else {}),
+                "metadata": {
+                    **(await self._build_creator_attribution_metadata(job, batch_id)),
+                    # spend logs read the deployment identity off these metadata keys, so
+                    # without them the batch cost row carries no model_id or model_group
+                    "model_info": {"id": model_id},
+                    "model_group": deployment_info.model_name,
+                },
             },
             optional_params={},
+            custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
 
         if not await self._claim_job_for_costing(job):
@@ -826,6 +883,8 @@ class CheckBatchCost:
                 batch_models=batch_result.models,
                 batch_successful_requests=batch_result.successful_requests,
                 batch_failed_requests=batch_result.failed_requests,
+                batch_prompt_cost=batch_result.prompt_cost,
+                batch_completion_cost=batch_result.completion_cost,
             )
         except Exception:
             await self._release_job_claim(job)

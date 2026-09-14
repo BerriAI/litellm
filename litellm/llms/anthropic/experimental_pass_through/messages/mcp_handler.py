@@ -82,7 +82,7 @@ async def anthropic_messages_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    mcp_references, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
+    mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
 
     if not mcp_references:
         return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(

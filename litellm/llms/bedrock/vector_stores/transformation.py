@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
     BedrockKBResponse,
@@ -37,6 +38,14 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def __init__(self) -> None:
         BaseVectorStoreConfig.__init__(self)
         BaseAWSLLM.__init__(self)
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         return {}
@@ -203,7 +212,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = f"{api_base}/{encoded_vector_store_id}/retrieve"
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),
         }
 
@@ -288,7 +297,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         data_source_id: Final = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-document-{data_source_id}"
 
-    def _get_attributes_from_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+    def _get_attributes_from_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
         """
         Extract all attributes from Bedrock KB metadata.
         Returns a copy of the metadata dictionary.

@@ -143,7 +143,11 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                     )}
                   >
                     {({ id, value, onChange }) => (
-                      <BudgetDurationDropdown id={id} value={value ?? null} onChange={onChange} />
+                      <BudgetDurationDropdown
+                        id={id}
+                        value={value ?? null}
+                        onChange={(next) => onChange(next ?? undefined)}
+                      />
                     )}
                   </FormField>
                 </FieldGroup>

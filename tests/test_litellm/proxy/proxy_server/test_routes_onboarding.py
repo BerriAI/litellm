@@ -234,7 +234,7 @@ def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma):
         json={
             "invitation_link": "inv-123",
             "user_id": "user-abc",
-            "password": "hunter2",
+            "password": "Hunter2Strong!",
         },
         headers={"Authorization": f"Bearer {onboarding_jwt}"},
     )
@@ -260,7 +260,7 @@ def test_claim_onboarding_link_invalid_invite_401(client, monkeypatch, mock_pris
         json={
             "invitation_link": "missing",
             "user_id": "user-abc",
-            "password": "hunter2",
+            "password": "Hunter2Strong!",
         },
         headers={"Authorization": "Bearer irrelevant"},
     )
@@ -287,7 +287,7 @@ def test_claim_onboarding_link_user_id_mismatch_401(
         json={
             "invitation_link": "inv-123",
             "user_id": "user-attacker",
-            "password": "hunter2",
+            "password": "Hunter2Strong!",
         },
         headers={"Authorization": "Bearer irrelevant"},
     )
@@ -339,7 +339,7 @@ def test_claim_onboarding_link_bad_onboarding_jwt_401(
         json={
             "invitation_link": "inv-123",
             "user_id": "user-abc",
-            "password": "hunter2",
+            "password": "Hunter2Strong!",
         },
         headers={"Authorization": f"Bearer {bogus_jwt}"},
     )

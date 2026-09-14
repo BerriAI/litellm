@@ -32,11 +32,15 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
+from litellm.proxy.db.autorouter_session_rollup import (
+    AUTOROUTER_BENCHMARKS_SQL,
+    bounded_session_id,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
+from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
@@ -54,6 +58,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    AutoRouterSessionResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
     RequestComplexityRouterConfig,
@@ -484,6 +489,8 @@ class _SessionAggRow(BaseModel):
     total_tokens: int
     spend: float
     saved_spend: float
+    classifier_cost: float
+    classifier_cost_recorded_turns: int
     session_seconds: float
 
 
@@ -520,6 +527,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
         spend=row.spend,
         saved_spend=row.saved_spend,
+        classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
         saved_pct=_pct(row.saved_spend, baseline_spend),
         saved_per_session=row.saved_spend / sessions if sessions else 0.0,
@@ -552,6 +560,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         avg_tokens_per_session=totals.avg_tokens_per_session,
         spend=totals.spend,
         saved_spend=totals.saved_spend,
+        classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
         saved_per_session=totals.saved_per_session,
@@ -582,6 +591,8 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         total_tokens=sum(row.total_tokens for row in rows),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
+        classifier_cost=sum(row.classifier_cost for row in rows),
+        classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
     )
 
@@ -645,6 +656,7 @@ async def get_auto_router_benchmarks(
         str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
+    api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
 ) -> AutoRouterBenchmarksResponse:
     """
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
@@ -681,6 +693,7 @@ async def get_auto_router_benchmarks(
         AUTOROUTER_BENCHMARKS_SQL,
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
+        api_key,
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
     groups: Final = (
@@ -693,6 +706,51 @@ async def get_auto_router_benchmarks(
         routers_in_scope=len(groups),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
+    )
+
+
+@router.get(
+    "/auto_router/session",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=AutoRouterSessionResponse,
+)
+async def get_auto_router_session(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    session_id: Annotated[
+        str, Query(description="The client session id (x-*-session-id header) the turns were sent under")
+    ],
+) -> AutoRouterSessionResponse:
+    """
+    One auto-routed session, for the key that ran it: the model its last turn was routed to and the
+    session's spend against the router's savings baseline. Built for a coding agent's status line
+    or stop hook, so any virtual key may call it and only ever sees rows written under its own
+    key hash. Reads the LiteLLM_AutoRouterSession rollup, which the asynchronous spend flush
+    fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
+    id is bounded the way the writer bounded it, so an oversized client id still finds its row.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    row: Final = await AutoRouterSessionRepository(prisma_client).find_latest_for_key(
+        user_api_key_dict.api_key, bounded_session_id(session_id)
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
+        )
+    return AutoRouterSessionResponse(
+        session_id=session_id,
+        router_name=row.router_name,
+        router_type=row.router_type,
+        turns=row.turns,
+        last_model=row.last_model,
+        spend=row.spend,
+        saved_spend=row.saved_spend,
+        baseline_spend=row.spend + row.saved_spend,
+        baseline_model=row.baseline_model,
+        baseline_models=row.baseline_models,
     )
 
 
@@ -789,6 +847,26 @@ def _for_teams(team_ids: Sequence[str | None]) -> str:
     return f" for team {', '.join(named)}" if named else ""
 
 
+def _validate_model_scope(llm_router: "Router | None", models: Sequence[str]) -> None:
+    """Reject a scope naming a model no request on this proxy could carry, at start rather
+    than as a job that silently samples nothing. The question is "could any caller ask for
+    this name", not "does it resolve for the job's teams": a user target's traffic can arrive
+    on any team's key, so a team-public name is a legitimate scope for it, and an auto-router
+    is one too (a forward job on router A scoped to router B samples what B serves today).
+    Nothing here is ever dispatched to."""
+    unreachable: Final = tuple(
+        model
+        for model in models
+        if judge_target(llm_router, model).via == "nothing"
+        and (llm_router is None or model not in llm_router.team_public_model_names)
+    )
+    if unreachable:
+        raise HTTPException(
+            status_code=400,
+            detail="models not served by this proxy: " + ", ".join(f"'{model}'" for model in unreachable),
+        )
+
+
 _JUDGED_ROLES: Final[frozenset[StrategyRouterDependencyRole]] = frozenset({"tier", "default"})
 
 
@@ -833,7 +911,7 @@ def _judge_collisions_for_team(
     return tuple(
         (role, model)
         for role, model in (
-            *_router_arm_models(llm_router, data.router_name),
+            *(arm for name in data.router_names for arm in _router_arm_models(llm_router, name)),
             *((("baseline", data.baseline_model),) if data.baseline_model is not None else ()),
         )
         if judge & judge_target(llm_router, model, team_id).models
@@ -904,7 +982,7 @@ class _AttemptAggRow(BaseModel):
 
 _ATTEMPT_AGG_ROWS: Final = TypeAdapter(list[_AttemptAggRow])
 
-_ATTEMPT_AGG_SELECT: Final = """
+_ATTEMPT_AGG_COLUMNS: Final = """
     COUNT(*)::int AS turn_count,
     COUNT(*) FILTER (WHERE outcome = 'real')::int AS real_wins,
     COUNT(*) FILTER (WHERE outcome = 'shadow')::int AS shadow_wins,
@@ -913,14 +991,33 @@ _ATTEMPT_AGG_SELECT: Final = """
     COALESCE(SUM(real_cost + real_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS real_spend,
     COALESCE(SUM(shadow_cost + shadow_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS shadow_spend,
     COUNT(*) FILTER (WHERE real_cache_hit)::int AS cache_hit_turns
+"""
+
+_ATTEMPT_AGG_SELECT: Final = (
+    _ATTEMPT_AGG_COLUMNS
+    + """
 FROM "LiteLLM_ShadowEvalAttempt"
 WHERE job_id = ANY($1::text[]) AND outcome != 'error'
 GROUP BY 1
 """
+)
 
 _ATTEMPT_AGG_BY_TIER_SQL: Final = "SELECT COALESCE(tier, 'UNCLASSIFIED') AS grp," + _ATTEMPT_AGG_SELECT
 _ATTEMPT_AGG_BY_MODEL_SQL: Final = "SELECT COALESCE(real_model, 'unknown') AS grp," + _ATTEMPT_AGG_SELECT
 _ATTEMPT_AGG_BY_LEG_SQL: Final = "SELECT job_id AS grp," + _ATTEMPT_AGG_SELECT
+
+# Attempt rows from before arm stamping carry no router_name; they belong to the job's
+# own router, which the join reads off the leg.
+_ATTEMPT_AGG_BY_ROUTER_SQL: Final = (
+    "SELECT COALESCE(a.router_name, j.router_name) AS grp,"
+    + _ATTEMPT_AGG_COLUMNS
+    + """
+FROM "LiteLLM_ShadowEvalAttempt" a
+JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
+WHERE a.job_id = ANY($1::text[]) AND a.outcome != 'error'
+GROUP BY 1
+"""
+)
 
 # These guards derive spend from attempt rows, the cross-pod authority; the sampler also
 # reads the live counter, so admission can stop before a row-based guard would fire (safe
@@ -1060,6 +1157,8 @@ class _LegRow(BaseModel):
     target_type: ShadowEvalTargetType
     target_id: str
     router_name: str
+    router_names: tuple[str, ...] = ()
+    models: tuple[str, ...] = ()
     direction: ShadowEvalDirection
     baseline_model: str | None = None
     judge_model: str
@@ -1070,6 +1169,12 @@ class _LegRow(BaseModel):
     ends_at: datetime
     stopped_at: datetime | None = None
     stopped_by: str | None = None
+
+    @property
+    def arm_router_names(self) -> tuple[str, ...]:
+        """The job's full router set; rows from before router_names existed hold it in
+        router_name alone. The one place that reading lives on the endpoint side."""
+        return self.router_names or (self.router_name,)
 
     @field_validator("created_at", "ends_at", "stopped_at")
     @classmethod
@@ -1123,7 +1228,8 @@ def _group_response(
             )
             for leg in sorted(legs, key=lambda leg: (leg.target_type, leg.target_id))
         ),
-        router_name=first.router_name,
+        router_names=first.arm_router_names,
+        models=first.models,
         direction=first.direction,
         baseline_model=first.baseline_model,
         judge_model=first.judge_model,
@@ -1252,6 +1358,9 @@ async def _shadow_eval_results(
             for slice in _slices(by_leg)
         }
     )
+    by_router: Final = _ATTEMPT_AGG_ROWS.validate_python(
+        await _query_raw(prisma_client, _ATTEMPT_AGG_BY_ROUTER_SQL, leg_ids) or ()
+    )
     total_turns: Final = sum(r.turn_count for r in by_tier)
     funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, leg_ids)
     counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
@@ -1261,6 +1370,7 @@ async def _shadow_eval_results(
     result: Final = ShadowEvalResult(
         by_tier=_slices(by_tier),
         by_current_model=_slices(by_model),
+        by_router=_slices(by_router),
         overall_shadow_win_rate_pct=_pct_of(sum(r.shadow_wins for r in by_tier), total_turns),
         overall_tie_rate_pct=_pct_of(sum(r.ties for r in by_tier), total_turns),
         sampled_real_spend=sum(r.real_spend for r in by_tier),
@@ -1292,7 +1402,10 @@ async def start_shadow_eval(
     A target is a virtual key, a team, or a user. Team and user targets match on the
     identity every request resolves to at auth time, so they cover JWT-authenticated
     traffic, which presents no virtual key; a user target samples that user's traffic
-    across all their teams, whether it arrives on a JWT or a key they own.
+    across all their teams, whether it arrives on a JWT or a key they own. models narrows
+    every target to requests for those model groups, so a user plus one model samples that
+    user's traffic on that model across every key they own; it is forward-only, since a
+    reverse job already samples exactly the traffic its own router served.
 
     A forward job answers whether the targets should adopt router_name: it samples the
     requests the router did not serve and duplicates them through it. A reverse job
@@ -1314,8 +1427,15 @@ async def start_shadow_eval(
     _require_admin_writer(user_api_key_dict, "start a shadow eval")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
-    if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, data.router_name):
-        raise HTTPException(status_code=400, detail=f"'{data.router_name}' is not a configured auto-router")
+    unconfigured: Final = tuple(
+        name
+        for name in data.router_names
+        if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, name)
+    )
+    if unconfigured:
+        raise HTTPException(
+            status_code=400, detail=f"Not a configured auto-router: {', '.join(repr(n) for n in unconfigured)}"
+        )
     token_rows: Final = (
         await _verification_tokens(prisma_client).find_many(
             where={"token": {"in": list(data.api_key_ids)}}  # mutable-ok: Prisma filter
@@ -1374,6 +1494,7 @@ async def start_shadow_eval(
     if data.baseline_model is not None:
         _validate_plain_model(llm_router, data.baseline_model, "baseline_model", team_ids)
     _validate_judge_is_not_a_candidate(llm_router, data, team_ids)
+    _validate_model_scope(llm_router, data.models)
 
     requested_targets: Final[tuple[tuple[ShadowEvalTargetType, str], ...]] = (
         *(("key", key) for key in data.api_key_ids),
@@ -1416,7 +1537,10 @@ async def start_shadow_eval(
     ends_at: Final = now + timedelta(days=data.duration_days)
     shared_config: Final = {  # mutable-ok: Prisma payload
         "group_id": group_id,
-        "router_name": data.router_name,
+        # a pre-router_names pod samples router_name alone, so it must be a real arm
+        "router_name": data.router_names[0],
+        "router_names": list(data.router_names),  # mutable-ok: Prisma payload
+        "models": list(data.models),  # mutable-ok: Prisma payload
         "direction": data.direction,
         "baseline_model": data.baseline_model,
         "judge_model": data.judge_model,
@@ -1477,7 +1601,8 @@ async def start_shadow_eval(
             )
             for target_type, target_id in sorted(requested_targets)
         ),
-        router_name=data.router_name,
+        router_names=data.router_names,
+        models=data.models,
         direction=data.direction,
         baseline_model=data.baseline_model,
         judge_model=data.judge_model,

@@ -7,10 +7,23 @@ Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request
 import json
 import socket
 import sys
-from contextlib import ExitStack
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractContextManager, ExitStack
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from litellm.proxy._types import UserAPIKeyAuth
+
+AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedAgentCall:
+    request_id: object
+    agent_extra_headers: dict[str, str] | None
 
 
 @pytest.mark.asyncio
@@ -364,7 +377,7 @@ def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
 
 
 def _make_request_mock(
-    method: str, params: dict, request_id: object = "req-1"
+    method: str, params: Mapping[str, object], request_id: object = "req-1"
 ) -> MagicMock:
     req = MagicMock()
     req.headers = {}
@@ -379,7 +392,9 @@ def _make_request_mock(
     return req
 
 
-def _base_patches(agent: MagicMock):
+def _base_patches(
+    agent: MagicMock, add_litellm_data: AddLiteLLMData | None = None
+) -> list[AbstractContextManager[object]]:
     return [
         patch(
             "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
@@ -391,7 +406,7 @@ def _base_patches(agent: MagicMock):
         ),
         patch(
             "litellm.proxy.common_request_processing.add_litellm_data_to_request",
-            new=AsyncMock(side_effect=_add_proxy_data),
+            new=AsyncMock(side_effect=add_litellm_data or _add_proxy_data),
         ),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
@@ -399,84 +414,67 @@ def _base_patches(agent: MagicMock):
     ]
 
 
-async def _add_proxy_data(data, **kwargs):
-    data["proxy_server_request"] = {
-        "url": "http://localhost:4000",
-        "method": "POST",
-        "headers": {},
-        "body": {},
+async def _add_proxy_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+    return {
+        **data,
+        "proxy_server_request": {"url": "http://localhost:4000", "method": "POST", "headers": {}, "body": {}},
+        "metadata": data.get("metadata", {}),
     }
-    data.setdefault("metadata", {})
-    return data
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["message/send", "message/stream"])
-async def test_message_methods_preserve_numeric_zero_request_id(method: str):
+_HELLO_MESSAGE_PARAMS = {
+    "message": {
+        "role": "user",
+        "parts": [{"kind": "text", "text": "Hello"}],
+        "messageId": "msg-123",
+    }
+}
+
+
+async def _invoke_message_method(
+    method: str,
+    mock_request: MagicMock,
+    user_api_key_dict: UserAPIKeyAuth,
+    add_litellm_data: AddLiteLLMData | None = None,
+) -> CapturedAgentCall:
     from fastapi.responses import JSONResponse
-    from litellm.proxy._types import UserAPIKeyAuth
 
     class MessageSendParams:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             self.__dict__.update(kwargs)
 
     class SendMessageRequest:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             self.__dict__.update(kwargs)
 
-    agent = _make_agent_mock()
-    params = {
-        "message": {
-            "role": "user",
-            "parts": [{"kind": "text", "text": "Hello"}],
-            "messageId": "msg-123",
-        }
-    }
-    mock_request = _make_request_mock(method, params, request_id=0)
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
-    captured = {}
-
-    async def capture_asend_message(request, **kwargs):
-        captured["request_id"] = request.id
-        response = MagicMock()
+    async def fake_asend_message(request: SendMessageRequest, **kwargs: object) -> MagicMock:
+        response: Final = MagicMock()
         response.model_dump.return_value = {
             "jsonrpc": "2.0",
-            "id": request.id,
+            "id": request.__dict__["id"],
             "result": {"status": "success"},
         }
         return response
 
-    async def capture_stream_message(**kwargs):
-        captured["request_id"] = kwargs["request_id"]
-        return JSONResponse({"jsonrpc": "2.0", "id": kwargs["request_id"]})
+    async def fake_stream_message(request_id: object, **kwargs: object) -> JSONResponse:
+        return JSONResponse({"jsonrpc": "2.0", "id": request_id})
 
-    mock_a2a_types = MagicMock()
+    mock_a2a_types: Final = MagicMock()
     mock_a2a_types.MessageSendParams = MessageSendParams
     mock_a2a_types.SendMessageRequest = SendMessageRequest
+    is_send: Final = method == "message/send"
+    downstream: Final = AsyncMock(side_effect=fake_asend_message if is_send else fake_stream_message)
 
     with ExitStack() as stack:
-        for p in _base_patches(agent):
+        for p in _base_patches(_make_agent_mock(), add_litellm_data):
             stack.enter_context(p)
         stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
-        if method == "message/send":
-            stack.enter_context(
-                patch.dict(
-                    sys.modules,
-                    {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "litellm.a2a_protocol.asend_message",
-                    new=AsyncMock(side_effect=capture_asend_message),
-                )
-            )
+        if is_send:
+            stack.enter_context(patch.dict(sys.modules, {"a2a": MagicMock(), "a2a.types": mock_a2a_types}))
+            stack.enter_context(patch("litellm.a2a_protocol.asend_message", new=downstream))
         else:
             stack.enter_context(
-                patch(
-                    "litellm.proxy.agent_endpoints.a2a_endpoints._handle_stream_message",
-                    new=AsyncMock(side_effect=capture_stream_message),
-                )
+                patch("litellm.proxy.agent_endpoints.a2a_endpoints._handle_stream_message", new=downstream)
             )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
@@ -488,7 +486,82 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
             user_api_key_dict=user_api_key_dict,
         )
 
-    assert captured["request_id"] == 0
+    kwargs: Final = downstream.call_args.kwargs
+    request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
+    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_preserve_numeric_zero_request_id(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS, request_id=0)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    assert captured.request_id == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_forward_caller_identity_headers(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="user-abc", team_id="team-xyz")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert forwarded_headers.get("X-LiteLLM-User-Id") == "user-abc"
+    assert forwarded_headers.get("X-LiteLLM-Team-Id") == "team-xyz"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_caller_identity_headers_cannot_be_spoofed(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    mock_request.headers = {
+        "x-a2a-test-agent-x-litellm-user-id": "attacker-user",
+        "x-a2a-test-agent-x-litellm-team-id": "attacker-team",
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert (
+        forwarded_headers.get("X-LiteLLM-User-Id") == "real-user"
+    ), "authenticated user id must not be overridden by forwarded client headers"
+    assert (
+        forwarded_headers.get("X-LiteLLM-Team-Id") == "real-team"
+    ), "authenticated team id must not be overridden by forwarded client headers"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_forward_key_bound_identity_not_pre_call_rewrite(method: str):
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    mock_request.headers = {"X-OpenWebUI-User-Id": "header-mapped-user"}
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="key-user", team_id="key-team")
+    general_settings: Final = {
+        "user_header_mappings": [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
+    }
+
+    async def apply_user_header_mapping(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+        LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+            general_settings, user_api_key_dict, dict(mock_request.headers)
+        )
+        return await _add_proxy_data(data, **kwargs)
+
+    captured = await _invoke_message_method(
+        method, mock_request, user_api_key_dict, add_litellm_data=apply_user_header_mapping
+    )
+
+    assert user_api_key_dict.user_id == "header-mapped-user", "precondition: pre-call rewrite ran"
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert forwarded_headers.get("X-LiteLLM-User-Id") == "key-user"
+    assert forwarded_headers.get("X-LiteLLM-Team-Id") == "key-team"
 
 
 @pytest.mark.asyncio
@@ -916,6 +989,62 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
     ]
     assert failure_data.get("litellm_call_id")
     assert failure_data.get("agent_id") == "test-agent"
+
+
+@pytest.mark.asyncio
+async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.litellm_params = {
+        "custom_llm_provider": "bedrock",
+        "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/demo",
+        "api_key": "test-jwt-token",
+    }
+    mock_request = _make_request_mock(
+        "message/send",
+        {
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "messageId": "msg-1",
+                "contextId": "too-short",
+            }
+        },
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook test uses; no HTTP call is made because the request is rejected before signing
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert response.status_code == 400
+    assert body["id"] == "req-1"
+    assert body["error"]["code"] == -32602
+    assert "Invalid AgentCore runtime session id" in body["error"]["message"]
+    assert "Internal error" not in body["error"]["message"]
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
 
 
 @pytest.mark.asyncio
