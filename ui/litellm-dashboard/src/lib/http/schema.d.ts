@@ -15067,27 +15067,14 @@ export interface paths {
         put?: never;
         /**
          * Bulk Team Member Delete
-         * @description Remove up to 500 members from one team in a single request.
+         * @description Remove up to 500 members (each named by `user_id` or `user_email`) from one team. Same authorization
+         *     as `/team/member_delete`. Returns one result per member, in order.
          *
-         *     Same authorization as `/team/member_delete` (proxy admin, team admin, or org admin of the team's
-         *     organization). Each member is named by `user_id` or `user_email`. The team is rewritten once under
-         *     the team lock: the roster, every removed user's `teams` array, their `LiteLLM_TeamMembership` rows and
-         *     their team-scoped keys are all cleaned up together. Members that are not on the team are reported in
-         *     `results` with `success: false` and the rest are still removed.
-         *
-         *     Example request:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_delete' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "team_id": "team-1234",
-         *         "members": [{"user_id": "user1"}, {"user_email": "user2@example.com"}]
-         *     }'
+         *     curl -X POST 'http://0.0.0.0:4000/team/bulk_member_delete' -H 'Authorization: Bearer sk-1234' \
+         *     -H 'Content-Type: application/json' \
+         *     -d '{"team_id": "team-1234", "members": [{"user_id": "user1"}, {"user_email": "user2@example.com"}]}'
          *     ```
-         *
-         *     Returns `team_id`, `results` (one entry per input member, in order, with `user_id`, `user_email`,
-         *     `success`, `error`), `total_requested`, `successful_deletions` and `failed_deletions`.
          */
         post: operations["bulk_team_member_delete_team_bulk_member_delete_post"];
         delete?: never;
@@ -16529,27 +16516,13 @@ export interface paths {
         put?: never;
         /**
          * Bulk Delete User
-         * @description Delete up to 500 internal users in one request and remove each one from every team they belong to.
+         * @description Delete up to 500 users and remove each one from every team they belong to. Same authorization as
+         *     `/user/delete`. Returns one result per user id, in order.
          *
-         *     Same authorization as `/user/delete`: proxy admins may delete anyone, org admins only users whose
-         *     organizations they all administer. Each team a deleted user was on is rewritten once under the team
-         *     lock, so the roster, the user's `teams` array and the `LiteLLM_TeamMembership` rows all agree afterwards.
-         *     Then the users' keys, invitation links, organization memberships and user rows are deleted.
-         *
-         *     Rows fail independently: unknown, duplicate or out-of-scope ids are reported in `results` with
-         *     `success: false` and an `error`, and the other users are still deleted.
-         *
-         *     Usage Example
-         *
-         *     ```shell
-         *     curl -X POST "http://localhost:4000/user/bulk_delete" \
-         *     -H "Content-Type: application/json" \
-         *     -H "Authorization: Bearer sk-1234" \
-         *     -d '{"user_ids": ["user-1", "user-2"]}'
+         *     ```bash
+         *     curl -X POST 'http://localhost:4000/user/bulk_delete' -H 'Authorization: Bearer sk-1234' \
+         *     -H 'Content-Type: application/json' -d '{"user_ids": ["user-1", "user-2"]}'
          *     ```
-         *
-         *     Returns `results` (one entry per input id, in order, with `user_id`, `user_email`, `success`,
-         *     `teams_removed`, `error`), `total_requested`, `successful_deletions` and `failed_deletions`.
          */
         post: operations["bulk_delete_user_user_bulk_delete_post"];
         delete?: never;

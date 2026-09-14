@@ -1,6 +1,6 @@
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -124,6 +124,13 @@ class BulkTeamMemberAddResponse(BaseModel):
 class BulkTeamMemberDeleteRequest(BaseModel):
     team_id: str
     members: tuple[MemberDeleteRequest, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_DELETES)
+
+    @field_validator("members")
+    @classmethod
+    def one_identifier_per_member(cls, members: tuple[MemberDeleteRequest, ...]) -> tuple[MemberDeleteRequest, ...]:
+        if any(m.user_id is not None and m.user_email is not None for m in members):
+            raise ValueError("Each member must be identified by exactly one of user_id or user_email")
+        return members
 
 
 class TeamMemberDeleteResult(BaseModel):

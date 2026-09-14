@@ -2516,29 +2516,20 @@ async def bulk_delete_user(
     ),
 ) -> BulkDeleteUserResponse:
     """
-    Delete up to 500 internal users in one request and remove each one from every team they belong to.
+    Delete up to 500 users and remove each one from every team they belong to. Same authorization as
+    `/user/delete`. Returns one result per user id, in order.
 
-    Same authorization as `/user/delete`: proxy admins may delete anyone, org admins only users whose
-    organizations they all administer. Each team a deleted user was on is rewritten once under the team
-    lock, so the roster, the user's `teams` array and the `LiteLLM_TeamMembership` rows all agree afterwards.
-    Then the users' keys, invitation links, organization memberships and user rows are deleted.
-
-    Rows fail independently: unknown, duplicate or out-of-scope ids are reported in `results` with
-    `success: false` and an `error`, and the other users are still deleted.
-
-    Usage Example
-
-    ```shell
-    curl -X POST "http://localhost:4000/user/bulk_delete" \\
-    -H "Content-Type: application/json" \\
-    -H "Authorization: Bearer sk-1234" \\
-    -d '{"user_ids": ["user-1", "user-2"]}'
+    ```bash
+    curl -X POST 'http://localhost:4000/user/bulk_delete' -H 'Authorization: Bearer sk-1234' \\
+    -H 'Content-Type: application/json' -d '{"user_ids": ["user-1", "user-2"]}'
     ```
-
-    Returns `results` (one entry per input id, in order, with `user_id`, `user_email`, `success`,
-    `teams_removed`, `error`), `total_requested`, `successful_deletions` and `failed_deletions`.
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -2547,6 +2538,8 @@ async def bulk_delete_user(
             data=data,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
             litellm_changed_by=litellm_changed_by,
         )
