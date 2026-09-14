@@ -251,6 +251,10 @@ def get_llm_provider(
                     elif endpoint == "api.deepinfra.com/v1/openai":
                         custom_llm_provider = "deepinfra"
                         dynamic_api_key = get_secret_str("DEEPINFRA_API_KEY")
+                    elif endpoint == "api.clfaigateway.dev/v1":
+                        custom_llm_provider = "clf_ai_gateway"  # rebind-ok: endpoint inference, like every branch
+                        clf_env_key = get_secret_str("CLF_AI_GATEWAY_API_KEY")
+                        dynamic_api_key = api_key or clf_env_key  # rebind-ok: caller key wins, like every branch
                     elif endpoint == "api.mistral.ai/v1":
                         custom_llm_provider = "mistral"
                         dynamic_api_key = get_secret_str("MISTRAL_API_KEY")
@@ -592,6 +596,12 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.DeepInfraConfig()._get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "clf_ai_gateway":
+        cfg = litellm.ClfAiGatewayConfig()
+        (
+            api_base,  # rebind-ok: resolved base/key are what this function returns, like every branch
+            dynamic_api_key,  # rebind-ok: see above
+        ) = cfg._get_openai_compatible_provider_info(api_base, api_key)  # pyright: ignore[reportPrivateUsage]  # hook
     elif custom_llm_provider == "empower":
         api_base = api_base or get_secret("EMPOWER_API_BASE") or "https://app.empower.dev/api/v1"
         dynamic_api_key = api_key or get_secret_str("EMPOWER_API_KEY")
