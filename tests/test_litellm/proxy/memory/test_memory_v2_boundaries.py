@@ -524,6 +524,7 @@ async def test_trailing_system_messages_survive_client_tool_continuation(prisma_
         body = await incoming.json()
         observed.append(body)
         messages = body["messages"]
+        assert json.dumps(body).count('"cache_control"') == 4
         assert all(
             message["role"] != "system" or messages[index + 1]["role"] == "assistant"
             for index, message in enumerate(messages[:-1])
@@ -540,8 +541,16 @@ async def test_trailing_system_messages_survive_client_tool_continuation(prisma_
         "role": "user",
         "content": [{"type": "text", "text": "Read README.md", "cache_control": {"type": "ephemeral"}}],
     }
-    directive = {"role": "system", "content": "Use concise answers"}
+    directive = {
+        "role": "system",
+        "content": [{"type": "text", "text": "Use concise answers", "cache_control": {"type": "ephemeral"}}],
+    }
+    earlier_directive = {"role": "system", "content": [{"type": "text", "text": "Use concise answers"}]}
     original = {
+        "system": [
+            {"type": "text", "text": "Cached prefix " + str(i), "cache_control": {"type": "ephemeral"}}
+            for i in range(2)
+        ],
         "messages": [prefix, directive],
         "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
         "tool_choice": {"type": "tool", "name": "Read"},
@@ -558,7 +567,7 @@ async def test_trailing_system_messages_survive_client_tool_continuation(prisma_
         "tool_choice": {"type": "none"},
         "messages": [
             prefix,
-            directive,
+            earlier_directive,
             {"role": "assistant", "content": [client_call]},
             {
                 "role": "user",
@@ -572,7 +581,8 @@ async def test_trailing_system_messages_survive_client_tool_continuation(prisma_
         pass
     assert len(observed) == 2
     assert observed[0]["messages"][0] == observed[1]["messages"][0] == prefix
-    assert observed[1]["messages"].count(directive) == 2
+    assert observed[1]["messages"].count(directive) == 1
+    assert observed[1]["messages"].count(earlier_directive) == 1
     assert observed[1]["messages"].count({"role": "assistant", "content": [client_call]}) == 1
     assert observed[1]["messages"][-1] == directive
     assert observed[1]["messages"][-3]["content"][0]["tool_use_id"] == "client_read"
@@ -580,16 +590,32 @@ async def test_trailing_system_messages_survive_client_tool_continuation(prisma_
 
 
 @pytest.mark.asyncio
-async def test_claude_output_directives_reach_search_answer_and_reflection_rounds(prisma_edge: MagicMock) -> None:
+@pytest.mark.parametrize("cached_directive", [False, True])
+async def test_claude_output_directives_reach_search_answer_and_reflection_rounds(
+    prisma_edge: MagicMock, cached_directive: bool
+) -> None:
     provider = FastAPI()
     observed = []
-    directive = {"role": "system", "content": [], "output_config": {"effort": "low"}}
+    directive = {
+        "role": "system",
+        "content": [{"type": "text", "text": "Reply briefly", "cache_control": {"type": "ephemeral"}}]
+        if cached_directive
+        else [],
+        "output_config": {"effort": "low"},
+    }
 
     @provider.post("/v1/messages")
     async def model(incoming: Request):
         body = await incoming.json()
         observed.append(body)
-        assert body["messages"][-1] == directive
+        assert json.dumps(body).count('"cache_control"') == 3 + int(cached_directive)
+        last = body["messages"][-1]
+        assert last["role"] == "system" and last["output_config"] == {"effort": "low"}
+        assert last["content"] == (
+            [{"type": "text", "text": "Reply briefly"}]
+            if cached_directive and len(observed) > 1
+            else directive["content"]
+        )
         if len(observed) == 1:
             content = [
                 {"type": "tool_use", "id": "search", "name": "litellm_memory_search", "input": {"query": "demo"}}
@@ -606,7 +632,19 @@ async def test_claude_output_directives_reach_search_answer_and_reflection_round
             "content": content,
         }
 
-    original = {"messages": [{"role": "user", "content": "My demo port?"}, directive]}
+    original = {
+        "system": [
+            {"type": "text", "text": "Cached prefix " + str(i), "cache_control": {"type": "ephemeral"}}
+            for i in range(2)
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "My demo port?", "cache_control": {"type": "ephemeral"}}],
+            },
+            directive,
+        ],
+    }
     loop = GatewayMemoryLoop(provider, request(), original, "anthropic_messages", store(prisma_edge))
     async for _ in loop.run():
         pass

@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.server_tools import (
     continue_server_tools,
     inject_server_tools,
     trailing_system_messages,
+    uncached_system_directive,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import wrap_passthrough_sse_bytes_with_keepalive_pings
@@ -147,7 +148,10 @@ class GatewayMemoryLoop:
             **self.data,
             **(
                 {  # mutable-ok: Native provider JSON containers.
-                    "messages": [*messages, *directives],  # mutable-ok: Provider request JSON.
+                    "messages": [  # mutable-ok: Provider request JSON.
+                        *messages,
+                        *(uncached_system_directive(directive) for directive in directives),
+                    ],
                 }
                 if directives and messages[-len(directives) :] != directives
                 else {}  # mutable-ok: Native provider JSON containers.

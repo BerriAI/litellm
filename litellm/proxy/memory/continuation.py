@@ -177,7 +177,20 @@ class MemoryContinuations:
             if patch.replaces > index + 1 or patch.replaces < 1:
                 raise HTTPException(status_code=409, detail="Invalid memory continuation")
             prefix: Final = result[: -(patch.replaces - 1)] if patch.replaces > 1 else result
-            return _append_items(prefix, patch.replacement, self.route)
+            # Clients move cache breakpoints between turns. Reuse their current
+            # directives rather than restoring an obsolete cached copy.
+            directives: Final = MappingProxyType(
+                {
+                    prefix_hashes((item,), self.route)[0]: item
+                    for item in items[index + 1 - patch.replaces : index + 1]
+                    if item.get("role") == "system"
+                }
+            )
+            replacement: Final = tuple(
+                directives.get(prefix_hashes((item,), self.route)[0], item) if item.get("role") == "system" else item
+                for item in patch.replacement
+            )
+            return _append_items(prefix, replacement, self.route)
 
         return reduce(apply, range(len(items)), ())
 

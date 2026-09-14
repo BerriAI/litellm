@@ -151,6 +151,22 @@ def trailing_system_messages(data: Mapping[str, object], route: ServerToolRoute)
     )
 
 
+def uncached_system_directive(message: Mapping[str, object]) -> Mapping[str, object]:
+    return {  # mutable-ok: Provider wire format requires native JSON containers.
+        **{key: value for key, value in message.items() if key != "cache_control"},
+        **(
+            {  # mutable-ok: Provider wire format requires native JSON containers.
+                "content": [  # mutable-ok: Provider wire format requires native JSON containers.
+                    {key: value for key, value in _OBJECT.validate_python(block).items() if key != "cache_control"}
+                    for block in _items(message.get("content"))
+                ],
+            }
+            if isinstance(message.get("content"), (list, tuple))
+            else {}  # mutable-ok: Provider wire format requires native JSON containers.
+        ),
+    }
+
+
 def append_server_reference(data: Mapping[str, object], route: ServerToolRoute, reference: str) -> Mapping[str, object]:
     field: Final = "input" if route == "aresponses" else "messages"
     messages: Final = _items(data.get(field))
