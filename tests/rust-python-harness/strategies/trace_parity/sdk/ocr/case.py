@@ -498,14 +498,12 @@ TRACE_SUITE: Final = TraceSuite(
             fixture=_mistral_fixture,
             mappings=PUBLIC_RUST_DISPATCH_MAPPINGS,
             asynchronous=False,
-            python_rust_enabled=True,
         ),
         TraceScenario(
             name="async-public-rust-dispatch",
             fixture=_mistral_fixture,
             mappings=PUBLIC_RUST_DISPATCH_MAPPINGS,
             asynchronous=True,
-            python_rust_enabled=True,
         ),
     ),
 )

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterable, Awaitable, Iterable
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -107,9 +106,7 @@ def _collect(
     return _CollectedTrace(tuple(profiler.events), error)
 
 
-def collect_trace(
-    spec: RouteSpec, engine: Engine, *, asynchronous: bool, python_rust_enabled: bool = False
-) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
+def collect_trace(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
     function: Final = _entrypoint(spec, engine, asynchronous=asynchronous)
     if isinstance(function, TraceExecutionFailure):
         return function
@@ -130,12 +127,7 @@ def collect_trace(
                 consume_stream=base_fixture.consume_stream,
                 environment=base_fixture.environment,
             )
-            environment: Final = (
-                patch.dict(os.environ, {"LITELLM_RUST": "1" if python_rust_enabled else "0"})
-                if engine == "python"
-                else nullcontext()
-            )
-            with environment, patch.dict(os.environ, fixture.environment):
+            with patch.dict(os.environ, fixture.environment):
                 collected: Final = _collect(function, fixture, engine, asynchronous=asynchronous)
             provider.take_requests(len(fixture.provider_responses))
     except Exception as error:
@@ -172,7 +164,6 @@ def execute_trace(
             scenario_route,
             "python",
             asynchronous=scenario.asynchronous,
-            python_rust_enabled=scenario.python_rust_enabled,
         )
         if engine != "rust"
         else ()
