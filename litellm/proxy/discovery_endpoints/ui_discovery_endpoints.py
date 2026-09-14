@@ -1,23 +1,15 @@
 #### Analytics Endpoints #####
 import os
-from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter
 
+from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
     UiDiscoveryEndpoints,
 )
 
 router: Final = APIRouter()
-
-
-def should_hide_default_credentials_hint(general_settings: Mapping[str, object]) -> bool:
-    return (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-        or bool(os.getenv("UI_PASSWORD"))
-    )
 
 
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)

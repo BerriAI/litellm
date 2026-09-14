@@ -101,12 +101,12 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import should_hide_default_credentials_hint
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
