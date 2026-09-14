@@ -167,6 +167,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     _get_cooldown_deployments,
     _set_cooldown_deployments,
+    cast_exception_status_to_int,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -8288,16 +8289,32 @@ class Router:
                 header_cooldown = litellm.utils._get_retry_after_from_exception_header(
                     response_headers=exception_headers
                 )
+
+            body_cooldown = None
+            if cast_exception_status_to_int(exception_status) == 429:
+                # Some providers (e.g. Zhipu bigmodel 1308/1310) state the quota
+                # reset time in the error body instead of a Retry-After header.
+                body_cooldown = (
+                    litellm.litellm_core_utils.exception_mapping_utils._get_retry_after_from_exception_body(
+                        original_exception=exception
+                    )
+                )
             ##############################################
             # Logic to determine cooldown time
             # 1. Check if a cooldown time is set in the deployment config
             # 2. Check if a cooldown time is set in the response header
-            # 3. If no cooldown time is set, use the router default cooldown time
+            # 3. Check if the error body states when the quota resets (429 only)
+            # 4. If no cooldown time is set, use the router default cooldown time
             ##############################################
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 _time_to_cooldown = deployment_cooldown
             elif header_cooldown is not None and header_cooldown >= 0:
                 _time_to_cooldown = header_cooldown
+            elif body_cooldown is not None and body_cooldown > 0:
+                verbose_router_logger.info(
+                    "Cooldown time from exception body (stated quota reset): %.0fs", body_cooldown
+                )
+                _time_to_cooldown = body_cooldown
             else:
                 _time_to_cooldown = self.cooldown_time
 
