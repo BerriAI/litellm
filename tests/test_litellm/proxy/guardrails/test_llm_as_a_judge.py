@@ -286,6 +286,24 @@ async def test_apply_guardrail_request_multi_turn_keeps_roles_and_focuses_latest
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_apply_guardrail_logging_only_labels_both_sides_logging_only(input_type: str):
+    router: Final = _judge_router(50.0)
+    guardrail: Final = _make_guardrail(
+        on_failure="log",
+        event_hook=GuardrailEventHooks.logging_only,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    assert guardrail.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is False
+    assert guardrail.should_run_guardrail(request_data, GuardrailEventHooks.post_call) is False
+    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, input_type)
+
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "logging_only"
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_response_prompt_unchanged():
     router: Final = _judge_router(90.0)
     guardrail: Final = _make_guardrail(router_provider=lambda: router)

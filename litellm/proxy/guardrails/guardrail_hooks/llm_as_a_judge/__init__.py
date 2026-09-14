@@ -277,6 +277,8 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             )
 
     def _event_type_for(self, input_type: JudgeInputType) -> GuardrailEventHooks:
+        if self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+            return GuardrailEventHooks.logging_only
         if input_type == "response":
             return GuardrailEventHooks.post_call
         if self._event_hook_is_event_type(GuardrailEventHooks.pre_call):
