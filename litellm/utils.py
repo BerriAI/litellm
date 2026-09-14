@@ -5822,7 +5822,9 @@ def _get_model_info_helper(
                         _model_info = None
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
-                fill_missing: Final = match_fill_missing_generalizations(key)
+                fill_missing: Final = match_fill_missing_generalizations(
+                    key, _model_info.get("litellm_provider", "")
+                )
                 if fill_missing is not None:
                     _model_info = {
                         **{k: v for k, v in fill_missing.items() if k not in _model_info},
