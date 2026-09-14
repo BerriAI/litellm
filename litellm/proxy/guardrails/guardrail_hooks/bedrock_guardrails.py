@@ -244,6 +244,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
         chunk_budget_chars: int = BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
+        contextual_grounding_from_messages: bool = False,
         streaming_buffer_until_moderated: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_end_of_stream_only: bool | None = None,
@@ -265,6 +266,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.guardrailVersion = guardrailVersion
         self.guardrail_provider = "bedrock"
         self.chunk_budget_chars = chunk_budget_chars
+        self.contextual_grounding_from_messages = contextual_grounding_from_messages
         self.experimental_use_latest_role_message_only = bool(kwargs.get("experimental_use_latest_role_message_only"))
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
@@ -459,8 +461,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Flatten a message into text blocks, preserving any contextual-grounding
         qualifier carried by the content-block ``type`` (grounding_source / query).
-        Untagged text keeps ``qualifier=None`` so the payload is unchanged for
-        callers that do not use grounding.
+        Untagged text keeps ``qualifier=None``; the OUTPUT scan decides whether to
+        derive grounding qualifiers from it.
         """
         content: Final = message.get("content")
         if content is None:
@@ -494,8 +496,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         contextual-grounding check to grade the response against. ``query`` is accepted
         from any role (it is the user's question).
 
-        A request with no tagged blocks falls back to the plain messages: system /
-        developer text is the grounding source and the latest user message is the query.
+        With ``contextual_grounding_from_messages`` on, a request with no tagged blocks
+        falls back to the plain messages: system / developer text is the grounding
+        source and the latest user message is the query.
         """
         grounding: Final[list[QualifiedTextBlock]] = []
         for message in messages or []:
@@ -507,13 +510,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     and role in _GROUNDING_SOURCE_TRUSTED_ROLES
                 ):
                     grounding.append(block)
-        return grounding or self._derive_grounding_blocks_from_plain_messages(messages)
+        if grounding or not self.contextual_grounding_from_messages:
+            return grounding
+        return self._derive_grounding_blocks_from_plain_messages(messages)
 
     def _derive_grounding_blocks_from_plain_messages(
         self, messages: list[AllMessageValues] | None
     ) -> list[QualifiedTextBlock]:
-        """Bedrock scores grounding only when source, query and response are all present,
-        and rejects a source without a query, so return nothing unless both exist."""
         if not messages:
             return []
         latest_user_index: Final = self._find_latest_message_index(messages, target_role="user")
