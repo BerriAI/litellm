@@ -5,7 +5,7 @@ import datetime
 import os
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -124,7 +124,7 @@ class SlackAlerting(CustomBatchLogger):
         alert_types: list[AlertType] = DEFAULT_ALERT_TYPES,
         alert_to_webhook_url: dict[AlertType, list[str] | str]
         | None = None,  # if user wants to separate alerts to diff channels
-        alerting_args={},
+        alerting_args: Mapping[str, object] | None = None,
         default_webhook_url: str | None = None,
         alert_type_config: dict[str, dict] | None = None,
         **kwargs,
@@ -138,7 +138,9 @@ class SlackAlerting(CustomBatchLogger):
         self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
-        self.alerting_args = SlackAlertingArgs(**alerting_args)
+        self.alerting_args = (
+            SlackAlertingArgs() if alerting_args is None else SlackAlertingArgs.model_validate(alerting_args)
+        )
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
@@ -161,7 +163,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_threshold: float | None = None,
         alert_types: list[AlertType] | None = None,
         alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None,
-        alerting_args: dict | None = None,
+        alerting_args: Mapping[str, object] | None = None,
         llm_router: Router | None = None,
         alert_type_config: dict[str, dict] | None = None,
     ):
@@ -174,7 +176,7 @@ class SlackAlerting(CustomBatchLogger):
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
-            self.alerting_args = SlackAlertingArgs(**alerting_args)
+            self.alerting_args = SlackAlertingArgs.model_validate(alerting_args)
             if not self.periodic_started:
                 asyncio.create_task(self.periodic_flush())
                 self.periodic_started = True
