@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.model_deprecation_notifications import (
     DeprecationEmailContext,
     TeamNotification,
     build_team_notifications,
+    email_pass_done_today,
     email_sent_key,
     make_email_deliverer,
     render_model_deprecation_email,
@@ -491,6 +492,14 @@ class TestSendModelDeprecationEmails:
         assert [recipients for recipients, _ in deliverer.sent] == [("b@x.io",)]
         assert await cache.async_get_cache(key=email_sent_key("t1", "dead-alias", 0)) is None
         assert await cache.async_get_cache(key=email_sent_key("t2", "dead-alias", 0)) is not None
+
+
+@pytest.mark.asyncio
+async def test_should_report_whether_the_daily_pass_already_ran():
+    cache: Final = DualCache()
+    assert await email_pass_done_today(cache) is False
+    await cache.async_set_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value, value=1.0)
+    assert await email_pass_done_today(cache) is True
 
 
 class TestMakeEmailDeliverer:

@@ -98,6 +98,9 @@ def _proxy_email_logger() -> "EmailSender | None":
     return proxy_logging_obj.email_logging_instance
 
 
+_CHANNELS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+
+
 class SlackAlerting(CustomBatchLogger):
     """
     Class for sending Slack Alerts
@@ -1097,12 +1100,14 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    def _channels(self) -> tuple[str, ...]:
+        return _CHANNELS_ADAPTER.validate_python(self.alerting or ())
+
     def _deprecation_alerts_enabled(self) -> bool:
+        channels: Final = self._channels()
         return (
-            self.alerting is not None
-            and ("slack" in self.alerting or MS_TEAMS_ALERTING_DESTINATION in self.alerting)
-            and AlertType.model_deprecation_warnings in self.alert_types
-        )
+            "slack" in channels or MS_TEAMS_ALERTING_DESTINATION in channels
+        ) and AlertType.model_deprecation_warnings in self.alert_types
 
     async def send_model_deprecation_alert(
         self,
@@ -1176,8 +1181,7 @@ Model Info:
 
     def _deprecation_emails_enabled(self) -> bool:
         return (
-            self.alerting is not None
-            and "email" in self.alerting
+            "email" in self._channels()
             and AlertType.model_deprecation_warnings in self.alert_types
             and bool(self.alerting_args.model_deprecation_email_thresholds)
         )
@@ -1193,21 +1197,20 @@ Model Info:
         """Email team admins the milestones crossed, resolving against the DB at most once a day"""
         if llm_router is None or not self._deprecation_emails_enabled():
             return 0
-        if (
-            await self.internal_usage_cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value)
-        ) is not None:
+
+        from litellm.proxy.common_utils.model_deprecation_notifications import (
+            DeprecationEmailContext,
+            email_pass_done_today,
+            make_email_deliverer,
+            send_model_deprecation_emails,
+        )
+
+        if await email_pass_done_today(self.internal_usage_cache):
             return 0
         prisma_client: Final = get_prisma_client()
         if prisma_client is None:
             verbose_proxy_logger.debug("model_deprecation: no database connected, skipping email pass")
             return 0
-
-        from litellm.proxy.common_utils.model_deprecation_notifications import (
-            DeprecationEmailContext,
-            make_email_deliverer,
-            send_model_deprecation_emails,
-        )
-
         run: Final = send_emails or send_model_deprecation_emails
         return await run(
             DeprecationEmailContext(

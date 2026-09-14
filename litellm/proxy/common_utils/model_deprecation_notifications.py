@@ -310,6 +310,10 @@ async def _stamp_pass(cache: DeprecationEmailCache) -> None:
     )
 
 
+async def email_pass_done_today(cache: DeprecationEmailCache) -> bool:
+    return (await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value)) is not None
+
+
 async def _claimed_email_window(pod_lock_manager: PodLockManager | None) -> bool:
     """Without a redis backed lock there is no fleet to coordinate, so a lone pod always sends"""
     if pod_lock_manager is None:
