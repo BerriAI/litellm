@@ -1,3 +1,16 @@
+import { PerSecondCostTier } from "@/components/model_dashboard/types";
+
+const PER_SECOND_TIER_KEY = /^output_cost_per_second_(.+)$/;
+
+export const perSecondCostTiers = (modelInfo: Record<string, unknown> | null | undefined): PerSecondCostTier[] =>
+  Object.entries(modelInfo ?? {}).flatMap(([key, value]) => {
+    const resolution = PER_SECOND_TIER_KEY.exec(key)?.[1];
+    return resolution !== undefined && typeof value === "number" ? [{ resolution, cost: value }] : [];
+  });
+
+export const formatPerSecondCost = (cost: number): string =>
+  `$${cost.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}/s`;
+
 /**
  * Utility function to transform raw model data into the format expected by UI components
  * This creates a new transformed data object without mutating the original
@@ -55,6 +68,9 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
     transformedData[i].provider = provider;
     transformedData[i].input_cost = input_cost;
     transformedData[i].output_cost = output_cost;
+    transformedData[i].output_cost_per_second =
+      curr_model?.litellm_params?.output_cost_per_second ?? model_info?.output_cost_per_second ?? null;
+    transformedData[i].output_cost_per_second_tiers = perSecondCostTiers(model_info);
     transformedData[i].litellm_model_name = litellm_model_name;
 
     // Convert Cost in terms of Cost per 1M tokens
