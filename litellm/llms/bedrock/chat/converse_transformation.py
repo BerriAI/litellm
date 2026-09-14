@@ -1254,9 +1254,9 @@ class AmazonConverseConfig(BaseConfig):
                         cache_block = self.get_cache_point_block(m, block_type="system", model=model)
                         if cache_block:
                             system_content_blocks.append(cache_block)
-        out_messages: Final[list[AllMessageValues]] = cast(
+        out_messages: Final = cast(  # cast-ok: validate into the AllMessageValues message-list contract
             list[AllMessageValues],
-            [
+            [  # mutable-ok: mutable message-list contract
                 self._system_role_message_as_user(message) if self._is_system_role_message(message) else message
                 for message in self._system_turns_after_tool_results(messages[leading_count:])
             ],
@@ -1272,17 +1272,17 @@ class AmazonConverseConfig(BaseConfig):
         return isinstance(message, dict) and message.get("role") == "system"
 
     @staticmethod
-    def _as_user_content_blocks(value: object) -> list:
+    def _as_user_content_blocks(value: object) -> list:  # mutable-ok: factory isinstance-checks content as list
         if value is None:
-            return []
+            return []  # mutable-ok: extended by the caller
         if isinstance(value, list):
-            return list(value)
+            return list(value)  # mutable-ok: factory isinstance-checks content as list
         if isinstance(value, str):
-            return [{"type": "text", "text": value}]
-        return [value]
+            return [{"type": "text", "text": value}]  # mutable-ok: shared mutable content shape
+        return [value]  # mutable-ok: shared mutable content shape
 
-    def _system_role_message_as_user(self, message: Mapping) -> dict:
-        return {
+    def _system_role_message_as_user(self, message: Mapping) -> Mapping[str, object]:
+        return {  # mutable-ok: joins the mutable message list the Converse transform walks
             "role": "user",
             "content": self._as_user_content_blocks(self._CONVERTED_SYSTEM_NOTE)
             + self._as_user_content_blocks(message.get("content")),
@@ -1296,7 +1296,7 @@ class AmazonConverseConfig(BaseConfig):
             return False
         if message.get("role") == "tool":
             return True
-        content: object = message.get("content")
+        content: Final[object] = message.get("content")
         return (
             message.get("role") == "user"
             and isinstance(content, list)
@@ -1309,7 +1309,7 @@ class AmazonConverseConfig(BaseConfig):
         # a converted turn wedged between an assistant tool_call turn and its
         # tool-result turns would split the call from its results; the whole
         # tool-result run is emitted first and the system run follows it
-        result: list = []
+        result: Final = []  # mutable-ok: single-pass accumulator; the lookahead loop can't build it in one shot
         i: int = 0
         while i < len(messages):
             if self._is_system_role_message(messages[i]):
