@@ -5135,8 +5135,8 @@ def completion(
             output schemas. Defaults to None.
         drop_params (bool | None, optional): If True, silently drop parameters unsupported by the target provider
             instead of raising an error. Defaults to None.
-        additional_drop_params (list[str] | None, optional): List of additional parameter names to drop if unsupported.
-            Defaults to None.
+        additional_drop_params (list[str] | None, optional): List of additional parameter names to drop, including
+            parameters supported by the target provider. Defaults to None.
         mock_response (MOCK_RESPONSE_TYPE | None, optional): If provided, return a mock completion response for testing
             or debugging. Defaults to None.
         custom_llm_provider (str | None, optional): Explicit provider override for non-OpenAI LLMs (e.g., "bedrock",
