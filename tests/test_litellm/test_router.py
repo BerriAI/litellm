@@ -2276,8 +2276,9 @@ async def test_acompletion_streaming_iterator_continues_after_content_when_eligi
         ({"emitted_disqualifying_content": True}, {}),
         ({"emitted_disqualifying_content": False}, {"response_format": {"type": "json_object"}}),
         ({"emitted_disqualifying_content": False}, {"tool_choice": "required"}),
+        ({"emitted_disqualifying_content": False}, {"merge_reasoning_content_in_choices": True}),
     ],
-    ids=["tool_or_thinking_emitted", "json_mode", "forced_tool_choice"],
+    ids=["tool_or_thinking_emitted", "json_mode", "forced_tool_choice", "merged_reasoning"],
 )
 async def test_acompletion_streaming_iterator_declines_ineligible_after_content(error_kwargs, request_kwargs):
     """Flag on but the break is not continuation-safe: the router re-raises and
@@ -2350,6 +2351,32 @@ def test_build_completion_continuation_input_appends_assistant_prefill():
     built = litellm.Router._build_completion_continuation_input(messages, "partial answer")
     assert built[:-1] == messages
     assert built[-1] == {"role": "assistant", "content": "partial answer", "prefix": True}
+
+
+def test_build_completion_continuation_input_folds_into_existing_prefill():
+    """A nested break must not leave two trailing assistant turns: the new partial
+    folds into the prior prefill so a non-merging provider still gets one."""
+    once = litellm.Router._build_completion_continuation_input([{"role": "user", "content": "hi"}], "part one ")
+    twice = litellm.Router._build_completion_continuation_input(list(once), "part two")
+    assert [m["role"] for m in twice] == ["user", "assistant"]
+    assert twice[-1] == {"role": "assistant", "content": "part one part two", "prefix": True}
+
+
+def test_mid_stream_continuation_eligible_allows_text_response_format():
+    """response_format={"type": "text"} is the unconstrained default and must stay
+    eligible, unlike json_object / json_schema."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k"}}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    e = MidStreamFallbackError(
+        message="boom", model="gpt-4", llm_provider="openai", generated_content="Hello",
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+    assert router._mid_stream_continuation_eligible(e=e, request_kwargs={"response_format": {"type": "text"}}) is True
+    assert router._mid_stream_continuation_eligible(e=e, request_kwargs={"response_format": {"type": "json_object"}}) is False
 
 
 @pytest.mark.asyncio

@@ -3067,7 +3067,9 @@ class Router:
             return False
         # Any structured-output request (response_format, or a forced tool call)
         # produces a partial that cannot be resumed from an arbitrary cut point.
-        if request_kwargs.get("response_format") is not None:
+        # `{"type": "text"}` is the unconstrained default and stays eligible.
+        response_format: Final = request_kwargs.get("response_format")
+        if response_format is not None and response_format != {"type": "text"}:
             return False
         tool_choice: Final = request_kwargs.get("tool_choice")
         if tool_choice == "required" or isinstance(tool_choice, Mapping):
@@ -3087,7 +3089,16 @@ class Router:
         regenerating text already delivered to the caller. The deployment filter
         guarantees the target supports ``prefix: True`` (parity with
         ``_build_responses_continuation_input`` for the Responses-API path).
+
+        A nested mid-stream break can re-enter here with a prefill already
+        appended; the new partial is folded into that trailing assistant turn so
+        the request keeps a single prefill rather than two consecutive assistant
+        messages a non-merging provider would reject.
         """
+        if messages and messages[-1].get("role") == "assistant" and messages[-1].get("prefix"):
+            last: Final = messages[-1]
+            merged: dict[str, object] = {**last, "content": str(last.get("content") or "") + generated_content}
+            return [*messages[:-1], merged]
         prefill: dict[str, object] = {"role": "assistant", "content": generated_content, "prefix": True}
         return [*messages, prefill]
 

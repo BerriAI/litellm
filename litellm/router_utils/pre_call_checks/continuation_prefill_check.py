@@ -28,12 +28,11 @@ _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 def _deployment_supports_prefill(deployment: object) -> bool:
     try:
-        params: Final = _STR_KEYED_DICT_ADAPTER.validate_python(
-            _STR_KEYED_DICT_ADAPTER.validate_python(deployment).get("litellm_params")
-        )
+        deployment_map: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment)
+        litellm_params: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("litellm_params"))
     except ValidationError:
         return False
-    model: Final = params.get("model")
+    model: Final = litellm_params.get("model")
     return isinstance(model, str) and bool(model) and supports_assistant_prefill(model=model)
 
 
