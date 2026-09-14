@@ -1677,6 +1677,22 @@ def test_custom_huggingface_tokenizer_stays_in_python_for_anthropic_models(rust_
     assert factory.counters == []
 
 
+def test_preselected_anthropic_tokenizer_is_counted_by_rust(rust_bridge) -> None:
+    """The proxy's token counting route selects the tokenizer itself and passes it in as `custom_tokenizer`."""
+    from litellm.utils import _select_tokenizer
+
+    factory: Final = _FakeTextCounterFactory(1_000)
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(factory)
+
+    count: Final = token_counter_new(
+        model=ANTHROPIC_MODEL, custom_tokenizer=_select_tokenizer(ANTHROPIC_MODEL), text="hello"
+    )
+
+    assert count == 1_000
+    assert [counter.texts for counter in factory.counters] == [["hello"]]
+
+
 def test_disabled_bridge_counts_anthropic_text_in_python(rust_bridge) -> None:
     factory: Final = _FakeTextCounterFactory(1_000)
     litellm.rust(False)

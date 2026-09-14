@@ -103,6 +103,7 @@ def text_counter(tokenizer: RustTokenizer) -> Callable[[str], int] | None:
     factory: Final = TOKEN_COUNTER.load()
     if factory is None:
         return None
+    verbose_logger.debug("Rust token counter (%s) counting text", tokenizer)
     return _counter(factory, tokenizer).count_text
 
 
