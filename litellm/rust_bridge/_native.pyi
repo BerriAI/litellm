@@ -1,6 +1,6 @@
 from asyncio import Future
-from collections.abc import Coroutine
-from typing import Literal, overload
+from collections.abc import Callable, Coroutine
+from typing import Literal, final, overload
 
 from typing_extensions import Never
 
@@ -8,45 +8,55 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
 
 class RustBridgeDeclined(Exception): ...
+class RustBridgeUnavailable(Exception): ...
+class RustHostCallbackError(Exception): ...
 class RustUpstreamError(Exception): ...
 
 @overload
 def _ocr_lifecycle(
-    request: LiteLLMOcrRequest, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: Literal[False]
+    request: LiteLLMOcrRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[False],
+    host: object,
 ) -> OCRResponse: ...
 @overload
 def _ocr_lifecycle(
-    request: LiteLLMOcrRequest, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: Literal[True]
+    request: LiteLLMOcrRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[True],
+    host: object,
 ) -> Coroutine[object, object, OCRResponse]: ...
 def _messages_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _chat_completions_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _transcription_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _embeddings_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _rerank_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _image_generation_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _image_edit_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _speech_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _moderation_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def _responses_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool
+    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
 def ocr(
     model: str,
@@ -98,6 +108,7 @@ def messages(
     custom_llm_provider: str | None = None,
     extra_headers: object = None,
     timeout_seconds: float | None = None,
+    has_agentic_hook: bool | None = None,
 ) -> dict[str, object]: ...
 def amessages(
     model: str,
@@ -107,6 +118,7 @@ def amessages(
     custom_llm_provider: str | None = None,
     extra_headers: object = None,
     timeout_seconds: float | None = None,
+    has_agentic_hook: bool | None = None,
 ) -> Future[dict[str, object]]: ...
 def chat_completions(
     model: str,
@@ -117,6 +129,8 @@ def chat_completions(
     custom_llm_provider: str | None = None,
     extra_headers: object = None,
     timeout_seconds: float | None = None,
+    host_facts: object = None,
+    on_request: Callable[[], None] | None = None,
 ) -> dict[str, object]: ...
 def achat_completions(
     model: str,
@@ -127,10 +141,9 @@ def achat_completions(
     custom_llm_provider: str | None = None,
     extra_headers: object = None,
     timeout_seconds: float | None = None,
+    host_facts: object = None,
+    on_request: Callable[[], None] | None = None,
 ) -> Future[dict[str, object]]: ...
-def chat_completions_decline(
-    model: str, messages: object, optional_params: object = None, custom_llm_provider: str | None = None
-) -> str | None: ...
 
 _OCR_MAX_FILE_BYTES: int
 
@@ -140,21 +153,60 @@ def _ocr_upload_document(
     file_content: bytes, file_name: str | None = None, content_type: str | None = None
 ) -> dict[str, object]: ...
 
+@final
 class ResponsesWebSocketConnection:
     @classmethod
     def connect(
-        cls, url: str, headers: object = None, timeout_seconds: float | None = None
+        cls,
+        url: str,
+        headers: object = None,
+        timeout_seconds: float | None = None,
+        custom_llm_provider: str | None = None,
     ) -> Future[ResponsesWebSocketConnection]: ...
     def send_text(self, text: str) -> Future[None]: ...
     def recv_text(self) -> Future[str | None]: ...
     def close(self) -> Future[None]: ...
 
-class TokenCounter:
-    def __init__(self, tokenizer_json: str) -> None: ...
-    @staticmethod
-    def from_cl100k_ranks(rank_file: str) -> TokenCounter: ...
-    @staticmethod
-    def from_o200k_ranks(rank_file: str) -> TokenCounter: ...
-    def acount_request(self, body: bytes) -> Future[dict[str, object]]: ...
+def count_input_tokens(
+    body: bytes,
+    kind: str | None,
+    encoding: str,
+    disabled: bool,
+    legacy_accounting: bool,
+    resource_loader: Callable[[str], str],
+) -> Future[dict[str, object]]: ...
 
 def gil_stats() -> dict[str, int]: ...
+
+__all__ = [
+    "RustBridgeUnavailable",
+    "RustBridgeDeclined",
+    "RustHostCallbackError",
+    "RustUpstreamError",
+    "ocr",
+    "aocr",
+    "_OCR_MAX_FILE_BYTES",
+    "_ocr_upload_document",
+    "_ocr_file_document",
+    "_ocr_mime_type",
+    "_ocr_lifecycle",
+    "_transcription_lifecycle",
+    "transcription",
+    "atranscription",
+    "_messages_lifecycle",
+    "messages",
+    "amessages",
+    "_chat_completions_lifecycle",
+    "chat_completions",
+    "achat_completions",
+    "_embeddings_lifecycle",
+    "_image_edit_lifecycle",
+    "_image_generation_lifecycle",
+    "_moderation_lifecycle",
+    "_rerank_lifecycle",
+    "ResponsesWebSocketConnection",
+    "_responses_lifecycle",
+    "_speech_lifecycle",
+    "count_input_tokens",
+    "gil_stats",
+]

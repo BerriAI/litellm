@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Protocol
 
 
@@ -15,6 +15,8 @@ class RustChatCompletions(Protocol):
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
+        host_facts: Mapping[str, bool] | None = None,
+        on_request: Callable[[], None] | None = None,
     ) -> Mapping[str, object]:
         raise NotImplementedError
 
@@ -30,18 +32,9 @@ class RustAchatCompletions(Protocol):
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
+        host_facts: Mapping[str, bool] | None = None,
+        on_request: Callable[[], None] | None = None,
     ) -> Awaitable[Mapping[str, object]]:
-        raise NotImplementedError
-
-
-class RustChatCompletionsDecline(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        custom_llm_provider: str | None,
-    ) -> str | None:
         raise NotImplementedError
 
 

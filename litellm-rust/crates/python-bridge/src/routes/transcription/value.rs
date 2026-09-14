@@ -7,7 +7,7 @@ use litellm_core::audio_transcription::{
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::{admit, execution_error_to_pyerr};
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_transcription(
@@ -23,6 +23,12 @@ fn prepare_transcription(
         timeout_seconds: inputs.timeout_seconds,
     })?;
     let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
+
+    admit(litellm_core::audio_transcription::admit(
+        &options.model,
+        options.custom_llm_provider.as_deref(),
+        &audio,
+    ))?;
 
     Ok(async move {
         let RouteOptions {
@@ -67,5 +73,5 @@ bridge_route! {
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_transcription,
-    errors = core_error_to_pyerr,
+    errors = execution_error_to_pyerr,
 }

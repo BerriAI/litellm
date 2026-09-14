@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
 from typing import (
     Final,
     cast,  # noqa: TID251  # native callable signatures are checked by bridge contract tests
@@ -10,12 +11,11 @@ from typing import (
 import httpx
 
 from litellm.rust_bridge.bindings import BINDING_UNSET, BindingUnset
-from litellm.rust_bridge.configuration import RouteName
+from litellm.rust_bridge.configuration import CapabilityContext, DeliveryMode
+from litellm.rust_bridge.messages.definition import COMPONENT
 from litellm.rust_bridge.messages.types import RustAmessages, RustMessages
-from litellm.rust_bridge.route import NativeRoute
+from litellm.rust_bridge.runtime import BridgeErrorContext, ainvoke, invoke
 from litellm.rust_bridge.timeouts import timeout_to_seconds
-
-ROUTE: Final = NativeRoute(RouteName.MESSAGES)
 
 
 def _as_messages(value: object) -> RustMessages | None:
@@ -26,8 +26,8 @@ def _as_amessages(value: object) -> RustAmessages | None:
     return cast(RustAmessages, value) if callable(value) else None  # cast-ok: validated callable native binding
 
 
-_MESSAGES: Final = ROUTE.bind("messages", validate=_as_messages)
-_AMESSAGES: Final = ROUTE.bind("amessages", validate=_as_amessages)
+_MESSAGES: Final = COMPONENT.bind("messages", validate=_as_messages)
+_AMESSAGES: Final = COMPONENT.bind("amessages", validate=_as_amessages)
 
 
 def set_rust_messages(
@@ -40,56 +40,108 @@ def set_rust_messages(
 
 
 def load_rust_messages() -> RustMessages | None:
-    return ROUTE.select(_MESSAGES)
+    return COMPONENT.resolve().select(_MESSAGES)
 
 
 def load_rust_amessages() -> RustAmessages | None:
-    return ROUTE.select(_AMESSAGES)
+    return COMPONENT.resolve().select(_AMESSAGES)
 
 
 def messages(
     *,
     model: str,
-    body: dict[str, object],
+    body: Mapping[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
+    extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
+    has_agentic_hook: bool = False,
 ) -> dict[str, object] | None:
-    rust_messages: Final = load_rust_messages()
-    if rust_messages is None:
-        return None
-    return rust_messages(
-        model=model,
-        body=body,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout_seconds=timeout_to_seconds(timeout),
+    execution: Final = COMPONENT.resolve(
+        CapabilityContext(
+            provider=custom_llm_provider or "",
+            model=model,
+            delivery=DeliveryMode.STREAMING if body.get("stream") is True else DeliveryMode.COMPLETED,
+        )
+    )
+    rust_messages: Final = execution.select(_MESSAGES)
+    native_call: Final[Callable[[], dict[str, object]] | None] = (
+        (
+            lambda: rust_messages(
+                model=model,
+                body=body,
+                has_agentic_hook=has_agentic_hook,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+        )
+        if rust_messages is not None
+        else None
+    )
+    return invoke(
+        execution=execution,
+        native_call=native_call,
+        python_fallback=lambda: None,
+        adapt=lambda value: value,
+        context=BridgeErrorContext(
+            route=COMPONENT.name.value,
+            provider=custom_llm_provider or "",
+            model=model,
+        ),
     )
 
 
 async def amessages(
     *,
     model: str,
-    body: dict[str, object],
+    body: Mapping[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
+    extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
+    has_agentic_hook: bool = False,
 ) -> dict[str, object] | None:
-    rust_amessages: Final = load_rust_amessages()
-    if rust_amessages is None:
+    execution: Final = COMPONENT.resolve(
+        CapabilityContext(
+            provider=custom_llm_provider or "",
+            model=model,
+            delivery=DeliveryMode.STREAMING if body.get("stream") is True else DeliveryMode.COMPLETED,
+        )
+    )
+    rust_amessages: Final = execution.select(_AMESSAGES)
+    native_call: Final[Callable[[], Awaitable[dict[str, object]]] | None] = (
+        (
+            lambda: rust_amessages(
+                model=model,
+                body=body,
+                has_agentic_hook=has_agentic_hook,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+        )
+        if rust_amessages is not None
+        else None
+    )
+
+    async def python_fallback() -> None:
         return None
-    return await rust_amessages(
-        model=model,
-        body=body,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout_seconds=timeout_to_seconds(timeout),
+
+    return await ainvoke(
+        execution=execution,
+        native_call=native_call,
+        python_fallback=python_fallback,
+        adapt=lambda value: value,
+        context=BridgeErrorContext(
+            route=COMPONENT.name.value,
+            provider=custom_llm_provider or "",
+            model=model,
+        ),
     )

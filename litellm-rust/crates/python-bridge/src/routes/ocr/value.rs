@@ -28,6 +28,11 @@ fn prepare_ocr(
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
         .unwrap_or_default();
 
+    crate::errors::admit(litellm_core::ocr::admit_value(
+        &options.model,
+        options.custom_llm_provider.as_deref(),
+    ))?;
+
     Ok(async move {
         let RouteOptions {
             model,

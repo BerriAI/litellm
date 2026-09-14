@@ -1,4 +1,5 @@
 from collections.abc import Generator, Mapping
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -51,7 +52,7 @@ def test_admitted_failure_is_returned_without_replay() -> None:
         assert caught.value is failure
     finally:
         NATIVE_OCR_LIFECYCLE.reset()
-        litellm.rust(None)
+        configuration.reset_rust_configuration()
     assert native.call_count == 1
 
 
@@ -64,6 +65,7 @@ def test_public_binding_keeps_positional_fields_and_defaults_out_of_native_hook_
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
         asynchronous: bool,
+        host: object,
     ) -> OCRResponse:
         captured.append((request, args, kwargs, asynchronous))
         return OCRResponse(pages=[], model=request.model)
@@ -74,7 +76,7 @@ def test_public_binding_keeps_positional_fields_and_defaults_out_of_native_hook_
         response: Final = litellm.ocr("mistral/mistral-ocr-latest", document)
     finally:
         NATIVE_OCR_LIFECYCLE.reset()
-        litellm.rust(None)
+        configuration.reset_rust_configuration()
 
     request, call_args, hook_kwargs, asynchronous = captured[0]
     assert response.model == "mistral/mistral-ocr-latest"
@@ -94,6 +96,7 @@ def test_public_binding_keeps_keyword_model_and_document_in_native_hook_kwargs()
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
         asynchronous: bool,
+        host: object,
     ) -> OCRResponse:
         assert args == ()
         captured.append(kwargs)
@@ -105,7 +108,7 @@ def test_public_binding_keeps_keyword_model_and_document_in_native_hook_kwargs()
         litellm.ocr(model="mistral/mistral-ocr-latest", document=document)
     finally:
         NATIVE_OCR_LIFECYCLE.reset()
-        litellm.rust(None)
+        configuration.reset_rust_configuration()
 
     assert captured[0]["model"] == "mistral/mistral-ocr-latest"
     assert captured[0]["document"] is document
@@ -123,7 +126,7 @@ def test_public_duplicate_argument_error_does_not_depend_on_native_selection(ena
             litellm.ocr("mistral/mistral-ocr-latest", document, model="duplicate")
     finally:
         NATIVE_OCR_LIFECYCLE.reset()
-        litellm.rust(None)
+        configuration.reset_rust_configuration()
     assert native.call_count == 0
 
 
@@ -137,14 +140,14 @@ def test_public_missing_required_argument_error_does_not_depend_on_native_select
             litellm.ocr("mistral/mistral-ocr-latest")
     finally:
         NATIVE_OCR_LIFECYCLE.reset()
-        litellm.rust(None)
+        configuration.reset_rust_configuration()
     assert native.call_count == 0
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("enabled", [False, True, None])
-async def test_environment_opt_out_never_loads_native(
+@pytest.mark.parametrize("enabled", [False, None])
+async def test_environment_opt_out_skips_native_without_process_enable(
     monkeypatch: pytest.MonkeyPatch, asynchronous: bool, enabled: bool | None
 ) -> None:
     monkeypatch.setenv("LITELLM_RUST", "0")
@@ -153,7 +156,8 @@ async def test_environment_opt_out_never_loads_native(
     monkeypatch.setattr(legacy, "aocr" if asynchronous else "ocr", fallback)
     load: Final = Mock(side_effect=AssertionError("native must not be loaded"))
     monkeypatch.setattr(bindings, "get_native_bridge", load)
-    litellm.rust(enabled)
+    if enabled is not None:
+        litellm.rust(enabled)
     document: Final = {"type": "file", "file": b"pdf"}
 
     result: Final = (
@@ -196,6 +200,10 @@ class Declined(Exception):
     pass
 
 
+class Upstream(Exception):
+    pass
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("declined", [False, True])
@@ -205,10 +213,11 @@ async def test_only_native_declines_replay_on_legacy(
     failure: Final = Declined("unsupported") if declined else RuntimeError("provider already called")
     native: Final = AsyncMock(side_effect=failure) if asynchronous else Mock(side_effect=failure)
     NATIVE_OCR_LIFECYCLE.override(native)
-    import importlib
-
-    main: Final = importlib.import_module("litellm.ocr.main")
-    monkeypatch.setattr(main, "native_exception_types", lambda: (Declined, RuntimeError))
+    monkeypatch.setattr(
+        bindings,
+        "get_native_bridge",
+        lambda: SimpleNamespace(RustBridgeDeclined=Declined, RustUpstreamError=Upstream),
+    )
     response: Final = OCRResponse(pages=[], model="mistral-ocr-latest")
     fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
     monkeypatch.setattr(legacy, "aocr" if asynchronous else "ocr", fallback)

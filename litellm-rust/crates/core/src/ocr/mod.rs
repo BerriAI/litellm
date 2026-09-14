@@ -19,6 +19,15 @@ pub use lifecycle::{
 };
 pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
 
+pub fn admit_value(
+    model: &str,
+    provider: Option<&str>,
+) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+    registry::resolve_wire_adapter(model, provider)
+        .map(|_| ())
+        .map_err(|_| crate::call_lifecycle::admission::AdmissionDecline::Provider)
+}
+
 #[cfg(test)]
 #[path = "../../tests/azure_ai_ocr.rs"]
 mod azure_ai_tests;

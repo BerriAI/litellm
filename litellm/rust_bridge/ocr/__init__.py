@@ -1,8 +1,8 @@
 from typing import Final
 
+from litellm.rust_bridge.ocr.definition import COMPONENT
 from litellm.rust_bridge.ocr.types import LiteLLMOcrRequest, RustAocr, RustOcr
 from litellm.rust_bridge.ocr.value import (
-    ROUTE,
     aocr,
     load_rust_aocr,
     load_rust_ocr,
@@ -10,7 +10,7 @@ from litellm.rust_bridge.ocr.value import (
 )
 
 __all__: Final = (
-    "ROUTE",
+    "COMPONENT",
     "LiteLLMOcrRequest",
     "RustAocr",
     "RustOcr",

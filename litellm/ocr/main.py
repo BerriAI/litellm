@@ -6,10 +6,11 @@ import httpx
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
 from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
-from litellm.rust_bridge.bindings import native_exception_types
-from litellm.rust_bridge.configuration import rust_ocr_enabled
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
+from litellm.rust_bridge.ocr.definition import COMPONENT
+from litellm.rust_bridge.ocr.host import HOST
 from litellm.rust_bridge.ocr.lifecycle import select
+from litellm.rust_bridge.runtime import BridgeErrorContext, ainvoke, invoke
 
 __all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
 
@@ -48,32 +49,48 @@ def ocr(
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
     request: Final = _public_request("ocr", args, kwargs)
-    native: Final = select(request) if rust_ocr_enabled() else None
-    if native is not None:
-        try:
-            return native(request, args, kwargs, False)
-        except _decline_types():
-            pass
+    execution: Final = COMPONENT.resolve()
+    native: Final = select(request, execution)
     fallback: Final = cast(  # cast-ok: forward the original call shape through the legacy @client decorator
         Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], legacy.ocr
     )
-    return fallback(*args, **kwargs)
+    native_call: Final[Callable[[], OCRResponse] | None] = (
+        (lambda: native(request, args, kwargs, False, HOST)) if native is not None else None
+    )
+    return invoke(
+        execution=execution,
+        native_call=native_call,
+        python_fallback=lambda: fallback(*args, **kwargs),
+        adapt=lambda value: value,
+        context=BridgeErrorContext(
+            route=COMPONENT.name.value,
+            provider=request.custom_llm_provider or "",
+            model=request.model,
+        ),
+    )
 
 
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
     request: Final = _public_request("aocr", args, kwargs)
-    native: Final = select(request) if rust_ocr_enabled() else None
-    if native is not None:
-        try:
-            return await native(request, args, kwargs, True)
-        except _decline_types():
-            pass
+    execution: Final = COMPONENT.resolve()
+    native: Final = select(request, execution)
     fallback: Final = cast(  # cast-ok: forward the original call shape through the legacy @client decorator
         Callable[..., Awaitable[OCRResponse]], legacy.aocr
     )
-    return await fallback(*args, **kwargs)
+    native_call: Final[Callable[[], Awaitable[OCRResponse]] | None] = (
+        (lambda: native(request, args, kwargs, True, HOST)) if native is not None else None
+    )
+    async def python_fallback() -> OCRResponse:
+        return await fallback(*args, **kwargs)
 
-
-def _decline_types() -> tuple[type[BaseException], ...]:
-    exception_types: Final = native_exception_types()
-    return (exception_types[0],) if exception_types is not None else ()
+    return await ainvoke(
+        execution=execution,
+        native_call=native_call,
+        python_fallback=python_fallback,
+        adapt=lambda value: value,
+        context=BridgeErrorContext(
+            route=COMPONENT.name.value,
+            provider=request.custom_llm_provider or "",
+            model=request.model,
+        ),
+    )

@@ -1,26 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
+from typing import Final, cast  # noqa: TID251  # validates dynamically loaded native callables
 
-import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.ocr import ROUTE, LiteLLMOcrRequest
-from litellm.rust_bridge.route import NativeLifecycle
+from litellm.rust_bridge.ocr.definition import COMPONENT
+from litellm.rust_bridge.ocr.host import HOST
+from litellm.rust_bridge.ocr.types import LiteLLMOcrRequest
+from litellm.rust_bridge.route import ComponentExecution, NativeLifecycle
 
 NativeOcrLifecycle = NativeLifecycle[LiteLLMOcrRequest, OCRResponse]
-
-
-class ExceptionMapper(Protocol):
-    def __call__(
-        self,
-        *,
-        model: str,
-        custom_llm_provider: str | None,
-        original_exception: Exception,
-        completion_kwargs: dict[str, object],
-        extra_kwargs: dict[str, object],
-    ) -> Exception: ...
 
 
 def _binding(value: object) -> NativeOcrLifecycle | None:
@@ -29,32 +17,15 @@ def _binding(value: object) -> NativeOcrLifecycle | None:
     return cast("NativeOcrLifecycle", value)  # cast-ok: callable validated at the native binding boundary
 
 
-LIFECYCLE: Final = ROUTE.bind("_ocr_lifecycle", validate=_binding)
+LIFECYCLE: Final = COMPONENT.bind("_ocr_lifecycle", validate=_binding)
 NATIVE_OCR_LIFECYCLE: Final = LIFECYCLE
 
 
-def select(request: LiteLLMOcrRequest) -> NativeOcrLifecycle | None:
+def select(request: LiteLLMOcrRequest, execution: ComponentExecution) -> NativeOcrLifecycle | None:
     if request.kwargs.get("aocr"):
         return None
-    return ROUTE.select(NATIVE_OCR_LIFECYCLE)
-
-
-def arguments(request: LiteLLMOcrRequest) -> Mapping[str, object]:
-    return request.kwargs
+    return execution.select(NATIVE_OCR_LIFECYCLE)
 
 
 def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: str) -> Exception:
-    mapper: Final = cast(  # cast-ok: bounded adapter for the legacy public exception mapper
-        ExceptionMapper, litellm.exception_type
-    )
-    try:
-        return mapper(
-            model=request.model.removeprefix(f"{request_provider}/"),
-            custom_llm_provider=request_provider,
-            original_exception=error,
-            completion_kwargs=dict(arguments(request)),  # mutable-ok: exception mapper requires owned kwargs
-            extra_kwargs=dict(request.kwargs),  # mutable-ok: exception mapper requires owned kwargs
-        )
-    except Exception as public_error:
-        public_error.__context__ = error
-        return public_error
+    return HOST.map_failure(error, request, request_provider)

@@ -1,6 +1,5 @@
 from typing import Final
 
-from litellm.rust_bridge.configuration import RouteName
-from litellm.rust_bridge.route import NativeRoute
+from litellm.rust_bridge.image_generation.definition import COMPONENT
 
-ROUTE: Final = NativeRoute(RouteName.IMAGE_GENERATION)
+__all__: Final = ("COMPONENT",)

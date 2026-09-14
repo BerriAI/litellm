@@ -8,12 +8,11 @@ from typing import (
 import httpx
 
 from litellm.rust_bridge.bindings import BINDING_UNSET, BindingUnset
-from litellm.rust_bridge.configuration import RouteName
-from litellm.rust_bridge.route import NativeRoute
+from litellm.rust_bridge.configuration import CapabilityContext
+from litellm.rust_bridge.runtime import BridgeErrorContext, ainvoke, invoke
 from litellm.rust_bridge.timeouts import timeout_to_seconds
+from litellm.rust_bridge.transcription.definition import COMPONENT
 from litellm.rust_bridge.transcription.types import RustAtranscription, RustTranscription
-
-ROUTE: Final = NativeRoute(RouteName.TRANSCRIPTION)
 
 
 def _as_transcription(value: object) -> RustTranscription | None:
@@ -24,8 +23,8 @@ def _as_atranscription(value: object) -> RustAtranscription | None:
     return cast(RustAtranscription, value) if callable(value) else None  # cast-ok: validated callable native binding
 
 
-_TRANSCRIPTION: Final = ROUTE.bind("transcription", validate=_as_transcription)
-_ATRANSCRIPTION: Final = ROUTE.bind("atranscription", validate=_as_atranscription)
+_TRANSCRIPTION: Final = COMPONENT.bind("transcription", validate=_as_transcription)
+_ATRANSCRIPTION: Final = COMPONENT.bind("atranscription", validate=_as_atranscription)
 
 
 def configure_rust_transcription(
@@ -37,12 +36,12 @@ def configure_rust_transcription(
     _ATRANSCRIPTION.configure(atranscription)
 
 
-def load_rust_transcription() -> RustTranscription | None:
-    return ROUTE.select(_TRANSCRIPTION)
+def load_rust_transcription(*, context: CapabilityContext) -> RustTranscription | None:
+    return COMPONENT.resolve(context).select(_TRANSCRIPTION)
 
 
-def load_rust_atranscription() -> RustAtranscription | None:
-    return ROUTE.select(_ATRANSCRIPTION)
+def load_rust_atranscription(*, context: CapabilityContext) -> RustAtranscription | None:
+    return COMPONENT.resolve(context).select(_ATRANSCRIPTION)
 
 
 def transcription(
@@ -56,18 +55,27 @@ def transcription(
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_transcription: Final = load_rust_transcription()
-    if rust_transcription is None:
-        return None
-    return rust_transcription(
-        model=model,
-        audio=audio,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=timeout_to_seconds(timeout),
+    execution: Final = COMPONENT.resolve(CapabilityContext(provider=custom_llm_provider or "", model=model))
+    rust_transcription: Final = execution.select(_TRANSCRIPTION)
+    return invoke(
+        execution=execution,
+        native_call=(
+            lambda: rust_transcription(
+                model=model,
+                audio=audio,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+        )
+        if rust_transcription is not None
+        else None,
+        python_fallback=lambda: None,
+        adapt=lambda response: response,
+        context=BridgeErrorContext(route=COMPONENT.name.value, provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -82,16 +90,28 @@ async def atranscription(
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_atranscription: Final = load_rust_atranscription()
-    if rust_atranscription is None:
+    execution: Final = COMPONENT.resolve(CapabilityContext(provider=custom_llm_provider or "", model=model))
+    rust_atranscription: Final = execution.select(_ATRANSCRIPTION)
+    async def python_fallback() -> None:
         return None
-    return await rust_atranscription(
-        model=model,
-        audio=audio,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=timeout_to_seconds(timeout),
+
+    return await ainvoke(
+        execution=execution,
+        native_call=(
+            lambda: rust_atranscription(
+                model=model,
+                audio=audio,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+        )
+        if rust_atranscription is not None
+        else None,
+        python_fallback=python_fallback,
+        adapt=lambda response: response,
+        context=BridgeErrorContext(route=COMPONENT.name.value, provider=custom_llm_provider or "", model=model),
     )

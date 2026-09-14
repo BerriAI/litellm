@@ -3,17 +3,18 @@ from __future__ import annotations
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from types import ModuleType
-from typing import (
-    Final,
-    Literal,
-    Protocol,
-    TypeVar,
-    cast,  # noqa: TID251  # validate callability at the native boundary
-    overload,
-)
+from typing import Final, Literal, Protocol, TypeVar, cast, overload
 
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.configuration import ROUTE_POLICIES, RouteName, RoutePolicy, rust_enabled
+from litellm.rust_bridge.configuration import (
+    CapabilityContext,
+    CapabilitySpec,
+    ExecutionDecision,
+    RouteName,
+    UtilityName,
+    capability_decision,
+)
+from litellm.rust_bridge.errors import RustRouteUnavailableError, RustRouteUnsupportedError
 
 BindingT = TypeVar("BindingT")
 RequestT = TypeVar("RequestT", contravariant=True)
@@ -28,6 +29,7 @@ class NativeLifecycle(Protocol[RequestT, ResponseT]):
         args: tuple[object, ...],
         kwargs: dict[str, object],  # mutable-ok: PyO3 requires the original concrete dict
         asynchronous: Literal[False],
+        host: object,
     ) -> ResponseT: ...
 
     @overload
@@ -37,6 +39,7 @@ class NativeLifecycle(Protocol[RequestT, ResponseT]):
         args: tuple[object, ...],
         kwargs: dict[str, object],  # mutable-ok: PyO3 requires the original concrete dict
         asynchronous: Literal[True],
+        host: object,
     ) -> Coroutine[object, object, ResponseT]: ...
 
     @overload
@@ -46,6 +49,7 @@ class NativeLifecycle(Protocol[RequestT, ResponseT]):
         args: tuple[object, ...],
         kwargs: dict[str, object],  # mutable-ok: PyO3 requires the original concrete dict
         asynchronous: bool,
+        host: object,
     ) -> ResponseT | Coroutine[object, object, ResponseT]: ...
 
 
@@ -56,15 +60,39 @@ def _lifecycle(value: object) -> NativeLifecycle[object, object] | None:
 
 
 @dataclass(frozen=True, slots=True)
-class NativeRoute:
-    name: RouteName
+class ComponentExecution:
+    route_name: RouteName | UtilityName
+    decision: ExecutionDecision
 
-    @property
-    def policy(self) -> RoutePolicy:
-        return ROUTE_POLICIES[self.name]
+    def require_supported(self) -> None:
+        if self.decision is ExecutionDecision.UNSUPPORTED:
+            raise RustRouteUnsupportedError(
+                f"No Python or Rust implementation for {self.route_name.value}"
+            )
 
-    def enabled(self) -> bool:
-        return rust_enabled(self.name)
+    def select(self, binding: NativeBinding[BindingT]) -> BindingT | None:
+        self.require_supported()
+        if self.decision is ExecutionDecision.PYTHON:
+            return None
+        selected: Final = binding.load()
+        if selected is None and self.decision is ExecutionDecision.RUST_REQUIRED:
+            raise RustRouteUnavailableError(
+                f"Rust {self.route_name.value} bridge is unavailable"
+            )
+        return selected
+
+
+@dataclass(frozen=True, slots=True)
+class NativeComponent:
+    name: RouteName | UtilityName
+    capability: CapabilitySpec
+    exports: tuple[str, ...]
+
+    def resolve(self, context: CapabilityContext = CapabilityContext()) -> ComponentExecution:
+        return ComponentExecution(
+            route_name=self.name,
+            decision=capability_decision(self.capability, context=context),
+        )
 
     def bind(
         self,
@@ -73,10 +101,9 @@ class NativeRoute:
         validate: Callable[[object], BindingT | None],
         module_loader: Callable[[], ModuleType | None] | None = None,
     ) -> NativeBinding[BindingT]:
+        if export not in self.exports:
+            raise ValueError(f"native export {export!r} is not declared for {self.name.value}")
         return NativeBinding(export, validate=validate, module_loader=module_loader)
-
-    def select(self, binding: NativeBinding[BindingT]) -> BindingT | None:
-        return binding.load() if self.enabled() else None
 
     def lifecycle(self) -> NativeBinding[NativeLifecycle[object, object]]:
         export: Final = f"_{self.name.value}_lifecycle"

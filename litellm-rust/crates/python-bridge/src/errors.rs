@@ -11,6 +11,18 @@ pyo3::create_exception!(
 
 pyo3::create_exception!(
     _native,
+    RustHostCallbackError,
+    pyo3::exceptions::PyException
+);
+
+pyo3::create_exception!(
+    _native,
+    RustBridgeUnavailable,
+    pyo3::exceptions::PyException
+);
+
+pyo3::create_exception!(
+    _native,
     RustUpstreamError,
     pyo3::exceptions::PyException,
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
@@ -31,7 +43,7 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 pub(crate) fn execution_error_to_pyerr(error: Error) -> PyErr {
     match error {
         Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
-        Error::Network(message) | Error::InvalidResponse(message) => {
+        Error::Connect(message) | Error::Network(message) | Error::InvalidResponse(message) => {
             RustUpstreamError::new_err((0u16, message))
         }
         other => core_error_to_pyerr(other),
@@ -40,8 +52,23 @@ pub(crate) fn execution_error_to_pyerr(error: Error) -> PyErr {
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
+    module.add(
+        "RustBridgeUnavailable",
+        py.get_type::<RustBridgeUnavailable>(),
+    )?;
     module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
+    module.add(
+        "RustHostCallbackError",
+        py.get_type::<RustHostCallbackError>(),
+    )?;
     module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
+}
+
+pub(crate) fn host_callback_error(py: Python<'_>, error: PyErr) -> PyErr {
+    let wrapped = RustHostCallbackError::new_err(error.to_string());
+    wrapped.set_context(py, Some(error.clone_ref(py)));
+    wrapped.set_cause(py, Some(error));
+    wrapped
 }
 
 #[cfg(test)]
@@ -70,7 +97,6 @@ mod tests {
                 Error::MissingAzureDocumentIntelligenceCredentials,
                 Error::MissingReductoApiKey,
                 Error::Routing("routing failed".into()),
-                Error::Connect("connection refused".into()),
             ] {
                 let expected = core_error_to_pyerr(error.clone());
                 let actual = execution_error_to_pyerr(error);
@@ -86,6 +112,7 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             for (error, status, message) in [
+                (Error::Connect("connection refused".into()), 0, "connection refused"),
                 (
                     Error::Http {
                         status: 429,
@@ -113,4 +140,10 @@ mod tests {
             }
         });
     }
+}
+
+pub(crate) fn admit(
+    result: Result<(), litellm_core::call_lifecycle::admission::AdmissionDecline>,
+) -> PyResult<()> {
+    result.map_err(|reason| RustBridgeDeclined::new_err(reason.to_string()))
 }

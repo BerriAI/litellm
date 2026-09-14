@@ -335,3 +335,12 @@ mod tests {
         assert!(!nested_without_flat.data.contains_key("model"));
     }
 }
+
+pub fn admit(
+    provider: Option<&str>,
+) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+    match provider {
+        Some("openai") => Ok(()),
+        _ => Err(crate::call_lifecycle::admission::AdmissionDecline::Provider),
+    }
+}

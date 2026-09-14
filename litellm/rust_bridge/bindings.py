@@ -63,3 +63,15 @@ def native_exception_types() -> tuple[type[BaseException], type[BaseException]] 
     if not isinstance(declined, type) or not isinstance(upstream, type):
         return None
     return declined, upstream
+
+
+def native_unavailable_exception() -> tuple[type[BaseException], ...]:
+    native: Final = get_native_bridge()
+    unavailable: Final = getattr(native, "RustBridgeUnavailable", None)
+    return (unavailable,) if isinstance(unavailable, type) and issubclass(unavailable, BaseException) else ()
+
+
+def native_host_callback_exception() -> tuple[type[BaseException], ...]:
+    native: Final = get_native_bridge()
+    callback: Final = getattr(native, "RustHostCallbackError", None)
+    return (callback,) if isinstance(callback, type) and issubclass(callback, BaseException) else ()

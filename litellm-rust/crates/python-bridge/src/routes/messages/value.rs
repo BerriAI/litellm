@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 use std::future::Future;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::{admit, execution_error_to_pyerr};
 use crate::marshal::{RouteOptions, RouteOptionsInputs, required_object};
 
 fn prepare_messages(
@@ -20,6 +20,12 @@ fn prepare_messages(
         extra_headers: inputs.extra_headers,
         timeout_seconds: inputs.timeout_seconds,
     })?;
+
+    admit(litellm_core::messages::admit(
+        &options.model,
+        options.custom_llm_provider.as_deref(),
+        inputs.has_agentic_hook.unwrap_or(false),
+    ))?;
 
     Ok(async move {
         let RouteOptions {
@@ -59,7 +65,8 @@ bridge_route! {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
+        has_agentic_hook: Option<bool>,
     },
     prepare = prepare_messages,
-    errors = core_error_to_pyerr,
+    errors = execution_error_to_pyerr,
 }

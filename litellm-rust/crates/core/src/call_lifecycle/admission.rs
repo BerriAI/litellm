@@ -18,3 +18,13 @@ pub enum UnimplementedRoute {
 pub fn admit_unimplemented(route: UnimplementedRoute) -> Result<Infallible, UnimplementedRoute> {
     Err(route)
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::Display)]
+pub enum AdmissionDecline {
+    #[strum(to_string = "provider is not supported by this native route")]
+    Provider,
+    #[strum(to_string = "required host operations are not supported")]
+    HostOperations,
+    #[strum(to_string = "{0}")]
+    Feature(&'static str),
+}

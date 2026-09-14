@@ -55,5 +55,55 @@ pub fn chat_completions_decline_reason(
         .map(|reason| reason.0)
 }
 
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdmissionContext {
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default)]
+    pub anthropic_user_id: bool,
+    #[serde(default)]
+    pub bedrock_metadata_owned: bool,
+}
+
+pub fn admit(
+    model: &str,
+    provider: Option<&str>,
+    messages: Value,
+    params: &Map<String, Value>,
+    headers: Option<&Map<String, Value>>,
+    context: AdmissionContext,
+) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+    use crate::call_lifecycle::admission::AdmissionDecline;
+    let resolved = crate::routing_utils::provider::get_custom_llm_provider(model, provider);
+    let provider = provider.or_else(|| resolved.as_ref().map(|value| value.custom_llm_provider));
+    if context.stream {
+        return Err(AdmissionDecline::Feature("streaming"));
+    }
+    if (provider == Some("anthropic") && context.anthropic_user_id)
+        || (provider == Some("bedrock") && context.bedrock_metadata_owned)
+    {
+        return Err(AdmissionDecline::HostOperations);
+    }
+    #[cfg(feature = "bedrock-auth")]
+    if provider == Some("bedrock")
+        && headers.is_some_and(|headers| {
+            headers
+                .keys()
+                .any(|name| crate::providers::bedrock::aws_base::is_sigv4_computed_header(name))
+        })
+    {
+        return Err(AdmissionDecline::Feature(
+            "request forwards a header AWS SigV4 computes",
+        ));
+    }
+    let _ = headers;
+    match chat_completions_decline_reason(model, provider, messages, params) {
+        Some(reason) => Err(AdmissionDecline::Feature(reason)),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests;

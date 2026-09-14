@@ -29,6 +29,7 @@ impl PythonLogger {
     pub(super) fn update_ocr(
         &self,
         py: Python<'_>,
+        host: &Py<PyAny>,
         kwargs: &Py<PyDict>,
         pre_call: &OcrLoggingFields,
         secret_fields: &[&str],
@@ -58,7 +59,7 @@ impl PythonLogger {
                 params.set_item(name, value)?;
             }
         }
-        for name in custom_pricing_fields(py)? {
+        for name in custom_pricing_fields(py, host)? {
             if let Some(value) = kwargs.bind(py).get_item(&name)?
                 && !value.is_none()
             {
@@ -127,15 +128,10 @@ impl PythonLogger {
     }
 }
 
-fn custom_pricing_fields(py: Python<'_>) -> PyResult<Vec<String>> {
-    py.import("litellm.types.utils")?
-        .getattr("CustomPricingLiteLLMParams")?
-        .getattr("model_fields")?
-        .cast_into::<PyDict>()?
-        .keys()
-        .iter()
-        .map(|name| name.extract::<String>())
-        .collect()
+fn custom_pricing_fields(py: Python<'_>, host: &Py<PyAny>) -> PyResult<Vec<String>> {
+    host.bind(py)
+        .call_method0("custom_pricing_fields")?
+        .extract()
 }
 
 fn redact(
@@ -158,21 +154,26 @@ fn redact(
     Ok(redacted.unbind())
 }
 
-pub(super) fn response(py: Python<'_>, response: &LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {
-    py.import("litellm.rust_bridge.ocr.value")?
-        .getattr("_response")?
+pub(super) fn response(
+    py: Python<'_>,
+    host: &Py<PyAny>,
+    response: &LiteLLMOcrResponse,
+) -> PyResult<Py<PyAny>> {
+    host.bind(py)
+        .getattr("response")?
         .call1((to_py(py, response)?,))
         .map(Bound::unbind)
 }
 
 pub(super) fn map_failure(
     py: Python<'_>,
+    host: &Py<PyAny>,
     error: &Py<PyBaseException>,
     request: &Bound<'_, PyAny>,
     provider: &str,
 ) -> PyResult<Py<PyBaseException>> {
-    Ok(py
-        .import("litellm.rust_bridge.ocr.lifecycle")?
+    Ok(host
+        .bind(py)
         .getattr("map_failure")?
         .call1((error, request, provider))?
         .extract()?)

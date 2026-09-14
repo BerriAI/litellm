@@ -17,6 +17,7 @@ use crate::lifecycle::{
 
 struct PythonOcrHost {
     state: PythonCallState,
+    adapter: Py<PyAny>,
     data: OcrHostData,
 }
 
@@ -92,6 +93,7 @@ impl PythonOcrHost {
         let pre_call = projected.pre_call.as_ref().ok_or_else(missing_state)?;
         self.state.logger()?.update_ocr(
             py,
+            &self.adapter,
             &self.state.kwargs,
             pre_call,
             &projected.fields.secret_fields,
@@ -215,7 +217,8 @@ impl PythonRoute for PythonOcrHost {
             }
             OcrHostOperation::ConstructResponse(response) => {
                 self.state.end = Some(now(py)?);
-                self.state.response = Some(callbacks::response(py, response.as_ref())?);
+                self.state.response =
+                    Some(callbacks::response(py, &self.adapter, response.as_ref())?);
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::MapFailure(error) => {
@@ -234,7 +237,7 @@ impl PythonRoute for PythonOcrHost {
                     ),
                     OcrHostData::Released => return Err(missing_state()),
                 };
-                let mapped = callbacks::map_failure(py, error, request, provider)?;
+                let mapped = callbacks::map_failure(py, &self.adapter, error, request, provider)?;
                 self.state
                     .retain_error(py, PyErr::from_value(mapped.into_bound(py).into_any()));
                 OcrHostResult::Lifecycle(Ok(()))
@@ -249,6 +252,7 @@ impl PythonRoute for PythonOcrHost {
         self.data = OcrHostData::Released;
     }
     fn traverse(&self, visit: &pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
+        visit.call(&self.adapter)?;
         match &self.data {
             OcrHostData::Unprojected { request } => visit.call(request),
             OcrHostData::Projected(projected) => {
@@ -282,6 +286,7 @@ fn _ocr_lifecycle(
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
+    host: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
     let call = admitted_call(OcrCall::admit(
@@ -299,6 +304,7 @@ fn _ocr_lifecycle(
             asynchronous,
             if asynchronous { "aocr" } else { "ocr" },
         )?,
+        adapter: host.unbind(),
         data: OcrHostData::Unprojected {
             request: request.unbind(),
         },

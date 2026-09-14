@@ -1,8 +1,8 @@
 from typing import Final
 
+from litellm.rust_bridge.messages.definition import COMPONENT
 from litellm.rust_bridge.messages.types import RustAmessages, RustMessages
 from litellm.rust_bridge.messages.value import (
-    ROUTE,
     amessages,
     load_rust_amessages,
     load_rust_messages,
@@ -11,7 +11,7 @@ from litellm.rust_bridge.messages.value import (
 )
 
 __all__: Final = (
-    "ROUTE",
+    "COMPONENT",
     "RustAmessages",
     "RustMessages",
     "amessages",

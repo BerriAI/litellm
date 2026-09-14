@@ -2,9 +2,7 @@ use litellm_core::Error;
 use std::future::Future;
 
 use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
-use litellm_core::chat_completions::{
-    chat_completions as run_chat_completions, chat_completions_decline_reason,
-};
+use litellm_core::chat_completions::{AdmissionContext, chat_completions as run_chat_completions};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -16,6 +14,12 @@ fn prepare_chat_completions(
 ) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
     let messages = required_array("messages", inputs.messages)?;
     let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
+    let context: AdmissionContext = inputs
+        .host_facts
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
+        .unwrap_or_default();
     let options = RouteOptions::from_python(RouteOptionsInputs {
         model: inputs.model,
         api_key: inputs.api_key,
@@ -24,6 +28,23 @@ fn prepare_chat_completions(
         extra_headers: inputs.extra_headers,
         timeout_seconds: inputs.timeout_seconds,
     })?;
+
+    crate::errors::admit(litellm_core::chat_completions::admit(
+        &options.model,
+        options.custom_llm_provider.as_deref(),
+        Value::Array(messages.clone()),
+        &optional_params,
+        options.extra_headers.as_ref(),
+        context,
+    ))?;
+    if let Some(on_request) = inputs.on_request {
+        Python::attach(|py| {
+            on_request
+                .call0(py)
+                .map(|_| ())
+                .map_err(|error| crate::errors::host_callback_error(py, error))
+        })?;
+    }
 
     Ok(async move {
         let RouteOptions {
@@ -48,24 +69,6 @@ fn prepare_chat_completions(
     })
 }
 
-#[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
-fn chat_completions_decline(
-    model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
-    custom_llm_provider: Option<String>,
-) -> PyResult<Option<String>> {
-    let optional_params = object_or_empty("optional_params", optional_params)?;
-    Ok(chat_completions_decline_reason(
-        &model,
-        custom_llm_provider.as_deref(),
-        messages,
-        &optional_params,
-    )
-    .map(str::to_string))
-}
-
 bridge_route! {
     sync = chat_completions,
     asynchronous = achat_completions,
@@ -84,8 +87,10 @@ bridge_route! {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)]
+        host_facts: Option<Value>,
+        on_request: Option<Py<PyAny>>,
     },
     prepare = prepare_chat_completions,
     errors = execution_error_to_pyerr,
-    extra = [chat_completions_decline],
 }

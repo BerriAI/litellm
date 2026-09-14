@@ -47,6 +47,7 @@ class RecordingMessages:
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        has_agentic_hook: bool = False,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -75,6 +76,7 @@ class RecordingAsyncMessages:
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
+        has_agentic_hook: bool = False,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -238,19 +240,19 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_to_python_when_bridge_raises():
+async def test_gate_propagates_unclassified_bridge_failure():
     bridge = RaisingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
-    response = await _gate()
-
-    assert response is None
+    with pytest.raises(RuntimeError, match="upstream request failed"):
+        await _gate()
     assert bridge.calls == 1
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_when_flag_absent():
+async def test_gate_skips_rust_when_flag_absent(monkeypatch):
+    monkeypatch.delenv("LITELLM_RUST", raising=False)
     bridge = ExplodingAsyncMessages()
     rust_messages.set_rust_messages(amessages=bridge)
 
@@ -324,26 +326,20 @@ async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_gate_skips_rust_for_unsupported_provider():
-    bridge = ExplodingAsyncMessages()
+    native = pytest.importorskip("litellm.rust_bridge._native")
     litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    response = await _gate(custom_llm_provider="openai")
-
+    rust_messages.set_rust_messages(amessages=native.amessages)
+    response = await _gate(custom_llm_provider="openai", api_base="http://127.0.0.1:1")
     assert response is None
-    assert bridge.calls == 0
 
 
 @pytest.mark.asyncio
 async def test_gate_skips_rust_for_agentic_hook():
-    bridge = ExplodingAsyncMessages()
+    native = pytest.importorskip("litellm.rust_bridge._native")
     litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    response = await _gate(has_agentic_hook=True)
-
+    rust_messages.set_rust_messages(amessages=native.amessages)
+    response = await _gate(has_agentic_hook=True, api_base="http://127.0.0.1:1")
     assert response is None
-    assert bridge.calls == 0
 
 
 @pytest.mark.asyncio

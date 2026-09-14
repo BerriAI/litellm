@@ -3,14 +3,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from enum import Enum
-from types import MappingProxyType
-from typing import Final
-
-from pydantic import TypeAdapter
+from typing import Final, Protocol, TypeAlias, assert_never
 
 DEFAULT_RUST_ENABLED: Final = False
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
-_ENV_BOOL: Final = TypeAdapter(bool)
 
 
 class RouteName(str, Enum):
@@ -27,33 +23,77 @@ class RouteName(str, Enum):
     RESPONSES = "responses"
 
 
-class RouteMode(str, Enum):
-    OPTIONAL = "optional"
-    REQUIRED = "required"
+class UtilityName(str, Enum):
+    TOKEN_COUNTER = "token_counter"
+
+
+class RustImplementationState(str, Enum):
+    UNIMPLEMENTED = "unimplemented"
+    EXPERIMENTAL = "experimental"
+    READY = "ready"
+
+
+class RolloutPolicy(str, Enum):
+    UNSUPPORTED = "unsupported"
+    PYTHON_ONLY = "python_only"
+    RUST_OPT_IN = "rust_opt_in"
+    RUST_OPT_OUT = "rust_opt_out"
+    RUST_REQUIRED = "rust_required"
+
+
+class ExecutionDecision(str, Enum):
+    UNSUPPORTED = "unsupported"
+    PYTHON = "python"
+    RUST_WITH_FALLBACK = "rust_with_fallback"
+    RUST_REQUIRED = "rust_required"
+
+
+class DeliveryMode(str, Enum):
+    COMPLETED = "completed"
+    STREAMING = "streaming"
+    WEBSOCKET = "websocket"
 
 
 @dataclass(frozen=True, slots=True)
-class RoutePolicy:
-    default_enabled: bool = False
-    mode: RouteMode = RouteMode.OPTIONAL
-    environment_opt_out: bool = False
+class CapabilityContext:
+    provider: str = ""
+    model: str = ""
+    delivery: DeliveryMode = DeliveryMode.COMPLETED
 
 
-ROUTE_POLICIES: Final = MappingProxyType(
-    {
-        RouteName.OCR: RoutePolicy(default_enabled=True, environment_opt_out=True),
-        RouteName.MESSAGES: RoutePolicy(),
-        RouteName.CHAT_COMPLETIONS: RoutePolicy(),
-        RouteName.TRANSCRIPTION: RoutePolicy(mode=RouteMode.REQUIRED),
-        RouteName.EMBEDDINGS: RoutePolicy(),
-        RouteName.RERANK: RoutePolicy(),
-        RouteName.IMAGE_GENERATION: RoutePolicy(),
-        RouteName.IMAGE_EDIT: RoutePolicy(),
-        RouteName.SPEECH: RoutePolicy(),
-        RouteName.MODERATION: RoutePolicy(),
-        RouteName.RESPONSES: RoutePolicy(),
-    }
-)
+@dataclass(frozen=True, slots=True)
+class CapabilityDefinition:
+    rust: RustImplementationState
+    python_available: bool
+    rollout: RolloutPolicy
+
+    def __post_init__(self) -> None:
+        if self.rollout is RolloutPolicy.UNSUPPORTED:
+            if self.rust is not RustImplementationState.UNIMPLEMENTED or self.python_available:
+                raise ValueError("an unsupported capability must have neither implementation")
+            return
+        if self.rust is RustImplementationState.UNIMPLEMENTED:
+            if self.rollout is not RolloutPolicy.PYTHON_ONLY or not self.python_available:
+                raise ValueError("an unimplemented Rust capability must use its Python implementation")
+            return
+        if self.rollout is RolloutPolicy.PYTHON_ONLY:
+            raise ValueError("an implemented Rust capability must declare a Rust rollout")
+        if self.rollout is RolloutPolicy.RUST_OPT_IN or self.rollout is RolloutPolicy.RUST_OPT_OUT:
+            if not self.python_available:
+                raise ValueError("an optional Rust capability requires a Python fallback")
+            return
+        if self.rollout is RolloutPolicy.RUST_REQUIRED:
+            if self.python_available:
+                raise ValueError("a required Rust capability must have no Python implementation")
+            return
+        assert_never(self.rollout)
+
+
+class CapabilityResolver(Protocol):
+    def __call__(self, context: CapabilityContext, /) -> CapabilityDefinition: ...
+
+
+CapabilitySpec: TypeAlias = CapabilityDefinition | CapabilityResolver
 
 
 class _RustConfiguration:
@@ -67,38 +107,72 @@ _CONFIGURATION: Final = _RustConfiguration()
 def _parse_env_bool(value: str | None) -> bool | None:
     if value is None:
         return None
-    return _ENV_BOOL.validate_python(value.strip())
+    match value.strip():
+        case "1":
+            return True
+        case "0":
+            return False
+        case invalid:
+            raise ValueError(f"{_GLOBAL_ENV_NAME} must be '1' or '0', got {invalid!r}")
 
 
-def resolve_rust_enabled(
+def resolve_capability(
+    capability: CapabilityDefinition,
     *,
     process_override: bool | None,
     environment_override: bool | None,
-    release_default: bool = DEFAULT_RUST_ENABLED,
-) -> bool:
-    if process_override is not None:
-        return process_override
-    if environment_override is not None:
-        return environment_override
-    return release_default
+) -> ExecutionDecision:
+    match capability.rollout:
+        case RolloutPolicy.UNSUPPORTED:
+            return ExecutionDecision.UNSUPPORTED
+        case RolloutPolicy.PYTHON_ONLY:
+            return ExecutionDecision.PYTHON
+        case RolloutPolicy.RUST_REQUIRED:
+            return ExecutionDecision.RUST_REQUIRED
+        case RolloutPolicy.RUST_OPT_IN | RolloutPolicy.RUST_OPT_OUT:
+            enabled: Final = (
+                process_override
+                if process_override is not None
+                else environment_override
+                if environment_override is not None
+                else capability.rollout is RolloutPolicy.RUST_OPT_OUT
+            )
+            return ExecutionDecision.RUST_WITH_FALLBACK if enabled else ExecutionDecision.PYTHON
+    assert_never(capability.rollout)
 
 
-def rust_enabled(route: RouteName | None = None) -> bool:
-    policy: Final = ROUTE_POLICIES[route] if route is not None else RoutePolicy()
-    if policy.mode is RouteMode.REQUIRED:
-        return True
-    environment: Final = _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME))
-    if policy.environment_opt_out and environment is False:
-        return False
-    return resolve_rust_enabled(
+def _definition(spec: CapabilitySpec, context: CapabilityContext) -> CapabilityDefinition:
+    if isinstance(spec, CapabilityDefinition):
+        return spec
+    return spec(context)
+
+
+def capability_decision(spec: CapabilitySpec, *, context: CapabilityContext) -> ExecutionDecision:
+    capability: Final = _definition(spec, context)
+    environment_override: Final = (
+        _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME))
+        if _CONFIGURATION.override is None
+        and capability.rollout in (RolloutPolicy.RUST_OPT_IN, RolloutPolicy.RUST_OPT_OUT)
+        else None
+    )
+    return resolve_capability(
+        capability,
         process_override=_CONFIGURATION.override,
-        environment_override=environment,
-        release_default=policy.default_enabled,
+        environment_override=environment_override,
     )
 
 
-def rust_ocr_enabled() -> bool:
-    return rust_enabled(RouteName.OCR)
+def rust_enabled() -> bool:
+    environment_override: Final = (
+        _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME)) if _CONFIGURATION.override is None else None
+    )
+    return (
+        _CONFIGURATION.override
+        if _CONFIGURATION.override is not None
+        else environment_override
+        if environment_override is not None
+        else DEFAULT_RUST_ENABLED
+    )
 
 
 def reset_rust_configuration() -> None:
@@ -106,8 +180,5 @@ def reset_rust_configuration() -> None:
 
 
 def rust(enabled: bool) -> None:
-    """Set the process override for optional Rust paths.
-
-    Rust-only paths, including Bedrock transcription, are not controlled by this switch.
-    """
+    """Set the process override for optional Rust capabilities."""
     _CONFIGURATION.override = enabled

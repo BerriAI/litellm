@@ -23,8 +23,6 @@ class BedrockAudioTranscriptionRustDispatch:
         audio_format: Final = formats.get(processed_audio.content_type) or (
             processed_audio.filename.rsplit(".", 1)[-1].lower() if "." in processed_audio.filename else ""
         )
-        if audio_format not in {"wav", "mp3", "flac", "ogg"}:
-            raise ValueError(f"Unsupported Bedrock audio format for file {processed_audio.filename!r}")
         return {
             "data": base64.b64encode(processed_audio.file_content).decode("ascii"),
             "format": audio_format,

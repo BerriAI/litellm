@@ -2,37 +2,20 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from enum import Enum
-from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
+from typing import Final, NoReturn, TypeVar
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import native_exception_types
+from litellm.rust_bridge.bindings import (
+    native_exception_types,
+    native_host_callback_exception,
+    native_unavailable_exception,
+)
+from litellm.rust_bridge.configuration import ExecutionDecision
+from litellm.rust_bridge.errors import RustRouteDeclinedError, RustRouteUnavailableError
+from litellm.rust_bridge.route import ComponentExecution
 
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
-
-
-class FallbackMode(Enum):
-    PYTHON = "python"
-    RUST_REQUIRED = "rust_required"
-
-
-@dataclass(frozen=True, slots=True)
-class RustHandled(Generic[ResultT]):
-    value: ResultT
-
-
-@dataclass(frozen=True, slots=True)
-class RustDeclined:
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class RustUnavailable:
-    pass
-
-
-RustAttempt: TypeAlias = RustHandled[ResultT] | RustDeclined | RustUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,95 +28,120 @@ class BridgeErrorContext:
 def invoke(
     *,
     native_call: Callable[[], NativeT] | None,
-    fallback: Callable[[], ResultT],
+    python_fallback: Callable[[], ResultT],
     adapt: Callable[[NativeT], ResultT],
-    mode: FallbackMode,
+    execution: ComponentExecution,
     context: BridgeErrorContext,
 ) -> ResultT:
-    result: Final = attempt(native_call=native_call, adapt=adapt, context=context)
-    if isinstance(result, RustHandled):
-        return result.value
-    if mode is FallbackMode.PYTHON:
-        return fallback()
-    _raise_required(result, context)
+    execution.require_supported()
+    if execution.decision is ExecutionDecision.PYTHON:
+        return python_fallback()
+    if native_call is None:
+        return _unavailable_or_fallback(execution, python_fallback)
+
+    exceptions: Final = native_exception_types()
+    if exceptions is None:
+        return adapt(native_call())
+    declined, upstream = exceptions
+    unavailable: Final = native_unavailable_exception()
+    host_callback: Final = native_host_callback_exception()
+    try:
+        value: Final = native_call()
+    except host_callback as error:
+        _raise_host_callback(error)
+    except unavailable:
+        return _unavailable_or_fallback(execution, python_fallback)
+    except declined as error:
+        return _declined_or_fallback(execution, python_fallback, error)
+    except upstream as error:
+        _raise_upstream(error, context)
+    return adapt(value)
 
 
 async def ainvoke(
     *,
     native_call: Callable[[], Awaitable[NativeT]] | None,
-    fallback: Callable[[], Awaitable[ResultT]],
+    python_fallback: Callable[[], Awaitable[ResultT]],
     adapt: Callable[[NativeT], ResultT],
-    mode: FallbackMode,
+    execution: ComponentExecution,
     context: BridgeErrorContext,
 ) -> ResultT:
-    result: Final = await aattempt(native_call=native_call, adapt=adapt, context=context)
-    if isinstance(result, RustHandled):
-        return result.value
-    if mode is FallbackMode.PYTHON:
-        return await fallback()
-    _raise_required(result, context)
-
-
-def attempt(
-    *,
-    native_call: Callable[[], NativeT] | None,
-    adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
-) -> RustAttempt[ResultT]:
+    execution.require_supported()
+    if execution.decision is ExecutionDecision.PYTHON:
+        return await python_fallback()
     if native_call is None:
-        return RustUnavailable()
+        return await _aunavailable_or_fallback(execution, python_fallback)
+
     exceptions: Final = native_exception_types()
     if exceptions is None:
-        return RustHandled(adapt(native_call()))
+        return adapt(await native_call())
     declined, upstream = exceptions
-    try:
-        value: Final = native_call()
-    except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
-    except upstream as error:
-        _raise_upstream(error, context)
-    return RustHandled(adapt(value))
-
-
-async def aattempt(
-    *,
-    native_call: Callable[[], Awaitable[NativeT]] | None,
-    adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
-) -> RustAttempt[ResultT]:
-    if native_call is None:
-        return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return RustHandled(adapt(await native_call()))
-    declined, upstream = exceptions
+    unavailable: Final = native_unavailable_exception()
+    host_callback: Final = native_host_callback_exception()
     try:
         value: Final = await native_call()
+    except host_callback as error:
+        _raise_host_callback(error)
+    except unavailable:
+        return await _aunavailable_or_fallback(execution, python_fallback)
     except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
+        return await _adeclined_or_fallback(execution, python_fallback, error)
     except upstream as error:
         _raise_upstream(error, context)
-    return RustHandled(adapt(value))
+    return adapt(value)
 
 
-def _decline_reason(error: BaseException) -> str:
-    reason: Final[object] = error.args[0] if error.args else str(error)
-    return reason if isinstance(reason, str) else str(reason)
+def _unavailable_or_fallback(
+    execution: ComponentExecution,
+    python_fallback: Callable[[], ResultT],
+) -> ResultT:
+    if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        return python_fallback()
+    raise RustRouteUnavailableError(f"Rust {execution.route_name.value} bridge is unavailable")
 
 
-def _raise_required(
-    result: RustDeclined | RustUnavailable,
-    context: BridgeErrorContext,
-) -> NoReturn:
-    raise RuntimeError(f"Rust {context.route} bridge {_required_reason(result)}")
+async def _aunavailable_or_fallback(
+    execution: ComponentExecution,
+    python_fallback: Callable[[], Awaitable[ResultT]],
+) -> ResultT:
+    if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        return await python_fallback()
+    raise RustRouteUnavailableError(f"Rust {execution.route_name.value} bridge is unavailable")
 
 
-def _required_reason(result: RustDeclined | RustUnavailable) -> str:
-    match result:
-        case RustUnavailable():
-            return "is unavailable"
-        case RustDeclined(reason=reason):
-            return f"declined the request: {reason}"
+def _declined_or_fallback(
+    execution: ComponentExecution,
+    python_fallback: Callable[[], ResultT],
+    error: BaseException,
+) -> ResultT:
+    if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        return python_fallback()
+    _raise_declined(execution, error)
+
+
+async def _adeclined_or_fallback(
+    execution: ComponentExecution,
+    python_fallback: Callable[[], Awaitable[ResultT]],
+    error: BaseException,
+) -> ResultT:
+    if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        return await python_fallback()
+    _raise_declined(execution, error)
+
+
+def _raise_declined(execution: ComponentExecution, error: BaseException) -> NoReturn:
+    reason_value: Final[object] = error.args[0] if error.args else str(error)
+    reason: Final = reason_value if isinstance(reason_value, str) else str(reason_value)
+    raise RustRouteDeclinedError(
+        f"Rust {execution.route_name.value} bridge declined the request: {reason}"
+    ) from error
+
+
+def _raise_host_callback(error: BaseException) -> NoReturn:
+    cause: Final = error.__cause__
+    if cause is not None:
+        raise cause
+    raise error
 
 
 def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:

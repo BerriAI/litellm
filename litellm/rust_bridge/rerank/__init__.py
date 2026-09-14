@@ -1,6 +1,5 @@
 from typing import Final
 
-from litellm.rust_bridge.configuration import RouteName
-from litellm.rust_bridge.route import NativeRoute
+from litellm.rust_bridge.rerank.definition import COMPONENT
 
-ROUTE: Final = NativeRoute(RouteName.RERANK)
+__all__: Final = ("COMPONENT",)

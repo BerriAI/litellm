@@ -27,5 +27,26 @@ pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Re
     execute_messages_provider_stream(request).await
 }
 
+
+pub fn admit(
+    model: &str,
+    provider: Option<&str>,
+    has_agentic_hook: bool,
+) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+    use crate::call_lifecycle::admission::AdmissionDecline;
+    let resolved = crate::routing_utils::provider::get_custom_llm_provider(model, provider);
+    let provider = provider.or_else(|| resolved.as_ref().map(|value| value.custom_llm_provider));
+    if provider
+        .and_then(common_utils::messages_provider_config)
+        .is_none()
+    {
+        return Err(AdmissionDecline::Provider);
+    }
+    if has_agentic_hook {
+        return Err(AdmissionDecline::HostOperations);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

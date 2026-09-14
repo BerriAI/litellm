@@ -8,7 +8,6 @@ mod function_trace;
 mod lifecycle;
 mod marshal;
 mod routes;
-mod token_counter;
 
 use pyo3::prelude::*;
 
@@ -20,7 +19,6 @@ mod _native {
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         super::errors::register(module)?;
         super::routes::register(module)?;
-        super::token_counter::register(module)?;
         super::diagnostics::register(module)
     }
 }
@@ -44,7 +42,9 @@ mod tests {
             let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
 
             let expected = [
+                "RustBridgeUnavailable",
                 "RustBridgeDeclined",
+                "RustHostCallbackError",
                 "RustUpstreamError",
                 "ocr",
                 "aocr",
@@ -52,11 +52,10 @@ mod tests {
                 "atranscription",
                 "messages",
                 "amessages",
-                "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
-                "TokenCounter",
+                "count_input_tokens",
                 "gil_stats",
             ];
 
@@ -148,7 +147,7 @@ mod tests {
 import asyncio
 
 async def exercise():
-    connection = await native.ResponsesWebSocketConnection.connect(url)
+    connection = await native.ResponsesWebSocketConnection.connect(url, custom_llm_provider="openai")
     assert type(connection) is native.ResponsesWebSocketConnection
     await connection.send_text("from-python")
     assert await connection.recv_text() == "from-server"

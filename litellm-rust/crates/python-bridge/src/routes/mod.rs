@@ -13,6 +13,7 @@ mod ocr;
 mod rerank;
 mod responses;
 mod speech;
+mod token_counter;
 mod transcription;
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -27,6 +28,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     rerank::register(module)?;
     responses::register(module)?;
     speech::register(module)?;
+    token_counter::register(module)?;
 
     #[cfg(feature = "trace-parity")]
     {

@@ -1,8 +1,8 @@
 from typing import Final
 
+from litellm.rust_bridge.transcription.definition import COMPONENT
 from litellm.rust_bridge.transcription.types import RustAtranscription, RustTranscription
 from litellm.rust_bridge.transcription.value import (
-    ROUTE,
     atranscription,
     configure_rust_transcription,
     load_rust_atranscription,
@@ -11,7 +11,7 @@ from litellm.rust_bridge.transcription.value import (
 )
 
 __all__: Final = (
-    "ROUTE",
+    "COMPONENT",
     "RustAtranscription",
     "RustTranscription",
     "atranscription",

@@ -1,5 +1,5 @@
 from typing import Final
 
-from litellm.rust_bridge.rerank import ROUTE
+from litellm.rust_bridge.rerank.definition import COMPONENT
 
-LIFECYCLE: Final = ROUTE.lifecycle()
+LIFECYCLE: Final = COMPONENT.lifecycle()

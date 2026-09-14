@@ -1,7 +1,7 @@
-import importlib
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import Mock
 
@@ -61,8 +61,11 @@ async def test_python_request_response_and_callbacks(
     if dispatch != "disabled":
         monkeypatch.setenv("LITELLM_RUST", "1")
         NATIVE_OCR_LIFECYCLE.override(Mock(side_effect=Declined()) if dispatch == "declined" else None)
-        main: Final = importlib.import_module("litellm.ocr.main")
-        monkeypatch.setattr(main, "native_exception_types", lambda: (Declined, RuntimeError))
+        native: Final = SimpleNamespace(
+            RustBridgeDeclined=Declined,
+            RustUpstreamError=RuntimeError,
+        )
+        monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     logger: Final = Mock(spec=CustomLogger)
     monkeypatch.setattr(litellm, "input_callback", [logger])
     arguments: Final = {

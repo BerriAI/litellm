@@ -1,6 +1,5 @@
 from typing import Final
 
-from litellm.rust_bridge.configuration import RouteName
-from litellm.rust_bridge.route import NativeRoute
+from litellm.rust_bridge.responses.definition import COMPONENT
 
-ROUTE: Final = NativeRoute(RouteName.RESPONSES)
+__all__: Final = ("COMPONENT",)

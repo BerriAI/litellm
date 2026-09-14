@@ -5,17 +5,18 @@ use pyo3::types::PyCFunction;
 macro_rules! unimplemented_lifecycle_route {
     ($route:ident, $entrypoint:ident) => {
         #[pyo3::pyfunction]
-        #[pyo3(signature = (request, args, kwargs, asynchronous))]
+        #[pyo3(signature = (request, args, kwargs, asynchronous, host))]
         fn $entrypoint(
             request: pyo3::Bound<'_, pyo3::PyAny>,
             args: pyo3::Bound<'_, pyo3::types::PyTuple>,
             kwargs: pyo3::Bound<'_, pyo3::types::PyDict>,
             asynchronous: bool,
+            host: pyo3::Bound<'_, pyo3::PyAny>,
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
             use litellm_core::call_lifecycle::admission::{
                 UnimplementedRoute, admit_unimplemented,
             };
-            let _ = (request, args, kwargs, asynchronous);
+            let _ = (request, args, kwargs, asynchronous, host);
             match admit_unimplemented(UnimplementedRoute::$route) {
                 Ok(never) => match never {},
                 Err(route) => Err($crate::errors::RustBridgeDeclined::new_err(format!(
@@ -268,12 +269,12 @@ mod tests {
                 (
                     "messages",
                     "amessages",
-                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
+                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, has_agentic_hook=None)",
                 ),
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
+                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, host_facts=None, on_request=None)",
                 ),
             ];
 
@@ -455,46 +456,6 @@ mod tests {
                 "ValueError: extra_headers must be a dict"
             );
             assert_eq!(explicit_error.to_string(), omitted_error.to_string());
-        });
-    }
-
-    #[test]
-    fn chat_completions_decline_keeps_existing_reasons() {
-        Python::initialize();
-        Python::attach(|py| {
-            let module = PyModule::new(py, "routes").expect("module should be created");
-            crate::routes::register(&module).expect("routes should register");
-            let decline = module
-                .getattr("chat_completions_decline")
-                .expect("decline helper should be registered");
-            let empty = PyList::empty(py);
-            let unreadable = py
-                .eval(c"'nope'", None, None)
-                .expect("string messages should convert");
-
-            let unknown: Option<String> = decline
-                .call1(("unknown-model", &empty))
-                .and_then(|value| value.extract())
-                .expect("unknown providers should decline");
-            assert_eq!(
-                unknown.as_deref(),
-                Some("provider is not on the rust chat completions path")
-            );
-
-            let empty_reason: Option<String> = decline
-                .call1(("anthropic/claude-sonnet-4-5", &empty))
-                .and_then(|value| value.extract())
-                .expect("empty lists should decline");
-            assert_eq!(empty_reason.as_deref(), Some("empty message list"));
-
-            let unreadable_reason: Option<String> = decline
-                .call1(("anthropic/claude-sonnet-4-5", unreadable))
-                .and_then(|value| value.extract())
-                .expect("non-list messages should decline");
-            assert_eq!(
-                unreadable_reason.as_deref(),
-                Some("unreadable message list")
-            );
         });
     }
 

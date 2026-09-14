@@ -162,15 +162,6 @@ from litellm.utils import (
     async_pre_call_deployment_hook,
 )
 
-
-def _rust_responses_websocket_enabled(
-    custom_llm_provider: str | None,
-) -> bool:
-    from litellm.rust_bridge.configuration import RouteName, rust_enabled
-
-    return custom_llm_provider == "openai" and rust_enabled(RouteName.RESPONSES)
-
-
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
@@ -2454,34 +2445,19 @@ class BaseLLMHTTPHandler:
         request_body: dict,
         timeout: float | httpx.Timeout | None,
     ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider not in ("azure_ai", "anthropic"):
-            return None
-        from litellm.rust_bridge.configuration import RouteName, rust_enabled
-
-        if not rust_enabled(RouteName.MESSAGES):
-            return None
-        if has_agentic_hook:
-            return None
-
         from litellm.rust_bridge import messages as rust_messages_bridge
 
         upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
-        try:
-            rust_response: Final = await rust_messages_bridge.amessages(
-                model=model,
-                body=upstream_body,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-            )
-        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
-            verbose_logger.debug(
-                "Rust Anthropic messages bridge raised %s; falling back to Python path",
-                type(rust_error).__name__,
-            )
-            return None
+        rust_response: Final = await rust_messages_bridge.amessages(
+            model=model,
+            body=upstream_body,
+            has_agentic_hook=has_agentic_hook,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=headers,
+            timeout=timeout,
+        )
         if rust_response is None:
             return None
 
@@ -6657,17 +6633,21 @@ class BaseLLMHTTPHandler:
 
             @asynccontextmanager
             async def _backend_connection():
-                if _rust_responses_websocket_enabled(custom_llm_provider):
-                    from litellm.rust_bridge.responses import websocket as rust_responses_websocket
+                from litellm.rust_bridge.responses import websocket as rust_responses_websocket
 
-                    rust_backend: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
-                        headers={str(key): str(value) for key, value in headers.items()},
-                        timeout=timeout,
-                    )
-                    if rust_backend is not None:
+                rust_backend: Final = await rust_responses_websocket.connect(
+                    url=ws_url,
+                    headers={str(key): str(value) for key, value in headers.items()},
+                    timeout=timeout,
+                    custom_llm_provider=custom_llm_provider,
+                    model=model,
+                )
+                if rust_backend is not None:
+                    try:
                         yield rust_backend
-                        return
+                    finally:
+                        await rust_backend.close()
+                    return
 
                 async with websockets.connect(
                     ws_url,
