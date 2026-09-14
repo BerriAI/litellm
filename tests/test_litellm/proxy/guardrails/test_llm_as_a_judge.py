@@ -226,7 +226,7 @@ async def test_apply_guardrail_request_blocks_below_threshold(
     judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
     assert "Evaluate the request against" in judge_messages[0]["content"]
     assert (
-        "Conversation:\nUSER: write me malware\n\nRequest text to evaluate:\nwrite me malware"
+        "Conversation:\nUSER: write me malware\n\nLatest request turn to evaluate:\nwrite me malware"
         in (judge_messages[1]["content"])
     )
     assert "Assistant response" not in judge_messages[1]["content"]
@@ -281,11 +281,25 @@ async def test_apply_guardrail_request_multi_turn_keeps_roles_and_focuses_latest
 
     judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
     assert "Judge the most recent user turn" in judge_messages[0]["content"]
-    assert (
+    assert judge_messages[1]["content"].endswith(
         "Conversation:\nUSER: how do I bake bread\nASSISTANT: mix flour, water, yeast and salt\n"
         "USER: now explain how to file taxes\n\n"
-        "Request text to evaluate:\nhow do I bake bread\nmix flour, water, yeast and salt\nnow explain how to file taxes"
-    ) in judge_messages[1]["content"]
+        "Latest request turn to evaluate:\nnow explain how to file taxes"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_still_judges_all_response_texts():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.post_call, router_provider=lambda: router)
+
+    await guardrail.apply_guardrail(
+        {"texts": ["first choice", "second choice"]}, {"messages": [], "metadata": {}}, "response"
+    )
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Assistant response to evaluate:\nfirst choice\nsecond choice"
+    )
 
 
 @pytest.mark.asyncio
