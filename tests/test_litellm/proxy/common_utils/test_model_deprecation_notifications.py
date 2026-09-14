@@ -356,6 +356,15 @@ FRESH_DEPLOYMENT: Final = {
     "litellm_params": {"model": "openai/fresh-model-with-no-cost-map-entry"},
     "model_info": {"id": "x"},
 }
+FAR_DEPLOYMENT: Final = {
+    "model_name": "far-alias",
+    "litellm_params": {"model": "openai/far-model"},
+    "model_info": {
+        "id": "3",
+        "deprecation_date": (datetime.now(timezone.utc).date() + timedelta(days=40)).isoformat(),
+        "litellm_provider": "openai",
+    },
+}
 
 
 class _Deliverer:
@@ -424,12 +433,12 @@ TWO_ADMINS: Final = (
 )
 
 
-def _context(router, prisma, deliver, cache=None, pod_lock_manager=None) -> DeprecationEmailContext:
+def _context(router, prisma, deliver, cache=None, pod_lock_manager=None, alerting_args=None) -> DeprecationEmailContext:
     return DeprecationEmailContext(
         llm_router=router,
         prisma_client=prisma,
         cache=cache or DualCache(),
-        alerting_args=SlackAlertingArgs(),
+        alerting_args=alerting_args or SlackAlertingArgs(),
         pod_lock_manager=pod_lock_manager,
         deliver=deliver,
     )
@@ -538,6 +547,22 @@ class TestSendModelDeprecationEmails:
         assert deliverer.sent[0][1] == "[LiteLLM] 1 model(s) deprecating for team Alpha"
         assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", 30)) is not None
         assert await cache.async_get_cache(key=email_sent_key("t1", "sunset-alias", 7)) is None
+
+    @pytest.mark.asyncio
+    async def test_should_email_an_upcoming_model_when_a_threshold_reaches_past_the_slack_window(self):
+        cache: Final = DualCache()
+        deliverer: Final = _Deliverer()
+        ctx: Final = _context(
+            _router([FAR_DEPLOYMENT]),
+            _prisma(TWO_TEAMS[:1], TWO_ADMINS),
+            deliverer,
+            cache,
+            alerting_args=SlackAlertingArgs(model_deprecation_email_thresholds=(45, 7, 0)),
+        )
+
+        assert await send_model_deprecation_emails(ctx) == 1
+        assert deliverer.sent[0][1] == "[LiteLLM] 1 model(s) deprecating for team Alpha"
+        assert await cache.async_get_cache(key=email_sent_key("t1", "far-alias", 45)) is not None
 
     @pytest.mark.asyncio
     async def test_should_stamp_sent_keys_with_the_configured_ttl_and_the_pass_for_a_day(self):
