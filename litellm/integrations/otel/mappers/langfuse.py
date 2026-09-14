@@ -5,19 +5,19 @@ Langfuse ingests OTLP spans and reads from its own vendor namespace
 ``GenAIMapper`` to send canonical + Langfuse-flavored spans simultaneously.
 
 Every attribute is declared as a ``key -> extractor`` table entry (one callable
-per mapping operation): ``_LLM_CALL_ATTRS`` for scalars, ``_TRACE_ATTRS`` for the
-caller's trace controls (shared with the root observation), and ``_BLOB_ATTRS`` for
-the JSON-serialized payloads. ``_llm_call`` just applies the three tables.
+per mapping operation): ``_LLM_CALL_ATTRS`` for scalars and ``_BLOB_ATTRS`` for
+the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace controls
+(shared with the root observation); ``_llm_call`` applies both tables plus it.
 """
 
 import json
-from collections.abc import Callable, Mapping
-from types import MappingProxyType
+from collections.abc import Callable
 from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
+    drop_none,
     json_if,
     output_messages,
     serialize_messages,
@@ -46,15 +46,6 @@ class LangfuseMapper:
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
     }
-
-    _TRACE_ATTRS: Mapping[str, Callable[[TraceControls], AttrValue | None]] = MappingProxyType(
-        {
-            LANGFUSE_TRACE_NAME: lambda t: t.name or None,
-            LANGFUSE_TRACE_USER_ID: lambda t: t.user_id or None,
-            LANGFUSE_TRACE_SESSION_ID: lambda t: t.session_id or None,
-            LANGFUSE_TRACE_TAGS: lambda t: t.tags or None,
-        }
-    )
 
     # Sub-tables folded into their respective JSON blobs.
     _MODEL_PARAMS: dict[str, Callable[[LLMRequestParams], AttrValue | None]] = {
@@ -91,9 +82,16 @@ class LangfuseMapper:
             case _:
                 return {}
 
-    @classmethod
-    def trace_attributes(cls, trace: TraceControls) -> AttributeMap:
-        return collect(cls._TRACE_ATTRS, trace)
+    @staticmethod
+    def trace_attributes(trace: TraceControls) -> AttributeMap:
+        return drop_none(
+            {
+                LANGFUSE_TRACE_NAME: trace.name or None,
+                LANGFUSE_TRACE_USER_ID: trace.user_id or None,
+                LANGFUSE_TRACE_SESSION_ID: trace.session_id or None,
+                LANGFUSE_TRACE_TAGS: trace.tags or None,
+            }
+        )
 
     @classmethod
     def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
