@@ -517,27 +517,35 @@ describe("ModelSelect", () => {
     expectOffered("All Proxy Models");
   });
 
-  it("should keep hiding All Proxy Models when neither the team nor the org reports a ceiling", async () => {
-    const user = userEvent.setup();
-    mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
-    mockUseTeam.mockReturnValue({
-      data: { team_id: "team-1", organization_models: null },
-      isLoading: false,
-    } as any);
+  it("should offer no models for an org team when neither the team nor the org reports a ceiling", async () => {
+    const testCases = [
+      { name: "/team/info withheld the ceiling", team: { team_id: "team-1", organization_models: null } },
+      { name: "/team/info failed after the list seeded the team", team: { team_id: "team-1", models: [] } },
+    ];
 
-    renderWithProviders(
-      <ModelSelect
-        onChange={mockOnChange}
-        context="team"
-        teamID="team-1"
-        organizationID="org-1"
-        options={{ includeSpecialOptions: true }}
-      />,
-    );
+    for (const testCase of testCases) {
+      const user = userEvent.setup();
+      mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
+      mockUseTeam.mockReturnValue({ data: testCase.team, isLoading: false, isFetching: false } as any);
 
-    await openModelList(user);
-    expectNotOffered("All Proxy Models");
-    expectOffered("No Default Models");
+      const { unmount } = renderWithProviders(
+        <ModelSelect
+          onChange={mockOnChange}
+          context="team"
+          teamID="team-1"
+          organizationID="org-1"
+          options={{ includeSpecialOptions: true }}
+        />,
+      );
+
+      await openModelList(user);
+      expectNotOffered("All Proxy Models");
+      expectOffered("No Default Models");
+      expectNotOffered("gpt-4");
+      expectNotOffered("claude-3");
+
+      unmount();
+    }
   });
 
   it("should use custom dataTestId when provided", async () => {
