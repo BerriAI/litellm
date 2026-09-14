@@ -35,7 +35,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -440,6 +439,18 @@ class Agent365Guardrail(CustomGuardrail):
             return call_id
         return str(uuid.uuid4())
 
+    async def exchange_rejects_subject(self, assertion: str) -> bool:
+        """Whether Entra refuses ``assertion`` as the On-Behalf-Of subject (expired, wrong audience, bad
+        signature). Gateway credential rejections and endpoint failures answer ``False``: the caller cannot fix
+        those by signing in again, so the tool call reports them."""
+        try:
+            await self._get_obo_token(assertion)
+        except Agent365TokenExchangeError as exc:
+            return exc.error_code not in _GATEWAY_OWNED_TOKEN_ERRORS
+        except (Agent365ThrottledError, Agent365MalformedResponseError, httpx.HTTPError, LitellmTimeout, TimeoutError):
+            return False
+        return False
+
     async def _get_obo_token(self, assertion: str) -> str:
         cache_key: Final = hashlib.sha256(assertion.encode("utf-8")).hexdigest()
         now: Final = time.time()
@@ -639,29 +650,32 @@ class Agent365Guardrail(CustomGuardrail):
 
 
 def _applies_to_caller(guardrail: Agent365Guardrail, user_api_key_auth: "UserAPIKeyAuth") -> bool:
-    probe: Final[dict[str, object]] = {"metadata": {}}  # mutable-ok: filled in place by the key resolver
-    add_guardrails_from_auth_metadata(
-        user_api_key_dict=user_api_key_auth, data=probe, metadata_variable_name="metadata"
-    )
-    return guardrail.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_mcp_call)
+    probe: Final[Mapping[str, object]] = {
+        "metadata": {
+            "user_api_key_metadata": user_api_key_auth.metadata,
+            "user_api_key_team_metadata": user_api_key_auth.team_metadata,
+        }
+    }
+    return guardrail.should_run_guardrail(data=dict(probe), event_type=GuardrailEventHooks.pre_mcp_call)
 
 
 def _applicable_guardrails(
     server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None"
 ) -> tuple[Agent365Guardrail, ...]:
-    """Agent 365 guardrails that gate ``server`` for this caller: the ``default_on`` ones for the anonymous
-    discovery fetch, otherwise those the caller's key, team, or policies select. Empty when the gateway
-    does not own sign-in for the server."""
+    """Agent 365 guardrails whose sign-in the gateway advertises for ``server``: the ``default_on`` ones, minus
+    those the caller's key or team opted out of once the caller is known. A guardrail only a key or policy
+    selects still enforces at the tool call but never challenges, since the anonymous metadata fetch that
+    follows a challenge cannot see which key selected it and would advertise the wrong issuer."""
     if server.auth_type == MCPAuth.oauth2 or not server.advertises_gateway_authorization_server:
         return ()
-    registered: Final = tuple(
+    advertised: Final = tuple(
         callback
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(Agent365Guardrail)
-        if isinstance(callback, Agent365Guardrail)
+        if isinstance(callback, Agent365Guardrail) and callback.default_on
     )
     if user_api_key_auth is None:
-        return tuple(g for g in registered if g.default_on)
-    return tuple(g for g in registered if _applies_to_caller(g, user_api_key_auth))
+        return advertised
+    return tuple(g for g in advertised if _applies_to_caller(g, user_api_key_auth))
 
 
 def entra_assertion(value: object) -> str | None:
@@ -670,12 +684,29 @@ def entra_assertion(value: object) -> str | None:
     return value if isinstance(value, str) and value.count(".") == 2 else None
 
 
-def agent_365_subject_token_present(oauth2_headers: Mapping[str, str] | None) -> bool:
-    """Whether the request's ``Authorization`` carries an Entra assertion the guardrail can exchange."""
+def _presented_assertion(oauth2_headers: Mapping[str, str] | None) -> str | None:
     authorization: Final = oauth2_headers.get("Authorization", "") if oauth2_headers else ""
     if not authorization.lower().startswith("bearer "):
+        return None
+    return entra_assertion(authorization[len("bearer ") :].strip())
+
+
+async def agent_365_sign_in_required(
+    server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None", oauth2_headers: Mapping[str, str] | None
+) -> bool:
+    """Whether the connect must answer with the RFC 9728 sign-in challenge: an Agent 365 guardrail gates
+    ``server`` for this caller and the request carries no Entra assertion, or one Entra will not exchange.
+    Decided at connect because a tool call's JSON-RPC error cannot carry ``WWW-Authenticate``."""
+    guardrails: Final = _applicable_guardrails(server, user_api_key_auth)
+    if not guardrails:
         return False
-    return entra_assertion(authorization[len("bearer ") :].strip()) is not None
+    assertion: Final = _presented_assertion(oauth2_headers)
+    if assertion is None:
+        return True
+    for guardrail in guardrails:
+        if await guardrail.exchange_rejects_subject(assertion):
+            return True
+    return False
 
 
 def agent_365_authorization_servers(server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> tuple[str, ...]:

@@ -82,8 +82,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import (
-    agent_365_authorization_servers,
-    agent_365_subject_token_present,
+    agent_365_sign_in_required,
 )
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -4160,9 +4159,11 @@ if MCP_AVAILABLE:
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
             # header lost, so the discovery flow needs this pre-emptive challenge. Servers gated by an
             # Agent 365 guardrail (OBO to the evaluate API) get the same challenge, also when the only
-            # bearer is the LiteLLM key itself, which admits the caller but is not an exchangeable subject.
-            # Only on the server's own route: the per-server metadata ``resource`` must equal the URL the
-            # client connected to (RFC 9728 3.3), which aggregate ``/mcp`` and multi-server connects never do.
+            # bearer is the LiteLLM key itself, which admits the caller but is not an exchangeable subject,
+            # and when Entra refuses the presented assertion (expired, wrong audience), so the client
+            # signs in again instead of failing every tool call. Only on the server's own route: the
+            # per-server metadata ``resource`` must equal the URL the client connected to (RFC 9728 3.3),
+            # which aggregate ``/mcp`` and multi-server connects never do.
             granted_single_server = server is not None and await _key_granted_single_server(
                 server, mcp_servers, user_api_key_auth, client_ip
             )
@@ -4171,8 +4172,7 @@ if MCP_AVAILABLE:
                 or (
                     granted_single_server
                     and tuple(_get_mcp_servers_in_path(get_route_relative_request_path(scope)) or ()) == (server_name,)
-                    and not agent_365_subject_token_present(oauth2_headers)
-                    and agent_365_authorization_servers(server, user_api_key_auth)
+                    and await agent_365_sign_in_required(server, user_api_key_auth, oauth2_headers)
                 )
             ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph

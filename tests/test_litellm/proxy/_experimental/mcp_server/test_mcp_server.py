@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
@@ -8915,6 +8916,15 @@ class TestAgent365ChallengeAtConnect:
     WWW-Authenticate header survives, instead of only inside the tools/call JSON-RPC error."""
 
     GATEWAY_SCOPE = "api://gateway-app/access_as_user"
+    ENTRA_BEARER = {"Authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2ln"}
+
+    @staticmethod
+    def _entra_response(status_code: int, body: dict[str, object]) -> httpx.Response:
+        return httpx.Response(
+            status_code=status_code,
+            json=body,
+            request=httpx.Request("POST", "https://login.microsoftonline.com/tenant-abc/oauth2/v2.0/token"),
+        )
 
     def _server(self, scopes: list[str] | None) -> MCPServer:
         return MCPServer(
@@ -8934,12 +8944,14 @@ class TestAgent365ChallengeAtConnect:
         import litellm
         from litellm.proxy.guardrails.guardrail_hooks.agent_365 import Agent365Guardrail
 
+        handler = AsyncMock()
+        handler.post.return_value = self._entra_response(200, {"access_token": "obo-token", "expires_in": 3599})
         guardrail = Agent365Guardrail(
             guardrail_name="agent-365-guard",
             tenant_id="tenant-abc",
             client_id="client-xyz",
             client_secret="secret-123",
-            async_handler=AsyncMock(),
+            async_handler=handler,
             event_hook="pre_mcp_call",
             default_on=True,
         )
@@ -8958,6 +8970,7 @@ class TestAgent365ChallengeAtConnect:
         path: str = "/mcp/tools",
         mount_scope: dict[str, str] | None = None,
         granted: bool = True,
+        key_metadata: dict[str, object] | None = None,
     ) -> HTTPException | None:
         from litellm.proxy._experimental.mcp_server import server as server_module
 
@@ -8983,7 +8996,9 @@ class TestAgent365ChallengeAtConnect:
                     mcp_servers=["tools"],
                     oauth2_headers=oauth2_headers,
                     mcp_server_auth_headers=None,
-                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    user_api_key_auth=UserAPIKeyAuth(
+                        api_key="sk-litellm-virtual-key", user_id="u-1", metadata=key_metadata or {}
+                    ),
                     client_ip=None,
                 )
             except HTTPException as challenge:
@@ -9048,8 +9063,80 @@ class TestAgent365ChallengeAtConnect:
 
     @pytest.mark.asyncio
     async def test_entra_assertion_present_connects(self, agent_365_guardrail):
-        bearer = {"Authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2ln"}
-        assert await self._connect(self._server([self.GATEWAY_SCOPE]), bearer) is None
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), self.ENTRA_BEARER) is None
+
+    @pytest.mark.asyncio
+    async def test_assertion_entra_refuses_to_exchange_is_challenged(self, agent_365_guardrail):
+        """An expired, wrong-audience, or forged Entra token looks like a valid one. Only the OBO exchange
+        can tell, and its verdict must arrive at connect, where WWW-Authenticate reaches the client,
+        rather than inside every tools/call JSON-RPC error."""
+        agent_365_guardrail.async_handler.post.return_value = self._entra_response(
+            400, {"error": "invalid_grant", "error_description": "AADSTS700084: The refresh token was issued..."}
+        )
+
+        challenge = await self._connect(self._server([self.GATEWAY_SCOPE]), self.ENTRA_BEARER)
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert 'error="invalid_token"' in www_authenticate
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/mcp/tools"'
+            in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "entra_outcome",
+        [
+            {"return_value": _entra_response(401, {"error": "invalid_client"})},
+            {"return_value": _entra_response(503, {"error": "temporarily_unavailable"})},
+            {"side_effect": httpx.ConnectError("dns")},
+        ],
+        ids=["gateway-credentials-rejected", "entra-5xx", "entra-unreachable"],
+    )
+    async def test_gateway_side_exchange_failures_do_not_send_the_caller_to_sign_in(
+        self, agent_365_guardrail, entra_outcome
+    ):
+        """Signing in again cannot fix the gateway's own client secret or an Entra outage, so those stay
+        with the tool call, which reports them as the guardrail's unavailable path."""
+        agent_365_guardrail.async_handler.post = AsyncMock(**entra_outcome)
+
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), self.ENTRA_BEARER) is None
+
+    @pytest.mark.asyncio
+    async def test_key_selected_default_off_guardrail_never_challenges(self):
+        """The anonymous metadata fetch that follows a challenge cannot see which key selected the guardrail
+        and would advertise the gateway issuer, so a challenge here would send the client to the wrong IdP.
+        The guardrail still enforces at tools/call."""
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.agent_365 import Agent365Guardrail
+
+        guardrail = Agent365Guardrail(
+            guardrail_name="agent-365-guard",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+            async_handler=AsyncMock(),
+            event_hook="pre_mcp_call",
+            default_on=False,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with patch(  # test-quality-ok: key-selected guardrails read the proxy server premium global, no injection seam
+                "litellm.proxy.proxy_server.premium_user", True
+            ):
+                assert (
+                    await self._connect(
+                        self._server([self.GATEWAY_SCOPE]),
+                        None,
+                        key_metadata={"guardrails": ["agent-365-guard"]},
+                    )
+                    is None
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
 
     @pytest.mark.asyncio
     async def test_litellm_key_in_authorization_is_still_challenged(self, agent_365_guardrail):

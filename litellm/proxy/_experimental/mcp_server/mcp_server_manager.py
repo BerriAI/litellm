@@ -4519,7 +4519,20 @@ class MCPServerManager:
             or self._references_per_user_env_var(server)
             or server.delegate_auth_to_upstream
             or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
+            or self._signs_caller_identity_upstream(server)
         )
+
+    @staticmethod
+    def _signs_caller_identity_upstream(server: MCPServer) -> bool:
+        """Whether MCPJWTSigner mints a per-caller ``Authorization`` for ``server``, so the upstream may
+        tailor its catalog to the caller even though the server itself is configured as shared."""
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (  # noqa: PLC0415  # lazy: guardrail package imports the proxy server
+            get_mcp_jwt_signer,
+        )
+
+        if get_mcp_jwt_signer() is None:
+            return False
+        return not any(k.lower() == "authorization" for k in (server.static_headers or {}))
 
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
         """Key the listed-tool cache by every request input that can change the upstream catalog.

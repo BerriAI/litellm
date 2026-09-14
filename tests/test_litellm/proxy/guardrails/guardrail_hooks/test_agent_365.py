@@ -1094,7 +1094,9 @@ class TestAgent365AuthorizationServers:
                 litellm.callbacks, twin, require_self=False
             )
 
-    def test_key_selected_guardrail_challenges_only_that_key(self):
+    def test_key_selected_guardrail_never_advertises_sign_in(self):
+        """The challenge a guarded key would get and the anonymous metadata fetch that follows it must name
+        the same issuer. The anonymous fetch cannot see the key, so neither side advertises Entra."""
         guardrail: Final = _make_guardrail(FakeHandler([]))
         guardrail.default_on = False
         litellm.logging_callback_manager.add_litellm_callback(guardrail)
@@ -1108,10 +1110,26 @@ class TestAgent365AuthorizationServers:
                 "litellm.proxy.proxy_server.premium_user", True
             ):
                 assert agent_365_authorization_servers(server, plain_key) == ()
-                assert agent_365_authorization_servers(server, guarded_key) == (ENTRA_ISSUER,)
+                assert agent_365_authorization_servers(server, guarded_key) == ()
                 assert agent_365_authorization_servers(server, None) == ()
                 assert agent_365_scopes_supported(_mcp_server(scopes=None), None) == ()
         finally:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(
                 litellm.callbacks, guardrail, require_self=False
             )
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [{"opted_out_global_guardrails": ["agent-365-guard"]}, {"disable_global_guardrails": True}],
+        ids=["opted-out", "globals-disabled"],
+    )
+    def test_key_opted_out_of_the_default_on_guardrail_is_not_challenged(self, registered_guardrail, metadata):
+        server: Final = _mcp_server(scopes=[GATEWAY_SCOPE])
+        opted_out: Final = UserAPIKeyAuth(api_key="sk-out", user_id="u-3", metadata=metadata)
+        team_opted_out: Final = UserAPIKeyAuth(api_key="sk-team", user_id="u-4", team_metadata=metadata)
+
+        assert agent_365_authorization_servers(server, opted_out) == ()
+        assert agent_365_authorization_servers(server, team_opted_out) == ()
+        assert agent_365_authorization_servers(server, UserAPIKeyAuth(api_key="sk-in", user_id="u-5")) == (
+            ENTRA_ISSUER,
+        )
