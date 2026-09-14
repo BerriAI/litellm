@@ -14366,3 +14366,123 @@ async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids
     assert exc_info.value.status_code == 400
     assert expected_error in str(exc_info.value.detail)
     mock_db_client.db.query_raw.assert_not_called()
+
+
+class _TeamRowWithOrganization(LiteLLM_TeamTable):
+    litellm_organization_table: LiteLLM_OrganizationTable | None = None
+
+
+@pytest.mark.parametrize(
+    "organization, expected_models",
+    [
+        (
+            LiteLLM_OrganizationTable(
+                organization_id="org-1",
+                budget_id="budget-1",
+                models=["all-proxy-models"],
+                created_by="admin",
+                updated_by="admin",
+            ),
+            ["all-proxy-models"],
+        ),
+        (
+            LiteLLM_OrganizationTable(
+                organization_id="org-1",
+                budget_id="budget-1",
+                models=["gpt-4o"],
+                created_by="admin",
+                updated_by="admin",
+            ),
+            ["gpt-4o"],
+        ),
+        (None, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_info_returns_parent_organization_models(organization, expected_models):
+    """/team/info must report the parent org's model ceiling.
+
+    A team admin who is not an org admin gets a 403 from /organization/info, so this
+    is the only read that can tell the Admin UI whether the org allows all proxy
+    models. Without it the team edit form hides the "All Proxy Models" option and a
+    team admin cannot grant their team everything on the proxy.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = _TeamRowWithOrganization(
+        team_id="team-1",
+        organization_id="org-1" if organization is not None else None,
+        litellm_organization_table=organization,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    memberships = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
+        patch.object(team_endpoints, "get_all_team_memberships", memberships),  # test-quality-ok: no seam on team_info
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert response["team_info"].organization_models == expected_models
+
+
+@pytest.mark.parametrize(
+    "caller, expected_models",
+    [
+        (UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.INTERNAL_USER), ["gpt-4o"]),
+        (UserAPIKeyAuth(user_id="member-1", user_role=LitellmUserRoles.INTERNAL_USER), None),
+        (UserAPIKeyAuth(team_id="team-1"), None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_info_reports_parent_organization_models_only_to_team_managers(caller, expected_models):
+    """Plain members and team keys can read their team, but not the org's wider allow-list."""
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = _TeamRowWithOrganization(
+        team_id="team-1",
+        organization_id="org-1",
+        members_with_roles=[
+            Member(user_id="admin-1", role="admin"),
+            Member(user_id="member-1", role="user"),
+        ],
+        litellm_organization_table=LiteLLM_OrganizationTable(
+            organization_id="org-1",
+            budget_id="budget-1",
+            models=["gpt-4o"],
+            created_by="admin",
+            updated_by="admin",
+        ),
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
+        patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])),  # test-quality-ok: no seam on team_info
+        patch.object(  # test-quality-ok: no seam on team_info
+            team_endpoints, "_is_user_org_admin_for_team", AsyncMock(return_value=False)
+        ),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=caller,
+        )
+
+    assert response["team_info"].organization_models == expected_models
