@@ -105,13 +105,14 @@ def test_ensure_trace_bridge_rebuilds_when_trace_feature_is_missing(
         state.rebuilt = True
         return True, ""
 
+    def fake_get_native_bridge() -> SimpleNamespace:
+        assert state.rebuilt
+        return SimpleNamespace(_trace=object())
+
     monkeypatch.setattr(native_build, "_native_module_path", lambda: native)
     monkeypatch.setattr(native_build, "_rebuild", fake_rebuild)
-    monkeypatch.setattr(
-        native_build,
-        "get_native_bridge",
-        lambda: SimpleNamespace(_trace=object() if state.rebuilt else None),
-    )
+    monkeypatch.setattr(native_build, "_installed_bridge_has_trace", lambda repo_root: False)
+    monkeypatch.setattr(native_build, "get_native_bridge", fake_get_native_bridge)
 
     message: Final = native_build.ensure_trace_bridge(tmp_path)
 
