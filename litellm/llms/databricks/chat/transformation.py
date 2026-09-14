@@ -455,12 +455,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             else:
                 _message = message
             _message = strip_name_from_message(_message, allowed_name_roles=["user"])
+            # Must run before the generic strip below, which would discard the thinking_blocks
+            # this converts into a replayable reasoning content block.
+            if "thinking_blocks" in _message or "reasoning_content" in _message:
+                _message = self._move_reasoning_into_content_block(_message)
             _message = strip_litellm_internal_message_fields(_message)
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
-            if "thinking_blocks" in _message or "reasoning_content" in _message:
-                _message = self._move_reasoning_into_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
             if _is_bare_assistant_message(_message):
                 continue
