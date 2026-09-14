@@ -10,13 +10,14 @@ import json
 from collections.abc import AsyncIterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, NoReturn, Protocol
 
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import (
+    BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
 )
@@ -59,15 +60,6 @@ def _as_bedrock_error(error: BaseException) -> BaseException:
     if status_code is None:
         return error
     return BedrockError(status_code=status_code, message=f"{type(error).__name__}: {error}")
-
-
-class _BedrockForwardingFailed(Exception):
-    """The Bedrock output stream failed after ``logged_events`` were already forwarded to the client."""
-
-    def __init__(self, cause: BaseException, logged_events: tuple[OpenAIRealtimeEvents, ...]) -> None:
-        super().__init__(str(cause))
-        self.cause: Final = cause
-        self.logged_events: Final = logged_events
 
 
 def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
@@ -150,12 +142,24 @@ async def _client_messages(client_ws: RealtimeClientWebSocket, initial_message: 
 def _pending_session_update(scope: Mapping[str, object]) -> str | None:
     """A fallback attempt on the same websocket replays the session.update the failed attempt never acked."""
     if scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True:
+        committed_failure: Final = scope.get(BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY)
         raise BedrockError(
-            status_code=409,
-            message="Bedrock realtime session already committed to a provider stream; it cannot be replayed",
+            status_code=400,
+            message=(
+                "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
+                + (f". The committed stream failed with: {committed_failure}" if committed_failure else "")
+            ),
         )
     pending: Final = scope.get(BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY)
     return pending if isinstance(pending, str) else None
+
+
+def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseException) -> NoReturn:
+    error: Final = _as_bedrock_error(failure)
+    verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", _redact_string(str(error)))
+    if scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True:
+        scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = _redact_string(str(error))
+    raise error from failure
 
 
 def _parse_client_message(message: str) -> Mapping[str, JsonValue]:
@@ -351,10 +355,7 @@ class BedrockRealtime(BaseAWSLLM):
                 "Bedrock Realtime: stream failed after the client disconnected: %s", outcome.provider_failure
             )
             return
-        verbose_proxy_logger.error(
-            "Bedrock Realtime: provider stream failed: %s", _redact_string(str(outcome.provider_failure))
-        )
-        raise _as_bedrock_error(outcome.provider_failure) from outcome.provider_failure
+        _raise_provider_failure(websocket.scope, outcome.provider_failure)
 
     async def _bridge(
         self,
@@ -367,17 +368,13 @@ class BedrockRealtime(BaseAWSLLM):
         initial_message: str | None,
     ) -> _BridgeOutcome:
         """Run both forwarding directions until the client leaves or either side fails."""
+        logged: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: events forwarded before a failure are still spend
 
-        async def collect_logged_events() -> tuple[OpenAIRealtimeEvents, ...]:
-            logged: Final[list[OpenAIRealtimeEvents]] = []  # mutable-ok: partial events are still logged
-            try:
-                async for event in self._forward_bedrock_to_client(
-                    bedrock_stream, websocket, transformation_config, model, logging_obj, session_state
-                ):
-                    logged.append(event)
-            except Exception as e:
-                raise _BedrockForwardingFailed(e, tuple(logged)) from e
-            return tuple(logged)
+        async def collect_logged_events() -> None:
+            async for event in self._forward_bedrock_to_client(
+                bedrock_stream, websocket, transformation_config, model, logging_obj, session_state
+            ):
+                logged.append(event)
 
         client_task: Final = asyncio.create_task(
             self._forward_client_to_bedrock(
@@ -395,18 +392,12 @@ class BedrockRealtime(BaseAWSLLM):
         client_outcome, bedrock_outcome = await asyncio.gather(client_task, bedrock_task, return_exceptions=True)
 
         return _BridgeOutcome(
-            logged_events=(
-                bedrock_outcome.logged_events
-                if isinstance(bedrock_outcome, _BedrockForwardingFailed)
-                else bedrock_outcome
-                if isinstance(bedrock_outcome, tuple)
-                else ()
-            ),
+            logged_events=tuple(logged),
             provider_failure=(
                 client_outcome
                 if isinstance(client_outcome, Exception)
-                else bedrock_outcome.cause
-                if isinstance(bedrock_outcome, _BedrockForwardingFailed)
+                else bedrock_outcome
+                if isinstance(bedrock_outcome, Exception)
                 else None
             ),
             client_disconnected=client_disconnected,
