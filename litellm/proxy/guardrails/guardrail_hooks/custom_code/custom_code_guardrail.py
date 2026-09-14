@@ -63,6 +63,10 @@ def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[st
     return bucket if isinstance(bucket, Mapping) else {}
 
 
+def _identity_field(request_data: Mapping[str, object], metadata: Mapping[str, object], key: str) -> object:
+    return metadata[key] if key in metadata else request_data.get(key)
+
+
 class CustomCodeGuardrailError(Exception):
     """Raised when custom code guardrail execution fails."""
 
@@ -291,9 +295,9 @@ class CustomCodeGuardrail(CustomGuardrail):
         }
         return {
             "model": request_data.get("model"),
-            "user_id": metadata.get("user_api_key_user_id"),
-            "team_id": metadata.get("user_api_key_team_id"),
-            "end_user_id": metadata.get("user_api_key_end_user_id"),
+            "user_id": _identity_field(request_data, metadata, "user_api_key_user_id"),
+            "team_id": _identity_field(request_data, metadata, "user_api_key_team_id"),
+            "end_user_id": _identity_field(request_data, metadata, "user_api_key_end_user_id"),
             "metadata": metadata,
         }
 
