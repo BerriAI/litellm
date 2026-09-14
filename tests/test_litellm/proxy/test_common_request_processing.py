@@ -3879,6 +3879,39 @@ class TestHandleLLMApiExceptionRetryAfter:
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
 
+    async def test_handle_llm_api_exception_names_cooldown_when_every_deployment_is_cooled_down(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a", "dep-b"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "all_deployments_in_cooldown"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" in body["message"]
+        assert proxy_exc.headers["retry-after"] == "120"
+
+    async def test_handle_llm_api_exception_keeps_rate_limit_type_when_cooldown_is_partial(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "rate_limit_error"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" not in body["message"]
+
 
 class TestHandleLLMApiExceptionFramingHeaders:
     """HTTP-framing headers on the provider exception must be stripped before the
