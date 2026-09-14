@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal, TypeAlias
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
@@ -8,9 +8,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
-
-GenericGuardrailAPIToolCalls: TypeAlias = GenericGuardrailAPIInputs["tool_calls"]  # noqa: F821  # TypedDict field reference, not a name
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 
 class GuardrailToolParam(BaseModel):
@@ -169,7 +167,7 @@ class GenericGuardrailAPIResponse:
     action: str
     blocked_reason: str | None
     stream_holdback_chars: list[int] | None
-    tool_calls: GenericGuardrailAPIToolCalls | None
+    tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None
 
     def __init__(
         self,
@@ -179,7 +177,7 @@ class GenericGuardrailAPIResponse:
         images: list[str] | None = None,
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
-        tool_calls: GenericGuardrailAPIToolCalls | None = None,
+        tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
