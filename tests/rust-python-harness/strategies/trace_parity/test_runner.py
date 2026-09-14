@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from typing import Final
+import importlib
+from pathlib import Path
+from typing import Final, cast
+
+import pytest
+
+import litellm
 
 from ...shared.reporting.models import Coverage, HarnessCase, HarnessRun, RunStatus, SdkFunction, Surface
 from ...shared.reporting.strategy import ModuleCaseSpec
-from ...shared.tracing.steps import Engine
+from ...shared.tracing.steps import Engine, PipelineStep
 from .models import GatewayRouteSpec, RouteFixture, RouteSpec, TraceScenario, TraceSuite
-from .runner import run_trace_mode, scenario_nodeids, validate_trace_suite
+from .reporting import TraceArtifact
+from .runner import run_trace_cases, run_trace_scenario, runner_selection, scenario_nodeids, validate_trace_suite
+from .sdk.execution import execute_trace
 
 
 def _fixture(_engine: Engine, _base_url: str) -> RouteFixture:
@@ -27,46 +35,98 @@ def test_scenario_filtering_and_occurrence_node_ids() -> None:
     suite: Final = TraceSuite(
         route=RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture),
         scenarios=(
-            TraceScenario("one", _fixture, (), modes=("sync", "async")),
-            TraceScenario("two", _fixture, (), modes=("async",)),
+            TraceScenario("sync-one", _fixture, (), asynchronous=False),
+            TraceScenario("async-one", _fixture, (), asynchronous=True),
+            TraceScenario("async-two", _fixture, (), asynchronous=True),
         ),
     )
     case: Final = _case()
 
-    nodes: Final = scenario_nodeids(suite, case, frozenset({"two"}))
+    nodes: Final = scenario_nodeids(suite, case, frozenset({"async-two"}))
 
-    assert tuple(nodeid for _, _, nodeid in nodes) == ("trace:sdk:ocr:two:async",)
+    assert tuple(nodeid for _, nodeid in nodes) == ("trace:sdk:ocr:async-two",)
+
+
+def test_python_engine_is_separate_from_scenario_selection() -> None:
+    assert runner_selection(("mistral", "--engine=python")) == (frozenset({"mistral"}), "python")
+
+
+def test_python_engine_skips_native_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.runner")
+    case: Final = _case()
+    selected: list[tuple[frozenset[str], str]] = []
+
+    def reject_bridge(_repo_root: Path) -> str | None:
+        raise AssertionError("Python-only tracing must not inspect or build the native bridge")
+
+    def capture_case(
+        _run: HarnessRun,
+        _case: HarnessCase,
+        scenarios: frozenset[str],
+        _on_update: object,
+        engine: str,
+    ) -> None:
+        selected.append((scenarios, engine))
+
+    monkeypatch.setattr(runner, "ensure_trace_bridge", reject_bridge)
+    monkeypatch.setattr(runner, "_run_case", capture_case)
+
+    exit_code, _ = run_trace_cases((case,), tmp_path, lambda _: None, ("mistral", "--engine=python"))
+
+    assert exit_code == 0
+    assert selected == [(frozenset({"mistral"}), "python")]
+
+
+def test_expected_provider_failure_omits_feedback_banner(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.sdk.responses.case")
+    suite: Final = cast(TraceSuite, loaded.TRACE_SUITE)
+    scenario: Final = next(item for item in suite.scenarios if item.name == "async-openai-provider-error")
+    monkeypatch.setattr(litellm, "suppress_debug_info", False)
+    assert isinstance(suite.route, RouteSpec)
+
+    result: Final = execute_trace(suite.route, scenario, "sdk", engine="python")
+
+    assert result.python_error is None
+    assert "Give Feedback / Get Help" not in capsys.readouterr().out
+    assert litellm.suppress_debug_info is False
 
 
 def test_scenario_validation_rejects_duplicate_and_unsafe_names() -> None:
     route: Final = RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture)
     duplicate: Final = TraceSuite(
         route=route,
-        scenarios=(TraceScenario("same", _fixture, ()), TraceScenario("same", _fixture, ())),
+        scenarios=(
+            TraceScenario("sync-same", _fixture, (), asynchronous=False),
+            TraceScenario("sync-same", _fixture, (), asynchronous=False),
+        ),
     )
-    unsafe: Final = TraceSuite(route=route, scenarios=(TraceScenario("bad:name", _fixture, ()),))
+    unsafe: Final = TraceSuite(
+        route=route, scenarios=(TraceScenario("sync-bad:name", _fixture, (), asynchronous=False),)
+    )
     case: Final = _case()
 
     assert validate_trace_suite(duplicate, case) is not None
     assert validate_trace_suite(unsafe, case) is not None
 
 
-def test_scenario_validation_rejects_invalid_modes_and_route_registration() -> None:
-    invalid_modes: Final = TraceSuite(
+def test_scenario_validation_rejects_invalid_names_and_route_registration() -> None:
+    invalid_name: Final = TraceSuite(
         route=RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture),
-        scenarios=(TraceScenario("invalid", _fixture, (), modes=("sync", "sync")),),
+        scenarios=(TraceScenario("bedrock", _fixture, (), asynchronous=True),),
     )
     wrong_function: Final = TraceSuite(
         route=RouteSpec("messages", ("create", "acreate"), ("messages", "amessages"), _fixture),
-        scenarios=(TraceScenario("one", _fixture, ()),),
+        scenarios=(TraceScenario("sync-one", _fixture, (), asynchronous=False),),
     )
     wrong_surface: Final = TraceSuite(
         route=GatewayRouteSpec("ocr"),
-        scenarios=(TraceScenario("one", _fixture, ()),),
+        scenarios=(TraceScenario("sync-one", _fixture, (), asynchronous=False),),
     )
     case: Final = _case()
 
-    assert "unique sync/async modes" in (validate_trace_suite(invalid_modes, case) or "")
+    assert "start with sync- or async-" in (validate_trace_suite(invalid_name, case) or "")
     assert "does not match case function" in (validate_trace_suite(wrong_function, case) or "")
     assert "must use RouteSpec" in (validate_trace_suite(wrong_surface, case) or "")
 
@@ -77,11 +137,35 @@ def test_invalid_route_dispatch_records_harness_error() -> None:
     result: Final = run.results[case.key]
     suite: Final = TraceSuite(
         route=GatewayRouteSpec("ocr"),
-        scenarios=(TraceScenario("one", _fixture, (), modes=("sync",)),),
+        scenarios=(TraceScenario("sync-one", _fixture, (), asynchronous=False),),
     )
-    nodeid: Final = "trace:sdk:ocr:one:sync"
+    nodeid: Final = "trace:sdk:ocr:sync-one"
 
-    run_trace_mode(run, result, suite, suite.scenarios[0], "sync", "sdk", nodeid, lambda _: None)
+    run_trace_scenario(run, result, suite, suite.scenarios[0], "sdk", nodeid, lambda _: None)
 
     assert result.outcomes[nodeid] is RunStatus.ERROR
     assert run.failures == [(nodeid, "gateway route cannot run on the sdk surface")]
+
+
+def test_different_python_and_rust_traces_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner: Final = importlib.import_module("tests.rust-python-harness.strategies.trace_parity.runner")
+    case: Final = _case()
+    run: Final = HarnessRun.from_cases((case,))
+    result: Final = run.results[case.key]
+    suite: Final = TraceSuite(
+        route=RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture),
+        scenarios=(TraceScenario("sync-one", _fixture, (), asynchronous=False),),
+    )
+    trace: Final = TraceArtifact.from_traces(
+        surface="sdk",
+        sdk_function="ocr",
+        scenario="sync-one",
+        python=(PipelineStep(0, None, "python_step", "python.py:1 python_step"),),
+        rust=(PipelineStep(0, None, "rust_step", "rust_step"),),
+    )
+    monkeypatch.setattr(runner, "_execute_scenario", lambda *_args: trace)
+
+    run_trace_scenario(run, result, suite, suite.scenarios[0], "sdk", "trace:sdk:ocr:sync-one", lambda _: None)
+
+    assert result.outcomes["trace:sdk:ocr:sync-one"] is RunStatus.PASSED
+    assert run.failures == []

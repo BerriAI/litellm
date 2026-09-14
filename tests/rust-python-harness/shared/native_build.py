@@ -85,7 +85,8 @@ def trace_bridge_error() -> str | None:
 def ensure_trace_bridge(repo_root: Path) -> str | None:
     native_path: Final = _native_module_path()
     native_mtime: Final = native_path.stat().st_mtime if native_path is not None and native_path.exists() else None
-    if needs_rebuild(native_mtime, _newest_source_mtime(repo_root)):
+    rebuild_required: Final = needs_rebuild(native_mtime, _newest_source_mtime(repo_root)) or trace_bridge_error() is not None
+    if rebuild_required:
         print(f"Rebuilding native Rust bridge ({BRIDGE_FEATURE} feature)...", flush=True)
         succeeded: Final
         output: Final

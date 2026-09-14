@@ -181,12 +181,7 @@ class TraceDiff:
 
     @property
     def matches(self) -> bool:
-        return (
-            not self.python_only
-            and not self.rust_only
-            and not self.missing_mappings
-            and self.shared_order_matches
-        )
+        return not self.python_only and not self.rust_only and not self.missing_mappings and self.shared_order_matches
 
 
 def _missing_mappings(
@@ -257,9 +252,7 @@ def trace_diff(
     rust_counts: Final = Counter(rust_spans)
     python_only_counts: Final = python_counts - rust_counts
     rust_only_counts: Final = rust_counts - python_counts
-    python_only: Final = tuple(
-        span for span, count in python_only_counts.items() for _ in range(count)
-    )
+    python_only: Final = tuple(span for span, count in python_only_counts.items() for _ in range(count))
     rust_only: Final = tuple(span for span, count in rust_only_counts.items() for _ in range(count))
     first_difference: Final = _first_difference(python, rust, mappings, contract)
     return TraceDiff(

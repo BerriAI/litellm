@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
+from collections.abc import AsyncIterable, Awaitable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -11,8 +11,8 @@ from ....shared.reporting.models import Surface
 from ....shared.tracing.native import TraceResponsePayload, native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
 from ....shared.tracing.steps import Engine, pipeline_projection
-from ..models import RouteFixture, RouteSpec, TraceExecutionFailure, TraceMode, TraceScenario
-from ..reporting import TraceComparisonArtifact
+from ..models import RouteFixture, RouteSpec, TraceEngine, TraceExecutionFailure, TraceScenario
+from ..reporting import TraceArtifact
 
 
 class SdkCall(Protocol):
@@ -25,10 +25,20 @@ class _CollectedTrace:
     error: str | None = None
 
 
-def _invoke(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool) -> object:
+def _invoke(
+    function: SdkCall,
+    kwargs: dict[str, object],
+    *,
+    asynchronous: bool,
+    consume_stream: bool = False,
+) -> object:
     async def invoke_async() -> object:
         try:
-            return await cast(Awaitable[object], function(**kwargs))
+            response: Final = await cast(Awaitable[object], function(**kwargs))
+            if consume_stream and isinstance(response, AsyncIterable):
+                stream = cast(AsyncIterable[object], response)
+                return tuple([item async for item in stream])
+            return response
         finally:
             await asyncio.sleep(0)
             from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -38,7 +48,10 @@ def _invoke(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool)
 
     if asynchronous:
         return asyncio.run(invoke_async())
-    return function(**kwargs)
+    response: Final = function(**kwargs)
+    if consume_stream and isinstance(response, Iterable):
+        return tuple(cast(Iterable[object], response))
+    return response
 
 
 def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCall | TraceExecutionFailure:
@@ -62,14 +75,6 @@ def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCa
     return cast(SdkCall, getattr(owner, spec.python_entrypoints[int(asynchronous)]))
 
 
-def _python_invocation_error(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool) -> str | None:
-    try:
-        _invoke(function, kwargs, asynchronous=asynchronous)
-    except Exception as error:
-        return f"{type(error).__name__}: {error}"
-    return None
-
-
 def _collect(
     function: SdkCall,
     fixture: RouteFixture,
@@ -83,8 +88,19 @@ def _collect(
         return _CollectedTrace(native_trace_events(payload), payload.error)
     import litellm
 
-    with profile_python(Path(litellm.__file__).parent, threads=True) as profiler:
-        error: Final = _python_invocation_error(function, kwargs, asynchronous=asynchronous)
+    previous_suppress_debug_info: Final = litellm.suppress_debug_info
+    try:
+        if fixture.expected_failure:
+            litellm.suppress_debug_info = True
+        with profile_python(Path(litellm.__file__).parent, threads=True) as profiler:
+            error: str | None
+            try:
+                _invoke(function, kwargs, asynchronous=asynchronous, consume_stream=fixture.consume_stream)
+                error = None
+            except Exception as caught:
+                error = f"{type(caught).__name__}: {caught}"
+    finally:
+        litellm.suppress_debug_info = previous_suppress_debug_info
     return _CollectedTrace(tuple(profiler.events), error)
 
 
@@ -108,6 +124,7 @@ def collect_trace(
                 },
                 provider_responses=base_fixture.provider_responses,
                 expected_failure=base_fixture.expected_failure,
+                consume_stream=base_fixture.consume_stream,
             )
             collected: Final = _collect(function, fixture, engine, asynchronous=asynchronous)
             provider.take_requests(len(fixture.provider_responses))
@@ -129,18 +146,24 @@ def _failure_message(result: tuple[FunctionTraceEvent, ...] | TraceExecutionFail
 
 
 def execute_trace(
-    route: RouteSpec, scenario: TraceScenario, mode: TraceMode, surface: Surface
-) -> TraceComparisonArtifact:
-    asynchronous: Final = mode == "async"
-    mappings: Final = scenario.mappings_for(mode)
+    route: RouteSpec,
+    scenario: TraceScenario,
+    surface: Surface,
+    engine: TraceEngine = "both",
+) -> TraceArtifact:
+    mappings: Final = scenario.mappings
     scenario_route: Final = RouteSpec(
         route=route.route,
         python_entrypoints=route.python_entrypoints,
         rust_entrypoints=route.rust_entrypoints,
         fixture=scenario.fixture,
     )
-    python_trace: Final = collect_trace(scenario_route, "python", asynchronous=asynchronous)
-    rust_trace: Final = collect_trace(scenario_route, "rust", asynchronous=asynchronous)
+    python_trace: Final = (
+        collect_trace(scenario_route, "python", asynchronous=scenario.asynchronous) if engine != "rust" else ()
+    )
+    rust_trace: Final = (
+        collect_trace(scenario_route, "rust", asynchronous=scenario.asynchronous) if engine != "python" else ()
+    )
     python_error: Final = _failure_message(python_trace)
     rust_error: Final = _failure_message(rust_trace)
     python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
@@ -149,28 +172,22 @@ def execute_trace(
         python: Final = pipeline_projection("python", python_events, mappings)
         rust: Final = pipeline_projection("rust", rust_events, mappings)
     except ValueError as error:
-        return TraceComparisonArtifact.from_traces(
+        return TraceArtifact.from_traces(
+            engine=engine,
             surface=surface,
             sdk_function=route.route,
             scenario=scenario.name,
-            mode=mode,
-            mappings=mappings,
-            contract=scenario.contract,
             python=(),
             rust=(),
-            python_unmatched=0,
             python_error=f"harness: {error}",
         )
-    return TraceComparisonArtifact.from_traces(
+    return TraceArtifact.from_traces(
+        engine=engine,
         surface=surface,
         sdk_function=route.route,
         scenario=scenario.name,
-        mode=mode,
-        mappings=mappings,
-        contract=scenario.contract,
         python=python.steps,
         rust=rust.steps,
-        python_unmatched=python.unmatched,
         python_error=python_error,
         rust_error=rust_error,
     )
