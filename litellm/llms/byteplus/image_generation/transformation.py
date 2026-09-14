@@ -32,7 +32,13 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: matches BaseImageGenerationConfig interface
-        return ["n", "response_format", "size", "user", "quality"]  # mutable-ok: matches BaseImageGenerationConfig interface
+        return [  # mutable-ok: matches BaseImageGenerationConfig interface
+            "n",
+            "response_format",
+            "size",
+            "user",
+            "quality",
+        ]
 
     def map_openai_params(
         self,
@@ -42,7 +48,9 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:  # mutable-ok: matches BaseImageGenerationConfig interface
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
-        optional_params.update({k: v for k, v in non_default_params.items() if k in supported_params})  # mutable-ok: update params dict
+        optional_params.update(
+            {k: v for k, v in non_default_params.items() if k in supported_params}  # mutable-ok: update params dict
+        )
 
         return optional_params
 
@@ -86,11 +94,12 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         return f"{base_url}/api/v3/images/generations"
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers  # mutable-ok: matches BaseImageGenerationConfig interface
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: matches BaseImageGenerationConfig interface
     ) -> BytePlusError:
-        typed_headers: Final[httpx.Headers] = (
-            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
-        )
+        typed_headers: Final[httpx.Headers] = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
         return BytePlusError(
             status_code=status_code,
             message=error_message,
@@ -125,7 +134,9 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
                 body[key] = optional_params[key]
 
         if "extra_body" in optional_params and isinstance(optional_params["extra_body"], dict):
-            extra_body: Final = {k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "prompt")}  # mutable-ok: extra body dictionary
+            extra_body: Final = {  # mutable-ok: extra body dictionary
+                k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "prompt")
+            }
             body.update(extra_body)
 
         return body
@@ -135,7 +146,7 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ImageResponse,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,  # mutable-ok: matches BaseImageGenerationConfig interface
         optional_params: dict,  # mutable-ok: matches BaseImageGenerationConfig interface
         litellm_params: dict,  # mutable-ok: matches BaseImageGenerationConfig interface
@@ -160,4 +171,3 @@ class BytePlusImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         return image_response
-

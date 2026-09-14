@@ -34,4 +34,3 @@ def get_byteplus_headers(
         headers.update(extra_headers)
 
     return headers
-

@@ -131,7 +131,6 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
             "speed",
         ]
 
-
     def map_openai_params(
         self,
         model: str,
@@ -170,9 +169,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         access_key: Final = get_secret_str("BYTEPLUS_TTS_ACCESS_KEY")
         app_key: Final = get_secret_str("BYTEPLUS_TTS_APP_KEY") or self.DEFAULT_APP_KEY
 
-        resource_id: Final[str] = (
-            model.removeprefix("byteplus/") if model.startswith("byteplus/") else model
-        )
+        resource_id: Final[str] = model.removeprefix("byteplus/") if model.startswith("byteplus/") else model
 
         req_headers: Final[dict[str, str]] = {  # mutable-ok: building concrete request headers to update
             "X-Api-Resource-Id": resource_id,
@@ -238,7 +235,9 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> TextToSpeechRequestData:
         params: Final[dict] = dict(optional_params or {})  # mutable-ok: local copy of optional parameters
         raw_extra_body: Final = params.pop("extra_body", None)
-        extra_body: Final[dict] = raw_extra_body if isinstance(raw_extra_body, dict) else {}  # mutable-ok: extra body parameters
+        extra_body: Final[dict] = (  # mutable-ok: extra body parameters
+            raw_extra_body if isinstance(raw_extra_body, dict) else {}  # mutable-ok: fallback empty dict
+        )
 
         raw_speaker: Final = voice or extra_body.get("speaker") or "en_female_stokie_uranus_bigtts"
         speaker: Final = (
@@ -375,7 +374,9 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
         **kwargs: object,  # kwargs-ok: matches BaseTextToSpeechConfig interface
     ) -> object:
         safe_extra_headers: Final[dict | None] = (  # mutable-ok: filtered request headers dictionary
-            {k: v for k, v in extra_headers.items() if k.lower() not in _BYTEPLUS_TTS_AUTH_HEADERS}  # mutable-ok: filtered headers dict comprehension
+            {  # mutable-ok: filtered headers dict comprehension
+                k: v for k, v in extra_headers.items() if k.lower() not in _BYTEPLUS_TTS_AUTH_HEADERS
+            }
             if extra_headers
             else None
         )
@@ -385,7 +386,7 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
                 "api_base": api_base,
             }
         )
-        handler_func: Final = getattr(base_llm_http_handler, "text_to_speech_handler")
+        handler_func: Final = base_llm_http_handler.text_to_speech_handler
         return handler_func(
             model=model,
             input=input,

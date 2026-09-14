@@ -12,9 +12,7 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
     def get_config(cls) -> "BytePlusChatConfig":
         return super().get_config()
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list:  # mutable-ok: matches BaseConfig interface
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: matches BaseConfig interface
         return [  # mutable-ok: matches BaseConfig interface
             "frequency_penalty",
             "logit_bias",
@@ -59,9 +57,12 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
             thinking_val: Final = mapped_params.pop("thinking", None)
             if thinking_val is not None:
                 if isinstance(thinking_val, bool):
-                    mapped_params["extra_body"] = {"thinking": {"type": "enabled" if thinking_val else "disabled"}}  # mutable-ok: extra_body payload dict
+                    mapped_params["extra_body"] = {  # mutable-ok: extra_body payload dict
+                        "thinking": {  # mutable-ok: nested thinking dict
+                            "type": "enabled" if thinking_val else "disabled"
+                        },
+                    }
                 elif isinstance(thinking_val, dict):
                     mapped_params["extra_body"] = {"thinking": thinking_val}  # mutable-ok: extra_body payload dict
 
         return mapped_params
-

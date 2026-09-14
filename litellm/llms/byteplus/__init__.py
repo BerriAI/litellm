@@ -3,6 +3,8 @@ BytePlus LLM Provider
 Support for BytePlus (ModelArk) chat, embedding, responses, image generation, and TTS models.
 """
 
+from typing import Final
+
 from .chat.transformation import BytePlusChatConfig
 from .common_utils import (
     BytePlusError,
@@ -13,8 +15,6 @@ from .embedding.transformation import BytePlusEmbeddingConfig
 from .image_generation.transformation import BytePlusImageGenerationConfig
 from .responses.transformation import BytePlusResponsesAPIConfig
 from .text_to_speech.transformation import BytePlusTextToSpeechConfig
-
-from typing import Final
 
 BytePlusConfig: Final = BytePlusChatConfig
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -29,12 +28,10 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
     """
 
     @classmethod
-    def get_config(cls) -> "BytePlusEmbeddingConfig":
+    def get_config(cls) -> BytePlusEmbeddingConfig:
         return super().get_config()
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list[str]:  # mutable-ok: matches BaseEmbeddingConfig interface
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: matches BaseEmbeddingConfig interface
         return [  # mutable-ok: matches BaseEmbeddingConfig interface
             "encoding_format",
             "user",
@@ -81,7 +78,9 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         drop_params: bool,
     ) -> dict:  # mutable-ok: matches BaseEmbeddingConfig interface
         supported: Final = frozenset(self.get_supported_openai_params(model))
-        optional_params.update({k: v for k, v in non_default_params.items() if k in supported})  # mutable-ok: update params dict
+        optional_params.update(
+            {k: v for k, v in non_default_params.items() if k in supported}  # mutable-ok: update params dict
+        )
         return optional_params
 
     def transform_embedding_request(
@@ -116,7 +115,9 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
                 data[key] = optional_params[key]
 
         if "extra_body" in optional_params and isinstance(optional_params["extra_body"], dict):
-            extra_body: Final = {k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "input")}  # mutable-ok: extra_body dictionary
+            extra_body: Final = {  # mutable-ok: extra_body dictionary
+                k: v for k, v in optional_params["extra_body"].items() if k not in ("model", "input")
+            }
             data.update(extra_body)
 
         return data
@@ -126,7 +127,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
         request_data: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
         optional_params: dict,  # mutable-ok: matches BaseEmbeddingConfig interface
@@ -183,10 +184,10 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
         return get_byteplus_headers(api_key=resolved_api_key, extra_headers=headers)
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers  # mutable-ok: matches BaseEmbeddingConfig interface
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: matches BaseEmbeddingConfig interface
     ) -> BytePlusError:
-        typed_headers: Final[httpx.Headers] = (
-            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
-        )
+        typed_headers: Final[httpx.Headers] = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
         return BytePlusError(status_code=status_code, message=error_message, headers=typed_headers)
-

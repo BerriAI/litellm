@@ -23,11 +23,12 @@ class BytePlusResponsesAPIConfig(VolcEngineResponsesAPIConfig):
         return LlmProviders.BYTEPLUS
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers  # mutable-ok: matches BaseResponsesAPIConfig interface
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: matches BaseResponsesAPIConfig interface
     ) -> BytePlusError:
-        typed_headers: Final[httpx.Headers] = (
-            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
-        )
+        typed_headers: Final[httpx.Headers] = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers)
         return BytePlusError(
             status_code=status_code,
             message=error_message,
@@ -78,4 +79,3 @@ class BytePlusResponsesAPIConfig(VolcEngineResponsesAPIConfig):
         if base_url.endswith("/api/v3"):
             return f"{base_url}/responses"
         return f"{base_url}/api/v3/responses"
-
