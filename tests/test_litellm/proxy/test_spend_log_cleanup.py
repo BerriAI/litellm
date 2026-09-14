@@ -824,13 +824,31 @@ async def test_health_check_retention_alone_cleans_only_the_health_check_table()
 
 
 @pytest.mark.asyncio
+async def test_daily_tag_spend_retention_alone_cleans_only_the_daily_tag_spend_table():
+    client = _mock_prisma_for_retention([0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_daily_tag_spend_retention_period": "90d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
+    assert len(tables) == 1
+    assert '"LiteLLM_DailyTagSpend"' in tables[0]
+    assert '"id"' in tables[0]
+    assert '"date"' in tables[0]
+    assert "$1::text" in tables[0]
+    cutoff_day = client.db.execute_raw.call_args[0][1]
+    expected_cutoff_day = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+    assert cutoff_day == expected_cutoff_day
+
+
+@pytest.mark.asyncio
 async def test_each_retention_key_cuts_off_at_its_own_horizon():
-    client = _mock_prisma_for_retention([0, 0, 0, 0])
+    client = _mock_prisma_for_retention([0, 0, 0, 0, 0])
     cleaner = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
             "maximum_autorouter_session_retention_period": "365d",
             "maximum_health_check_retention_period": "30d",
+            "maximum_daily_tag_spend_retention_period": "90d",
         }
     )
     cleaner.pod_lock_manager = None
@@ -841,6 +859,8 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
             if '"LiteLLM_AutoRouterSession"' in call[0][0]
             else "LiteLLM_HealthCheckTable"
             if '"LiteLLM_HealthCheckTable"' in call[0][0]
+            else "LiteLLM_DailyTagSpend"
+            if '"LiteLLM_DailyTagSpend"' in call[0][0]
             else "logs"
         ): call[0][1]
         for call in client.db.execute_raw.call_args_list
@@ -849,6 +869,7 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
     assert (now - cutoffs["logs"]).days == 7
     assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
     assert (now - cutoffs["LiteLLM_HealthCheckTable"]).days == 30
+    assert cutoffs["LiteLLM_DailyTagSpend"] == (now - timedelta(days=90)).strftime("%Y-%m-%d")
 
 
 @pytest.mark.asyncio
@@ -1213,6 +1234,7 @@ async def test_the_outstanding_rows_probe_carries_a_statement_timeout():
         datetime.now(timezone.utc) - timedelta(days=7),
         "LiteLLM_SpendLogs",
         "startTime",
+        "timestamptz",
         _far_deadline(),
     )
 
@@ -1279,6 +1301,7 @@ async def test_no_statement_is_issued_once_the_budget_is_spent():
         datetime.now(timezone.utc) - timedelta(days=7),
         "LiteLLM_SpendLogs",
         "startTime",
+        "timestamptz",
         123,
         "budget_exhausted",
         time.monotonic() - 1,
