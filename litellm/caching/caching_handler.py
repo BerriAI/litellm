@@ -208,10 +208,8 @@ class LLMCachingHandler:
         """
         # Check if caching should be performed BEFORE doing expensive operations
         if (
-            (
-                (kwargs.get("caching", None) is None and litellm.cache is not None)
-                or kwargs.get("caching", False) is True
-            )
+            litellm.cache is not None
+            and (kwargs.get("caching", None) is None or kwargs.get("caching", False) is True)
             and (kwargs.get("cache", {}).get("no-cache", False) is not True)
             and self._is_call_type_supported_by_cache(
                 original_function=original_function, call_type=call_type, kwargs=kwargs
