@@ -15067,14 +15067,7 @@ export interface paths {
         put?: never;
         /**
          * Bulk Team Member Delete
-         * @description Remove up to 500 members (each named by `user_id` or `user_email`) from one team. Same authorization
-         *     as `/team/member_delete`. Returns one result per member, in order.
-         *
-         *     ```bash
-         *     curl -X POST 'http://0.0.0.0:4000/team/bulk_member_delete' -H 'Authorization: Bearer sk-1234' \
-         *     -H 'Content-Type: application/json' \
-         *     -d '{"team_id": "team-1234", "members": [{"user_id": "user1"}, {"user_email": "user2@example.com"}]}'
-         *     ```
+         * @description Remove up to 500 members from one team; same authorization as `/team/member_delete`.
          */
         post: operations["bulk_team_member_delete_team_bulk_member_delete_post"];
         delete?: never;
@@ -16516,13 +16509,7 @@ export interface paths {
         put?: never;
         /**
          * Bulk Delete User
-         * @description Delete up to 500 users and remove each one from every team they belong to. Same authorization as
-         *     `/user/delete`. Returns one result per user id, in order.
-         *
-         *     ```bash
-         *     curl -X POST 'http://localhost:4000/user/bulk_delete' -H 'Authorization: Bearer sk-1234' \
-         *     -H 'Content-Type: application/json' -d '{"user_ids": ["user-1", "user-2"]}'
-         *     ```
+         * @description Delete up to 500 users, removing each from every team; same authorization as `/user/delete`.
          */
         post: operations["bulk_delete_user_user_bulk_delete_post"];
         delete?: never;

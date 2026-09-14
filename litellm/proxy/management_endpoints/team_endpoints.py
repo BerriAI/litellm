@@ -3464,16 +3464,7 @@ async def bulk_team_member_delete(
     data: BulkTeamMemberDeleteRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
 ) -> BulkTeamMemberDeleteResponse:
-    """
-    Remove up to 500 members (each named by `user_id` or `user_email`) from one team. Same authorization
-    as `/team/member_delete`. Returns one result per member, in order.
-
-    ```bash
-    curl -X POST 'http://0.0.0.0:4000/team/bulk_member_delete' -H 'Authorization: Bearer sk-1234' \\
-    -H 'Content-Type: application/json' \\
-    -d '{"team_id": "team-1234", "members": [{"user_id": "user1"}, {"user_email": "user2@example.com"}]}'
-    ```
-    """
+    """Remove up to 500 members from one team; same authorization as `/team/member_delete`."""
     from litellm.proxy.management_helpers.bulk_user_deletion import bulk_remove_team_members
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
