@@ -209,7 +209,9 @@ class _FallbackGeneralizations:
             return None
         return {key: value for model_info in matched for key, value in model_info.items()}
 
-    def match_fill_missing(self, model: str, provider: str) -> dict[str, object] | None:
+    def match_fill_missing(
+        self, model: str, provider: str
+    ) -> dict[str, object] | None:  # mutable-ok: preserve the existing dict return contract
         if not model or not provider:
             return None
         matched = tuple(
@@ -219,7 +221,7 @@ class _FallbackGeneralizations:
         )
         if not matched:
             return None
-        fill_missing: Final[dict[str, object]] = {
+        fill_missing: Final[dict[str, object]] = {  # mutable-ok: preserve the existing dict merge input
             key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY
         }
         return fill_missing or None
@@ -261,7 +263,9 @@ def match_capability_generalizations(model: str) -> dict | None:
     return _registry.match_capabilities(model)
 
 
-def match_fill_missing_generalizations(model: str, provider: str) -> dict[str, object] | None:
+def match_fill_missing_generalizations(
+    model: str, provider: str
+) -> dict[str, object] | None:  # mutable-ok: preserve the existing dict return contract
     """Return flagged capability rules matching ``model`` for ``provider``.
 
     Later rules override earlier ones on key conflicts. Only rules listing
