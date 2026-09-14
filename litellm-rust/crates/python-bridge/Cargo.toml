@@ -14,6 +14,7 @@ default = ["abi3"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
 panic-test = []
+bench = []
 trace-parity = [
     "dep:tracing",
     "litellm-core/observability",
