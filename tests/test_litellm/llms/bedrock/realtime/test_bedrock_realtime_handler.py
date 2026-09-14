@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
+from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
@@ -77,6 +78,7 @@ class UnavailableBedrockStream:
 class FakeLogging:
     def __init__(self, trace_id="trace-nova-sonic"):
         self.litellm_trace_id = trace_id
+        self.model_call_details = {}
 
 
 class DisconnectingClientWS:
@@ -674,6 +676,31 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
 
     @pytest.mark.asyncio
+    async def test_success_dispatch_stamps_the_ownership_marker_only_when_spend_was_logged(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            logging_obj=spend_dispatch["logging_obj"],
+            **self.AWS_PARAMS,
+        )
+        await spend_dispatch["coro"]
+        assert [event["type"] for event in spend_dispatch["events"]] == ["response.done"]
+        assert spend_dispatch["logging_obj"].model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+
+        idle_logging = FakeLogging()
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream([])]
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+            logging_obj=idle_logging,
+            **self.AWS_PARAMS,
+        )
+        assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in idle_logging.model_call_details
+
+    @pytest.mark.asyncio
     async def test_stream_failure_after_client_disconnect_is_not_a_provider_failure(self, stub_aws_sdk_client):
         stream = ScriptedBedrockStream([], receiver_type=BreakingBedrockReceiver)
         stub_aws_sdk_client["streams"] = [stream]
@@ -682,6 +709,25 @@ class TestBedrockRealtimeProviderFailurePropagation:
             model="amazon.nova-sonic-v1:0", websocket=RealtimeClientWS(), logging_obj=FakeLogging(), **self.AWS_PARAMS
         )
 
+        assert stream.input_stream.closed
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_ends_the_session_while_bedrock_output_stays_open(self, stub_aws_sdk_client):
+        receiver = DrainedThenOpenBedrockReceiver([])
+        stream = ScriptedBedrockStream([], receiver_type=lambda _payloads: receiver)
+        stub_aws_sdk_client["streams"] = [stream]
+
+        await asyncio.wait_for(
+            BedrockRealtime().async_realtime(
+                model="amazon.nova-sonic-v1:0",
+                websocket=RealtimeClientWS(),
+                logging_obj=FakeLogging(),
+                **self.AWS_PARAMS,
+            ),
+            timeout=1,
+        )
+
+        assert receiver.drained.is_set(), "the handler must have been waiting on the open provider stream"
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio
