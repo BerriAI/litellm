@@ -2783,8 +2783,10 @@ if MCP_AVAILABLE:
 
         return managed_resource_templates
 
-    def _registered_tool_metadata(name: str, registered: RegisteredTool) -> MCPTool:
-        return MCPTool(name=name, description=registered.description, inputSchema=registered.input_schema)
+    def _registered_tool_metadata(name: str, registered: RegisteredTool, server: MCPServer) -> MCPTool:
+        overrides: Final = server.tool_name_to_description
+        description: Final = overrides.get(name, registered.description) if overrides else registered.description
+        return MCPTool(name=name, description=description, inputSchema=registered.input_schema)
 
     def _resolve_display_name_to_original(
         name: str,
@@ -3124,7 +3126,7 @@ if MCP_AVAILABLE:
                 server=mcp_server,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
-                tool=_registered_tool_metadata(original_tool_name, local_tool),
+                tool=_registered_tool_metadata(original_tool_name, local_tool, mcp_server),
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -3232,7 +3234,7 @@ if MCP_AVAILABLE:
                     server=prefix_server,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
-                    tool=_registered_tool_metadata(original_tool_name, registered_local_tool),
+                    tool=_registered_tool_metadata(original_tool_name, registered_local_tool, prefix_server),
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -4019,6 +4021,21 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
+    async def _key_granted_single_server(
+        server: MCPServer,
+        mcp_servers: Sequence[str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None,
+    ) -> bool:
+        """Sign-in challenges are issued only on a single-server connect the key's grant admits, so a key
+        without access gets the grant's 403 instead of a sign-in it could not use."""
+        if len(mcp_servers or []) != 1:
+            return False
+        allowed: Final = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+        )
+        return any(granted.server_id == server.server_id for granted in allowed)
+
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -4146,10 +4163,14 @@ if MCP_AVAILABLE:
             # bearer is the LiteLLM key itself, which admits the caller but is not an exchangeable subject.
             # Only on the server's own route: the per-server metadata ``resource`` must equal the URL the
             # client connected to (RFC 9728 3.3), which aggregate ``/mcp`` and multi-server connects never do.
+            granted_single_server = server is not None and await _key_granted_single_server(
+                server, mcp_servers, user_api_key_auth, client_ip
+            )
             if server and (
                 (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
                 or (
-                    tuple(_get_mcp_servers_in_path(get_route_relative_request_path(scope)) or ()) == (server_name,)
+                    granted_single_server
+                    and tuple(_get_mcp_servers_in_path(get_route_relative_request_path(scope)) or ()) == (server_name,)
                     and not agent_365_subject_token_present(oauth2_headers)
                     and agent_365_authorization_servers(server, user_api_key_auth)
                 )
@@ -4174,17 +4195,7 @@ if MCP_AVAILABLE:
             # and what each mints from. Gated to single-server routes the key may reach; the
             # multi-server aggregate keeps absorbing per-server auth failures so one bad server
             # cannot 401 the whole connect.
-            if (
-                server
-                and len(mcp_servers or []) == 1
-                and server.server_id
-                in frozenset(
-                    allowed.server_id
-                    for allowed in await _get_allowed_mcp_servers(
-                        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
-                    )
-                )
-            ):
+            if server and granted_single_server:
                 await global_mcp_server_manager.preflight_token_exchange(
                     server=server,
                     oauth2_headers=oauth2_headers,

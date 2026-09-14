@@ -7052,6 +7052,7 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
     fake_server.server_name = "openapi-petstore"
     fake_server.alias = None
     fake_server.short_prefix = None
+    fake_server.tool_name_to_description = None
 
     fake_tool = MagicMock()
     fake_tool.name = "list_pets"
@@ -7150,6 +7151,48 @@ async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_ca
         "List the pets",
         schema,
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_openapi_hooks_the_admin_description_clients_saw():
+    """tools/list shows the admin's tool_name_to_description wording, so the local-registry call path
+    must hand the pre-call hooks that same wording rather than the generated one."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+        tool_name_to_description={"getpetbyid": "ADMIN DESC"},
+    )
+    schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
+    mcp_module.global_mcp_tool_registry.register_tool(
+        name="petstore-getpetbyid", description="Find pet by ID", input_schema=schema, handler=lambda petId: "ok"
+    )
+    manager = mcp_module.global_mcp_server_manager
+    manager._listed_tools_by_server_id.pop(petstore.server_id, None)
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            await mcp_module.execute_mcp_tool(
+                name="petstore-getpetbyid",
+                arguments={"petId": 1},
+                allowed_mcp_servers=[petstore],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
+            )
+    finally:
+        mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+
+    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
+    assert (handed_tool.description, handed_tool.inputSchema) == ("ADMIN DESC", schema)
 
 
 @pytest.mark.asyncio
@@ -8914,6 +8957,7 @@ class TestAgent365ChallengeAtConnect:
         oauth2_headers: dict[str, str] | None,
         path: str = "/mcp/tools",
         mount_scope: dict[str, str] | None = None,
+        granted: bool = True,
     ) -> HTTPException | None:
         from litellm.proxy._experimental.mcp_server import server as server_module
 
@@ -8922,7 +8966,7 @@ class TestAgent365ChallengeAtConnect:
                 server_module.global_mcp_server_manager, "get_mcp_server_by_name", return_value=server
             ),
             patch.object(  # test-quality-ok: allowed-set resolution needs the DB; the test controls its answer
-                server_module, "_get_allowed_mcp_servers", AsyncMock(return_value=[])
+                server_module, "_get_allowed_mcp_servers", AsyncMock(return_value=[server] if granted else [])
             ),
         ):
             try:
@@ -9033,6 +9077,12 @@ class TestAgent365ChallengeAtConnect:
     @pytest.mark.asyncio
     async def test_no_registered_guardrail_means_no_challenge(self):
         assert await self._connect(self._server([self.GATEWAY_SCOPE]), None) is None
+
+    @pytest.mark.asyncio
+    async def test_key_without_the_server_grant_is_not_sent_to_sign_in(self, agent_365_guardrail):
+        """Signing in cannot earn a key a server it was never granted, so the connect must fall through to
+        the ordinary 403 grant denial instead of leading with an Entra challenge the caller cannot use."""
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), None, granted=False) is None
 
 
 def _make_obo_server(alias: str) -> MCPServer:

@@ -136,7 +136,10 @@ class Agent365ThrottledError(Exception):
 
 
 class Agent365Guardrail(CustomGuardrail):
-    """Pre-MCP-call guardrail enforcing Microsoft Agent 365 tool-evaluation verdicts."""
+    """Pre-MCP-call guardrail enforcing Microsoft Agent 365 tool-evaluation verdicts.
+
+    Block-only: it never rewrites the call, so it runs in the post-sequential phase and judges the
+    arguments the sequential guardrails hand upstream, whatever order the guardrails list uses."""
 
     records_own_guardrail_information: ClassVar[bool] = True
 
@@ -157,6 +160,7 @@ class Agent365Guardrail(CustomGuardrail):
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=self.get_supported_event_hooks(),
+            run_in_parallel=True,
             **kwargs,
         )
         self.guardrail_provider = "agent_365"
@@ -408,11 +412,10 @@ class Agent365Guardrail(CustomGuardrail):
 
     @staticmethod
     def _resolve_conversation_id(data: Mapping[str, object]) -> str:
+        """The MCP session groups every tool call of one client conversation, so it is the conversation id
+        when the transport carries one; stateless calls fall back to the per-call id."""
         raw_logging_obj: Final = data.get("litellm_logging_obj")
         logging_obj: Final = raw_logging_obj if isinstance(raw_logging_obj, LiteLLMLoggingObj) else None
-        call_id: Final = data.get("litellm_call_id") or (logging_obj.litellm_call_id if logging_obj else None)
-        if isinstance(call_id, str) and call_id:
-            return call_id
         if logging_obj is not None:
             tool_call_metadata: Final = logging_obj.model_call_details.get("mcp_tool_call_metadata")
             session_from_logging: Final = (
@@ -432,6 +435,9 @@ class Agent365Guardrail(CustomGuardrail):
             )
             if isinstance(session_id, str) and session_id:
                 return session_id
+        call_id: Final = data.get("litellm_call_id") or (logging_obj.litellm_call_id if logging_obj else None)
+        if isinstance(call_id, str) and call_id:
+            return call_id
         return str(uuid.uuid4())
 
     async def _get_obo_token(self, assertion: str) -> str:
@@ -643,7 +649,7 @@ def _applies_to_caller(guardrail: Agent365Guardrail, user_api_key_auth: "UserAPI
 def _applicable_guardrails(
     server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None"
 ) -> tuple[Agent365Guardrail, ...]:
-    """Agent 365 guardrails that gate ``server`` for this caller: every registered one for the anonymous
+    """Agent 365 guardrails that gate ``server`` for this caller: the ``default_on`` ones for the anonymous
     discovery fetch, otherwise those the caller's key, team, or policies select. Empty when the gateway
     does not own sign-in for the server."""
     if server.auth_type == MCPAuth.oauth2 or not server.advertises_gateway_authorization_server:
@@ -654,7 +660,7 @@ def _applicable_guardrails(
         if isinstance(callback, Agent365Guardrail)
     )
     if user_api_key_auth is None:
-        return registered
+        return tuple(g for g in registered if g.default_on)
     return tuple(g for g in registered if _applies_to_caller(g, user_api_key_auth))
 
 
