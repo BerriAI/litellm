@@ -34886,7 +34886,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "meta/muse-voice-transcribe-1.0": {
-        "input_cost_per_second": 0.00005,
+        "input_cost_per_second": 5e-05,
         "litellm_provider": "meta",
         "mode": "audio_transcription",
         "source": "https://dev.meta.ai/docs/speech-to-text",
@@ -43676,7 +43676,6 @@
         "supports_tool_choice": true
     },
     "together_ai/openai/gpt-oss-20b": {
-        "deprecation_date": "2026-09-14",
         "input_cost_per_token": 5e-08,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
@@ -43969,7 +43968,6 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/google/gemma-4-31B-it": {
-        "deprecation_date": "2026-09-14",
         "input_cost_per_token": 3.9e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
@@ -43984,7 +43982,6 @@
         "supports_vision": true
     },
     "together_ai/intfloat/multilingual-e5-large-instruct": {
-        "deprecation_date": "2026-09-14",
         "input_cost_per_token": 2e-08,
         "litellm_provider": "together_ai",
         "max_input_tokens": 514,
@@ -44097,7 +44094,6 @@
         "supports_tool_choice": true
     },
     "together_ai/thinkingmachines/Inkling-Small": {
-        "deprecation_date": "2026-09-14",
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "together_ai",
@@ -61144,6 +61140,17 @@
         "max_input_tokens": 131072,
         "mode": "chat",
         "source": "https://api.together.xyz/v1/models"
+    },
+    "together_ai/deepseek-ai/DeepSeek-V4.1-Flash": {
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_prompt_caching": true
     },
     "cerebras/gemma-4-31b": {
         "input_cost_per_token": 9.9e-07,
