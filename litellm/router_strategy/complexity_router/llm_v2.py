@@ -141,7 +141,7 @@ class LLMV2ProbabilityCalibration(BaseModel):
     offsets: tuple[LLMV2CalibrationOffset, ...] = Field(default=(), max_length=15)
 
     @model_validator(mode="after")
-    def _validate_unique_features(self) -> "LLMV2ProbabilityCalibration":
+    def _validate_unique_features(self) -> LLMV2ProbabilityCalibration:
         if len(frozenset(offset.feature for offset in self.offsets)) != len(self.offsets):
             raise ValueError("offsets must contain unique demand features")
         return self
