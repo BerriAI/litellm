@@ -2,6 +2,8 @@ import asyncio
 import base64
 import io
 import json
+from collections.abc import Iterator, Sequence
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -14,7 +16,7 @@ import litellm
 import litellm.types.utils
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
 from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
@@ -4931,7 +4933,7 @@ def test_every_responses_delta_event_is_in_the_scanned_set():
     assert "response.mcp_call_arguments.delta" in _RESPONSES_DELTA_EVENT_TYPES
 
 
-def _clean_armor_response() -> dict:
+def _clean_armor_response() -> dict[str, object]:
     return {
         "sanitizationResult": {
             "filterMatchState": "NO_MATCH_FOUND",
@@ -4940,7 +4942,7 @@ def _clean_armor_response() -> dict:
     }
 
 
-def _flagged_armor_response() -> dict:
+def _flagged_armor_response() -> dict[str, object]:
     return {
         "sanitizationResult": {
             "filterMatchState": "MATCH_FOUND",
@@ -4949,17 +4951,50 @@ def _flagged_armor_response() -> dict:
     }
 
 
-def _logging_only_guardrail() -> ModelArmorGuardrail:
-    return ModelArmorGuardrail(
+class _FakeArmorHandler(AsyncHTTPHandler):
+    def __init__(self, responses: Sequence[dict[str, object] | Exception]):
+        self.responses: Iterator[dict[str, object] | Exception] = iter(responses)
+        self.calls: list[dict[str, object]] = []
+        self.raise_on_call: Exception | None = None
+
+    async def post(
+        self,
+        url: str,
+        json: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+        **kwargs: object,
+    ) -> httpx.Response:
+        if self.raise_on_call is not None:
+            raise self.raise_on_call
+        if json is not None:
+            self.calls.append(json)
+        response: dict[str, object] | Exception = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        return httpx.Response(200, json=response, request=httpx.Request("POST", url))
+
+
+async def _async_token_provider() -> tuple[str, str]:
+    return ("test-token", "test-project")
+
+
+def _logging_only_guardrail(
+    responses: Sequence[dict[str, object] | Exception] = (_clean_armor_response(), _clean_armor_response()),
+) -> ModelArmorGuardrail:
+    handler = _FakeArmorHandler(responses)
+    guardrail = ModelArmorGuardrail(
         template_id="test-template",
         project_id="test-project",
         location="us-central1",
         guardrail_name="model-armor-logging",
         event_hook=GuardrailEventHooks.logging_only,
+        async_handler=handler,
+        access_token_provider=_async_token_provider,
     )
+    return guardrail
 
 
-def _logged_kwargs() -> dict:
+def _logged_kwargs() -> dict[str, object]:
     return {
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "hi"}],
@@ -4990,8 +5025,10 @@ def _stream_chunk(text: str) -> litellm.ModelResponseStream:
     )
 
 
-def _metadata_entries(kwargs: dict) -> list:
-    return kwargs["standard_logging_object"].get("guardrail_information") or []
+def _metadata_entries(kwargs: dict[str, object]) -> list[dict[str, object]]:
+    standard_logging_object = cast(dict[str, object], kwargs["standard_logging_object"])
+    entries = standard_logging_object.get("guardrail_information") or []
+    return cast(list[dict[str, object]], entries)
 
 
 def test_logging_only_mode_is_accepted_and_keeps_native_hooks():
@@ -5014,10 +5051,11 @@ def test_logging_only_mode_is_accepted_and_keeps_native_hooks():
 async def test_logging_only_stream_yields_chunks_without_waiting_for_scan():
     """A logging_only guardrail must pass stream chunks straight through; the scan happens
     afterwards on the assembled response via async_logging_hook."""
-    guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(
-        side_effect=AssertionError("logging_only must not scan the stream")
+    guardrail = _logging_only_guardrail(
+        [_clean_armor_response(), _clean_armor_response()]
     )
+    handler = cast(_FakeArmorHandler, guardrail.async_handler)
+    handler.raise_on_call = AssertionError("logging_only must not scan the stream")
 
     produced = 0
 
@@ -5038,9 +5076,9 @@ async def test_logging_only_stream_yields_chunks_without_waiting_for_scan():
     async for chunk in hook_iter:
         chunks.append(chunk)
     assert len(chunks) == 3
-    guardrail.make_model_armor_request.assert_not_awaited()
+    assert handler.calls == []
+    handler.raise_on_call = None
 
-    guardrail.make_model_armor_request = AsyncMock(return_value=_clean_armor_response())
     response = _chat_response("all clear")
     kwargs = _logged_kwargs()
     out_kwargs, out_result = await guardrail.async_logging_hook(
@@ -5057,8 +5095,9 @@ async def test_logging_only_stream_yields_chunks_without_waiting_for_scan():
 
 @pytest.mark.asyncio
 async def test_logging_only_records_flagged_verdict_without_altering_response():
-    guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(return_value=_flagged_armor_response())
+    guardrail = _logging_only_guardrail(
+        [_flagged_armor_response(), _flagged_armor_response()]
+    )
     response = _chat_response("flagged output")
     kwargs = _logged_kwargs()
 
@@ -5074,9 +5113,11 @@ async def test_logging_only_records_flagged_verdict_without_altering_response():
 
 @pytest.mark.asyncio
 async def test_logging_only_records_model_armor_api_error():
-    guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(
-        side_effect=ModelArmorAPIError("Model Armor API error (upstream 500)")
+    guardrail = _logging_only_guardrail(
+        [
+            ModelArmorAPIError("Model Armor API error (upstream 500)"),
+            ModelArmorAPIError("Model Armor API error (upstream 500)"),
+        ]
     )
     response = _chat_response("some output")
     kwargs = _logged_kwargs()
@@ -5124,7 +5165,6 @@ async def test_logging_only_scans_assembled_responses_api_stream():
     )
 
     guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(return_value=_clean_armor_response())
     kwargs = _logged_kwargs()
     del kwargs["messages"]
     kwargs["input"] = "hello"
@@ -5134,13 +5174,10 @@ async def test_logging_only_scans_assembled_responses_api_stream():
         kwargs=kwargs, result=event, call_type="aresponses"
     )
 
-    response_scans = [
-        call
-        for call in guardrail.make_model_armor_request.await_args_list
-        if call.kwargs.get("source") == "model_response"
-    ]
+    handler = cast(_FakeArmorHandler, guardrail.async_handler)
+    response_scans = [call for call in handler.calls if "modelResponseData" in call]
     assert response_scans, "expected a model_response scan of the assembled response"
-    assert "assembled output text" in response_scans[0].kwargs["content"]
+    assert "assembled output text" in response_scans[0]["modelResponseData"]["text"]
     assert _metadata_entries(out_kwargs)
 
 
@@ -5148,7 +5185,6 @@ async def test_logging_only_scans_assembled_responses_api_stream():
 async def test_logging_only_scans_anthropic_messages_model_response():
     """/v1/messages logs a ModelResponse; the output scan must extract the assistant text."""
     guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(return_value=_clean_armor_response())
     kwargs = _logged_kwargs()
     kwargs["messages"] = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
     response = _chat_response("anthropic assembled text")
@@ -5158,38 +5194,36 @@ async def test_logging_only_scans_anthropic_messages_model_response():
     )
 
     assert out_result is response
-    response_scans = [
-        call
-        for call in guardrail.make_model_armor_request.await_args_list
-        if call.kwargs.get("source") == "model_response"
-    ]
+    handler = cast(_FakeArmorHandler, guardrail.async_handler)
+    response_scans = [call for call in handler.calls if "modelResponseData" in call]
     assert response_scans
-    assert "anthropic assembled text" in response_scans[0].kwargs["content"]
+    assert "anthropic assembled text" in response_scans[0]["modelResponseData"]["text"]
     assert _metadata_entries(out_kwargs)
 
 
 @pytest.mark.asyncio
 async def test_logging_only_skips_output_scan_when_no_assembled_response():
     guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(return_value=_clean_armor_response())
     kwargs = _logged_kwargs()
 
     await guardrail.async_logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
 
-    sources = [call.kwargs.get("source") for call in guardrail.make_model_armor_request.await_args_list]
-    assert "model_response" not in sources
+    handler = cast(_FakeArmorHandler, guardrail.async_handler)
+    assert all("modelResponseData" not in call for call in handler.calls)
 
 
 @pytest.mark.asyncio
 async def test_native_post_call_mode_ignores_logging_hook():
+    handler = _FakeArmorHandler([_clean_armor_response()])
     guardrail = ModelArmorGuardrail(
         template_id="test-template",
         project_id="test-project",
         location="us-central1",
         guardrail_name="model-armor-post",
         event_hook=GuardrailEventHooks.post_call,
+        async_handler=handler,
+        access_token_provider=_async_token_provider,
     )
-    guardrail.make_model_armor_request = AsyncMock(return_value=_clean_armor_response())
     response = _chat_response("some output")
     kwargs = _logged_kwargs()
 
@@ -5199,13 +5233,12 @@ async def test_native_post_call_mode_ignores_logging_hook():
 
     assert out_kwargs is kwargs
     assert out_result is response
-    guardrail.make_model_armor_request.assert_not_awaited()
+    assert handler.calls == []
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_records_flagged_without_raising():
-    guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(return_value=_flagged_armor_response())
+    guardrail = _logging_only_guardrail([_flagged_armor_response()])
     request_data = {"metadata": {}}
     inputs = {"texts": ["forbidden output"]}
 
@@ -5222,8 +5255,7 @@ async def test_apply_guardrail_records_flagged_without_raising():
 
 @pytest.mark.asyncio
 async def test_logging_only_records_transport_error():
-    guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(side_effect=httpx.ConnectError("boom"))
+    guardrail = _logging_only_guardrail([httpx.ConnectError("boom"), httpx.ConnectError("boom")])
     response = _chat_response("some output")
     kwargs = _logged_kwargs()
 
@@ -5241,8 +5273,9 @@ async def test_logging_only_records_transport_error():
 @pytest.mark.asyncio
 async def test_logging_only_flagged_prompt_still_scans_response():
     """A flagged input scan must not abort the output scan; both verdicts are recorded."""
-    guardrail = _logging_only_guardrail()
-    guardrail.make_model_armor_request = AsyncMock(return_value=_flagged_armor_response())
+    guardrail = _logging_only_guardrail(
+        [_flagged_armor_response(), _flagged_armor_response()]
+    )
     response = _chat_response("flagged output")
     kwargs = _logged_kwargs()
 
@@ -5250,7 +5283,8 @@ async def test_logging_only_flagged_prompt_still_scans_response():
         kwargs=kwargs, result=response, call_type="acompletion"
     )
 
-    sources = [call.kwargs.get("source") for call in guardrail.make_model_armor_request.await_args_list]
+    handler = cast(_FakeArmorHandler, guardrail.async_handler)
+    sources = ["user_prompt" if "userPromptData" in call else "model_response" for call in handler.calls]
     assert sources == ["user_prompt", "model_response"]
     entries = _metadata_entries(out_kwargs)
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
@@ -5261,14 +5295,16 @@ async def test_logging_only_flagged_prompt_still_scans_response():
 async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     """The /guardrails/apply_guardrail endpoint calls apply_guardrail directly; a
     non-logging_only instance must signal the block so flagged text is not returned as clean."""
+    handler = _FakeArmorHandler([_flagged_armor_response()])
     guardrail = ModelArmorGuardrail(
         template_id="test-template",
         project_id="test-project",
         location="us-central1",
         guardrail_name="model-armor-pre",
         event_hook=GuardrailEventHooks.pre_call,
+        async_handler=handler,
+        access_token_provider=_async_token_provider,
     )
-    guardrail.make_model_armor_request = AsyncMock(return_value=_flagged_armor_response())
     request_data = {"metadata": {}}
 
     with pytest.raises(HTTPException) as exc_info:
