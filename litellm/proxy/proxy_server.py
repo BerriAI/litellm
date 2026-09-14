@@ -7065,6 +7065,9 @@ class ProxyConfig:
         if "max_file_size_mb" not in self._yaml_general_settings_keys:
             general_settings["max_file_size_mb"] = _general_settings.get("max_file_size_mb")
 
+        if "allowed_file_extensions" not in self._yaml_general_settings_keys:
+            general_settings["allowed_file_extensions"] = _general_settings.get("allowed_file_extensions")
+
         if "blocked_file_extensions" not in self._yaml_general_settings_keys:
             general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
 
@@ -17036,6 +17039,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
         "max_file_size_mb": "Integer",
+        "allowed_file_extensions": "List",
         "blocked_file_extensions": "List",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
