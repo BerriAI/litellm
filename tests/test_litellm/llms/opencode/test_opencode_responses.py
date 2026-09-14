@@ -407,6 +407,22 @@ class TestCostMap:
         entry = litellm.model_cost[model_key]
         return entry
 
+    @pytest.mark.parametrize("surface", ["zen", "go"])
+    def test_responses_set_agrees_with_cost_map_mode(self, surface):
+        """Every model the cost map publishes routes to responses exactly when its mode says responses."""
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+        from litellm.llms.opencode.common_utils import is_responses_model
+
+        published = {
+            key.split("/", 1)[1]: entry["mode"]
+            for key, entry in GetModelCostMap.load_local_model_cost_map().items()
+            if entry.get("litellm_provider") == f"opencode_{surface}"
+        }
+        assert published
+        assert {model for model in published if is_responses_model(surface, model)} == {
+            model for model, mode in published.items() if mode == "responses"
+        }
+
     # --- gpt-5.6 series ---
 
     def test_gpt_5_6_sol(self):

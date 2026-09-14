@@ -3525,11 +3525,6 @@ def _complete_opencode(
         else base_headers
     )
 
-    # Part of the catalogue is served over the Anthropic Messages wire format.
-    # Those models go through the Anthropic chat handler, which translates
-    # OpenAI input to Anthropic and the Anthropic reply back to a ModelResponse
-    # (and handles streaming and acompletion natively) — the same path the
-    # first-party anthropic provider takes.
     from litellm.llms.opencode.chat.messages_transformation import is_messages_model
 
     if is_messages_model(surface, model):

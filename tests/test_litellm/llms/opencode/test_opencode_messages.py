@@ -99,6 +99,21 @@ class TestMessagesModelSet:
         with pytest.raises(AttributeError):
             OPENCODE_MESSAGES_MODELS["zen"].add("brand-new-model")
 
+    @pytest.mark.parametrize("surface", ["zen", "go"])
+    def test_set_agrees_with_cost_map_mode(self, surface):
+        """Every model the cost map publishes routes to messages exactly when its mode says messages."""
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+        published = {
+            key.split("/", 1)[1]: entry["mode"]
+            for key, entry in GetModelCostMap.load_local_model_cost_map().items()
+            if entry.get("litellm_provider") == f"opencode_{surface}"
+        }
+        assert published
+        assert {model for model in published if is_messages_model(surface, model)} == {
+            model for model, mode in published.items() if mode == "messages"
+        }
+
 
 # ---------------------------------------------------------------------------
 # is_messages_model routing

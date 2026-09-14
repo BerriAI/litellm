@@ -26,14 +26,9 @@ from litellm.llms.opencode.common_utils import (
 )
 from litellm.types.router import GenericLiteLLMParams
 
-# ---------- surface base URL ( /v1/messages appended downstream ) ----------
-
 ZEN_MESSAGES_BASE: Final = "https://opencode.ai/zen"
 
-# ------------------------------------------------------------------- model sets
 # Models the gateway serves via the Anthropic Messages wire format, per surface.
-# Source: models.dev ``npm == @ai-sdk/anthropic`` classification.
-#
 # These live in code rather than being read from the cost map's ``mode`` field
 # because ``litellm.model_cost`` is fetched from the published remote map at
 # import, and a provider's entries only appear there once released. Routing that
@@ -85,9 +80,6 @@ def is_messages_model(surface: str, model: str) -> bool:
     """
     bare: Final = model.rsplit("/", 1)[-1]
     return bare in OPENCODE_MESSAGES_MODELS.get(surface, frozenset())
-
-
-# ------------------------------------------------------------------ config class
 
 
 class OpenCodeMessagesConfig(AnthropicMessagesConfig):
@@ -152,7 +144,6 @@ class OpenCodeMessagesConfig(AnthropicMessagesConfig):
         Both surfaces authenticate ``/v1/messages`` with ``x-api-key``
         (Anthropic default); Bearer returns 401 "Missing API key" on both.
         """
-        # -- key resolution (same chain as chat arm) ---------------------------
         # A missing key is rejected here: the base class resolves one from
         # ANTHROPIC_API_KEY, which would send a first-party Anthropic
         # credential to opencode.ai.
@@ -165,15 +156,6 @@ class OpenCodeMessagesConfig(AnthropicMessagesConfig):
 
         base_url: Final = resolve_opencode_api_base(self.surface, api_base) or self._base_url()
 
-        # -- auth header per surface -------------------------------------------
-        # OpenCode does not support OAuth, so we can skip the OAuth check that
-        # the base class performs.  Both surfaces authenticate /v1/messages with
-        # x-api-key (verified live: Bearer returns 401 "Missing API key" on both
-        # Zen and Go), so leave headers empty and let the base class inject
-        # x-api-key.
-        # NOTE: this intentionally diverges from the chat arm, which uses Bearer.
-
-        # -- base class handles defaults, beta headers, content-type ----------
         resolved_headers, resolved_base_url = super().validate_anthropic_messages_environment(
             headers=headers,
             model=model,
