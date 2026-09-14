@@ -4,12 +4,12 @@ from typing import Final
 
 import httpx
 import pytest
-from fastapi import HTTPException
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
+from litellm.proxy.list_api.common import ManagementProblem
 from litellm.proxy.management_helpers.bulk_user_creation import bulk_create_users
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkNewUserItem,
@@ -203,10 +203,10 @@ async def test_creates_users_and_team_membership_in_every_store():
         ],
     )
 
-    assert (response.total_requested, response.successful_creations, response.failed_creations) == (3, 3, 0)
-    assert [r.user_id for r in response.results] == ["u1", "u2", "u3"]
-    assert all(r.success and r.key is None and r.error is None for r in response.results)
-    assert [r.teams for r in response.results] == [("t1", "t2"), ("t1",), ()]
+    assert (response.meta.total_requested, response.meta.created, response.meta.failed) == (3, 3, 0)
+    assert [r.user_id for r in response.data] == ["u1", "u2", "u3"]
+    assert all(r.success and r.key is None and r.error is None for r in response.data)
+    assert [r.teams for r in response.data] == [("t1", "t2"), ("t1",), ()]
 
     users = prisma.db.litellm_usertable.rows
     assert users["u1"].teams == ["t1", "t2"] and users["u1"].max_budget == 50
@@ -225,9 +225,9 @@ async def test_user_id_already_on_the_roster_keeps_the_team_and_is_not_added_twi
     prisma = _FakePrisma(teams=[_team("t1", [Member(user_id="u1", role="user")])])
     response = await _run(prisma, [{"user_id": "u1", "teams": ["t1"]}, {"user_id": "u2", "teams": ["t1"]}])
 
-    assert [r.success for r in response.results] == [True, True]
-    assert [r.teams for r in response.results] == [("t1",), ("t1",)]
-    assert [r.error for r in response.results] == [None, None]
+    assert [r.success for r in response.data] == [True, True]
+    assert [r.teams for r in response.data] == [("t1",), ("t1",)]
+    assert [r.error for r in response.data] == [None, None]
     assert prisma.db.litellm_usertable.rows["u1"].teams == ["t1"]
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u1", "u2"]
 
@@ -267,9 +267,9 @@ async def test_bad_rows_fail_alone_and_good_rows_still_land():
         ],
     )
 
-    assert [r.success for r in response.results] == [True, False, False, False, False, False, False, False, True]
-    assert (response.successful_creations, response.failed_creations) == (2, 7)
-    errors = [r.error for r in response.results]
+    assert [r.success for r in response.data] == [True, False, False, False, False, False, False, False, True]
+    assert (response.meta.created, response.meta.failed) == (2, 7)
+    errors = [r.error for r in response.data]
     assert "Duplicate user_email" in errors[1]
     assert "Duplicate user_id" in errors[2]
     assert "already exists" in errors[3] and "already exists" in errors[4]
@@ -289,8 +289,8 @@ async def test_insert_failure_falls_back_to_per_row_and_reports_only_that_row():
         [{"user_id": "u1", "teams": ["t1"]}, {"user_id": "u2", "teams": ["t1"]}, {"user_id": "u3"}],
     )
 
-    assert [r.success for r in response.results] == [True, False, True]
-    assert "insert failed for u2" in (response.results[1].error or "")
+    assert [r.success for r in response.data] == [True, False, True]
+    assert "insert failed for u2" in (response.data[1].error or "")
     assert set(prisma.db.litellm_usertable.rows) == {"u1", "u3"}
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u1"]
 
@@ -300,8 +300,8 @@ async def test_insert_that_committed_but_lost_its_response_still_counts_as_creat
     prisma = _FakePrisma(teams=[_team("t1")], commit_then_drop=True)
     response = await _run(prisma, [{"user_id": "u1", "teams": ["t1"]}, {"user_id": "u2"}])
 
-    assert [r.success for r in response.results] == [True, True]
-    assert [r.error for r in response.results] == [None, None]
+    assert [r.success for r in response.data] == [True, True]
+    assert [r.error for r in response.data] == [None, None]
     assert set(prisma.db.litellm_usertable.rows) == {"u1", "u2"}
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u1"]
 
@@ -311,8 +311,8 @@ async def test_user_id_taken_by_a_concurrent_request_is_not_claimed_by_this_batc
     prisma = _FakePrisma(teams=[_team("t1")], raced_ids=frozenset({"u1"}))
     response = await _run(prisma, [{"user_id": "u1", "teams": ["t1"]}, {"user_id": "u2", "teams": ["t1"]}])
 
-    assert [r.success for r in response.results] == [False, True]
-    assert "User id=u1 already exists" in (response.results[0].error or "")
+    assert [r.success for r in response.data] == [False, True]
+    assert "User id=u1 already exists" in (response.data[0].error or "")
     assert prisma.db.litellm_usertable.rows["u1"].user_email == "u1@other-request.example"
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u2"]
 
@@ -327,12 +327,12 @@ async def test_team_write_failure_keeps_user_and_reports_it_on_the_row():
     prisma.db.litellm_teamtable.update = explode
     response = await _run(prisma, [{"user_id": "u1", "teams": ["t1", "t2"]}])
 
-    result = response.results[0]
+    result = response.data[0]
     assert result.success is True
     assert result.teams == ()
     assert "t1" in (result.error or "") and "roster write failed" in (result.error or "")
     assert prisma.db.litellm_usertable.rows["u1"].teams == []
-    assert (response.successful_creations, response.failed_creations) == (1, 0)
+    assert (response.meta.created, response.meta.failed) == (1, 0)
 
 
 @pytest.mark.asyncio
@@ -364,7 +364,7 @@ async def test_keys_are_opt_in_per_row():
         generate_key=generate_key,
     )
 
-    assert [r.key for r in response.results] == [None, "sk-u2", None]
+    assert [r.key for r in response.data] == [None, "sk-u2", None]
     assert len(calls) == 1
     assert calls[0]["user_id"] == "u2" and calls[0]["table_name"] == "key"
     assert calls[0]["models"] == ("gpt-4o",) and calls[0]["key_alias"] == "u2-key"
@@ -385,8 +385,8 @@ async def test_non_admin_cannot_create_admin_users_but_other_rows_proceed():
         caller=INTERNAL,
     )
 
-    assert [r.success for r in response.results] == [False, True]
-    assert "Only proxy admins" in (response.results[0].error or "")
+    assert [r.success for r in response.data] == [False, True]
+    assert "Only proxy admins" in (response.data[0].error or "")
     assert set(prisma.db.litellm_usertable.rows) == {"u2"}
 
 
@@ -396,19 +396,19 @@ async def test_license_is_checked_once_against_the_whole_batch():
     prisma.db.litellm_usertable.rows["existing"] = _UserRow(user_id="existing")
     license = _License(max_users=3)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ManagementProblem) as exc:
         await _run(prisma, [{"user_id": f"u{i}"} for i in range(3)], license=license)
 
-    assert exc.value.status_code == 403
+    assert (exc.value.problem.status, exc.value.problem.type) == (403, "urn:litellm:error:license-limit-exceeded")
     assert license.seen == [4]
     assert set(prisma.db.litellm_usertable.rows) == {"existing"}
 
     ok = await _run(prisma, [{"user_id": f"u{i}"} for i in range(2)], license=license)
-    assert ok.successful_creations == 2
+    assert ok.meta.created == 2
 
     resend = await _run(prisma, [{"user_id": f"u{i}"} for i in range(2)], license=license)
-    assert [r.success for r in resend.results] == [False, False]
-    assert all("already exists" in (r.error or "") for r in resend.results)
+    assert [r.success for r in resend.data] == [False, False]
+    assert all("already exists" in (r.error or "") for r in resend.data)
     assert license.seen == [4, 3]
     assert set(prisma.db.litellm_usertable.rows) == {"existing", "u0", "u1"}
 
@@ -422,3 +422,10 @@ def test_request_rejects_empty_oversized_and_invite_rows():
         BulkNewUserItem(user_email="a@example.com", send_invite_email=True)
     assert len(BulkNewUserRequest(users=[{"user_email": f"{i}@example.com"} for i in range(500)]).users) == 500
     assert BulkNewUserItem(user_email="a@example.com").auto_create_key is False
+
+
+def test_request_rejects_unknown_fields_at_both_levels():
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        BulkNewUserRequest(users=[{"user_email": "a@example.com", "user_emial": "typo"}])
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        BulkNewUserRequest(users=[{"user_email": "a@example.com"}], dry_run=True)

@@ -5,7 +5,6 @@ Internal User Management Endpoints
 These are members of a Team on LiteLLM
 
 /user/new
-/user/bulk_new
 /user/update
 /user/bulk_update
 /user/delete
@@ -78,8 +77,6 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
-    BulkNewUserRequest,
-    BulkNewUserResponse,
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
     UserListResponse,
@@ -637,71 +634,6 @@ async def new_user(
         return new_user_response
     except Exception as e:
         verbose_proxy_logger.exception("/user/new: Exception occured - %s", e)
-        raise handle_exception_on_proxy(e)
-
-
-@router.post(
-    "/user/bulk_new",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=BulkNewUserResponse,
-)
-@management_endpoint_wrapper
-async def bulk_new_user(
-    data: BulkNewUserRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
-) -> BulkNewUserResponse:
-    """
-    Create up to 500 internal users in one request, optionally adding each one to teams.
-
-    Every entry in `users` takes the same fields as `/user/new`, with two differences: `auto_create_key`
-    defaults to `false` (opt in per user to also get a virtual key back) and `send_invite_email` is not
-    supported. Rows are validated together (duplicate ids or emails, unknown teams, roles the caller may not
-    grant), inserted in one statement, and each referenced team is written once for all of its new members.
-
-    Rows fail independently: a bad row is reported in `results` with `success: false` and an `error`, and the
-    other rows still get created. A user that was created but could not be added to one of its teams is
-    reported with `success: true`, `teams` listing where they did land, and `error` naming the failed team.
-    The whole request is rejected with 403 only if creating the valid rows would exceed the license seat limit.
-
-    Usage Example
-
-    ```shell
-    curl -X POST "http://localhost:4000/user/bulk_new" \\
-    -H "Content-Type: application/json" \\
-    -H "Authorization: Bearer sk-1234" \\
-    -d '{
-        "users": [
-            {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
-            {"user_email": "b@example.com", "user_role": "internal_user", "auto_create_key": true}
-        ]
-    }'
-    ```
-
-    Returns `results` (one entry per input row, in order, with `user_id`, `user_email`, `success`, `teams`,
-    `key`, `error`), `total_requested`, `successful_creations` and `failed_creations`.
-    """
-    from litellm.proxy.management_helpers.bulk_user_creation import bulk_create_users
-    from litellm.proxy.proxy_server import (
-        _license_check,  # pyright: ignore[reportPrivateUsage]  # same proxy license singleton /user/new reads
-        litellm_proxy_admin_name,
-        prisma_client,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
-    try:
-        return await bulk_create_users(
-            users=data.users,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            license_check=_license_check,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            user_api_key_cache=user_api_key_cache,
-        )
-    except Exception as e:  # noqa: BLE001  # normalize every failure to the proxy exception contract
-        verbose_proxy_logger.exception("/user/bulk_new: Exception occured")
         raise handle_exception_on_proxy(e)
 
 

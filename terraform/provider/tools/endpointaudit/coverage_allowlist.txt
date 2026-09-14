@@ -84,7 +84,6 @@ POST /team/{team_id}/member/{user_id}/reset_spend
 POST /team/key/bulk_update
 POST /team/permissions_bulk_update
 POST /team/{team_id}/disable_logging
-POST /user/bulk_new
 POST /user/bulk_update
 
 # Alternate method or path for functionality the provider already manages elsewhere
