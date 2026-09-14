@@ -91,6 +91,23 @@ def test_anthropic_continuation_preserves_signed_thinking_and_matches_tool_resul
     ]
 
 
+@pytest.mark.parametrize("directive_only", [False, True])
+def test_memory_reference_keeps_anthropic_trailing_system_directives_valid(directive_only: bool) -> None:
+    prefix: Final = {
+        "role": "user",
+        "content": [{"type": "text", "text": "Read a file", "cache_control": {"type": "ephemeral"}}],
+    }
+    directive: Final = {
+        "role": "system",
+        "content": [] if directive_only else "Use concise answers",
+        "output_config": {"effort": "low"},
+    }
+    original: Final = {"messages": [prefix, directive]}
+    result: Final = append_server_reference(original, "anthropic_messages", "Untrusted stored context")
+    assert result["messages"] == [prefix, {"role": "user", "content": "Untrusted stored context"}, directive]
+    assert original["messages"] == [prefix, directive]
+
+
 def test_responses_continuation_keeps_reasoning_and_function_call_output() -> None:
     output: Final = [
         {"type": "reasoning", "id": "reason-1", "encrypted_content": "opaque-provider-data"},

@@ -19,7 +19,9 @@ from litellm.repositories.unit_of_work import prisma_transaction
 _ITEMS: Final = TypeAdapter(tuple[object, ...])
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _MAX_PATCH_BYTES: Final = 1024 * 1024
-_MAX_PATCHES: Final = 1000
+_MAX_PATCHES: Final = 256
+_MAX_NAMESPACE_BYTES: Final = 32 * 1024 * 1024
+_USAGE: Final = TypeAdapter(tuple[dict[str, int], ...])
 
 
 async def cleanup_memory_continuations(prisma_client: object) -> None:
@@ -204,31 +206,34 @@ class MemoryContinuations:
         key_id: Final = self.store.access.identity.key_id or self.store.access.identity.user_id or ""
         now: Final = datetime.now(timezone.utc)
         async with prisma_transaction(self.store.prisma_client) as transaction:
-            lock_key: Final = int(memory_digest("memory-continuation-quota", namespace, key_id)[:16], 16) - (1 << 63)
+            lock_key: Final = int(memory_digest("memory-continuation-quota", namespace)[:16], 16) - (1 << 63)
             await transaction.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
             table: Final = MemoryContinuationRepository(SimpleNamespace(db=transaction)).table
             await table.delete_many(
                 where={  # mutable-ok: Prisma query and write JSON.
                     "namespace": namespace,
-                    "key_id": key_id,
                     "expires_at": {  # mutable-ok: Prisma query and write JSON.
                         "lte": now
                     },
                 }
             )
-            count: Final = await table.count(
-                where={  # mutable-ok: Prisma query and write JSON.
-                    "namespace": namespace,
-                    "key_id": key_id,
-                    "id": {  # mutable-ok: Prisma query and write JSON.
-                        "not_in": [  # mutable-ok: Prisma query and write JSON.
-                            identifier for identifier, _ in payloads
-                        ]
-                    },
-                }
+            usage: Final = _USAGE.validate_python(
+                await transaction.query_raw(
+                    "SELECT COUNT(*) FILTER (WHERE key_id = $2)::int AS key_count, "
+                    "COALESCE(SUM(octet_length(payload::text)), 0) + "
+                    "(SELECT COALESCE(SUM(octet_length(value::text)), 0) "
+                    "FROM jsonb_array_elements($4::jsonb)) AS bytes "
+                    'FROM "LiteLLM_MemoryContinuation" WHERE namespace = $1 AND NOT (id = ANY($3::text[]))',
+                    namespace,
+                    key_id,
+                    [identifier for identifier, _ in payloads],  # mutable-ok: Native Prisma array parameter.
+                    "[" + ",".join(payload for _, payload in payloads) + "]",
+                )
             )
-            if count + len(payloads) > _MAX_PATCHES:
+            if usage[0]["key_count"] + len(payloads) > _MAX_PATCHES:
                 raise HTTPException(status_code=429, detail="Too many active memory continuations for this key")
+            if usage[0]["bytes"] > _MAX_NAMESPACE_BYTES:
+                raise HTTPException(status_code=429, detail="Memory continuations exceed 32 megabytes for this scope")
             for identifier, payload in payloads:
                 await table.upsert(
                     where={  # mutable-ok: Prisma query and write JSON.

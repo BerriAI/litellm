@@ -31265,6 +31265,1080 @@
       }
     }
   },
+  "memory_v2": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "MemoryCapture": {
+          "additionalProperties": false,
+          "properties": {
+            "certainty": {
+              "default": "observed",
+              "enum": [
+                "user_stated",
+                "observed",
+                "inferred"
+              ],
+              "title": "Certainty",
+              "type": "string"
+            },
+            "content": {
+              "maxLength": 8000,
+              "minLength": 1,
+              "title": "Content",
+              "type": "string"
+            },
+            "evidence": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "title": "Evidence",
+              "type": "string"
+            },
+            "expected_revision": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Revision"
+            },
+            "key": {
+              "maxLength": 160,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_.-]+$",
+              "title": "Key",
+              "type": "string"
+            },
+            "kind": {
+              "default": "context",
+              "enum": [
+                "workflow",
+                "decision",
+                "correction",
+                "learning",
+                "context",
+                "disagreement"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "scope": {
+              "default": "",
+              "maxLength": 200,
+              "title": "Scope",
+              "type": "string"
+            },
+            "source": {
+              "default": "",
+              "maxLength": 1000,
+              "title": "Source",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "when_to_use": {
+              "default": "",
+              "maxLength": 700,
+              "title": "When To Use",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "title",
+            "content",
+            "evidence"
+          ],
+          "title": "MemoryCapture",
+          "type": "object"
+        },
+        "MemoryEntry": {
+          "properties": {
+            "actor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            },
+            "actor_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor Name"
+            },
+            "certainty": {
+              "default": "observed",
+              "enum": [
+                "user_stated",
+                "observed",
+                "inferred"
+              ],
+              "title": "Certainty",
+              "type": "string"
+            },
+            "content": {
+              "title": "Content",
+              "type": "string"
+            },
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "evidence": {
+              "title": "Evidence",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "kind": {
+              "default": "context",
+              "enum": [
+                "workflow",
+                "decision",
+                "correction",
+                "learning",
+                "context",
+                "disagreement"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "memory_id": {
+              "title": "Memory Id",
+              "type": "string"
+            },
+            "scope": {
+              "default": "",
+              "title": "Scope",
+              "type": "string"
+            },
+            "source": {
+              "default": "",
+              "title": "Source",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            },
+            "when_to_use": {
+              "default": "",
+              "title": "When To Use",
+              "type": "string"
+            }
+          },
+          "required": [
+            "memory_id",
+            "key",
+            "title",
+            "content",
+            "evidence",
+            "updated_at"
+          ],
+          "title": "MemoryEntry",
+          "type": "object"
+        },
+        "MemoryPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "activation": {
+              "enum": [
+                "disabled",
+                "opt_in",
+                "automatic"
+              ],
+              "title": "Activation",
+              "type": "string"
+            },
+            "policy_id": {
+              "title": "Policy Id",
+              "type": "string"
+            },
+            "scope": {
+              "default": "user",
+              "enum": [
+                "key",
+                "user",
+                "team",
+                "project",
+                "organization"
+              ],
+              "title": "Scope",
+              "type": "string"
+            },
+            "target_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Target Id",
+              "type": "string"
+            },
+            "target_type": {
+              "enum": [
+                "gateway",
+                "organization",
+                "team",
+                "project",
+                "user",
+                "key"
+              ],
+              "title": "Target Type",
+              "type": "string"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            },
+            "updated_by": {
+              "title": "Updated By",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target_type",
+            "target_id",
+            "activation",
+            "policy_id",
+            "updated_at",
+            "updated_by"
+          ],
+          "title": "MemoryPolicy",
+          "type": "object"
+        },
+        "MemoryPolicyInput": {
+          "additionalProperties": false,
+          "properties": {
+            "activation": {
+              "enum": [
+                "disabled",
+                "opt_in",
+                "automatic"
+              ],
+              "title": "Activation",
+              "type": "string"
+            },
+            "scope": {
+              "default": "user",
+              "enum": [
+                "key",
+                "user",
+                "team",
+                "project",
+                "organization"
+              ],
+              "title": "Scope",
+              "type": "string"
+            },
+            "target_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "Target Id",
+              "type": "string"
+            },
+            "target_type": {
+              "enum": [
+                "gateway",
+                "organization",
+                "team",
+                "project",
+                "user",
+                "key"
+              ],
+              "title": "Target Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target_type",
+            "target_id",
+            "activation"
+          ],
+          "title": "MemoryPolicyInput",
+          "type": "object"
+        },
+        "MemoryPreference": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "title": "MemoryPreference",
+          "type": "object"
+        },
+        "MemoryStatus": {
+          "properties": {
+            "activation": {
+              "enum": [
+                "disabled",
+                "opt_in",
+                "automatic"
+              ],
+              "title": "Activation",
+              "type": "string"
+            },
+            "active": {
+              "title": "Active",
+              "type": "boolean"
+            },
+            "opted_in": {
+              "title": "Opted In",
+              "type": "boolean"
+            },
+            "policy_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Policy Id"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "key",
+                    "user",
+                    "team",
+                    "project",
+                    "organization"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "user_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Name"
+            }
+          },
+          "required": [
+            "active",
+            "activation",
+            "scope",
+            "opted_in",
+            "policy_id"
+          ],
+          "title": "MemoryStatus",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/v2/memory/entries": {
+        "get": {
+          "operationId": "list_entries_v2_memory_entries_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "default": "",
+                "maxLength": 500,
+                "title": "Query",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "maximum": 20,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "key_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "before_updated_at",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Before Updated At"
+              }
+            },
+            {
+              "in": "query",
+              "name": "before_memory_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Before Memory Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/MemoryEntry"
+                    },
+                    "title": "Response List Entries V2 Memory Entries Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Entries",
+          "tags": [
+            "memory_v2"
+          ]
+        },
+        "post": {
+          "operationId": "capture_entry_v2_memory_entries_post",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "key_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Id"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryCapture"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MemoryEntry"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Capture Entry",
+          "tags": [
+            "memory_v2"
+          ]
+        }
+      },
+      "/v2/memory/entries/{memory_id}": {
+        "delete": {
+          "operationId": "delete_entry_v2_memory_entries__memory_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "memory_id",
+              "required": true,
+              "schema": {
+                "title": "Memory Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "key_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Id"
+              }
+            }
+          ],
+          "responses": {
+            "204": {
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Entry",
+          "tags": [
+            "memory_v2"
+          ]
+        }
+      },
+      "/v2/memory/policies": {
+        "get": {
+          "operationId": "list_policies_v2_memory_policies_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "target_type",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "gateway",
+                      "organization",
+                      "team",
+                      "project",
+                      "user",
+                      "key"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Target Type"
+              }
+            },
+            {
+              "in": "query",
+              "name": "target_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Target Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/MemoryPolicy"
+                    },
+                    "title": "Response List Policies V2 Memory Policies Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Policies",
+          "tags": [
+            "memory_v2"
+          ]
+        },
+        "put": {
+          "operationId": "set_policy_v2_memory_policies_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryPolicyInput"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MemoryPolicy"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Set Policy",
+          "tags": [
+            "memory_v2"
+          ]
+        }
+      },
+      "/v2/memory/policies/{policy_id}": {
+        "delete": {
+          "operationId": "delete_policy_v2_memory_policies__policy_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "policy_id",
+              "required": true,
+              "schema": {
+                "title": "Policy Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "204": {
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Policy",
+          "tags": [
+            "memory_v2"
+          ]
+        }
+      },
+      "/v2/memory/preference": {
+        "get": {
+          "operationId": "get_preference_v2_memory_preference_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "key_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MemoryPreference"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Preference",
+          "tags": [
+            "memory_v2"
+          ]
+        },
+        "put": {
+          "operationId": "set_preference_v2_memory_preference_put",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "key_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Id"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryPreference"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MemoryPreference"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Set Preference",
+          "tags": [
+            "memory_v2"
+          ]
+        }
+      },
+      "/v2/memory/status": {
+        "get": {
+          "operationId": "get_status_v2_memory_status_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "key_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MemoryStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Status",
+          "tags": [
+            "memory_v2"
+          ]
+        }
+      }
+    }
+  },
   "policies": {
     "components": {
       "schemas": {

@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.server_tools import (
     append_server_reference,
     continue_server_tools,
     inject_server_tools,
+    trailing_system_messages,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import wrap_passthrough_sse_bytes_with_keepalive_pings
@@ -68,6 +69,7 @@ class GatewayMemoryLoop:
         self.checkpoint = memory_digest(store.access.namespace, *prefix_hashes(self.visible_input, route)[-1:])
         self.data: Mapping[str, object] = data
         self.baseline_length = 0
+        self.replaced_input = 0
         self.reflected = store.access.identity.read_only or (
             data.get("tool_choice") not in (None, "auto")
             and object_value(data.get("tool_choice")).get("type") != "auto"
@@ -115,7 +117,8 @@ class GatewayMemoryLoop:
             functions,
             MEMORY_READ_ONLY_WORKFLOW if self.store.access.identity.read_only else MEMORY_WORKFLOW,
         )
-        self.baseline_length = len(transcript_items(injected, self.route))
+        self.replaced_input = trailing_system_messages(injected, self.route)
+        self.baseline_length = len(transcript_items(injected, self.route)) - self.replaced_input
         catalog: Final = await memory_catalog(self.store, MemoryCatalogRequest(limit=12))
         self.data = append_server_reference(
             injected,
@@ -203,7 +206,7 @@ class GatewayMemoryLoop:
         visible: Final = response_messages(response, self.route)
         anchors: Final = prefix_hashes((*self.visible_input, *visible), self.route)
         patch: Final = MemoryContinuation(
-            replaces=len(visible),
+            replaces=len(visible) + self.replaced_input,
             replacement=transcript_items(self.data, self.route)[self.baseline_length :],
             upstream_ids=self.upstream_ids,
             pending_results=self.pending_results,

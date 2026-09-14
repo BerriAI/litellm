@@ -1,7 +1,6 @@
 """An isolated office pilot that preserves upstream gateway credentials."""
 
 import asyncio
-import hashlib
 import os
 import secrets
 from collections.abc import Callable
@@ -19,7 +18,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.server_tool_responses import object_value
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._types import UI_TEAM_ID, UserAPIKeyAuth
+from litellm.proxy._types import UI_TEAM_ID, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.auth.user_api_key_auth import _get_bearer_token_or_received_api_key
 from litellm.proxy.memory.transport import in_gateway_round
@@ -101,7 +100,7 @@ class PilotGateway:
         if prisma_client is None:
             await JSONResponse({"error": "Pilot database unavailable"}, status_code=503)(scope, receive, send)
             return
-        digest: Final = hashlib.sha256(credential.encode()).hexdigest()
+        digest: Final = hash_token(credential)
         tokens: Final = VerificationTokenRepository(prisma_client)
         local_key: Final = await tokens.find_by_id(digest)
         if local_key and local_key.team_id == UI_TEAM_ID:

@@ -137,16 +137,33 @@ def _tool_name(tool: object) -> object:
     return _OBJECT.validate_python(function).get("name") if isinstance(function, dict) else definition.get("name")
 
 
+def trailing_system_messages(data: Mapping[str, object], route: ServerToolRoute) -> int:
+    if route != "anthropic_messages":
+        return 0
+    messages: Final = _items(data.get("messages"))
+    return next(
+        (
+            index
+            for index, message in enumerate(reversed(messages))
+            if not isinstance(message, dict) or _OBJECT.validate_python(message).get("role") != "system"
+        ),
+        len(messages),
+    )
+
+
 def append_server_reference(data: Mapping[str, object], route: ServerToolRoute, reference: str) -> Mapping[str, object]:
     field: Final = "input" if route == "aresponses" else "messages"
+    messages: Final = _items(data.get(field))
+    insertion: Final = len(messages) - trailing_system_messages(data, route)
     return {  # mutable-ok: Provider wire format requires native JSON containers.
         **data,
         field: [  # mutable-ok: Provider wire format requires native JSON containers.
-            *_items(data.get(field)),
+            *messages[:insertion],
             {  # mutable-ok: Provider wire format requires native JSON containers.
                 "role": "user",
                 "content": reference,
             },
+            *messages[insertion:],
         ],
     }
 

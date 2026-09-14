@@ -53,6 +53,7 @@ def prisma_edge() -> MagicMock:
     table.count = AsyncMock(return_value=0)
     client.db.tx.return_value.__aenter__.return_value = client.db
     client.db.execute_raw = AsyncMock()
+    client.db.query_raw = AsyncMock(return_value=[{"key_count": 0, "bytes": 0}])
     continuations = client.db.litellm_memorycontinuation
     continuations.find_many = AsyncMock(return_value=[])
     continuations.find_first = AsyncMock(return_value=None)
@@ -513,6 +514,72 @@ async def test_model_loop_is_bounded_and_search_results_reach_the_active_model(p
 
 
 @pytest.mark.asyncio
+async def test_trailing_system_messages_survive_client_tool_continuation(prisma_edge: MagicMock) -> None:
+    provider = FastAPI()
+    observed = []
+    client_call = {"type": "tool_use", "id": "client_read", "name": "Read", "input": {"path": "README.md"}}
+
+    @provider.post("/v1/messages")
+    async def model(incoming: Request):
+        body = await incoming.json()
+        observed.append(body)
+        messages = body["messages"]
+        assert all(
+            message["role"] != "system" or messages[index + 1]["role"] == "assistant"
+            for index, message in enumerate(messages[:-1])
+        )
+        return {
+            "id": "msg_" + str(len(observed)),
+            "role": "assistant",
+            "type": "message",
+            "stop_reason": "tool_use" if len(observed) == 1 else "end_turn",
+            "content": [client_call] if len(observed) == 1 else [{"type": "text", "text": "Read complete"}],
+        }
+
+    prefix = {
+        "role": "user",
+        "content": [{"type": "text", "text": "Read README.md", "cache_control": {"type": "ephemeral"}}],
+    }
+    directive = {"role": "system", "content": "Use concise answers"}
+    original = {
+        "messages": [prefix, directive],
+        "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "tool", "name": "Read"},
+    }
+    first = GatewayMemoryLoop(provider, request(), original, "anthropic_messages", store(prisma_edge))
+    async for _ in first.run():
+        pass
+    saved = prisma_edge.db.litellm_memorycontinuation.upsert.call_args.kwargs
+    prisma_edge.db.litellm_memorycontinuation.find_many.return_value = [
+        SimpleNamespace(id=saved["where"]["id"], payload=json.loads(saved["data"]["create"]["payload"]))
+    ]
+    following = {
+        **original,
+        "tool_choice": {"type": "none"},
+        "messages": [
+            prefix,
+            directive,
+            {"role": "assistant", "content": [client_call]},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "client_read", "content": "File content"}],
+            },
+            directive,
+        ],
+    }
+    second = GatewayMemoryLoop(provider, request(), following, "anthropic_messages", store(prisma_edge))
+    async for _ in second.run():
+        pass
+    assert len(observed) == 2
+    assert observed[0]["messages"][0] == observed[1]["messages"][0] == prefix
+    assert observed[1]["messages"].count(directive) == 2
+    assert observed[1]["messages"].count({"role": "assistant", "content": [client_call]}) == 1
+    assert observed[1]["messages"][-1] == directive
+    assert observed[1]["messages"][-3]["content"][0]["tool_use_id"] == "client_read"
+    assert original["messages"] == [prefix, directive]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("bad_id,count", [(True, 1), (False, 17)])
 async def test_invalid_model_calls_are_rejected_before_storage(
     prisma_edge: MagicMock, bad_id: bool, count: int
@@ -894,3 +961,38 @@ async def test_full_scope_blocks_creation_but_permits_correction_and_reclaimed_c
     table.create.return_value = row()
     assert (await store(prisma_edge).capture(_CAPTURE)).memory_id == "entry"
     table.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_count,used_bytes", [(256, 0), (0, 32 * 1024 * 1024 + 1)])
+async def test_continuation_quota_rejects_excess_without_writing(
+    prisma_edge: MagicMock, key_count: int, used_bytes: int
+) -> None:
+    prisma_edge.db.query_raw.return_value = [{"key_count": key_count, "bytes": used_bytes}]
+    with pytest.raises(HTTPException) as exc:
+        await MemoryContinuations(store(prisma_edge), "aresponses").save("response", MemoryContinuation(replaces=1))
+    assert exc.value.status_code == 429
+    prisma_edge.db.litellm_memorycontinuation.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_continuation_quota_shares_namespace_lock_across_keys_and_allows_replacements(
+    prisma_edge: MagicMock,
+) -> None:
+    user_policy = _POLICY.model_copy(update={"scope": "user"})
+    prisma_edge.db.litellm_memorypolicy.find_many.return_value = [user_policy]
+    prisma_edge.db.query_raw.return_value = [{"key_count": 255, "bytes": 32 * 1024 * 1024}]
+    other_key = MemoryIdentity("b" * 64, "owner", "team", "project", "org", False)
+    for identity in (_IDENTITY, other_key):
+        continuations = MemoryContinuations(
+            MemoryStore(prisma_edge, MemoryAccess(identity, user_policy, False)), "aresponses"
+        )
+        await continuations.save("response", MemoryContinuation(replaces=1, response={"text": "é漢字"}))
+        query = prisma_edge.db.query_raw.call_args.args
+        assert query[1:4] == (identity.namespace("user"), identity.key_id, [continuations.identifier("response")])
+        assert json.loads(query[4])[0]["response"]["text"] == "é漢字"
+    locks = prisma_edge.db.execute_raw.call_args_list
+    assert locks[0] == locks[1]
+    cleanup = prisma_edge.db.litellm_memorycontinuation.delete_many.call_args.kwargs["where"]
+    assert cleanup["namespace"] == _IDENTITY.namespace("user") and "key_id" not in cleanup
+    assert prisma_edge.db.litellm_memorycontinuation.upsert.await_count == 2
