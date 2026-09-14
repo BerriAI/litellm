@@ -1892,6 +1892,47 @@ def test_get_user_agent_tags():
     assert "User-Agent: litellm/0.1.0" in tags
 
 
+def test_get_user_agent_tags_case_insensitive():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags_title_case = StandardLoggingPayloadSetup._get_user_agent_tags(
+        proxy_server_request={
+            "headers": {
+                "User-Agent": "my-client/1.0.0",
+            }
+        }
+    )
+    assert tags_title_case is not None
+    assert "User-Agent: my-client" in tags_title_case
+    assert "User-Agent: my-client/1.0.0" in tags_title_case
+
+    tags_upper_case = StandardLoggingPayloadSetup._get_user_agent_tags(
+        proxy_server_request={
+            "headers": {
+                "USER-AGENT": "custom-agent",
+            }
+        }
+    )
+    assert tags_upper_case is not None
+    assert "User-Agent: custom-agent" in tags_upper_case
+
+
+def test_get_request_tags_case_insensitive_user_agent():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={"metadata": {"tags": ["custom-tag"]}},
+        proxy_server_request={
+            "headers": {
+                "User-Agent": "python-requests/2.31.0",
+            }
+        },
+    )
+    assert "custom-tag" in tags
+    assert "User-Agent: python-requests" in tags
+    assert "User-Agent: python-requests/2.31.0" in tags
+
+
 def test_get_request_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
