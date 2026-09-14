@@ -4162,7 +4162,14 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     prisma_client.db.litellm_teamtable.count = AsyncMock(side_effect=count)
     prisma_client.db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        return_value=SimpleNamespace(teams=["team_in_org_A", "team_in_org_B"])
+        return_value=LiteLLM_UserTable(
+            user_id="org_admin_user",
+            teams=["team_in_org_A", "team_in_org_B"],
+            organization_memberships=[
+                _org_membership("org_admin_user", "org_A", "org_admin"),
+                _org_membership("org_admin_user", "org_B", "internal_user"),
+            ],
+        )
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
@@ -4193,7 +4200,9 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     assert await list_teams(None) == own_view
     assert await list_teams("org_admin_user", search="team_in_org_B") == ["team_in_org_B"]
     assert await list_teams("other_user") == ["other_team_in_org_A"]
-    prisma_client.db.litellm_usertable.find_unique.assert_awaited_with(where={"user_id": "org_admin_user"})
+    prisma_client.db.litellm_usertable.find_unique.assert_awaited_with(
+        where={"user_id": "org_admin_user"}, include={"organization_memberships": True}
+    )
 
 
 @pytest.mark.asyncio

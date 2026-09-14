@@ -4858,9 +4858,24 @@ async def _get_org_admin_org_ids(
     return org_ids if org_ids else None
 
 
-async def _get_user_team_ids_from_db(user_id: str, prisma_client: PrismaClient) -> tuple[str, ...]:
-    user_row: Final = await _user_db(prisma_client).find_unique(where={"user_id": user_id})
-    return tuple(user_row.teams or ()) if user_row is not None else ()
+async def _get_user_team_ids_from_db(
+    user_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    try:
+        user: Final = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=True,
+        )
+    except ValueError:
+        return ()
+    return tuple(user.teams or ()) if user is not None else ()
 
 
 async def _build_team_list_where_conditions(
@@ -5080,7 +5095,12 @@ async def _enforce_list_team_v2_access(
             )
         is_own_query: Final = user_id is None or user_id == caller_user_id
         own_team_ids: Final = (
-            await _get_user_team_ids_from_db(user_id=caller_user_id, prisma_client=prisma_client)
+            await _get_user_team_ids_from_db(
+                user_id=caller_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
             if is_own_query
             else ()
         )
