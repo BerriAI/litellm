@@ -65,6 +65,7 @@ def test_should_collect_response_from_stream():
     assert collected.id == "resp-1"
     assert collected._hidden_params.get("headers") == {"x-test": "1"}
 
+
 class _RecoverableResponsesStream(_FakeResponsesStream):
     """Terminal response.completed carries an empty output array even though
     output_item.done events streamed the full answer (issue #41009)."""
@@ -104,9 +105,7 @@ def test_collect_response_from_stream_rebuilds_empty_output_from_streamed_items(
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [
-                {"type": "output_text", "text": "Hi! How can I help?", "annotations": []}
-            ],
+            "content": [{"type": "output_text", "text": "Hi! How can I help?", "annotations": []}],
         }
     ]
     stream = _RecoverableResponsesStream(response, streamed_items)
@@ -133,9 +132,7 @@ async def test_collect_response_from_stream_async_rebuilds_empty_output_from_str
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [
-                {"type": "output_text", "text": "Hi! How can I help?", "annotations": []}
-            ],
+            "content": [{"type": "output_text", "text": "Hi! How can I help?", "annotations": []}],
         }
     ]
     stream = _RecoverableAsyncResponsesStream(response, streamed_items)
