@@ -7,6 +7,8 @@ VERIA-39 regression tests:
   models the caller is not authorized to use.
 """
 
+import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2286,3 +2288,45 @@ async def test_disable_flag_still_skips_batch_processing_with_enqueued_limits():
 
     assert result is data
     afile_content_mock.assert_not_awaited()
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+@pytest.mark.parametrize("tz", ["Asia/Kolkata", "America/Los_Angeles"])
+def test_batch_429_reset_time_is_utc_on_a_non_utc_proxy(tz, monkeypatch):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage, _PROXY_BatchRateLimiter
+
+    parallel_request_limiter = MagicMock()
+    parallel_request_limiter.window_size = 60
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=parallel_request_limiter,
+    )
+    status = {
+        "code": "OVER_LIMIT",
+        "descriptor_key": "api_key",
+        "limit_remaining": 0,
+        "rate_limit_type": "requests",
+        "current_limit": 2,
+    }
+
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+    try:
+        before = datetime.now(timezone.utc).replace(microsecond=0)
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            rate_limiter._raise_rate_limit_error(
+                status=status,
+                descriptors=[{"key": "api_key", "value": "sk-test", "rate_limit": None}],
+                batch_usage=BatchFileUsage(total_tokens=10, request_count=1),
+                limit_type="requests",
+                requested_model="gpt-4o-mini",
+            )
+        after = datetime.now(timezone.utc)
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+    reported = str(exc_info.value).split("Limit resets at: ")[-1]
+    reset_at = datetime.strptime(reported, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
+    assert before + timedelta(seconds=60) <= reset_at <= after + timedelta(seconds=60)
