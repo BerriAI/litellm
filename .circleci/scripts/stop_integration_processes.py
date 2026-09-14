@@ -12,8 +12,6 @@ def is_owned(process: psutil.Process, identity: str, owner_uid: int) -> bool:
 
 
 def owned_processes(identity: str, owner_uid: int) -> tuple[psutil.Process, ...]:
-    # The runner invokes this helper with sudo. Unreadable ownership remains a hard
-    # failure: skipping it would make a successful cleanup unverifiable.
     return tuple(process for process in psutil.process_iter() if is_owned(process, identity, owner_uid))
 
 
