@@ -6576,6 +6576,51 @@ async def test_get_team_membership_invalidation_during_cache_write_evicts_stale_
 
 
 @pytest.mark.asyncio
+async def test_get_team_membership_stale_write_finishing_after_fresh_load_never_serves_old_row():
+    from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
+
+    write_started = asyncio.Event()
+    release_stale_write = asyncio.Event()
+    stale_writes = iter((release_stale_write,))
+
+    class _SlowFirstWriteCache(UserApiKeyCache):
+        async def async_set_cache(self, key, value, local_only=False, **kwargs):
+            release = next(stale_writes, None)
+            if release is not None:
+                write_started.set()
+                await release.wait()
+            return await super().async_set_cache(key, value, local_only=local_only, **kwargs)
+
+    rows = iter(("budget-old", "budget-new", "budget-new"))
+
+    async def _find_unique(*args, **kwargs):
+        row = MagicMock()
+        row.dict = lambda: {"user_id": "u-sw", "team_id": "t-sw", "spend": 1.0, "budget_id": next(rows)}
+        return row
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_find_unique)
+    cache = _SlowFirstWriteCache()
+
+    async def _load():
+        return await get_team_membership(
+            user_id="u-sw", team_id="t-sw", prisma_client=mock_prisma_client, user_api_key_cache=cache
+        )
+
+    stale = asyncio.create_task(_load())
+    await asyncio.wait_for(write_started.wait(), timeout=2)
+    await invalidate_team_member_spend_state(user_id="u-sw", team_id="t-sw", user_api_key_cache=cache)
+    fresh_result = await _load()
+    release_stale_write.set()
+    stale_result = await stale
+    after_result = await _load()
+
+    assert fresh_result is not None and fresh_result.budget_id == "budget-new"
+    assert stale_result is not None and stale_result.budget_id == "budget-old"
+    assert after_result is not None and after_result.budget_id == "budget-new"
+
+
+@pytest.mark.asyncio
 async def test_common_checks_calls_get_team_membership_once_per_request():
     from fastapi import Request
 
