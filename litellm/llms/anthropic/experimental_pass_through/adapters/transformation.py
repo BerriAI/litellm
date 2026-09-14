@@ -1562,7 +1562,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def _classify_streaming_chunk(
-        choices: list["OpenAIStreamingChoice | StreamingChoices"],
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
         thinking_disabled: bool = False,
     ) -> Literal["thinking", "redacted_thinking", "tool_use", "text", "skip"]:
         """
@@ -1667,7 +1667,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _translate_streaming_openai_chunk_to_anthropic_content_block(
         self,
-        choices: list[OpenAIStreamingChoice | StreamingChoices],
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices | Choices"],
         thinking_disabled: bool = False,
     ) -> tuple[
         Literal["text", "tool_use", "thinking", "redacted_thinking"],
@@ -1732,7 +1732,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _translate_streaming_openai_chunk_to_anthropic(
         self,
-        choices: list[OpenAIStreamingChoice | StreamingChoices],
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices | Choices"],
         thinking_disabled: bool = False,
     ) -> tuple[
         StreamingContentBlockDeltaType,
@@ -1757,7 +1757,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _accumulate_streaming_chunk_payloads(
         self,
-        choices: list[OpenAIStreamingChoice | StreamingChoices],
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
         thinking_disabled: bool = False,
     ) -> tuple[str, str, str, str | None]:
         """Fold a chunk's choices into (text, reasoning_content, reasoning_signature, partial_json).
@@ -1838,7 +1838,7 @@ class LiteLLMAnthropicMessagesAdapter:
             type_of_content,
             content_block_delta,
         ) = self._translate_streaming_openai_chunk_to_anthropic(
-            choices=response.choices,  # type: ignore
+            choices=response.choices,
             thinking_disabled=thinking_disabled,
         )
         return ContentBlockDelta(

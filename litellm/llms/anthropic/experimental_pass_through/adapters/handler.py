@@ -319,7 +319,7 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
-    def _is_thinking_disabled(thinking: dict | None) -> bool:
+    def _is_thinking_disabled(thinking: Mapping | None) -> bool:
         """Return True when the client's thinking param is absent or explicitly disabled."""
         return thinking is None or (isinstance(thinking, dict) and thinking.get("type") == "disabled")
 

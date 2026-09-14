@@ -1169,7 +1169,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         return (
             LiteLLMAnthropicMessagesAdapter._classify_streaming_chunk(
-                choices=chunk.choices,  # type: ignore
+                choices=chunk.choices,
                 thinking_disabled=thinking_disabled,
             )
             != "skip"
@@ -1232,7 +1232,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             block_type,
             content_block_start,
         ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-            choices=chunk.choices,  # type: ignore
+            choices=chunk.choices,
             thinking_disabled=self.thinking_disabled,
         )
 
