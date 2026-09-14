@@ -318,6 +318,8 @@ def test_langfuse_e2e_sync(monkeypatch):
     import litellm
     from litellm import completion
     from litellm.integrations.langfuse.langfuse import LangFuseLogger
+    from litellm.integrations.langfuse.langfuse_prompt_management import langfuse_client_init
+    from litellm.litellm_core_utils import litellm_logging
 
     received_paths = []
 
@@ -338,7 +340,10 @@ def test_langfuse_e2e_sync(monkeypatch):
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-e2e-sync")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-e2e-sync")
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
-    monkeypatch.setattr(litellm, "_langfuse_logger_cache", {}, raising=False)
+    monkeypatch.setattr(litellm_logging, "langFuseLogger", None)
+    monkeypatch.setattr(litellm_logging, "in_memory_dynamic_logger_cache", DynamicLoggingCache())
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    langfuse_client_init.cache_clear()
 
     try:
         completion(
