@@ -1404,6 +1404,49 @@ class RedisCache(BaseCache):
         return float(result)
 
     @_redis_circuit_breaker_guard
+    async def async_reset_preserving_delta(
+        self,
+        key: str,
+        new_base: float,
+        snapshot: float,
+        ttl: int | None = None,
+    ) -> float:
+        """Atomically reset ``key`` to ``new_base`` while preserving any amount
+        added since ``snapshot`` was read, so a reset racing a concurrent
+        ``async_increment`` cannot erase spend reserved after the reset boundary.
+
+        ``snapshot`` is the value read once before the first attempt and held
+        fixed across retries by the caller, not re-read each attempt: replaying
+        this call after a transient failure stays correct no matter how many
+        increments landed in between, because the delta is always measured
+        against that same original baseline. The GET/compute/SET runs in a
+        single Lua call, atomic across racing callers and pods, mirroring
+        ``async_set_max``. Returns the resulting value.
+        """
+        _redis_client: Final = self.init_async_client()
+        _used_ttl: Final = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
+        lua: Final = (
+            "local cur = redis.call('GET', KEYS[1]) "
+            "local cur_num = cur and tonumber(cur) or tonumber(ARGV[2]) "
+            "local delta = cur_num - tonumber(ARGV[2]) "
+            "if delta < 0 then delta = 0 end "
+            "local result = tonumber(ARGV[1]) + delta "
+            "redis.call('SET', KEYS[1], result) "
+            "if tonumber(ARGV[3]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[3]) end "
+            "return tostring(result)"
+        )
+        result = cast(
+            "str | bytes",
+            await _redis_client.eval(
+                lua, 1, key, str(new_base), str(snapshot), str(int(_used_ttl or 0))
+            ),
+        )
+        if isinstance(result, bytes):
+            result = result.decode()
+        return float(result)
+
+    @_redis_circuit_breaker_guard
     async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         """Async twin of ``increment_with_floor``, sharing its Lua script and its guarantees."""
         _redis_client: Final = self._async_commands()

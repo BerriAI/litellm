@@ -53,6 +53,15 @@ class _BudgetCounter:
     window_start: datetime | None = None
 
 
+_RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS: Final = 2
+"""Bounded retries of the per-reservation reconcile on the cancel path before
+falling back to invalidating the shared aggregate counters. reconcile_budget_reservation
+only ever adjusts this reservation's own recorded contribution to each counter (see
+_set_reserved_entries_actual_cost), so it is safe and idempotent to retry; the counter
+invalidation fallback below is not, since it deletes state every concurrent reservation
+and recorded spend on that counter shares."""
+
+
 _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Key": Litellm_EntityType.KEY.value,
     "Team": Litellm_EntityType.TEAM.value,
@@ -372,7 +381,12 @@ async def release_budget_reservation_on_cancel(
     when success/failure handling already reconciled, so calling it on every
     cancellation path is safe.
 
-    A reconcile failure here (e.g. a Redis timeout) falls back to
+    A reconcile failure here (e.g. a Redis timeout) is retried a bounded number of
+    times before falling back to invalidate_budget_reservation_counters: unlike that
+    fallback, the reconcile only ever adjusts this reservation's own contribution to
+    each counter, so it cannot clobber a concurrent request's reservation or recorded
+    spend on the same key/user/team counter the way deleting the aggregate can. Only
+    once every retry hits the same failure does this fall back to
     invalidate_budget_reservation_counters, mirroring release_or_invalidate_budget_reservation's
     handling of the same failure on the non-cancel release path: dropping the reserved counters
     forces the next read to reseed from the DB instead of leaving the pre-charge stuck in Redis
@@ -389,8 +403,12 @@ async def release_budget_reservation_on_cancel(
         pass
     except Exception:
         verbose_proxy_logger.exception(
-            "Failed to reconcile budget reservation on cancel; invalidating reserved counters"
+            "Failed to reconcile budget reservation on cancel; retrying before invalidating reserved counters"
         )
+        if await asyncio.shield(
+            _retry_reconcile_reservation_on_cancel(budget_reservation=budget_reservation, incurred_cost=incurred_cost)
+        ):
+            return
         try:
             await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
         except Exception:
@@ -399,6 +417,35 @@ async def release_budget_reservation_on_cancel(
             )
         finally:
             budget_reservation["finalized"] = True
+
+
+async def _retry_reconcile_reservation_on_cancel(
+    budget_reservation: dict,  # mutable-ok: reconcile_budget_reservation stamps finalized on success
+    incurred_cost: float,
+) -> bool:
+    """Bounded retry of the reconcile that just failed once on the cancel path.
+
+    Unlike invalidate_budget_reservation_counters, reconcile_budget_reservation only
+    ever adjusts this reservation's own recorded contribution to each counter (see
+    _set_reserved_entries_actual_cost's applied_adjustment bookkeeping), so retrying it
+    is safe and idempotent, and correct on any attempt that gets through: it does not
+    touch concurrent reservations or spend the counter also aggregates. Returns whether
+    a retry succeeded, so the caller falls back to the destructive invalidation only
+    after every retry hits the same (presumably persistent) failure.
+    """
+    for attempt in range(_RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS):
+        try:
+            await reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
+            return True
+        except Exception:
+            is_last_attempt = attempt == _RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS - 1
+            verbose_proxy_logger.warning(
+                "Retry %d/%d to reconcile budget reservation on cancel failed",
+                attempt + 1,
+                _RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS,
+                exc_info=not is_last_attempt,
+            )
+    return False
 
 
 async def invalidate_budget_reservation_counters(

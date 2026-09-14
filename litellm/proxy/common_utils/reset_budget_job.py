@@ -545,11 +545,21 @@ class ResetBudgetJob:
         commit opens a window where get_current_spend reads 0 from Redis
         while the DB still holds the pre-reset value, allowing bypass.
 
-        A SET that keeps failing after retrying falls back to deleting the key rather
+        The reset is delta-preserving: a snapshot of the pre-reset value is read
+        once up front and held fixed across every retry, so a concurrent
+        async_increment landing during a retry (e.g. a request reserving spend
+        against the just-reset budget) is carried forward on top of new_spend
+        instead of being erased by a later attempt's write. See
+        async_reset_preserving_delta and _reset_redis_spend_counter.
+
+        A reset that keeps failing after retrying falls back to deleting the key rather
         than leaving the pre-reset (possibly far higher) value authoritative in Redis
         until its TTL expires: a missing counter reads as cold and reseeds from the
         DB on the next request (_ensure_spend_counter_initialized), which is always
-        closer to the truth than the stale value a failed SET would otherwise leave behind.
+        closer to the truth than the stale value a failed reset would otherwise leave
+        behind. The same is true when the pre-reset snapshot itself cannot be read:
+        with no safe baseline to preserve increments against, deleting is the only
+        option that cannot silently erase a concurrent reservation.
         """
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
@@ -558,8 +568,12 @@ class ResetBudgetJob:
             redis_cache = spend_counter_cache.redis_cache
             if redis_cache is None:
                 return
-            if await ResetBudgetJob._reset_redis_spend_counter(
-                redis_cache=redis_cache, counter_key=counter_key, new_spend=new_spend
+
+            snapshot = await ResetBudgetJob._snapshot_spend_counter(
+                redis_cache=redis_cache, counter_key=counter_key
+            )
+            if snapshot is not None and await ResetBudgetJob._reset_redis_spend_counter(
+                redis_cache=redis_cache, counter_key=counter_key, new_spend=new_spend, snapshot=snapshot
             ):
                 return
             verbose_proxy_logger.error(
@@ -581,10 +595,31 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
 
     @staticmethod
-    async def _reset_redis_spend_counter(redis_cache: RedisCache, counter_key: str, new_spend: float) -> bool:
+    async def _snapshot_spend_counter(redis_cache: RedisCache, counter_key: str) -> float | None:
+        """Read the pre-reset baseline the delta-preserving reset holds fixed across
+        retries. A failed read leaves no safe baseline to reconcile against, so the
+        caller skips the atomic reset and falls straight back to delete."""
+        try:
+            current = await redis_cache.async_get_cache(key=counter_key)
+            return float(current) if current is not None else 0.0
+        except Exception as redis_err:
+            verbose_proxy_logger.warning(
+                "Failed to read spend counter %s in Redis before reset; skipping the delta-preserving "
+                "reset and falling back to delete: %s",
+                counter_key,
+                redis_err,
+            )
+            return None
+
+    @staticmethod
+    async def _reset_redis_spend_counter(
+        redis_cache: RedisCache, counter_key: str, new_spend: float, snapshot: float
+    ) -> bool:
         for attempt in range(RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS):
             try:
-                await redis_cache.async_set_cache(key=counter_key, value=new_spend, ttl=60)
+                await redis_cache.async_reset_preserving_delta(
+                    key=counter_key, new_base=new_spend, snapshot=snapshot, ttl=60
+                )
                 return True
             except Exception as redis_err:
                 is_last_attempt = attempt == RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS - 1
