@@ -116,8 +116,7 @@ async def run_team_metadata_validation(
             },
         )
     if not inspect.iscoroutinefunction(validator):
-        # Value unwrap so iscoroutinefunction can see through functors; not a callability test
-        validator_call = getattr(validator, "__call__", None)  # noqa: B004  # value unwrap for functor check
+        validator_call: Final = getattr(validator, "__call__", None)  # noqa: B004  # value unwrap for the functor check
         if not inspect.iscoroutinefunction(validator_call):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
