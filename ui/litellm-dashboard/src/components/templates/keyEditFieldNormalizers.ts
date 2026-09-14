@@ -60,10 +60,10 @@ export const moveTagsOutOfMetadataJson = (
   const { tags: metadataTags, ...rest } = parsed;
   if (!Array.isArray(metadataTags)) return null;
   const existing = currentTags ?? [];
-  const movedTags = metadataTags.filter(
-    (tag: unknown, index: number): tag is string =>
-      typeof tag === "string" && !existing.includes(tag) && metadataTags.indexOf(tag) === index,
-  );
+  const movedTags = metadataTags
+    .filter((tag: unknown): tag is string => typeof tag === "string")
+    .map((tag) => tag.trim())
+    .filter((tag, index, all) => tag.length > 0 && !existing.includes(tag) && all.indexOf(tag) === index);
   return { metadata: JSON.stringify(rest, null, 2), tags: [...existing, ...movedTags], movedTags };
 };
 
