@@ -4661,12 +4661,6 @@ class PrismaClient:
                     )
                     return response
 
-            elif table_name == "enduser" and budget_id_list is not None:
-                if query_type == "find_all":
-                    response = await EndUserRepository(self).table.find_many(
-                        where={"budget_id": {"in": budget_id_list}}
-                    )
-                    return response
             elif table_name == "team":
                 if query_type == "find_unique":
                     response = await TeamRepository(self).table.find_unique(

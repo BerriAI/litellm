@@ -23,6 +23,24 @@ from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 
 
+def _row_matches_where(row: Any, where: Dict[str, Any]) -> bool:
+    """Evaluate the small prisma where-subset the reset job reads with:
+    attribute equality (including None), {"in": [...]} and {"gt": number}.
+    Canned rows that don't model a field skip that predicate."""
+    for key, predicate in where.items():
+        if not hasattr(row, key):
+            continue
+        value = getattr(row, key)
+        if isinstance(predicate, dict):
+            if "in" in predicate and value not in predicate["in"]:
+                return False
+            if "gt" in predicate and not (isinstance(value, (int, float)) and value > predicate["gt"]):
+                return False
+        elif value != predicate:
+            return False
+    return True
+
+
 # Mock classes for testing
 class MockTable:
     """A single prisma table: records reads/writes and replays canned rows."""
@@ -37,7 +55,7 @@ class MockTable:
 
     async def find_many(self, where: Dict[str, Any]) -> List[Any]:
         self.find_many_calls.append({"where": where})
-        return self._find_many_results
+        return [row for row in self._find_many_results if _row_matches_where(row, where)]
 
     async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         self.update_many_calls.append({"where": where, "data": data})
@@ -390,12 +408,13 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
         {
             "spend": 20.0,
             "litellm_budget_table": test_budget,
+            "budget_id": "test-budget-1",
             "user_id": "test-enduser-1",
         },
     )
 
     mock_prisma_client.data["budget"] = [test_budget]
-    mock_prisma_client.data["enduser"] = [test_enduser]
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results([test_enduser])
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
@@ -473,6 +492,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         {
             "spend": 20.0,
             "litellm_budget_table": test_budget,
+            "budget_id": "test-budget-1",
             "user_id": "test-enduser-1",
         },
     )
@@ -481,7 +501,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     mock_prisma_client.data["user"] = [test_user]
     mock_prisma_client.data["team"] = [test_team]
     mock_prisma_client.data["budget"] = [test_budget]
-    mock_prisma_client.data["enduser"] = [test_enduser]
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results([test_enduser])
 
     # Run the test
     asyncio.run(reset_budget_job.reset_budget())
@@ -576,15 +596,17 @@ def test_enduser_reset_bind_count_does_not_scale_with_population(reset_budget_jo
     """
     budget = _budget_row(budget_id="shared-tier", budget_duration="1d")
     mock_prisma_client.data["budget"] = [budget]
-    mock_prisma_client.data["enduser"] = [
-        types.SimpleNamespace(
-            spend=1.0,
-            litellm_budget_table=budget,
-            user_id=f"cust-{index:08d}",
-            budget_id="shared-tier",
-        )
-        for index in range(population)
-    ]
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results(
+        [
+            types.SimpleNamespace(
+                spend=1.0,
+                litellm_budget_table=budget,
+                user_id=f"cust-{index:08d}",
+                budget_id="shared-tier",
+            )
+            for index in range(population)
+        ]
+    )
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
@@ -594,6 +616,25 @@ def test_enduser_reset_bind_count_does_not_scale_with_population(reset_budget_jo
         f"{_POSTGRES_MAX_BIND_VARIABLES} binds PostgreSQL refuses the statement, got {writes[:1]}"
     )
     assert _batch_writes(mock_prisma_client, "budget")[0]["data"]["budget_reset_at"] is not None
+
+
+def test_enduser_budget_read_only_fetches_rows_with_spend(reset_budget_job, mock_prisma_client):
+    """Regression for #41084.
+
+    The budget-linked end-user read used to load every customer on the expiring
+    tier and then run two cache round trips per row, so a large zero-spend
+    population paid that cost on every expiry for nothing. The read now filters
+    spend > 0, matching the sibling NULL-budget path and every other cascade
+    read.
+    """
+    budget = _budget_row(budget_id="shared-tier", budget_duration="1d")
+    mock_prisma_client.data["budget"] = [budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    reads = mock_prisma_client.db.litellm_endusertable.find_many_calls
+    assert reads, "the budget-linked end-user read must go through the repository"
+    assert reads[0]["where"] == {"budget_id": {"in": ["shared-tier"]}, "spend": {"gt": 0}}
 
 
 def test_budget_table_reset_writes_nothing_when_no_budget_is_due(reset_budget_job, mock_prisma_client):
@@ -722,6 +763,7 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
         {
             "spend": 30.0,
             "litellm_budget_table": test_budget,
+            "budget_id": default_budget_id,
             "user_id": "enduser-explicit",
         },
     )
@@ -756,10 +798,10 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
     )
 
     mock_prisma_client.data["budget"] = [test_budget]
-    mock_prisma_client.data["enduser"] = [enduser_with_budget]
 
-    # Set up the DB mock for NULL-budget-id end users
-    mock_prisma_client.db.litellm_endusertable.set_find_many_results([enduser_no_budget_row])
+    # Set up the DB mock for both reads: the budget-linked query and the
+    # NULL-budget-id query share the mock table, the where clauses route rows.
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results([enduser_with_budget, enduser_no_budget_row])
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
@@ -782,8 +824,10 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
 
     # Verify find_many was called to fetch NULL-budget-id end users
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    assert len(find_many_calls) == 1
-    assert find_many_calls[0]["where"] == {"budget_id": None, "spend": {"gt": 0}}
+    assert [call["where"] for call in find_many_calls] == [
+        {"budget_id": {"in": [default_budget_id]}, "spend": {"gt": 0}},
+        {"budget_id": None, "spend": {"gt": 0}},
+    ]
 
     litellm.max_end_user_budget_id = None
 
@@ -816,7 +860,7 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_configured(
 
     # Should NOT have queried for NULL-budget-id end users
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    assert len(find_many_calls) == 0
+    assert [call["where"] for call in find_many_calls if call["where"].get("budget_id") is None] == []
 
     litellm.max_end_user_budget_id = None
 
@@ -853,7 +897,7 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
 
     # Should NOT have queried for NULL-budget-id end users
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    assert len(find_many_calls) == 0
+    assert [call["where"] for call in find_many_calls if call["where"].get("budget_id") is None] == []
 
     litellm.max_end_user_budget_id = None
 
@@ -1561,7 +1605,7 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
             "user_id": "customer-42",
         },
     )
-    mock_prisma_client.data["enduser"] = [test_enduser]
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results([test_enduser])
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
@@ -1779,9 +1823,9 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
     now = datetime.now(timezone.utc)
     budget = _budget_row(budget_id="budget-1", budget_duration="7d")
     mock_prisma_client.data["budget"] = [budget]
-    mock_prisma_client.data["enduser"] = [
-        type("EndUser", (), {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1", "budget_id": "budget-1"})
-    ]
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results(
+        [type("EndUser", (), {"spend": 5.0, "litellm_budget_table": budget, "user_id": "enduser-1", "budget_id": "budget-1"})]
+    )
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
