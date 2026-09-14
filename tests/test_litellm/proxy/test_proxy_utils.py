@@ -1,6 +1,7 @@
 import datetime as real_datetime
 import smtplib
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -9,13 +10,8 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, get_custom_url, join_paths
 from litellm.types.guardrails import GuardrailEventHooks
-
-
-from unittest.mock import MagicMock, patch
-
-from litellm.proxy.utils import get_custom_url, join_paths
 
 
 def test_get_custom_url(monkeypatch):
@@ -1303,10 +1299,9 @@ class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized
     client errors must be excluded so a guardrail content-policy block never
-    pages on-call. ProxyException is such an error; before LIT-3751 only
-    HTTPException was excluded, so AIM blocks paged as if the LLM API failed."""
+    pages on-call. 5xx proxy errors still alert."""
 
-    async def _alerted(self, exc) -> bool:
+    async def _alerted(self, exc):
         import asyncio
         from unittest.mock import AsyncMock
 
@@ -1325,7 +1320,7 @@ class TestPostCallFailureHookLLMExceptionAlerting:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
         await asyncio.sleep(0)  # let the fire-and-forget alert task run
-        return alerting_handler.called
+        return alerting_handler
 
     @pytest.mark.asyncio
     async def test_proxy_exception_does_not_alert(self):
@@ -1338,15 +1333,49 @@ class TestPostCallFailureHookLLMExceptionAlerting:
             code=400,
             openai_code="content_policy_violation",
         )
-        assert await self._alerted(exc) is False
+        assert (await self._alerted(exc)).called is False
 
     @pytest.mark.asyncio
     async def test_http_exception_does_not_alert(self):
-        assert await self._alerted(HTTPException(status_code=400, detail="blocked")) is False
+        assert (await self._alerted(HTTPException(status_code=400, detail="blocked"))).called is False
 
     @pytest.mark.asyncio
     async def test_genuine_llm_api_error_still_alerts(self):
-        assert await self._alerted(Exception("upstream 503")) is True
+        assert (await self._alerted(Exception("upstream 503"))).called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_5xx_alerts(self):
+        alerting_handler = await self._alerted(
+            HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Headroom compression service returned an error",
+                    "status_code": 503,
+                    "guardrail_name": "headroom-compression-global",
+                },
+            )
+        )
+        assert alerting_handler.called is True
+        assert "headroom-compression-global" in alerting_handler.call_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_5xx_alerts(self):
+        from litellm.proxy._types import ProxyException
+
+        alerting_handler = await self._alerted(
+            ProxyException(
+                message="guardrail backend down",
+                type="internal_server_error",
+                param=None,
+                code=503,
+            )
+        )
+        assert alerting_handler.called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_429_does_not_alert(self):
+        alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
+        assert alerting_handler.called is False
 
 
 class TestPostCallFailureHookProxyExceptionLogging:
@@ -2110,9 +2139,7 @@ def test_create_model_info_response_resolves_alias_to_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="bedrock-claude-opus-5", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="bedrock-claude-opus-5", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2141,9 +2168,7 @@ def test_create_model_info_response_keeps_exact_alias_over_generalized_deploymen
             ]
         )
 
-        response = create_model_info_response(
-            model_id="claude-opus-5", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="claude-opus-5", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2167,9 +2192,7 @@ def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_na
             ]
         )
 
-        response = create_model_info_response(
-            model_id="gpt-4o", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="gpt-4o", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2194,9 +2217,7 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="my-embeddings", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="my-embeddings", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2274,7 +2295,9 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
         await proxy_logging_obj.post_call_failure_hook(
             request_data={"metadata": {}},
-            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            original_exception=HTTPException(
+                status_code=400, detail="Upstream passthrough request failed with status 400"
+            ),
             user_api_key_dict=UserAPIKeyAuth(),
             traceback_str=upstream_traceback,
         )

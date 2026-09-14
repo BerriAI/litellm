@@ -429,6 +429,14 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
         detail.setdefault("guardrail_mode", event_hook)
 
 
+def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, HTTPException):
+        return exc.status_code < 500
+    if isinstance(exc, ProxyException):
+        return not (exc.code.isdigit() and int(exc.code) >= 500)
+    return False
+
+
 def _exception_changes_request_flow(exc: BaseException) -> bool:
     """
     True for guardrail exceptions the proxy turns into an alternate request flow
@@ -2885,9 +2893,7 @@ class ProxyLogging:
 
         ### ALERTING ###
         await self.update_request_status(litellm_call_id=request_data.get("litellm_call_id", ""), status="fail")
-        if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, (HTTPException, ProxyException)
-        ):
+        if AlertType.llm_exceptions in self.alert_types and not _is_client_error_exception(original_exception):
             """
             Just alert on LLM API exceptions. Do not alert on user errors
 
