@@ -7,6 +7,8 @@ mkdir -p "$results"
 integration_identity="$(.venv/bin/python -c 'import uuid; print(uuid.uuid4().hex)')"
 upstream_pid=""
 proxy_pid=""
+peer_pid=""
+launched_pid=""
 guard_created=false
 guard_installed=false
 guard6_created=false
@@ -15,9 +17,9 @@ cleanup() {
   original_status=$?
   trap - EXIT INT TERM
   sudo .venv/bin/python .circleci/scripts/stop_integration_processes.py \
-    "$integration_identity" "$(id -u)" "$proxy_pid" "$upstream_pid" \
+    "$integration_identity" "$(id -u)" "$proxy_pid" "$peer_pid" "$upstream_pid" \
     > "$results/process-cleanup.txt" 2>&1 || original_status=1
-  for owned_pid in "$proxy_pid" "$upstream_pid"; do
+  for owned_pid in "$peer_pid" "$proxy_pid" "$upstream_pid"; do
     if [ -n "$owned_pid" ]; then
       kill -- "-$owned_pid" 2>/dev/null || true
       for _ in {1..50}; do
@@ -60,8 +62,10 @@ export LITELLM_MASTER_KEY=sk-integration-master LITELLM_SALT_KEY=sk-integration-
 export LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True
 export STORE_MODEL_IN_DB=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1
 export INTEGRATION_PROXY_URL=http://127.0.0.1:4000
+export INTEGRATION_PEER_URL=""
 export INTEGRATION_UPSTREAM_URL=http://127.0.0.1:8190
 export INTEGRATION_MASTER_KEY="$LITELLM_MASTER_KEY"
+export INTEGRATION_SEED="$((16#$(git rev-parse --short=8 HEAD)))"
 
 uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
 
@@ -93,40 +97,29 @@ awk '$3 == "REJECT" && $1 > 0 { rejected=1 } END { exit !rejected }' "$results/e
 setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
   .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
 upstream_pid=$!
-setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
-  DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
-  LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" \
-  LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True STORE_MODEL_IN_DB=True \
-  AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
-  .venv/bin/litellm --config tests/integration/proxy_config.yaml --host 127.0.0.1 --port 4000 --num_workers 1 --telemetry False \
-  --use_prisma_db_push --enforce_prisma_migration_check \
-  > "$results/proxy.log" 2>&1 &
-proxy_pid=$!
-
-.venv/bin/python - <<'PY'
-import time
-import httpx
-
-deadline = time.monotonic() + 90
-with httpx.Client(trust_env=False, timeout=2) as client:
-    while True:
-        try:
-            provider = client.get("http://127.0.0.1:8190/health")
-            proxy = client.get("http://127.0.0.1:4000/health/readiness")
-            if provider.status_code == proxy.status_code == 200:
-                cache = client.get("http://127.0.0.1:4000/cache/ping", headers={"Authorization": "Bearer sk-integration-master"})
-                cache.raise_for_status()
-                assert cache.json()["status"] == "healthy", cache.text
-                assert cache.json()["cache_type"] == "redis", cache.text
-                assert cache.json()["ping_response"] is True, cache.text
-                assert cache.json()["set_cache_response"] == "success", cache.text
-                break
-        except httpx.TransportError:
-            pass
-        if time.monotonic() >= deadline:
-            raise SystemExit("Integration services did not become ready")
-        time.sleep(0.2)
-PY
+start_proxy() {
+  local port="$1"
+  local log_name="$2"
+  setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
+    DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
+    LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" \
+    LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True STORE_MODEL_IN_DB=True \
+    AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
+    .venv/bin/python -m integration._support.proxy --config tests/integration/proxy_config.yaml \
+    --host 127.0.0.1 --port "$port" --num_workers 1 --telemetry False \
+    --use_prisma_db_push --enforce_prisma_migration_check \
+    > "$results/$log_name" 2>&1 &
+  launched_pid=$!
+}
+start_proxy 4000 proxy.log
+proxy_pid="$launched_pid"
+.venv/bin/python .circleci/scripts/wait_integration_services.py
+if [ "$suite" = management ]; then
+  export INTEGRATION_PEER_URL=http://127.0.0.1:4001
+  start_proxy 4001 peer.log
+  peer_pid="$launched_pid"
+  .venv/bin/python .circleci/scripts/wait_integration_services.py
+fi
 
 if [ "$suite" = providers ]; then
   INTEGRATION_RUN_ID="$integration_identity" .venv/bin/python -m pytest --noconftest -o addopts= \
@@ -141,7 +134,9 @@ fi
 timeout --signal=TERM --kill-after=20s 11m env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
-  INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
+  INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_PEER_URL="$INTEGRATION_PEER_URL" \
+  INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
   INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
+  INTEGRATION_SEED="$INTEGRATION_SEED" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   .venv/bin/python tests/integration/run.py "$suite" --results "$results"
