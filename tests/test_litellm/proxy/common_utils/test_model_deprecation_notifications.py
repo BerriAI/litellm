@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
 
+from litellm.caching.caching import DualCache
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation_notifications import (
     AffectedModel,
     TeamNotification,
+    build_team_notifications,
+    email_sent_key,
     render_model_deprecation_email,
     resolve_affected_teams,
     select_milestone,
@@ -262,3 +266,66 @@ class TestRenderModelDeprecationEmail:
             notification, email_logo_url="https://logo", email_support_contact="h@x.io"
         )
         assert subject == "[LiteLLM] 1 model(s) deprecating for team Data Team"
+
+
+def _prisma_with_users(rows: Sequence[Mapping[str, object]]) -> SimpleNamespace:
+    async def find_many(where=None, take=None, skip=None, order=None):
+        wanted: Final = where["user_id"]["in"]
+        return [row for row in rows if row["user_id"] in wanted]
+
+    return SimpleNamespace(db=SimpleNamespace(litellm_usertable=SimpleNamespace(find_many=find_many)))
+
+
+ADMIN_USERS: Final = ({"user_id": "u1", "user_email": "admin@example.com"},)
+
+
+def _admin_team(team_id: str, alias: str | None = None) -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(team_id=team_id, team_alias=alias, members_with_roles=[{"user_id": "u1", "role": "admin"}])
+
+
+class TestBuildTeamNotifications:
+    @pytest.mark.asyncio
+    async def test_should_build_one_digest_per_team_with_admin_recipients(self):
+        models: Final = (AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),)
+        notifications: Final = await build_team_notifications(
+            {"t1": models}, (_admin_team("t1", "Data"),), DualCache(), _prisma_with_users(ADMIN_USERS)
+        )
+        assert notifications == (
+            TeamNotification(team_id="t1", team_alias="Data", recipients=("admin@example.com",), models=models),
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_skip_milestones_already_sent(self):
+        cache: Final = DualCache()
+        await cache.async_set_cache(key=email_sent_key("t1", "gpt-old", 7), value=1.0)
+        sent: Final = AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7)
+        fresh: Final = AffectedModel(info=_info("gpt-older", -1), display_name="gpt-older", milestone=0)
+        notifications: Final = await build_team_notifications(
+            {"t1": (sent, fresh)}, (_admin_team("t1"),), cache, _prisma_with_users(ADMIN_USERS)
+        )
+        assert notifications[0].models == (fresh,)
+
+    @pytest.mark.asyncio
+    async def test_should_drop_team_when_everything_was_already_sent(self):
+        cache: Final = DualCache()
+        await cache.async_set_cache(key=email_sent_key("t1", "gpt-old", 7), value=1.0)
+        models: Final = (AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),)
+        notifications: Final = await build_team_notifications(
+            {"t1": models}, (_admin_team("t1"),), cache, _prisma_with_users(ADMIN_USERS)
+        )
+        assert notifications == ()
+
+    @pytest.mark.asyncio
+    async def test_should_drop_team_without_admin_emails(self):
+        models: Final = (AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),)
+        no_admins: Final = LiteLLM_TeamTable(team_id="t1", members_with_roles=[{"user_id": "u1", "role": "user"}])
+        notifications: Final = await build_team_notifications(
+            {"t1": models}, (no_admins,), DualCache(), _prisma_with_users(ADMIN_USERS)
+        )
+        assert notifications == ()
+
+    @pytest.mark.asyncio
+    async def test_should_key_the_sent_marker_by_team_model_and_milestone(self):
+        assert email_sent_key("t1", "gpt-old", 7) == "model_deprecation_email:t1:gpt-old:7"
+        assert email_sent_key("t1", "gpt-old", 7) != email_sent_key("t2", "gpt-old", 7)
+        assert email_sent_key("t1", "gpt-old", 7) != email_sent_key("t1", "gpt-old", 0)

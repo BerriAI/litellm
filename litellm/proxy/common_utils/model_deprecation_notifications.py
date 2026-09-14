@@ -6,11 +6,12 @@ import html
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.email_alerting import get_team_admin_emails
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.integrations.email_templates.model_deprecation_email import (
     MODEL_DEPRECATION_EMAIL_ROW_TEMPLATE,
@@ -22,6 +23,7 @@ from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.types.proxy.model_deprecation import ModelDeprecationInfo
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 
 
@@ -45,6 +47,12 @@ class TeamNotification:
     team_alias: str | None
     recipients: tuple[str, ...]
     models: tuple[AffectedModel, ...]
+
+
+class DeprecationEmailCache(Protocol):
+    async def async_get_cache(self, key: str) -> object | None: ...
+
+    async def async_set_cache(self, key: str, value: float, ttl: int) -> None: ...
 
 
 def select_milestone(days_until: int, thresholds: Sequence[int]) -> int | None:
@@ -147,6 +155,53 @@ async def resolve_affected_teams(
         }
     )
     return MappingProxyType({team_id: models for team_id, models in per_team.items() if models})
+
+
+def email_sent_key(team_id: str, model_name: str, milestone: int) -> str:
+    return f"model_deprecation_email:{team_id}:{model_name}:{milestone}"
+
+
+async def _unsent(
+    team_id: str, models: Sequence[AffectedModel], cache: DeprecationEmailCache
+) -> tuple[AffectedModel, ...]:
+    flags: Final = tuple(
+        [
+            await cache.async_get_cache(key=email_sent_key(team_id, model.info.model_name, model.milestone)) is None
+            for model in models
+        ]
+    )
+    return tuple(model for model, unsent in zip(models, flags, strict=True) if unsent)
+
+
+async def _notification_for(
+    team: LiteLLM_TeamTable, models: Sequence[AffectedModel], cache: DeprecationEmailCache, prisma_client: PrismaClient
+) -> TeamNotification | None:
+    unsent: Final = await _unsent(team.team_id, models, cache)
+    if not unsent:
+        return None
+    recipients: Final = await get_team_admin_emails(team, prisma_client)
+    if not recipients:
+        verbose_proxy_logger.debug("model_deprecation: team %s has no admin emails, skipping", team.team_id)
+        return None
+    return TeamNotification(team_id=team.team_id, team_alias=team.team_alias, recipients=recipients, models=unsent)
+
+
+async def build_team_notifications(
+    affected: Mapping[str, Sequence[AffectedModel]],
+    teams: Sequence[LiteLLM_TeamTable],
+    cache: DeprecationEmailCache,
+    prisma_client: PrismaClient,
+) -> tuple[TeamNotification, ...]:
+    """One digest per team of the milestones not yet emailed, dropping teams with nobody to email"""
+    teams_by_id: Final = MappingProxyType({team.team_id: team for team in teams})
+    candidates: Final = tuple(
+        [
+            await _notification_for(teams_by_id[team_id], models, cache, prisma_client)
+            for team_id, models in affected.items()
+            if team_id in teams_by_id
+        ]
+    )
+    return tuple(notification for notification in candidates if notification is not None)
 
 
 def _days_left_label(days_until: int) -> str:
