@@ -459,9 +459,9 @@ class BaseResponsesAPIStreamingIterator:
         """
         if not self._streamed_output_items:
             return []  # mutable-ok: response.output takes a real list
-        return [
+        return [  # mutable-ok: response.output takes a real list
             item for _, item in sorted(self._streamed_output_items.items())
-        ]  # mutable-ok: response.output takes a real list
+        ]
 
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
