@@ -171,12 +171,9 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort":
-                if "magistral" in model.lower():
-                    optional_params["_add_reasoning_prompt"] = True
-                else:
-                    optional_params["reasoning_effort"] = value
-            if param == "thinking" and "magistral" in model.lower():
+            if param == "reasoning_effort" and "magistral" not in model.lower():
+                optional_params["reasoning_effort"] = value
+            if param in ("reasoning_effort", "thinking") and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
             if param == "parallel_tool_calls":
