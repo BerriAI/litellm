@@ -1,7 +1,8 @@
 import pytest
+from prisma import Json
 
 from .actors import Actor
-from .conftest import create_scratch_team
+from .conftest import create_scratch_team, create_scratch_user
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -112,6 +113,36 @@ async def test_team_bulk_member_delete_reports_each_row_in_order(proxy_client, p
 
     row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
     assert row is not None and _member_ids(row) == [keep]
+
+
+async def test_team_bulk_member_delete_by_id_removes_a_legacy_email_only_roster_entry(
+    proxy_client, prisma, scratch, world
+):
+    email = f"{scratch.prefix}@example.com"
+    victim = await create_scratch_user(prisma, scratch.prefix, suffix="victim", user_email=email)
+    keep = scratch.tag("keep")
+    await prisma.db.litellm_teamtable.create(
+        data={
+            "team_id": scratch.prefix,
+            "team_alias": scratch.prefix,
+            "organization_id": world.org_a_id,
+            "members_with_roles": Json([{"user_email": email, "role": "user"}, {"user_id": keep, "role": "user"}]),
+        }
+    )
+    await prisma.db.litellm_usertable.update(where={"user_id": victim}, data={"teams": [scratch.prefix]})
+
+    resp = await proxy_client.post(
+        f"/management/v1/teams/{scratch.prefix}/members/bulk_delete",
+        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={"members": [{"user_id": victim}]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert [(r["user_id"], r["success"]) for r in resp.json()["data"]] == [(victim, True)]
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": scratch.prefix})
+    assert row is not None and [(m["user_id"], m.get("user_email")) for m in row.members_with_roles] == [(keep, None)]
+    user = await prisma.db.litellm_usertable.find_unique(where={"user_id": victim})
+    assert user is not None and user.teams == []
 
 
 async def test_team_bulk_member_delete_row_naming_both_identifiers_is_422(proxy_client, prisma, scratch, world):
