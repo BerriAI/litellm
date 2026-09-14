@@ -54,21 +54,12 @@ class TestDashscopeCostCalculator:
             is None
         )
 
-    def test_provider_neutral_cache_rate_resolver_allows_configs_without_an_override(
+    def test_provider_neutral_cache_rate_resolver_ignores_providers_without_chat_config(
         self,
-        monkeypatch: pytest.MonkeyPatch,
     ):
-        from litellm.litellm_core_utils.llm_cost_calc import utils as cost_utils
-
-        monkeypatch.setattr(
-            cost_utils.ProviderConfigManager,
-            "get_provider_chat_config",
-            lambda **_: None,
-        )
-
         assert (
             _resolve_cache_read_cost_rate(
-                custom_llm_provider="openai",
+                custom_llm_provider="aws_polly",
                 model_info={"key": "cache-rate-fallback-test"},
                 usage=Usage(prompt_tokens=1, completion_tokens=0),
                 current_time=None,
