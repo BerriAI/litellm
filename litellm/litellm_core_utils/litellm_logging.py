@@ -6021,6 +6021,7 @@ def _get_status_fields(
         "failure": "guardrail_failed_to_respond",  # legacy
         "guardrail_failed_to_respond": "guardrail_failed_to_respond",  # direct
         "not_run": "not_run",
+        "skipped": "not_run",
     }
 
     # Set LLM API status

@@ -1893,7 +1893,7 @@ class TestScanOnlyToolResults:
         assert data["messages"][4]["content"] == "and then?"
 
 
-class TestNoScannableContentRecordsNotRun:
+class TestNoScannableContentRecordsSkipped:
     """LIT-6314: a guardrail whose scoping leaves nothing to scan must still persist an evaluation record"""
 
     def _system_only_data(self) -> dict:
@@ -1904,7 +1904,7 @@ class TestNoScannableContentRecordsNotRun:
         return metadata.get("standard_logging_guardrail_information") or []
 
     @pytest.mark.asyncio
-    async def test_skipped_scan_records_not_run_entry(self):
+    async def test_skipped_scan_records_skipped_entry(self):
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockGuardrail(guardrail_name="skip-system-guardrail")
         guardrail.skip_system_message_in_guardrail = True
@@ -1916,7 +1916,7 @@ class TestNoScannableContentRecordsNotRun:
         entries = self._recorded_entries(data)
         assert len(entries) == 1
         assert entries[0]["guardrail_name"] == "skip-system-guardrail"
-        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_status"] == "skipped"
 
     @pytest.mark.asyncio
     async def test_self_recording_guardrail_is_left_alone(self):
@@ -1940,7 +1940,7 @@ class TestNoScannableContentRecordsNotRun:
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert guardrail.last_inputs is not None
-        assert all(e.get("guardrail_status") != "not_run" for e in self._recorded_entries(data))
+        assert all(e.get("guardrail_status") != "skipped" for e in self._recorded_entries(data))
 
 
 class TestBuildBlockSseChunks:

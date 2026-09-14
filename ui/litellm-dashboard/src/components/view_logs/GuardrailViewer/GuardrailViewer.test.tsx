@@ -16,7 +16,7 @@ const PresidioPath = "@/components/view_logs/GuardrailViewer/PresidioDetectedEnt
 const BedrockPath = "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails";
 
 const skippedPreCall: Partial<GuardrailInformation> = {
-  guardrail_status: "not_run",
+  guardrail_status: "skipped",
   guardrail_mode: "pre_call",
   guardrail_response: "no scannable content after message scoping",
   start_time: null,
@@ -68,15 +68,15 @@ describe("GuardrailViewer", () => {
     expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
   });
 
-  it("renders not_run as NOT RUN (muted) and keeps it out of the evaluated and passed counts", async () => {
+  it("renders skipped as SKIPPED (muted) and keeps it out of the evaluated and passed counts", async () => {
     const user = userEvent.setup();
     const data = makeGuardrailInformation(skippedPreCall);
     renderWithProviders(<GuardrailViewer data={data} />);
 
     expect(screen.getByText(/0 guardrails evaluated/)).toBeInTheDocument();
     expect(screen.getByText(/0 Passed/)).toHaveClass("text-muted-foreground");
-    expect(screen.getByText(/1 Not run/)).toBeInTheDocument();
-    const badge = screen.getByText("NOT RUN");
+    expect(screen.getByText(/1 Skipped/)).toBeInTheDocument();
+    const badge = screen.getByText("SKIPPED");
     expect(badge).toHaveClass("text-muted-foreground");
     expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
     expect(screen.queryByText(/^T\+/)).not.toBeInTheDocument();
@@ -85,7 +85,7 @@ describe("GuardrailViewer", () => {
     expect(screen.getByText("no scannable content after message scoping")).toBeInTheDocument();
   });
 
-  it("anchors the lifecycle timeline on timed entries when an untimed not_run entry sorts first", () => {
+  it("anchors the lifecycle timeline on timed entries when an untimed skipped entry sorts first", () => {
     const skipped = makeGuardrailInformation({ ...skippedPreCall, guardrail_name: "skipped-rail" });
     const ran = makeGuardrailInformation(ranPostCall);
     renderWithProviders(<GuardrailViewer data={[skipped, ran]} />);

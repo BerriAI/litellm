@@ -591,17 +591,17 @@ class TestModeMatching:
                     assert mode in _guaranteed_modes(g_mode), (g_mode, mode)
 
 
-class TestNotRunGuardrails:
-    """LIT-6314 logs a not_run entry for a guardrail that message scoping left nothing to scan."""
+class TestSkippedGuardrails:
+    """LIT-6314 logs a skipped entry for a guardrail that message scoping left nothing to scan."""
 
-    def test_not_run_alone_never_evidences_compliance(self):
+    def test_skipped_alone_never_evidences_compliance(self):
         data = ComplianceCheckRequest(
             request_id="req-601",
             user_id="user-1",
             model="gpt-4",
             timestamp="2026-02-17T00:00:00Z",
             guardrail_information=[
-                {"guardrail_name": "pii_detection", "guardrail_status": "not_run", "guardrail_mode": "pre_call"},
+                {"guardrail_name": "pii_detection", "guardrail_status": "skipped", "guardrail_mode": "pre_call"},
             ],
         )
         results = {c.check_name: c.passed for c in ComplianceChecker(data).check_eu_ai_act()}
@@ -609,7 +609,7 @@ class TestNotRunGuardrails:
         assert results["Content screened before LLM"] is False
         assert results["Audit record complete"] is False
 
-    def test_not_run_sibling_does_not_fail_a_passing_request(self):
+    def test_skipped_sibling_does_not_fail_a_passing_request(self):
         data = ComplianceCheckRequest(
             request_id="req-602",
             user_id="user-1",
@@ -618,7 +618,7 @@ class TestNotRunGuardrails:
             pii_detected=True,
             guardrail_information=[
                 {"guardrail_name": "pii_detection", "guardrail_status": "success", "guardrail_mode": "pre_call"},
-                {"guardrail_name": "system_only", "guardrail_status": "not_run", "guardrail_mode": "pre_call"},
+                {"guardrail_name": "system_only", "guardrail_status": "skipped", "guardrail_mode": "pre_call"},
             ],
         )
         results = {c.check_name: c.passed for c in ComplianceChecker(data).check_gdpr()}
