@@ -23164,34 +23164,6 @@
         "output_cost_per_token": 0.0,
         "source": "https://fireworks.ai/pricing"
     },
-    "friendliai/meta-llama-3.1-70b-instruct": {
-        "input_cost_per_token": 6e-07,
-        "litellm_provider": "friendliai",
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 6e-07,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true
-    },
-    "friendliai/meta-llama-3.1-8b-instruct": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "friendliai",
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 1e-07,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true
-    },
     "friendliai/zai-org/GLM-5.3-Flash": {
         "litellm_provider": "friendliai",
         "max_input_tokens": 1048576,
