@@ -257,7 +257,7 @@ commands:
       - install_rust
       - restore_cache:
           keys:
-            - v2-integration-uv-cache-{{ checksum "uv.lock" }}
+            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
@@ -266,7 +266,7 @@ commands:
       - save_cache:
           paths:
             - ~/.cache/uv
-          key: v2-integration-uv-cache-{{ checksum "uv.lock" }}
+          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
 
 jobs:
   # Add Windows testing job
@@ -2932,7 +2932,7 @@ jobs:
             - install_node
             - restore_cache:
                 keys:
-                  - integration-ui-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+                  - integration-ui-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
             - run:
                 name: Install locked browser dependencies
                 command: |
@@ -2944,7 +2944,7 @@ jobs:
                     timeout --signal=TERM --kill-after=20s 6m node node_modules/@playwright/test/cli.js install-deps chromium
                   timeout --signal=TERM --kill-after=20s 3m node node_modules/@playwright/test/cli.js install chromium
             - save_cache:
-                key: integration-ui-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+                key: integration-ui-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
                 paths:
                   - ~/.npm
                   - ~/.cache/ms-playwright

@@ -150,12 +150,39 @@ test("project creation and explicit detachment preserve saved scope and restore 
     const blocked = await chat(prefix);
     expect(blocked.status(), await blocked.text()).toBe(401);
     expect((await blocked.json()).error.type).toBe("auth_error");
+    // The table keeps old rows while its debounced search is pending. Finish
+    // that initial load before opening an editor whose key data comes from it.
+    const searched = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        response.request().method() === "GET" &&
+        url.pathname === "/key/list" &&
+        url.searchParams.get("search") === prefix
+      );
+    });
+    await page.getByPlaceholder("Search by key alias or ID").fill(prefix);
+    const searchResponse = await searched;
+    expect(searchResponse.ok(), await searchResponse.text()).toBe(true);
+    expect(
+      (await searchResponse.json()).keys.map(
+        (entry: { key_alias: string }) => entry.key_alias,
+      ),
+    ).toEqual([prefix]);
+    await expect(
+      page.getByText("Loading keys...", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Refresh", exact: true }),
+    ).toBeEnabled();
     await openKeyDetail(page, prefix);
     await page.getByRole("tab", { name: "Settings" }).click();
     await page.getByRole("button", { name: "Edit Settings" }).click();
     await page
       .getByRole("button", { name: "Detach from project", exact: true })
       .click();
+    await expect(
+      page.getByRole("button", { name: "Keep project", exact: true }),
+    ).toBeVisible();
     const update = await captureRequestBody(
       page,
       { method: "POST", urlIncludes: "/key/update" },
