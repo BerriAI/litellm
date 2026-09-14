@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
