@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import MAX_LITELLM_CALL_ID_LENGTH, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -30,6 +30,7 @@ from litellm.proxy.common_request_processing import (
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
@@ -3877,6 +3878,39 @@ class TestHandleLLMApiExceptionRetryAfter:
         )
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
+
+    async def test_handle_llm_api_exception_names_cooldown_when_every_deployment_is_cooled_down(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a", "dep-b"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "all_deployments_in_cooldown"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" in body["message"]
+        assert proxy_exc.headers["retry-after"] == "120"
+
+    async def test_handle_llm_api_exception_keeps_rate_limit_type_when_cooldown_is_partial(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "rate_limit_error"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" not in body["message"]
 
 
 class TestHandleLLMApiExceptionFramingHeaders:
@@ -8060,6 +8094,19 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     assert (records[0].exc_info is not None) is expect_traceback
 
 
+class TestResolveLitellmCallId:
+    def test_client_call_id_within_the_bound_is_kept(self):
+        assert resolve_litellm_call_id("req-abc-123") == "req-abc-123"
+        at_bound: Final = "y" * MAX_LITELLM_CALL_ID_LENGTH
+        assert resolve_litellm_call_id(at_bound) == at_bound
+
+    @pytest.mark.parametrize("client_call_id", [None, "", "x" * (MAX_LITELLM_CALL_ID_LENGTH + 1), "z" * 3000])
+    def test_missing_empty_or_oversized_client_call_id_gets_a_generated_uuid(self, client_call_id):
+        resolved: Final = resolve_litellm_call_id(client_call_id)
+        assert resolved != client_call_id
+        assert uuid.UUID(resolved).version == 4
+
+
 class _FailureHookRecorder:
     """Stands in for ProxyLogging.post_call_failure_hook, recording what the detached-failure closure hands it."""
 
@@ -8259,6 +8306,83 @@ class TestStreamingResponseHeadersFollowFallback:
         assert result.headers["x-callback-header"] == "kept"
 
 
+class _MessagesFallbackStream:
+    def __init__(self) -> None:
+        self.fallback_headers_adopted = False
+        self._hidden_params: dict[str, object] = {
+            "additional_headers": {
+                "x-litellm-complexity-router-tier": "REASONING",
+                "x-litellm-complexity-router-reasoning-effort": "xhigh",
+            }
+        }
+        self._chunks = iter(
+            (
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"OK"}}\n\n',
+            )
+        )
+
+    def __aiter__(self) -> "_MessagesFallbackStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        self._hidden_params = {
+            "model_id": "fallback-deployment",
+            "additional_headers": {"x-fallback-only": "yes"},
+        }
+        self.fallback_headers_adopted = True
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_messages_http_headers_refresh_after_lazy_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.caching.caching import DualCache
+
+    stream = _MessagesFallbackStream()
+    logging_obj = MagicMock()
+    logging_obj.litellm_call_id = "messages-fallback-headers"
+    logging_obj._defer_async_logging = False
+    logging_obj._on_deferred_stream_complete = None
+    logging_obj.cost_breakdown = None
+    logging_obj.litellm_params = {}
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"model": "auto-router", "stream": True, "litellm_logging_obj": logging_obj}
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    async def call() -> _MessagesFallbackStream:
+        return stream
+
+    async def fake_route_request(**_kwargs: object) -> object:
+        return call()
+
+    monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+    response = await processor.base_process_llm_request(
+        request=Request(scope={"type": "http", "headers": []}),
+        fastapi_response=Response(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+        route_type="anthropic_messages",
+        proxy_logging_obj=proxy_logging_obj,
+        general_settings={},
+        proxy_config=MagicMock(spec=ProxyConfig),
+        is_streaming_request=True,
+        skip_pre_call_logic=True,
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert stream.fallback_headers_adopted is True
+    assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+    assert response.headers["x-fallback-only"] == "yes"
+    assert "x-litellm-complexity-router-tier" not in response.headers
+    assert "x-litellm-complexity-router-reasoning-effort" not in response.headers
+
+
 class TestPassthroughHeadersAcceptImmutableMappings:
     """LIT-6767: the streaming branch now hands the passthrough helpers an immutable mapping."""
 
@@ -8307,6 +8431,41 @@ async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status
 
     assert exc_info.value.headers is not None
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-passthrough-500"
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_response_is_synthetic():
+    """Exception mapping hands the proxy a mapped error whose ``response`` is a synthetic empty
+    ``httpx.Response`` and parks the provider's real headers on ``litellm_response_headers``.
+    The client must still get the provider request id, as it does on a 200.
+    """
+    import httpx
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    mapped = litellm.BadRequestError(
+        message="OpenAIException - max_tokens is too large: 999999999.",
+        model="gpt-4o-mini",
+        llm_provider="openai",
+    )
+    mapped.litellm_response_headers = httpx.Headers({"x-request-id": "req_openai_400"})
+    assert dict(mapped.response.headers) == {}
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await processor._handle_llm_api_exception(
+            e=mapped,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert exc_info.value.code == "400"
+    assert "max_tokens is too large: 999999999." in exc_info.value.message
+    assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
 
 
 class TestBackgroundResponseRetrievalGovernance:
