@@ -1228,6 +1228,20 @@ def test_access_log_path_filter_keeps_a_record_without_positional_args():
     assert AccessLogPathFilter(frozenset({"/health/liveliness"})).filter(record) is True
 
 
+def test_access_log_path_filter_keeps_a_record_with_a_non_string_path():
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="%s - %s %s",
+        args=("127.0.0.1:1", "GET", 42),
+        exc_info=None,
+    )
+
+    assert AccessLogPathFilter(frozenset({"/health/liveliness"})).filter(record) is True
+
+
 def test_uvicorn_access_logger_drops_a_listed_path_end_to_end(monkeypatch):
     monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", "/health/liveliness")
     access_log_filter = AccessLogPathFilter(
