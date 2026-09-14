@@ -473,6 +473,50 @@ describe("ModelSelect", () => {
     }
   });
 
+  it("should stay in the loading state while a list-seeded team is still fetching its org ceiling", () => {
+    mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
+    mockUseTeam.mockReturnValue({
+      data: { team_id: "team-1", models: [] },
+      isLoading: false,
+      isFetching: true,
+    } as any);
+
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        context="team"
+        teamID="team-1"
+        organizationID="org-1"
+        options={{ includeSpecialOptions: true }}
+      />,
+    );
+
+    expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+  });
+
+  it("should not hold the loading state on a background refetch once the org ceiling is known", async () => {
+    const user = userEvent.setup();
+    mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
+    mockUseTeam.mockReturnValue({
+      data: { team_id: "team-1", organization_models: ["all-proxy-models"] },
+      isLoading: false,
+      isFetching: true,
+    } as any);
+
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        context="team"
+        teamID="team-1"
+        organizationID="org-1"
+        options={{ includeSpecialOptions: true }}
+      />,
+    );
+
+    await openModelList(user);
+    expectOffered("All Proxy Models");
+  });
+
   it("should keep hiding All Proxy Models when neither the team nor the org reports a ceiling", async () => {
     const user = userEvent.setup();
     mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);

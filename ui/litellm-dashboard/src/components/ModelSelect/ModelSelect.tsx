@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/combobox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import type { Team } from "@/components/key_team_helpers/key_list";
 import { splitWildcardModels } from "./modelUtils";
 
 const MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE = {
@@ -76,6 +77,10 @@ type FilterContextArgs = {
 const isUncappedModelCeiling = (organizationModels: string[]) =>
   organizationModels.length === 0 || organizationModels.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value);
 
+// useTeam seeds from the team list, which omits organization_models; /team/info is the only source of the org ceiling.
+const isAwaitingOrganizationModels = (team: Team | undefined, isFetchingTeam: boolean) =>
+  isFetchingTeam && team !== undefined && team.organization_models === undefined;
+
 const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextArgs) => string[]> = {
   user: ({ allProxyModels, userModels, options }) => {
     if (!userModels) return [];
@@ -118,13 +123,14 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
-  const { data: team, isLoading: isLoadingTeam } = useTeam(teamID);
+  const { data: team, isLoading: isLoadingTeam, isFetching: isFetchingTeam } = useTeam(teamID);
   const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
   const { data: currentUser, isLoading: isCurrentUserLoading } = useCurrentUser();
 
   const isSpecialOption = (value: string) => MODEL_SENTINEL_OPTIONS.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);
-  const isLoading = isLoadingAllProxyModels || isLoadingTeam || isLoadingOrganization || isCurrentUserLoading;
+  const isTeamPending = isLoadingTeam || isAwaitingOrganizationModels(team, isFetchingTeam);
+  const isLoading = isLoadingAllProxyModels || isTeamPending || isLoadingOrganization || isCurrentUserLoading;
   // The org's ceiling rides on /team/info, which a team admin may read; /organization/info 403s for them.
   const organizationModels = team?.organization_models ?? organization?.models;
   const organizationHasAllProxyModels = organizationModels !== undefined && isUncappedModelCeiling(organizationModels);
