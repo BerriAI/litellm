@@ -552,14 +552,6 @@ def _coerce_metadata_to_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def should_hide_default_credentials_hint(general_settings: Mapping[str, object]) -> bool:
-    return (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-        or bool(os.getenv("UI_PASSWORD"))
-    )
-
-
 async def pre_db_read_auth_checks(
     request: Request,
     request_data: dict,

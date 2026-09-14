@@ -318,7 +318,6 @@ from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
     log_once_if_budget_reservation_disabled,
-    should_hide_default_credentials_hint,
     warn_once_if_custom_auth_skips_common_checks,
 )
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
@@ -451,6 +450,7 @@ from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
 )
+from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import should_hide_default_credentials_hint
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
