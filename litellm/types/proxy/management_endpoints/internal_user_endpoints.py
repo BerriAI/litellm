@@ -1,14 +1,17 @@
 from collections.abc import Mapping
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
+    NewUserRequest,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
+
+MAX_BULK_NEW_USERS: Final = 500
 
 
 class InsensitiveContains(TypedDict):
@@ -83,3 +86,38 @@ class BulkUpdateUserResponse(BaseModel):
     total_requested: int
     successful_updates: int
     failed_updates: int
+
+
+class BulkNewUserItem(NewUserRequest):
+    """One row of `/user/bulk_new`: the `/user/new` body, with keys opt-in and invite emails unsupported."""
+
+    auto_create_key: bool = False
+
+    @field_validator("send_invite_email")
+    @classmethod
+    def reject_invite_email(cls, value: bool | None) -> bool | None:
+        if value:
+            raise ValueError("send_invite_email is not supported on /user/bulk_new; invite users separately")
+        return value
+
+
+class BulkNewUserRequest(BaseModel):
+    users: tuple[BulkNewUserItem, ...] = Field(min_length=1, max_length=MAX_BULK_NEW_USERS)
+
+
+class UserCreateResult(BaseModel):
+    """Outcome for one row of `/user/bulk_new`. `teams` lists the teams the user was actually added to."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    teams: tuple[str, ...] | None = None
+    key: str | None = None
+    error: str | None = None
+
+
+class BulkNewUserResponse(BaseModel):
+    results: tuple[UserCreateResult, ...]
+    total_requested: int
+    successful_creations: int
+    failed_creations: int
