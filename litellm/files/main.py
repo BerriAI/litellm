@@ -31,7 +31,7 @@ FileCreateProvider = Literal[
 FileRetrieveProvider = Literal[
     "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic"
 ]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "litellm_proxy", "manus", "anthropic"]
+FileDeleteProvider = Literal["openai", "azure", "gemini", "bedrock", "litellm_proxy", "manus", "anthropic"]
 FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic"]
 import litellm
 from litellm import get_secret_str
@@ -682,6 +682,10 @@ def file_list(
         )
         if provider_config is not None:
             litellm_params_dict: Final = get_litellm_params(**kwargs)
+            add_trusted_model_credentials_to_litellm_params(
+                litellm_params_dict=litellm_params_dict,
+                kwargs=kwargs,
+            )
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
 

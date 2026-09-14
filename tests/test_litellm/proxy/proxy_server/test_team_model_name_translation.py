@@ -27,6 +27,7 @@ from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
     _translate_model_name_for_response,
 )
+from litellm.types.router import DeploymentModelListingInfo
 
 
 def _team_row() -> dict:
@@ -880,7 +881,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -922,7 +923,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -957,7 +958,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     router.get_model_group_info.return_value = None
@@ -1003,7 +1004,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     # Fallbacks are keyed on the internal routing name, as the router stores them.
@@ -1060,7 +1061,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_x, team_y]
     router.get_model_list.return_value = [team_x, team_y]
     router.fallbacks = [
@@ -1085,6 +1086,101 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
             "created": 1677610602,
             "owned_by": "openai",
             "metadata": {"fallbacks": ["teamX-backup"]},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypatch):
+    team_dep = {
+        "model_name": "model_name_teamX_terra_uuid",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id-terra",
+            "team_id": "teamX",
+            "team_public_model_name": "GPT Terra",
+            "access_groups": ["grp-a"],
+            "mode": "chat",
+            "max_input_tokens": 876000,
+            "max_output_tokens": 128000,
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_terra_uuid"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_terra_uuid"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("azure/gpt-4.1",),
+        max_input_tokens=876000,
+        max_output_tokens=128000,
+    )
+    router.get_configured_mode.return_value = "chat"
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    router.get_model_group_info.return_value = None
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": True})
+
+    key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
+    response = await ps.model_list(user_api_key_dict=key, include_metadata=True)
+
+    assert response["data"] == [
+        {
+            "id": "GPT Terra",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "mode": "chat",
+            "max_input_tokens": 876000,
+            "max_output_tokens": 128000,
+            "metadata": {"fallbacks": []},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeypatch):
+    team_dep = {
+        "model_name": "model_name_teamX_image_uuid",
+        "litellm_params": {"model": "openai/gpt-image-1"},
+        "model_info": {
+            "id": "id-image",
+            "team_id": "teamX",
+            "team_public_model_name": "image",
+            "access_groups": ["grp-a"],
+            "mode": "image_generation",
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_image_uuid"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_image_uuid"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("openai/gpt-image-1",),
+        max_input_tokens=None,
+        max_output_tokens=None,
+    )
+    router.get_configured_mode.return_value = "image_generation"
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    router.get_model_group_info.return_value = None
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": True})
+
+    key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
+    response = await ps.model_list(user_api_key_dict=key)
+
+    assert response["data"] == [
+        {
+            "id": "image",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "mode": "image_generation",
         }
     ]
 
@@ -1315,7 +1411,7 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag():
 def _public_named_router(*team_rows: dict) -> MagicMock:
     router = MagicMock()
     router.get_model_list.return_value = list(team_rows)
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     return router
 
 
@@ -1427,8 +1523,13 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     team_row = _team_row()
     router = _public_named_router(team_row)
     deployment = MagicMock()
-    deployment.litellm_params.model = "azure/gpt-5.2-low-rpm-testing"
+    deployment.litellm_params.model = "azure/gpt-4.1"
     router.get_deployment_by_model_group_name.return_value = deployment
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("azure/gpt-4.1",),
+        max_input_tokens=16384,
+        max_output_tokens=4096,
+    )
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "general_settings", {})
@@ -1445,6 +1546,9 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     resp = await ps.model_info(model_id="team-claude-sonnet", user_api_key_dict=key)
 
     assert resp["id"] == "team-claude-sonnet"
+    assert resp.get("mode") == "chat"
+    assert resp.get("max_input_tokens") == 16384
+    assert resp.get("max_output_tokens") == 4096
     # lookup happened by the internal routing key, not the public name
     router.get_deployment_by_model_group_name.assert_called_once_with(
         "model_name_team-abc-123_4a6b8"

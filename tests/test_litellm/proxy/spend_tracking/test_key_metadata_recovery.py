@@ -1,19 +1,58 @@
+import asyncio
+import time
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from prisma.errors import PrismaError
 
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import (
+    SPEND_LOG_KEY_METADATA_CACHE_TTL,
+    SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
+    SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
+)
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     fill_missing_api_key_aliases,
     recover_double_hashed_key_metadata,
+    recover_key_metadata_from_spend_logs,
 )
 from litellm.proxy.utils import hash_token
 
 
-def _digest_row(digest: str, key_alias: str, team_id: str | None, user_id: str | None) -> dict[str, str | None]:
+def _digest_row(digest: str, key_alias: str | None, team_id: str | None, user_id: str | None) -> dict[str, str | None]:
     return {"digest": digest, "key_alias": key_alias, "team_id": team_id, "user_id": user_id}
+
+
+def _query_raw_spend_logs(rows: Sequence[dict[str, str | None]]) -> AsyncMock:
+    async def query_raw(sql: str, *params: object) -> list[dict[str, str | None]]:
+        if '"LiteLLM_SpendLogs"' in sql:
+            return list(rows)
+        raise AssertionError(f"unexpected query: {sql}")
+
+    return AsyncMock(side_effect=query_raw)
+
+
+def _spend_log_row(digest: str, key_alias: str | None, team_id: str | None, user_id: str | None) -> dict[str, str | None]:
+    return {
+        "digest": digest,
+        "first_alias": key_alias,
+        "last_alias": key_alias,
+        "first_team": team_id,
+        "last_team": team_id,
+        "first_owner": user_id,
+        "last_owner": user_id,
+    }
+
+
+def _spend_log_transaction(mock_prisma: MagicMock, query_raw: AsyncMock) -> AsyncMock:
+    transaction = MagicMock()
+    transaction.execute_raw = AsyncMock(return_value=0)
+    transaction.query_raw = query_raw
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return query_raw
 
 
 def _query_raw_by_table(
@@ -218,3 +257,334 @@ async def test_fill_missing_api_key_aliases_skips_named_keys_that_have_no_email(
 
     assert filled == rows
     mock_prisma.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_resolves_session_token_from_metadata():
+    session_digest = hash_token("cli-session-repro-user-6852")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(
+        mock_prisma,
+        _query_raw_spend_logs(
+            [_spend_log_row(session_digest, "cli-session-repro-user-6852", None, "repro-user-6852")]
+        ),
+    )
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {session_digest}, window, cache=InMemoryCache())
+
+    assert result[session_digest]["key_alias"] == "cli-session-repro-user-6852"
+    assert result[session_digest]["user_id"] == "repro-user-6852"
+    ((_, digests, start, end),) = [call.args for call in query_raw.call_args_list]
+    assert digests == [session_digest]
+    assert (start, end) == window
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_skips_query_when_no_missing_keys():
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, AsyncMock(return_value=[]))
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, set(), window, cache=InMemoryCache())
+
+    assert result == {}
+    query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_returns_empty_on_prisma_error():
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("db down")))
+
+    result = await recover_key_metadata_from_spend_logs(
+        mock_prisma, {hash_token("cli-session-x")}, window, cache=InMemoryCache()
+    )
+
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_ignores_foreign_and_all_null_rows():
+    wanted = hash_token("cli-session-wanted")
+    all_null = hash_token("cli-session-null")
+    foreign = hash_token("cli-session-foreign")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(
+        mock_prisma,
+        _query_raw_spend_logs(
+            [
+                _spend_log_row(wanted, "kept-alias", None, "owner-1"),
+                _spend_log_row(all_null, None, None, None),
+                _spend_log_row(foreign, "foreign-alias", None, "owner-2"),
+            ]
+        ),
+    )
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {wanted, all_null}, window, cache=InMemoryCache())
+
+    assert set(result) == {wanted}
+    assert result[wanted]["key_alias"] == "kept-alias"
+    assert result[wanted]["user_id"] == "owner-1"
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_skips_non_sha256_keys():
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, AsyncMock(return_value=[]))
+
+    result = await recover_key_metadata_from_spend_logs(
+        mock_prisma, {"cli-session-raw-1798", "key-hash-short"}, window, cache=InMemoryCache()
+    )
+
+    assert result == {}
+    query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_accepts_hashed_jwt_digests():
+    jwt_digest = f"hashed-jwt-{hash_token('jwt-subject-1')}"
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(jwt_digest, None, "team-jwt", "jwt-user")]))
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {jwt_digest}, window, cache=InMemoryCache())
+
+    assert result[jwt_digest]["team_id"] == "team-jwt"
+    assert result[jwt_digest]["user_id"] == "jwt-user"
+    ((_, digests, _, _),) = [call.args for call in query_raw.call_args_list]
+    assert digests == [jwt_digest]
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_serves_repeat_lookups_from_the_cache():
+    found = hash_token("cli-session-found")
+    unknown = hash_token("cli-session-unknown")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache()
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(found, "found-alias", None, "owner-1")]))
+
+    first = await recover_key_metadata_from_spend_logs(mock_prisma, {found, unknown}, window, cache=cache)
+    second = await recover_key_metadata_from_spend_logs(mock_prisma, {found, unknown}, window, cache=cache)
+
+    assert first == second
+    assert set(first) == {found}
+    assert first[found]["key_alias"] == "found-alias"
+    assert query_raw.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_only_queries_digests_the_cache_has_not_seen():
+    cached_digest = hash_token("cli-session-cached")
+    new_digest = hash_token("cli-session-new")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache()
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(cached_digest, "cached-alias", None, None)]))
+    await recover_key_metadata_from_spend_logs(mock_prisma, {cached_digest}, window, cache=cache)
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(new_digest, "new-alias", None, None)]))
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {cached_digest, new_digest}, window, cache=cache)
+
+    assert result[cached_digest]["key_alias"] == "cached-alias"
+    assert result[new_digest]["key_alias"] == "new-alias"
+    ((_, digests, _, _),) = [call.args for call in query_raw.call_args_list]
+    assert digests == [new_digest]
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_rescans_when_the_window_changes():
+    digest = hash_token("cli-session-windowed")
+    cache = InMemoryCache()
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([]))
+    await recover_key_metadata_from_spend_logs(
+        mock_prisma, {digest}, (datetime(2026, 9, 1), datetime(2026, 9, 4)), cache=cache
+    )
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(digest, "later-alias", None, None)]))
+
+    result = await recover_key_metadata_from_spend_logs(
+        mock_prisma, {digest}, (datetime(2026, 9, 7), datetime(2026, 9, 10)), cache=cache
+    )
+
+    assert result[digest]["key_alias"] == "later-alias"
+    assert query_raw.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_retries_a_failed_query_only_after_the_miss_ttl():
+    digest = hash_token("cli-session-retry")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("statement timeout")))
+    started = time.time()
+    assert await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache) == {}
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(digest, "back-online", None, None)]))
+
+    assert await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache) == {}
+    query_raw.assert_not_awaited()
+    miss_key = next(key for key in cache.ttl_dict if digest in key and not key.endswith(":missed-before"))
+    assert cache.ttl_dict[miss_key] - started <= SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1
+    cache.ttl_dict[miss_key] = time.time() - 1
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache)
+
+    assert result[digest]["key_alias"] == "back-online"
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_drops_the_owner_of_a_digest_shared_by_several_users():
+    shared_ui_digest = hash_token("ui-token")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(
+        mock_prisma,
+        _query_raw_spend_logs(
+            [{**_spend_log_row(shared_ui_digest, "ui-token", "litellm-dashboard", None), "first_owner": "alice", "last_owner": "bob"}]
+        ),
+    )
+
+    result = await recover_key_metadata_from_spend_logs(
+        mock_prisma, {shared_ui_digest}, window, cache=InMemoryCache()
+    )
+
+    assert result[shared_ui_digest] == {"key_alias": "ui-token", "team_id": "litellm-dashboard", "user_id": None}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_keeps_the_owner_when_every_named_row_agrees():
+    digest = hash_token("cli-session-one-owner")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(
+        mock_prisma,
+        _query_raw_spend_logs(
+            [_spend_log_row(digest, None, None, "carol")]
+        ),
+    )
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=InMemoryCache())
+
+    assert result[digest]["user_id"] == "carol"
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_forgets_a_miss_long_before_a_hit():
+    found = hash_token("cli-session-found")
+    unknown = hash_token("cli-session-unknown")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(found, "found-alias", None, None)]))
+    started = time.time()
+
+    await recover_key_metadata_from_spend_logs(mock_prisma, {found, unknown}, window, cache=cache)
+
+    hit_expires = next(deadline for key, deadline in cache.ttl_dict.items() if found in key)
+    miss_expires = next(deadline for key, deadline in cache.ttl_dict.items() if unknown in key)
+    assert miss_expires - started <= SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1
+    assert hit_expires - started >= SPEND_LOG_KEY_METADATA_CACHE_TTL - 1
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_runs_one_query_for_concurrent_lookups():
+    digest = hash_token("cli-session-shared")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache()
+    lock = asyncio.Lock()
+    mock_prisma = MagicMock()
+
+    async def slow_query_raw(sql: str, *params: object) -> list[dict[str, str | None]]:
+        await asyncio.sleep(0.01)
+        return [_spend_log_row(digest, "shared-alias", None, None)]
+
+    query_raw = _spend_log_transaction(mock_prisma, AsyncMock(side_effect=slow_query_raw))
+
+    results = await asyncio.gather(
+        *(
+            recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache, lock=lock)
+            for _ in range(9)
+        )
+    )
+
+    assert all(result[digest]["key_alias"] == "shared-alias" for result in results)
+    assert query_raw.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_keeps_a_repeated_miss_as_long_as_a_hit():
+    unknown = hash_token("cli-session-never-named")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
+    mock_prisma = MagicMock()
+    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([]))
+    await recover_key_metadata_from_spend_logs(mock_prisma, {unknown}, window, cache=cache)
+    first_miss_key = next(key for key in cache.ttl_dict if unknown in key and not key.endswith(":missed-before"))
+    cache.ttl_dict[first_miss_key] = time.time() - 1
+    started = time.time()
+
+    await recover_key_metadata_from_spend_logs(mock_prisma, {unknown}, window, cache=cache)
+
+    assert query_raw.await_count == 2
+    assert cache.ttl_dict[first_miss_key] - started >= SPEND_LOG_KEY_METADATA_CACHE_TTL - 1
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_keeps_the_owner_older_rows_agree_on_when_the_newest_is_nameless():
+    digest = hash_token("cli-session-owner-from-older-rows")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(digest, None, "team-x", "alice")]))
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=InMemoryCache())
+
+    assert result[digest] == {"key_alias": None, "team_id": "team-x", "user_id": "alice"}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_names_nothing_for_a_field_whose_rows_disagree():
+    digest = hash_token("cli-session-disagreeing-rows")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    _spend_log_transaction(
+        mock_prisma,
+        _query_raw_spend_logs(
+            [
+                {
+                    **_spend_log_row(digest, None, None, "carol"),
+                    "first_alias": "old-alias",
+                    "last_alias": "renamed-alias",
+                    "first_team": "team-a",
+                    "last_team": "team-b",
+                }
+            ]
+        ),
+    )
+
+    result = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=InMemoryCache())
+
+    assert result[digest] == {"key_alias": None, "team_id": None, "user_id": "carol"}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_bounds_the_scan_with_a_statement_timeout():
+    digest = hash_token("cli-session-bounded-scan")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    mock_prisma = MagicMock()
+    calls: list[str] = []
+    transaction = MagicMock()
+    transaction.execute_raw = AsyncMock(side_effect=lambda sql: calls.append(sql) or 0)
+    transaction.query_raw = AsyncMock(side_effect=lambda sql, *args: calls.append("scan") or [])
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+
+    await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=InMemoryCache())
+
+    assert calls == [f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}", "scan"]
+    assert mock_prisma.db.tx.call_args.kwargs["timeout"] == timedelta(
+        milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
+    )
