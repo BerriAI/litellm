@@ -307,5 +307,5 @@ fn _ocr_lifecycle(
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(_ocr_lifecycle, module)?)
+    crate::routes::definition::add_function(module, wrap_pyfunction!(_ocr_lifecycle, module)?)
 }

@@ -15,7 +15,7 @@
 - Only core's typed, effect-free admission may return `Declined`; conversion errors and all post-admission failures are terminal
   - Admission cannot invoke hooks, acquire credentials, consume files/iterators, prepare requests or perform I/O
   - Disabled/unavailable native execution or an admission decline may select legacy once; callback exceptions never authorize fallback or replay
-- Use one ordinary inline `async def` driver in `litellm/rust_bridge/lifecycle.py`, with the native handle in `src/lifecycle.rs`
+- Use one ordinary inline `async def` driver in `litellm/rust_bridge/lifecycle.py`, with the native handle in `src/lifecycle/handle.rs`
   - Contract: `start`, `resume_value`, `resume_error`, idempotent `close`; explicitly tagged `Await`/`Complete` preserve awaitable final values
   - Validate Created/Running/Suspended/Closed protocol states; core alone chooses lifecycle phases and result/error policy
   - Defer effectful setup/context reads/timestamps until start; unstarted-handle destruction releases inputs independently of Python `finally`

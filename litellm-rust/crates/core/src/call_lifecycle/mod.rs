@@ -4,6 +4,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::Error;
 
 pub mod admission;
+pub mod dispatch;
 pub mod host;
 #[cfg(test)]
 #[path = "../../tests/host_lifecycle.rs"]

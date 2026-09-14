@@ -56,7 +56,7 @@ impl PythonLogger {
     pub(super) fn defer_success(
         &self,
         py: Python<'_>,
-        pending: Py<super::PendingLogging>,
+        pending: Py<super::dispatch::PendingLogging>,
     ) -> PyResult<()> {
         self.object(py).setattr("_native_pending_logging", pending)
     }
