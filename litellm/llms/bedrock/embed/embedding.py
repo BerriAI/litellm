@@ -12,7 +12,7 @@ import httpx
 
 import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
-from litellm.litellm_core_utils.core_helpers import (
+from litellm.litellm_core_utils.internal_params import (
     strip_internal_params_from_request_body,
 )
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding

@@ -1,4 +1,4 @@
-from litellm.types.internal_params import LiteLLMInternalParam
+from litellm.litellm_core_utils.internal_params import LiteLLMInternalParam
 import json
 from unittest.mock import MagicMock
 

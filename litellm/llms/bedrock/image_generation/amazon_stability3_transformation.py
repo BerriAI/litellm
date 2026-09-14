@@ -3,7 +3,7 @@ from typing import Final
 
 from openai.types.image import Image
 
-from litellm.litellm_core_utils.core_helpers import (
+from litellm.litellm_core_utils.internal_params import (
     strip_internal_params_from_request_body,
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_cached_model_info

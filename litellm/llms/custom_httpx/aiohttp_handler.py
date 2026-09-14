@@ -10,7 +10,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm.litellm_core_utils.core_helpers import (
+from litellm.litellm_core_utils.internal_params import (
     strip_internal_params_from_chat_request_body,
     strip_internal_params_from_request_body,
 )

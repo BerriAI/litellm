@@ -3721,7 +3721,7 @@ def test_embedding_strips_internal_params_from_request_body():
     splat optional_params into the wire body, so a leaked internal knob such as
     cache_control_injection_points would 400 on a strict-schema provider -- the
     same failure the chat path already prevents on line 450."""
-    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.litellm_core_utils.internal_params import LiteLLMInternalParam
     from litellm.types.utils import EmbeddingResponse
 
     handler = BaseLLMHTTPHandler()
@@ -3779,7 +3779,7 @@ def test_chat_boundary_preserves_cache_control_injection_points():
     LiteLLM-internal knobs (skip_mcp_handler, fake_stream, ...) must still be
     stripped before the transform splats optional_params into the wire body."""
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.litellm_core_utils.internal_params import LiteLLMInternalParam
     from litellm.types.utils import ModelResponse
 
     handler = BaseLLMHTTPHandler()
@@ -3835,7 +3835,7 @@ def test_chat_boundary_strips_internal_params_from_splat_body():
     body returned by `transform_request` to prevent extraneous-field 400s on
     strict-schema providers."""
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.litellm_core_utils.internal_params import LiteLLMInternalParam
     from litellm.types.utils import ModelResponse
 
     handler = BaseLLMHTTPHandler()
@@ -3887,7 +3887,7 @@ def test_chat_boundary_strips_internal_params_from_splat_body():
 
 @pytest.mark.parametrize("transform_async", [False, True])
 async def test_internal_params_are_filtered_before_signing_both_transform_paths(transform_async):
-    from litellm.types.internal_params import LiteLLMInternalParam
+    from litellm.litellm_core_utils.internal_params import LiteLLMInternalParam
 
     class SplatConfig(_TransformRecordingConfig):
         def transform_request(self, model, messages, optional_params, litellm_params, headers):

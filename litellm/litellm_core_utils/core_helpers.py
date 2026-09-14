@@ -4,17 +4,13 @@ import copy
 import logging
 import re
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.types.internal_params import (
-    LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS,
-    LITELLM_INTERNAL_REQUEST_BODY_PARAMS,
-    MCP_INTERNAL_PARAMS,
-)
+from litellm.litellm_core_utils.internal_params import MCP_INTERNAL_PARAMS
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -646,34 +642,6 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
     )
 
     return {k: v for k, v in data.items() if k not in internal_params}
-
-
-_RequestParamValue = TypeVar("_RequestParamValue")
-
-
-def strip_internal_params_from_request_body(data: Mapping[str, _RequestParamValue]) -> dict[str, _RequestParamValue]:
-    """
-    Remove every LiteLLM-internal optional_params key from a provider request body.
-
-    Applied at the serialization boundary (where optional_params becomes a request
-    body) so internal control knobs can never reach a provider that rejects unknown
-    fields. See `litellm.types.internal_params.LiteLLMInternalParam` for the registry.
-    """
-    return {k: v for k, v in data.items() if k not in LITELLM_INTERNAL_REQUEST_BODY_PARAMS}
-
-
-def strip_internal_params_from_chat_request_body(
-    data: Mapping[str, _RequestParamValue],
-) -> dict[str, _RequestParamValue]:
-    """
-    Strip variant for the chat-completion boundary that preserves keys consumed
-    inside `transform_request` (currently `cache_control_injection_points`, which
-    `AmazonConverseConfig` reads to append a `cachePoint` to Bedrock tool_config).
-    The shared chat handler re-applies `strip_internal_params_from_request_body`
-    to the body returned by `transform_request`, so splat-style transforms that
-    splat `**optional_params` into the wire body cannot leak the preserved key.
-    """
-    return {k: v for k, v in data.items() if k not in LITELLM_CHAT_REQUEST_BODY_STRIP_PARAMS}
 
 
 def redact_nested_match_and_regex_keys(

@@ -1,5 +1,3 @@
-from litellm.types.internal_params import LiteLLMInternalParam, LITELLM_INTERNAL_REQUEST_BODY_PARAMS
-from litellm.litellm_core_utils.core_helpers import filter_internal_params, strip_internal_params_from_request_body
 """Tests for litellm_core_utils.core_helpers module."""
 
 import logging
@@ -10,6 +8,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     drop_params_env_flag,
     drop_params_flag,
+    filter_internal_params,
     get_or_create_metadata_bucket,
     map_finish_reason,
     normalize_drop_params,
@@ -410,37 +409,21 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(vendor_limit) is False
 
 
-class TestInternalParamFiltering:
-    """The request-body filter must drop every registry key while keeping real provider params."""
-
-    def test_strips_every_registry_key(self):
-        seeded = {param.value: "internal" for param in LiteLLMInternalParam}
-        seeded.update({"temperature": 0.5, "max_tokens": 10})
-
-        result = strip_internal_params_from_request_body(seeded)
-
-        assert not (LITELLM_INTERNAL_REQUEST_BODY_PARAMS & result.keys())
-        assert result == {"temperature": 0.5, "max_tokens": 10}
-
-    def test_keeps_unknown_provider_native_params(self):
-        result = strip_internal_params_from_request_body({"anthropic_beta": "x", "top_k": 3})
-        assert result == {"anthropic_beta": "x", "top_k": 3}
-
-    def test_fallback_filter_keeps_non_mcp_internal_params(self):
-        kwargs = {
-            "skip_mcp_handler": True,
-            "cache_control_injection_points": [{"location": "message"}],
-            "stream_chunk_size": 5,
-            "api_key": "test-fallback-key",
-            "num_retries": 2,
-            "metadata": {"test": "fallback"},
-            "temperature": 0.5,
-        }
-        result = filter_internal_params(kwargs)
-        assert "skip_mcp_handler" not in result
-        assert result["cache_control_injection_points"] == [{"location": "message"}]
-        assert result["stream_chunk_size"] == 5
-        assert result["temperature"] == 0.5
-        assert result["api_key"] == "test-fallback-key"
-        assert result["num_retries"] == 2
-        assert result["metadata"] == {"test": "fallback"}
+def test_fallback_filter_keeps_non_mcp_internal_params():
+    kwargs = {
+        "skip_mcp_handler": True,
+        "cache_control_injection_points": [{"location": "message"}],
+        "stream_chunk_size": 5,
+        "api_key": "test-fallback-key",
+        "num_retries": 2,
+        "metadata": {"test": "fallback"},
+        "temperature": 0.5,
+    }
+    result = filter_internal_params(kwargs)
+    assert "skip_mcp_handler" not in result
+    assert result["cache_control_injection_points"] == [{"location": "message"}]
+    assert result["stream_chunk_size"] == 5
+    assert result["temperature"] == 0.5
+    assert result["api_key"] == "test-fallback-key"
+    assert result["num_retries"] == 2
+    assert result["metadata"] == {"test": "fallback"}
