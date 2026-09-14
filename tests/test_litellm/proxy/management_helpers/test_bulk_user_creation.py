@@ -2,8 +2,10 @@ import json
 from contextlib import asynccontextmanager
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.caching.caching import DualCache
@@ -31,10 +33,16 @@ class _UserRow(BaseModel):
 class _UserTable:
     """Enough of the Prisma user table for the bulk path: set lookups, one create_many and per-row fallbacks."""
 
-    def __init__(self, fail_ids: frozenset[str] = frozenset(), commit_then_drop: bool = False) -> None:
+    def __init__(
+        self,
+        fail_ids: frozenset[str] = frozenset(),
+        commit_then_drop: bool = False,
+        raced_ids: frozenset[str] = frozenset(),
+    ) -> None:
         self.rows: dict[str, _UserRow] = {}
         self.fail_ids = fail_ids
         self.commit_then_drop = commit_then_drop
+        self.raced_ids = raced_ids
         self.create_many_calls = 0
 
     async def count(self, where: object = None) -> int:
@@ -59,10 +67,15 @@ class _UserTable:
         rows = [_UserRow.model_validate(d) for d in data]
         if any(row.user_id in self.fail_ids for row in rows):
             raise RuntimeError("batch insert failed")
+        raced = [row.user_id for row in rows if row.user_id in self.raced_ids]
+        if raced:
+            for user_id in raced:
+                self.rows[user_id] = _UserRow(user_id=user_id, user_email=f"{user_id}@other-request.example")
+            raise UniqueViolationError({}, message="Unique constraint failed on the fields: (`user_id`)")
         for row in rows:
             self.rows[row.user_id] = row
         if self.commit_then_drop:
-            raise ConnectionError("connection reset after commit")
+            raise httpx.ReadError("connection reset after commit")
         return len(rows)
 
     async def update(self, where: dict[str, str], data: dict[str, object]) -> _UserRow:
@@ -114,9 +127,13 @@ class _Tx:
 
 class _Db:
     def __init__(
-        self, teams: list[LiteLLM_TeamTable], fail_ids: frozenset[str] = frozenset(), commit_then_drop: bool = False
+        self,
+        teams: list[LiteLLM_TeamTable],
+        fail_ids: frozenset[str] = frozenset(),
+        commit_then_drop: bool = False,
+        raced_ids: frozenset[str] = frozenset(),
     ) -> None:
-        self.litellm_usertable = _UserTable(fail_ids, commit_then_drop)
+        self.litellm_usertable = _UserTable(fail_ids, commit_then_drop, raced_ids)
         self.litellm_teamtable = _TeamTable(teams)
         self.litellm_teammembership = _MembershipTable()
 
@@ -127,8 +144,9 @@ class _FakePrisma:
         teams: list[LiteLLM_TeamTable] | None = None,
         fail_ids: frozenset[str] = frozenset(),
         commit_then_drop: bool = False,
+        raced_ids: frozenset[str] = frozenset(),
     ) -> None:
-        self.db = _Db(teams or [], fail_ids, commit_then_drop)
+        self.db = _Db(teams or [], fail_ids, commit_then_drop, raced_ids)
         self.tx_count = 0
         self.locks: list[str] = []
 
@@ -274,6 +292,17 @@ async def test_insert_that_committed_but_lost_its_response_still_counts_as_creat
     assert [r.error for r in response.results] == [None, None]
     assert set(prisma.db.litellm_usertable.rows) == {"u1", "u2"}
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u1"]
+
+
+@pytest.mark.asyncio
+async def test_user_id_taken_by_a_concurrent_request_is_not_claimed_by_this_batch():
+    prisma = _FakePrisma(teams=[_team("t1")], raced_ids=frozenset({"u1"}))
+    response = await _run(prisma, [{"user_id": "u1", "teams": ["t1"]}, {"user_id": "u2", "teams": ["t1"]}])
+
+    assert [r.success for r in response.results] == [False, True]
+    assert "User id=u1 already exists" in (response.results[0].error or "")
+    assert prisma.db.litellm_usertable.rows["u1"].user_email == "u1@other-request.example"
+    assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u2"]
 
 
 @pytest.mark.asyncio
