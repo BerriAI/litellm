@@ -88,6 +88,23 @@ def redact_model_call_details_for_custom_logger(
     if not opted_out or custom_logger.redacts_messages_itself():
         return model_call_details
     response_keys: Final = ("response", "original_response", "complete_response")
+    raw_request_typed_dict: Final = model_call_details.get("raw_request_typed_dict")
+    raw_request_body: Final = (
+        raw_request_typed_dict.get("raw_request_body") if isinstance(raw_request_typed_dict, dict) else None
+    )
+    redacted_raw_request_typed_dict: Final = (
+        {
+            **raw_request_typed_dict,
+            "raw_request_body": {
+                **raw_request_body,
+                "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+                "input": "",
+                "prompt": "",
+            },
+        }
+        if isinstance(raw_request_typed_dict, dict) and isinstance(raw_request_body, dict)
+        else raw_request_typed_dict
+    )
     return {
         **model_call_details,
         **{
@@ -95,6 +112,11 @@ def redact_model_call_details_for_custom_logger(
             for key in response_keys
             if model_call_details.get(key) is not None
         },
+        **(
+            {"raw_request_typed_dict": redacted_raw_request_typed_dict}
+            if redacted_raw_request_typed_dict is not raw_request_typed_dict
+            else {}
+        ),
     }
 
 

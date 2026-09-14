@@ -1054,6 +1054,9 @@ def test_success_handler_redacts_custom_logger_payload_per_callback(logging_obj)
     logging_obj.model_call_details["original_response"] = {
         "choices": [{"message": {"content": "original response"}}]
     }
+    logging_obj.model_call_details["raw_request_typed_dict"] = {
+        "raw_request_body": {"messages": [{"role": "user", "content": "original request"}]},
+    }
     standard_logging_object = {
         "messages": [{"role": "user", "content": "original message"}],
         "response": {"choices": []},
@@ -1076,13 +1079,25 @@ def test_success_handler_redacts_custom_logger_payload_per_callback(logging_obj)
     assert (
         logging_obj.model_call_details["standard_logging_object"]["messages"][0]["content"] == "original message"
     )
+    assert (
+        logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]["messages"][0]["content"]
+        == "original request"
+    )
     assert redacting_logger.received_kwargs[0]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
     assert (
         redacting_logger.received_kwargs[0]["original_response"]["choices"][0]["message"]["content"]
         == "redacted-by-litellm"
     )
     assert (
+        redacting_logger.received_kwargs[0]["raw_request_typed_dict"]["raw_request_body"]["messages"][0]["content"]
+        == "redacted-by-litellm"
+    )
+    assert (
         plain_logger.received_kwargs[0]["original_response"]["choices"][0]["message"]["content"] == "original response"
+    )
+    assert (
+        plain_logger.received_kwargs[0]["raw_request_typed_dict"]["raw_request_body"]["messages"][0]["content"]
+        == "original request"
     )
     assert redacting_logger.received_response_objs[0] == {"text": "redacted-by-litellm"}
     assert plain_logger.received_response_objs[0] == {"id": "response"}
