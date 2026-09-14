@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import fastapi
 from fastapi import FastAPI
@@ -413,33 +408,52 @@ async def test_pass_through_request_logging_failure_with_stream(
             assert response.body == b'{"mock": "response"}'
 
 
+PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
+    "/comprehendmedical": {"POST"},
+    "/comprehendmedical/{operation}": {"POST"},
+}
+
+
 def test_pass_through_routes_support_all_methods():
     """
-    Test that all pass-through routes support GET, POST, PUT, DELETE, PATCH methods
+    A pass-through route fronts a whole provider API, so narrowing its method
+    set turns a request the upstream would have accepted into a 405. The
+    exceptions are providers whose wire protocol admits only one method: Amazon
+    Comprehend Medical speaks AWS JSON 1.1, which is POST-only, so there is no
+    other method to forward.
     """
-    # Import the routers
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,
     )
 
-    # Expected HTTP methods
     expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
 
-    # Function to check routes in a router
     def check_router_methods(router):
         for route in router.routes:
             if isinstance(route, APIRoute):
-                # Get path and methods for this route
                 path = route.path
                 methods = set(route.methods)
-                print("supported methods for route", path, "are", methods)
-                # Assert all expected methods are supported
+                allowed = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
                 assert (
-                    methods == expected_methods
-                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {expected_methods}"
+                    methods == allowed
+                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
 
-    # Check both routers
     check_router_methods(llm_router)
+
+
+def test_protocol_constrained_pass_through_exemptions_are_not_stale():
+    """
+    The exemption list above weakens the method contract, so it must not
+    outlive the routes it covers: a renamed or deleted route has to fail here
+    rather than sit in the list silently exempting nothing.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        router as llm_router,
+    )
+
+    registered_paths = {route.path for route in llm_router.routes if isinstance(route, APIRoute)}
+    unmatched = set(PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES) - registered_paths
+    assert not unmatched, f"Exempted pass-through routes no longer exist: {sorted(unmatched)}"
 
 
 def test_is_bedrock_agent_runtime_route():

@@ -24,7 +24,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 STRICT_CONFIG = REPO_ROOT / "ruff-strict.toml"
 BUDGET_PATH = REPO_ROOT / "ruff-strict-budget.json"
 TARGET = "litellm"
-DEFAULT_BASE = "origin/litellm_internal_staging"
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -193,7 +192,7 @@ def ratcheted_budget(budget: dict, current: dict, base: dict) -> dict:
     }
 
 
-def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
+def cmd_update(base_ref: str) -> None:
     """Ratchet each rule's limit down by the violations this branch fixed.
 
     The working-tree count is compared against a ruff pass over a detached
@@ -212,10 +211,15 @@ def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    cmd_update(args.base) if args.update else cmd_check(args.base)
+    from default_branch import resolve_base_ref
+    from gate_slot_lock import held_slot
+
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
+    with held_slot():
+        cmd_update(base_ref) if args.update else cmd_check(base_ref)
 
 
 if __name__ == "__main__":

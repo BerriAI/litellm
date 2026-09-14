@@ -1,8 +1,7 @@
 import React, { useState } from "react";
 import { ExternalLink, Search } from "lucide-react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { searchToolQueryCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -39,7 +38,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
 
   const handleSearch = async () => {
     if (!query.trim()) {
-      MessageManager.warning("Please enter a search query");
+      toast.warning("Please enter a search query");
       return;
     }
 
@@ -61,7 +60,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
       setSearchHistory((prev) => [historyEntry, ...prev]);
     } catch (error) {
       console.error("Error querying search tool:", error);
-      NotificationsManager.fromBackend("Failed to query search tool");
+      toast.fromError("Failed to query search tool");
     } finally {
       setIsLoading(false);
     }
@@ -74,7 +73,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
   const clearHistory = () => {
     setSearchHistory([]);
     setExpandedResults({});
-    NotificationsManager.success("Search history cleared");
+    toast.success("Search history cleared");
   };
 
   const toggleResultExpansion = (historyIndex: number, resultIndex: number) => {
@@ -157,7 +156,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                           {latestResults.latency !== undefined && (
                             <>
                               <span className="text-muted-foreground">•</span>
-                              <div className="text-sm font-semibold text-emerald-600">{latestResults.latency}ms</div>
+                              <div className="text-sm font-semibold text-success">{latestResults.latency}ms</div>
                             </>
                           )}
                         </div>
@@ -198,7 +197,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                                 </Button>
                               </div>
 
-                              <div className="mb-3 truncate text-sm font-medium text-emerald-700">{result.url}</div>
+                              <div className="mb-3 truncate text-sm font-medium text-success">{result.url}</div>
 
                               <div className="text-sm leading-relaxed text-foreground">
                                 {isResultExpanded
@@ -259,7 +258,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                           {entry.latency !== undefined && (
                             <>
                               <span>•</span>
-                              <span className="font-medium text-emerald-600">{entry.latency}ms</span>
+                              <span className="font-medium text-success">{entry.latency}ms</span>
                             </>
                           )}
                           <span>•</span>

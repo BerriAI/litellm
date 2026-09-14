@@ -7,25 +7,13 @@ export type AutoRouterCacheStats = components["schemas"]["AutoRouterCacheStats"]
 
 export const ALL_ROUTERS = "__all__";
 
-export type BenchmarkWindow = "30d" | "7d" | "24h";
-
-const WINDOW_DAYS: Record<BenchmarkWindow, number> = { "30d": 30, "7d": 7, "24h": 1 };
-
-export const WINDOW_LABELS: Record<BenchmarkWindow, string> = {
-  "30d": "Last 30 days",
-  "7d": "Last 7 days",
-  "24h": "Last 24 hours",
-};
-
-export const windowFor = (range: BenchmarkWindow, now: Date): { start_date: string; end_date: string } => ({
-  start_date: new Date(now.getTime() - WINDOW_DAYS[range] * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-  end_date: now.toISOString().slice(0, 10),
-});
-
 export interface BenchmarkView {
   label: string;
-  stats: AutoRouterBenchmarkTotals;
+  stats: AutoRouterBenchmarkTotals | AutoRouterBenchmarkGroup;
 }
+
+export const viewGroup = (view: BenchmarkView): AutoRouterBenchmarkGroup | null =>
+  "router_name" in view.stats ? view.stats : null;
 
 export const groupKey = (group: AutoRouterBenchmarkGroup): string => `${group.router_name} ${group.router_type}`;
 

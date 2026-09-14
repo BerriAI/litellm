@@ -17,7 +17,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { CheckCircle, Pencil, Play, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import CloudZeroUpdateModal from "./CloudZeroUpdateModal";
@@ -59,10 +59,10 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
       { limit: 10 },
       {
         onSuccess: (data) => {
-          MessageManager.success("Dry run completed successfully");
+          toast.success("Dry run completed successfully");
         },
         onError: (error) => {
-          MessageManager.error(error?.message || "Failed to perform dry run");
+          toast.error(error?.message || "Failed to perform dry run");
         },
       },
     );
@@ -77,11 +77,11 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
       { operation: "replace_hourly" },
       {
         onSuccess: () => {
-          MessageManager.success("Data successfully exported to CloudZero");
+          toast.success("Data successfully exported to CloudZero");
           setIsExportConfirmOpen(false);
         },
         onError: (error) => {
-          MessageManager.error(error?.message || "Failed to export data");
+          toast.error(error?.message || "Failed to export data");
         },
       },
     );
@@ -109,12 +109,12 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
 
     deleteMutation.mutate(undefined, {
       onSuccess: () => {
-        MessageManager.success("CloudZero integration deleted successfully");
+        toast.success("CloudZero integration deleted successfully");
         setIsDeleteModalOpen(false);
         onSettingsUpdated();
       },
       onError: (error) => {
-        MessageManager.error(error?.message || "Failed to delete CloudZero integration");
+        toast.error(error?.message || "Failed to delete CloudZero integration");
       },
     });
   };

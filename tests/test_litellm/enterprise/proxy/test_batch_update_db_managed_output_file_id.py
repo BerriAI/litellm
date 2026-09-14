@@ -356,3 +356,205 @@ async def test_ensure_batch_response_returns_early_without_auth():
 
     assert response.output_file_id == "file-raw-output"
     mock_managed_files.get_unified_output_file_id.assert_not_called()
+
+
+def _in_memory_managed_files():
+    """Build a real _PROXY_LiteLLMManagedFiles whose prisma upsert hits an in-memory row."""
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
+    store: dict = {}
+
+    async def _upsert(where, data):
+        key = where["unified_object_id"]
+        if key in store:
+            store[key].update(data["update"])
+        else:
+            store[key] = dict(data["create"])
+
+    table = MagicMock()
+    table.upsert = AsyncMock(side_effect=_upsert)
+    prisma = MagicMock()
+    prisma.db.litellm_managedobjecttable = table
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock()
+
+    return (
+        _PROXY_LiteLLMManagedFiles(internal_usage_cache=cache, prisma_client=prisma),
+        store,
+    )
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_persists_key_and_tags_on_create():
+    """Regression (spend loss): the batch create persists the creating key hash and tags so
+    CheckBatchCost can write an attributed spend row instead of a blank one the DB drops."""
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key="hash-alice", org_id="org-acme")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_build_batch_response(batch_id="b", status="validating"),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+        request_tags=["env:prod"],
+        persist_attribution=True,
+    )
+
+    row = store["unified-b"]
+    assert row["api_key"] == "hash-alice"
+    assert row["created_by"] == "alice"
+    assert row["team_id"] == "team-alpha"
+    assert row["org_id"] == "org-acme"
+    assert row["request_tags"].data == ["env:prod"]
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_resolves_org_through_the_cached_team():
+    """Most keys belong to an org only through their team, so the auth object carries no
+    org_id. The create reads the team that auth already cached, so org spend is snapshotted
+    at submission time without a database query in the request path."""
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-cached", api_key="hash-alice")
+    await user_api_key_cache.async_set_cache(
+        key="team_id:team-cached",
+        value=LiteLLM_TeamTableCachedObj(team_id="team-cached", organization_id="org-via-team"),
+        model_type=LiteLLM_TeamTableCachedObj,
+    )
+    try:
+        await instance.store_unified_object_id(
+            unified_object_id="unified-b",
+            file_object=_build_batch_response(batch_id="b", status="validating"),
+            litellm_parent_otel_span=None,
+            model_object_id="b",
+            file_purpose="batch",
+            user_api_key_dict=creator,
+            persist_attribution=True,
+        )
+    finally:
+        user_api_key_cache.delete_cache(key="team_id:team-cached")
+
+    assert store["unified-b"]["org_id"] == "org-via-team"
+    instance.prisma_client.db.litellm_teamtable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is_not_cached():
+    """A team no request has run under yet is absent from the auth cache; its organization
+    still comes back from the table so the org is billed rather than dropped."""
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    instance, store = _in_memory_managed_files()
+    instance.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-uncached", organization_id="org-via-db")
+    )
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-uncached", api_key="hash-alice")
+    try:
+        await instance.store_unified_object_id(
+            unified_object_id="unified-b",
+            file_object=_build_batch_response(batch_id="b", status="validating"),
+            litellm_parent_otel_span=None,
+            model_object_id="b",
+            file_purpose="batch",
+            user_api_key_dict=creator,
+            persist_attribution=True,
+        )
+    finally:
+        user_api_key_cache.delete_cache(key="team_id:team-uncached")
+
+    assert store["unified-b"]["org_id"] == "org-via-db"
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_omits_key_and_tags_without_persist_attribution():
+    """Regression (spend redirect): a caller that is not the batch create (a poll, or the
+    generic post-call hook on a retrieve) carries a real hashed key, but must never have it
+    recorded as the batch's paying key. created_by/team_id keep their existing behavior."""
+    instance, store = _in_memory_managed_files()
+    poller = UserAPIKeyAuth(user_id="bob", team_id="team-bravo", api_key="hash-bob")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_build_batch_response(batch_id="b", status="in_progress"),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=poller,
+        request_tags=["env:dev"],
+    )
+
+    row = store["unified-b"]
+    assert "api_key" not in row
+    assert "request_tags" not in row
+    assert row["created_by"] == "bob"
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_attribution_columns_are_write_once():
+    """Identity is written only in the upsert create branch, so a later store for the same
+    batch (a status update, a poll) can neither reassign the paying key nor clear it."""
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key="hash-alice")
+    poller = UserAPIKeyAuth(user_id="bob", team_id="team-bravo", api_key="hash-bob")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_build_batch_response(batch_id="b", status="validating"),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+        request_tags=["env:prod"],
+        persist_attribution=True,
+    )
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_build_batch_response(batch_id="b", status="completed"),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=poller,
+        request_tags=["poller-tag"],
+        persist_attribution=True,
+    )
+
+    row = store["unified-b"]
+    assert row["api_key"] == "hash-alice"
+    assert row["created_by"] == "alice"
+    assert row["status"] == "completed"
+
+    upsert_data = instance.prisma_client.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"]
+    assert "api_key" not in upsert_data["update"]
+    assert "request_tags" not in upsert_data["update"]
+    assert "org_id" not in upsert_data["update"]
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_omits_unset_columns():
+    """A batch created with no tags (the common case) still registers: the optional columns
+    are omitted rather than passed as None, which prisma rejects for the Json column."""
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key=None)
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_build_batch_response(batch_id="b", status="validating"),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+        request_tags=None,
+        persist_attribution=True,
+    )
+
+    create_data = instance.prisma_client.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"]["create"]
+    assert "api_key" not in create_data
+    assert "request_tags" not in create_data
+    assert "unified-b" in store

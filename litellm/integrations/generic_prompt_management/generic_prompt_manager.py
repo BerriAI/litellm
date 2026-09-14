@@ -4,6 +4,7 @@ Fetches prompts from any API that implements the /beta/litellm_prompt_management
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -349,7 +350,7 @@ class GenericPromptManager(CustomPromptManagement):
     def _apply_variables(
         self,
         prompt_client: PromptManagementClient,
-        variables: dict[str, Any],
+        variables: Mapping[str, object],
     ) -> PromptManagementClient:
         """
         Apply variables to the prompt template.
@@ -416,17 +417,8 @@ class GenericPromptManager(CustomPromptManagement):
             tools=tools,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
-            ignore_prompt_manager_model=(
-                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
-                if prompt_spec
-                else False
-            ),
-            ignore_prompt_manager_optional_params=(
-                ignore_prompt_manager_optional_params
-                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
-                if prompt_spec
-                else False
-            ),
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     def get_chat_completion_prompt(
@@ -457,17 +449,8 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
-            ignore_prompt_manager_model=(
-                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
-                if prompt_spec
-                else False
-            ),
-            ignore_prompt_manager_optional_params=(
-                ignore_prompt_manager_optional_params
-                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
-                if prompt_spec
-                else False
-            ),
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     def clear_cache(self) -> None:

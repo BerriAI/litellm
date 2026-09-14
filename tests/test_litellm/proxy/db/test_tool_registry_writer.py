@@ -3,14 +3,11 @@ Unit tests for tool_registry_writer.py — uses a mock prisma client
 that exposes litellm_tooltable.upsert / find_many / find_unique.
 """
 
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.db.tool_registry_writer import (
     ToolPolicyRegistry,
