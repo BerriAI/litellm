@@ -32,10 +32,6 @@ def coerce_optional_int_setting(raw: object) -> int | None:
 
 
 def coerce_optional_str_list_setting(raw: object) -> tuple[str, ...] | None:
-    """A general_settings value declared as an optional list of strings, e.g. allowed_file_extensions.
-
-    None (unset) and [] (set to nothing) are different answers for an allowlist, so both survive.
-    """
     if raw is None:
         return None
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
@@ -104,7 +100,6 @@ def check_allowed_extension(
     filename: str | None,
     allowed_extensions: tuple[str, ...] | None,
 ) -> UploadedFileExtensionNotAllowed | None:
-    """None means the allowlist is not configured; an empty tuple means nothing is allowed."""
     if allowed_extensions is None:
         return None
     extension: Final = _normalized_extension(filename)

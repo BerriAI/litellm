@@ -104,7 +104,6 @@ def test_allowed_extension_match_is_case_insensitive_for_configured_value():
 
 @pytest.mark.parametrize("filename", ["README", "", None, "../../"])
 def test_no_extension_rejected_when_allowlist_set(filename):
-    """The allowlist grants by extension, so a name that yields none has nothing to be granted for."""
     assert check_allowed_extension(filename, (".jsonl",)) == UploadedFileExtensionNotAllowed(extension="")
 
 
