@@ -4287,3 +4287,111 @@ def test_system_string_after_a_developer_message_stays_in_input_in_client_order(
     assert instructions is None
     assert [item["role"] for item in input_items] == ["developer", "system", "user"]
     assert input_items[1] == _system_input_item("Be brief.")
+
+
+def _make_iterator():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    return OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+
+def test_chunk_parser_drops_verbatim_duplicate_message_item():
+    # gpt-5.4+ occasionally emits the same message output item twice (#41109);
+    # the bridge must not stream the repeated text a second time
+    iterator = _make_iterator()
+    text = "Hi - this is Alex from Acme Co. Am I speaking with John?"
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 0, "item": {"id": "msg_1", "type": "message"}}
+    )
+    result = iterator.chunk_parser({"type": "response.output_text.delta", "delta": text})
+    assert result.choices[0].delta.content == text
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"id": "msg_1", "type": "message", "content": [{"type": "output_text", "text": text}]},
+        }
+    )
+
+    # a second message item repeating the same text contributes nothing
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 1, "item": {"id": "msg_2", "type": "message"}}
+    )
+    result = iterator.chunk_parser({"type": "response.output_text.delta", "delta": text})
+    assert result.choices[0].delta.content == ""  # buffered while the item is open
+    result = iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {"id": "msg_2", "type": "message", "content": [{"type": "output_text", "text": text}]},
+        }
+    )
+    assert result.choices[0].delta.content == ""  # dropped as a verbatim repeat
+
+
+def test_chunk_parser_flushes_new_text_from_later_message_item():
+    # a later message item carrying NEW text must still reach the consumer
+    iterator = _make_iterator()
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 0, "item": {"id": "msg_1", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "let me check the schedule"})
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"id": "msg_1", "type": "message"},
+        }
+    )
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 1, "item": {"id": "msg_2", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "your appointment is at 3pm"})
+    result = iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {"id": "msg_2", "type": "message"},
+        }
+    )
+    assert result.choices[0].delta.content == "your appointment is at 3pm"
+
+
+def test_chunk_parser_flushes_buffered_text_on_terminal_event():
+    # when the stream ends before the buffered item's own done event, the buffered
+    # text still has to reach the consumer on the terminal chunk
+    iterator = _make_iterator()
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 0, "item": {"id": "msg_1", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "seen text"})
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"id": "msg_1", "type": "message"},
+        }
+    )
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 1, "item": {"id": "msg_2", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "tail text"})
+    result = iterator.chunk_parser({"type": "response.completed", "response": {"output": []}})
+    assert result.choices[0].delta.content == "tail text"
+    assert result.choices[0].finish_reason == "stop"
+
+
+def test_chunk_parser_first_message_item_streams_through_unchanged():
+    # the first message item is never buffered; behavior is unchanged
+    iterator = _make_iterator()
+
+    result = iterator.chunk_parser({"type": "response.output_text.delta", "delta": "literal text"})
+    assert result.choices[0].delta.content == "literal text"
+    assert result.choices[0].finish_reason is None
