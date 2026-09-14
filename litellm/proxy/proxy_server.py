@@ -11893,6 +11893,10 @@ async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth
     )
 
 
+async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth) -> None:
+    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)  # pyright: ignore[reportPrivateUsage]  # same release idiom the HTTP disconnect path uses
+
+
 async def _reject_realtime_session(
     websocket: WebSocket,
     user_api_key_dict: UserAPIKeyAuth,
@@ -11912,6 +11916,7 @@ async def _reject_realtime_session(
         await websocket.close(code=code, reason=reason)
     finally:
         await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 @app.websocket("/openai/v1/realtime")
@@ -11991,68 +11996,69 @@ async def realtime_websocket_endpoint(
     # Errors here (e.g. guardrail block) are sent back to the client as an
     # error event before closing, so the caller knows what happened.
     try:
-        try:
-            (
-                data,
-                litellm_logging_obj,
-            ) = await base_llm_response_processor.common_processing_pre_call_logic(
-                request=request,
-                general_settings=general_settings,
-                user_api_key_dict=user_api_key_dict,
-                version=version,
-                proxy_logging_obj=proxy_logging_obj,
-                proxy_config=proxy_config,
-                user_model=user_model,
-                user_temperature=user_temperature,
-                user_request_timeout=user_request_timeout,
-                user_max_tokens=user_max_tokens,
-                user_api_base=user_api_base,
-                model=route_model,
-                route_type="_arealtime",
-            )
-        except Exception as e:
-            verbose_proxy_logger.exception("Realtime pre-call error")
-            await _reject_realtime_session(
-                websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
-            )
-            return
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=route_model,
+            route_type="_arealtime",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception("Realtime pre-call error")
+        await _reject_realtime_session(
+            websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
+        )
+        return
+    except BaseException:
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
 
-        # Phase 2: route to upstream LLM.
+    # Phase 2: route to upstream LLM.
+    try:
+        data["user_api_key_dict"] = user_api_key_dict
+        llm_call: Final = await route_request(
+            data=data,
+            route_type="_arealtime",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        await llm_call
+    except websockets.exceptions.InvalidStatusCode as e:
+        verbose_proxy_logger.exception("Invalid status code")
+        await websocket.close(code=e.status_code, reason="Invalid status code")
+    except Exception as e:
+        verbose_proxy_logger.exception("Internal server error")
+        redacted_error: Final = _redact_string(str(e))
         try:
-            data["user_api_key_dict"] = user_api_key_dict
-            llm_call: Final = await route_request(
-                data=data,
-                route_type="_arealtime",
-                llm_router=llm_router,
-                user_model=user_model,
+            await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
+        except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
+            verbose_proxy_logger.debug("Could not send realtime error event to client; closing anyway")
+        try:
+            await websocket.close(
+                code=1011,
+                reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
             )
-            await llm_call
-        except websockets.exceptions.InvalidStatusCode as e:
-            verbose_proxy_logger.exception("Invalid status code")
-            await websocket.close(code=e.status_code, reason="Invalid status code")
-        except Exception as e:
-            verbose_proxy_logger.exception("Internal server error")
-            redacted_error: Final = _redact_string(str(e))
-            try:
-                await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
-            except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
-                verbose_proxy_logger.debug("Could not send realtime error event to client; closing anyway")
-            try:
-                await websocket.close(
-                    code=1011,
-                    reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
-                )
-            except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
-                verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
-        finally:
-            from litellm.litellm_core_utils.realtime_streaming import (
-                REALTIME_SESSION_SUCCESS_LOGGED_KEY,
-            )
-
-            if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
-                await _release_realtime_budget_reservation(user_api_key_dict)
+        except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
+            verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
     finally:
-        await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)  # pyright: ignore[reportPrivateUsage]  # same release idiom the HTTP disconnect path uses
+        from litellm.litellm_core_utils.realtime_streaming import (
+            REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+        )
+
+        if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
+            await _release_realtime_budget_reservation(user_api_key_dict)
+            await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 ######################################################################
