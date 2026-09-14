@@ -41,7 +41,7 @@ def test_recorded_catalog_has_expected_models() -> None:
     ids = {model.id for model in RECORDED_CATALOG}
     assert "kimi-k3" in ids
     assert "gpt-6-astra" in ids
-    assert "seedance-2.0" in ids  # not registered: proves unregistered models don't crash the sync
+    assert "seedance-2.0" in ids
 
 
 def test_recorded_catalog_carries_tiered_pricing_for_the_four_threshold_models() -> None:
@@ -50,8 +50,7 @@ def test_recorded_catalog_carries_tiered_pricing_for_the_four_threshold_models()
 
 
 def test_registry_already_matches_the_recorded_catalog() -> None:
-    # If this fails, either the registry has drifted from the last live sync or the sync logic
-    # itself broke: both are worth knowing about, not just "no crash"
+    """A failure here means either the registry drifted from the last live sync or the sync logic broke."""
     outcome = sync.compute_sync(REGISTERED_CHEAPERINFERENCE, RECORDED_CATALOG)
     assert outcome.updated == ()
     assert outcome.missing_from_catalog == ()
@@ -63,7 +62,6 @@ def test_a_perturbed_price_is_detected_and_corrected() -> None:
     outcome = sync.compute_sync(perturbed, RECORDED_CATALOG)
     assert outcome.updated == ("cheaperinference/kimi-k3: input_cost_per_token: 999.0 -> 2.1e-06",)
     assert outcome.cost_map["cheaperinference/kimi-k3"]["input_cost_per_token"] == 2.1e-06
-    # untouched, curated fields survive the merge unchanged
     assert outcome.cost_map["cheaperinference/kimi-k3"]["supports_vision"] is True
 
 
@@ -98,10 +96,101 @@ def test_a_model_losing_its_pricing_tier_drops_the_above_272k_fields() -> None:
 
 
 def test_null_context_length_and_max_output_tokens_do_not_overwrite_curated_limits() -> None:
-    # gpt-oss-120b reports null context_length/max_output_tokens in the live catalog; the curated
-    # registry limits must survive rather than being wiped to None
+    """gpt-oss-120b reports null limits in the live catalog, so the curated ones must survive."""
     registered = json.loads(json.dumps(REGISTERED_CHEAPERINFERENCE))
     assert "cheaperinference/gpt-oss-120b" in registered
     curated_max_input = registered["cheaperinference/gpt-oss-120b"].get("max_input_tokens")
     outcome = sync.compute_sync(registered, RECORDED_CATALOG)
     assert outcome.cost_map["cheaperinference/gpt-oss-120b"].get("max_input_tokens") == curated_max_input
+
+
+@pytest.mark.parametrize(
+    "threshold,band",
+    [
+        (272_000, "above_272k_tokens"),
+        (271_999, "above_272k_tokens"),
+        (200_000, "above_200k_tokens"),
+        (128_000, "above_128k_tokens"),
+        (512_000, "above_512k_tokens"),
+    ],
+)
+def test_catalog_thresholds_map_to_the_matching_cost_map_band(threshold: int, band: str) -> None:
+    assert sync.band_for_threshold(threshold) == band
+
+
+@pytest.mark.parametrize("threshold", [0, 100_000, 300_000, 999_999])
+def test_a_threshold_outside_every_band_maps_to_nothing(threshold: int) -> None:
+    assert sync.band_for_threshold(threshold) is None
+
+
+def _catalog_with_threshold(model_id: str, threshold: int) -> list:
+    """The recorded catalog with one model's long-context threshold moved."""
+    raw = json.loads(FIXTURES.joinpath("models.json").read_bytes())
+    entries = raw["data"] if isinstance(raw, dict) else raw
+    for entry in entries:
+        above = entry["pricing"].get("above_threshold")
+        if entry["id"] == model_id and above is not None:
+            above["input_token_price_threshold"] = threshold
+    return sync.load_catalog(json.dumps(entries).encode())
+
+
+def test_a_threshold_with_no_band_leaves_the_entry_untouched_and_is_flagged() -> None:
+    catalog = _catalog_with_threshold("gpt-5.6-luna", 300_000)
+    perturbed = json.loads(json.dumps(REGISTERED_CHEAPERINFERENCE))
+    perturbed["cheaperinference/gpt-5.6-luna"]["input_cost_per_token"] = 999.0
+
+    outcome = sync.compute_sync(perturbed, catalog)
+
+    assert outcome.unmappable_thresholds == ("cheaperinference/gpt-5.6-luna (threshold 300000)",)
+    assert outcome.updated == ()
+    assert outcome.cost_map["cheaperinference/gpt-5.6-luna"]["input_cost_per_token"] == 999.0
+
+
+def test_a_moved_threshold_rewrites_the_band_and_drops_the_old_one() -> None:
+    catalog = _catalog_with_threshold("gpt-5.6-luna", 200_000)
+
+    outcome = sync.compute_sync(REGISTERED_CHEAPERINFERENCE, catalog)
+
+    entry = outcome.cost_map["cheaperinference/gpt-5.6-luna"]
+    assert entry["input_cost_per_token_above_200k_tokens"] == pytest.approx(0.16e-06)
+    assert "input_cost_per_token_above_272k_tokens" not in entry
+    assert outcome.unmappable_thresholds == ()
+
+
+def test_warnings_name_every_kind_of_catalog_drift() -> None:
+    outcome = sync.SyncOutcome(
+        cost_map={},
+        unpriced_new_models=("cheaperinference/brand-new",),
+        missing_from_catalog=("cheaperinference/retired",),
+        unmappable_thresholds=("cheaperinference/odd (threshold 300000)",),
+    )
+
+    assert outcome.warnings == (
+        "new in the catalog, not registered: cheaperinference/brand-new",
+        "registered but gone from the catalog: cheaperinference/retired",
+        "long-context threshold matches no cost-map band, entry left untouched: cheaperinference/odd (threshold 300000)",
+    )
+
+
+def test_the_warnings_block_is_written_even_when_no_prices_changed(tmp_path: Path) -> None:
+    outcome = sync.SyncOutcome(cost_map={}, unpriced_new_models=("cheaperinference/brand-new",))
+
+    assert not outcome.has_changes
+    assert "cheaperinference/brand-new" in sync.render_warnings_block(outcome)
+
+
+def test_a_quiet_run_says_so_instead_of_writing_an_empty_list() -> None:
+    assert "No catalog drift" in sync.render_warnings_block(sync.SyncOutcome(cost_map={}))
+
+
+def test_the_step_summary_is_the_default_destination_in_actions(tmp_path: Path, monkeypatch) -> None:
+    summary = tmp_path / "step_summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    assert sync._github_step_summary() == summary
+
+
+def test_no_summary_destination_outside_actions(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    assert sync._github_step_summary() is None

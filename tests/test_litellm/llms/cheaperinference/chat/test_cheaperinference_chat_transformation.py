@@ -264,3 +264,65 @@ class TestCheaperInferenceCostTracking:
         assert info["input_cost_per_token"] == pytest.approx(0.080000 / 1_000_000)
         assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(0.160000 / 1_000_000)
         assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(0.720000 / 1_000_000)
+
+
+class TestCheaperInferenceResponsesStore:
+    """The gateway's /v1/responses layer is stateless and rejects a request that does not send store=false."""
+
+    @pytest.fixture
+    def responses_config(self):
+        from litellm.utils import ProviderConfigManager
+
+        return ProviderConfigManager.get_provider_responses_api_config(
+            provider=PROVIDER,
+            model="claude-sonnet-5",
+        )
+
+    def test_registry_declares_force_store_false(self):
+        provider = JSONProviderRegistry.get(PROVIDER)
+
+        assert provider.special_handling.get("force_store_false") is True
+
+    def test_store_is_forced_when_the_caller_omits_it(self, responses_config):
+        from litellm.types.router import GenericLiteLLMParams
+
+        transformed = responses_config.transform_responses_api_request(
+            model="claude-sonnet-5",
+            input="hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert transformed["store"] is False
+
+    def test_store_true_from_the_caller_is_overridden(self, responses_config):
+        from litellm.types.router import GenericLiteLLMParams
+
+        params = {"store": True, "temperature": 0.2}
+        transformed = responses_config.transform_responses_api_request(
+            model="claude-sonnet-5",
+            input="hello",
+            response_api_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert transformed["store"] is False
+        assert transformed["temperature"] == 0.2
+
+    def test_responses_url_and_auth_header(self, responses_config):
+        from litellm.types.router import GenericLiteLLMParams
+
+        with patch.dict("os.environ", {"CHEAPERINFERENCE_API_KEY": "secret-from-env"}):
+            headers = responses_config.validate_environment(
+                headers={},
+                model="claude-sonnet-5",
+                litellm_params=GenericLiteLLMParams(),
+            )
+
+        assert headers["Authorization"] == "Bearer secret-from-env"
+        assert (
+            responses_config.get_complete_url(api_base=None, litellm_params={})
+            == f"{BASE_URL}/responses"
+        )

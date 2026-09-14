@@ -5,14 +5,19 @@ already-registered cheaperinference/<id> entries. Dry run (the default) prints t
 generated PR body; ``--write`` applies the changes to the root cost map and its ``litellm/`` backup copy.
 
 Policy highlights:
-- Only price fields (input/output/cache read/cache write, and their above-272k-token variants) and the two
+- Only price fields (input/output/cache read/cache write, and their long-context variants) and the two
   limit fields (max_input_tokens, max_output_tokens/max_tokens) are synced from the catalog.
+- The catalog's own long-context threshold picks the cost-map band. A threshold that matches no band
+  litellm understands leaves that entry untouched and is surfaced as a warning, so a moved threshold can
+  never be written out under the wrong band.
 - Capability flags (supports_vision, supports_reasoning, supports_tool_choice, and so on), litellm_provider,
   mode, source, and supported_endpoints are curated by hand and are never touched by this script.
 - A catalog model with no matching registry entry is surfaced as a warning for a human to add, never
   auto-added: the capability flags for a new model cannot be derived from this endpoint.
 - A registry entry whose catalog model disappeared is left untouched and surfaced as a warning: nothing is
   deleted.
+- Warnings are appended to $GITHUB_STEP_SUMMARY and echoed as workflow annotations when running in Actions,
+  so a run that changes no prices still reports catalog drift somewhere durable.
 """
 
 import argparse
@@ -42,6 +47,7 @@ class SyncError(RuntimeError):
 
 
 class AboveThreshold(BaseModel):
+    input_token_price_threshold: int
     input_per_million: str
     output_per_million: str
     cache_read_input_per_million: str
@@ -70,23 +76,38 @@ RegistryEntry = dict[str, object]
 CostMap = dict[str, object]
 
 SYNCED_LIMIT_FIELDS: Final = ("max_input_tokens", "max_output_tokens", "max_tokens")
-SYNCED_PRICE_FIELDS: Final = (
+BASE_PRICE_FIELDS: Final = (
     "input_cost_per_token",
     "output_cost_per_token",
     "cache_read_input_token_cost",
     "cache_creation_input_token_cost",
-    "input_cost_per_token_above_272k_tokens",
-    "output_cost_per_token_above_272k_tokens",
-    "cache_read_input_token_cost_above_272k_tokens",
-    "cache_creation_input_token_cost_above_272k_tokens",
 )
+TIERED_BANDS: Final = {
+    128_000: "above_128k_tokens",
+    200_000: "above_200k_tokens",
+    256_000: "above_256k_tokens",
+    272_000: "above_272k_tokens",
+    512_000: "above_512k_tokens",
+}
+BAND_TOLERANCE_TOKENS: Final = 1
+TIERED_PRICE_FIELDS: Final = tuple(
+    f"{field}_{band}" for band in TIERED_BANDS.values() for field in BASE_PRICE_FIELDS
+)
+SYNCED_PRICE_FIELDS: Final = BASE_PRICE_FIELDS + TIERED_PRICE_FIELDS
 
 
 def per_token(price_per_million: str) -> float:
     return float(f"{float(price_per_million) / 1e6:.6g}")
 
 
-def _price_fields(pricing: CatalogPricing) -> RegistryEntry:
+def band_for_threshold(threshold: int) -> str | None:
+    for supported, band in TIERED_BANDS.items():
+        if abs(threshold - supported) <= BAND_TOLERANCE_TOKENS:
+            return band
+    return None
+
+
+def _price_fields(pricing: CatalogPricing) -> tuple[RegistryEntry, int | None]:
     base: Final[RegistryEntry] = {
         "input_cost_per_token": per_token(pricing.input_per_million),
         "output_cost_per_token": per_token(pricing.output_per_million),
@@ -94,15 +115,18 @@ def _price_fields(pricing: CatalogPricing) -> RegistryEntry:
         "cache_creation_input_token_cost": per_token(pricing.cache_write_input_per_million),
     }
     if pricing.above_threshold is None:
-        return base
+        return base, None
     above: Final = pricing.above_threshold
+    band: Final = band_for_threshold(above.input_token_price_threshold)
+    if band is None:
+        return base, above.input_token_price_threshold
     return {
         **base,
-        "input_cost_per_token_above_272k_tokens": per_token(above.input_per_million),
-        "output_cost_per_token_above_272k_tokens": per_token(above.output_per_million),
-        "cache_read_input_token_cost_above_272k_tokens": per_token(above.cache_read_input_per_million),
-        "cache_creation_input_token_cost_above_272k_tokens": per_token(above.cache_write_input_per_million),
-    }
+        f"input_cost_per_token_{band}": per_token(above.input_per_million),
+        f"output_cost_per_token_{band}": per_token(above.output_per_million),
+        f"cache_read_input_token_cost_{band}": per_token(above.cache_read_input_per_million),
+        f"cache_creation_input_token_cost_{band}": per_token(above.cache_write_input_per_million),
+    }, None
 
 
 def _limit_fields(model: CatalogModel) -> RegistryEntry:
@@ -115,8 +139,9 @@ def _limit_fields(model: CatalogModel) -> RegistryEntry:
     return fields
 
 
-def _synced_fields(model: CatalogModel) -> RegistryEntry:
-    return {**_price_fields(model.pricing), **_limit_fields(model)}
+def _synced_fields(model: CatalogModel) -> tuple[RegistryEntry, int | None]:
+    prices, unmappable_threshold = _price_fields(model.pricing)
+    return {**prices, **_limit_fields(model)}, unmappable_threshold
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,10 +150,19 @@ class SyncOutcome:
     updated: tuple[str, ...] = ()
     unpriced_new_models: tuple[str, ...] = ()
     missing_from_catalog: tuple[str, ...] = ()
+    unmappable_thresholds: tuple[str, ...] = ()
 
     @property
     def has_changes(self) -> bool:
         return bool(self.updated)
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return (
+            tuple(f"new in the catalog, not registered: {key}" for key in self.unpriced_new_models)
+            + tuple(f"registered but gone from the catalog: {key}" for key in self.missing_from_catalog)
+            + tuple(f"long-context threshold matches no cost-map band, entry left untouched: {key}" for key in self.unmappable_thresholds)
+        )
 
 
 def compute_sync(cost_map: CostMap, catalog: Sequence[CatalogModel]) -> SyncOutcome:
@@ -137,6 +171,7 @@ def compute_sync(cost_map: CostMap, catalog: Sequence[CatalogModel]) -> SyncOutc
 
     updated: Final[list[str]] = []
     missing: Final[list[str]] = []
+    unmappable: Final[list[str]] = []
     result: Final[CostMap] = dict(cost_map)
 
     for model_id, key in sorted(registry_ids.items()):
@@ -147,13 +182,14 @@ def compute_sync(cost_map: CostMap, catalog: Sequence[CatalogModel]) -> SyncOutc
         entry = result.get(key)
         if not isinstance(entry, dict):
             continue
-        desired: Final = _synced_fields(model)
-        stale_tiered: Final = () if model.pricing.above_threshold else tuple(
-            f for f in SYNCED_PRICE_FIELDS if f.endswith("_above_272k_tokens")
-        )
+        desired, unmappable_threshold = _synced_fields(model)
+        if unmappable_threshold is not None:
+            unmappable.append(f"{key} (threshold {unmappable_threshold})")
+            continue
+        stale_tiered: Final = tuple(f for f in TIERED_PRICE_FIELDS if f not in desired)
         changes: Final = tuple(
             f"{name}: {entry.get(name)!r} -> {value!r}" for name, value in desired.items() if entry.get(name) != value
-        ) + tuple(f"{name}: {entry[name]!r} removed (no longer above a threshold)" for name in stale_tiered if name in entry)
+        ) + tuple(f"{name}: {entry[name]!r} removed (not priced in that band any more)" for name in stale_tiered if name in entry)
         if not changes:
             continue
         merged: Final = {name: value for name, value in {**entry, **desired}.items() if name not in stale_tiered}
@@ -169,6 +205,7 @@ def compute_sync(cost_map: CostMap, catalog: Sequence[CatalogModel]) -> SyncOutc
         updated=tuple(updated),
         unpriced_new_models=unpriced_new,
         missing_from_catalog=tuple(sorted(missing)),
+        unmappable_thresholds=tuple(sorted(unmappable)),
     )
 
 
@@ -187,14 +224,23 @@ def render_pr_body(outcome: SyncOutcome) -> str:
         f"{_section_block('New in the catalog, not yet registered (needs a human review for capabilities)', outcome.unpriced_new_models)}"
         "\n"
         f"{_section_block('Registered but missing from the catalog', outcome.missing_from_catalog)}"
+        "\n"
+        f"{_section_block('Long-context threshold with no matching cost-map band (left untouched)', outcome.unmappable_thresholds)}"
     )
 
 
 def render_summary(outcome: SyncOutcome) -> str:
     return (
         f"updated={len(outcome.updated)} new_unregistered={len(outcome.unpriced_new_models)} "
-        f"missing={len(outcome.missing_from_catalog)}"
+        f"missing={len(outcome.missing_from_catalog)} unmappable_thresholds={len(outcome.unmappable_thresholds)}"
     )
+
+
+def render_warnings_block(outcome: SyncOutcome) -> str:
+    if not outcome.warnings:
+        return "## cheaperinference registry sync\n\nNo catalog drift to report.\n"
+    bullets: Final = "\n".join(f"- {warning}" for warning in outcome.warnings)
+    return f"## cheaperinference registry sync\n\n{bullets}\n"
 
 
 def load_catalog(raw: bytes) -> list[CatalogModel]:
@@ -204,6 +250,11 @@ def load_catalog(raw: bytes) -> list[CatalogModel]:
         return CATALOG_ADAPTER.validate_python(entries)
     except ValidationError as error:
         raise SyncError(f"the catalog response no longer matches the expected shape: {error}") from error
+
+
+def _github_step_summary() -> Path | None:
+    path: Final = os.environ.get("GITHUB_STEP_SUMMARY")
+    return Path(path) if path else None
 
 
 def _fetch(url: str, headers: Mapping[str, str]) -> bytes:
@@ -222,6 +273,11 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--write", action="store_true", help="apply the sync to the cost map files (default: dry run)")
     parser.add_argument("--models-json", type=Path, help="recorded catalog response to use instead of the live API")
     parser.add_argument("--pr-body-file", type=Path, help="write the generated PR body to this path")
+    parser.add_argument(
+        "--summary-file",
+        type=Path,
+        help="append a markdown block of catalog warnings here (default: $GITHUB_STEP_SUMMARY when set)",
+    )
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     args: Final = parser.parse_args(argv)
 
@@ -241,6 +297,13 @@ def main(argv: Sequence[str]) -> int:
 
     if args.pr_body_file is not None:
         args.pr_body_file.write_text(body)
+    summary_path: Final = args.summary_file or _github_step_summary()
+    if summary_path is not None:
+        with summary_path.open("a", encoding="utf-8") as summary:
+            summary.write(render_warnings_block(outcome))
+    if os.environ.get("GITHUB_ACTIONS"):
+        for warning in outcome.warnings:
+            print(f"::warning::{warning}")
     if args.write and outcome.has_changes:
         for relpath in COST_MAP_RELPATHS:
             (args.repo_root / relpath).write_text(_serialize(outcome.cost_map))
