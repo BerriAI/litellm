@@ -210,13 +210,15 @@ UNSUPPORTED_TOOL_CHOICES = [
 TOOLS = [
     {
         "type": "function",
-        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
     }
 ]
 
 
 def _deepinfra_optional_params(monkeypatch, **kwargs):
-    """Run the user-facing param translation for a DeepInfra chat model."""
     from litellm.utils import get_optional_params
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -233,12 +235,6 @@ def _deepinfra_optional_params(monkeypatch, **kwargs):
 
 @pytest.mark.parametrize("tool_choice", SUPPORTED_TOOL_CHOICES)
 def test_deepinfra_forwards_supported_tool_choice(monkeypatch, tool_choice):
-    """
-    DeepInfra accepts tool_choice "auto" and "none", so both must reach the request body.
-
-    Regression: the tool_choice guard used to intercept every value and never write one
-    back, so a caller asking for "none" still got tools called.
-    """
     optional_params = _deepinfra_optional_params(monkeypatch, tool_choice=tool_choice)
 
     assert optional_params["tool_choice"] == tool_choice
@@ -247,14 +243,12 @@ def test_deepinfra_forwards_supported_tool_choice(monkeypatch, tool_choice):
 
 @pytest.mark.parametrize("tool_choice", UNSUPPORTED_TOOL_CHOICES)
 def test_deepinfra_rejects_unsupported_tool_choice(monkeypatch, tool_choice):
-    """Values DeepInfra cannot honour still raise rather than being sent and ignored."""
     with pytest.raises(litellm.UnsupportedParamsError, match="tool_choice"):
         _deepinfra_optional_params(monkeypatch, tool_choice=tool_choice)
 
 
 @pytest.mark.parametrize("tool_choice", UNSUPPORTED_TOOL_CHOICES)
 def test_deepinfra_drops_unsupported_tool_choice_when_asked(monkeypatch, tool_choice):
-    """drop_params=True drops only the unsupported tool_choice, leaving tools intact."""
     optional_params = _deepinfra_optional_params(
         monkeypatch, tool_choice=tool_choice, drop_params=True
     )
@@ -264,8 +258,9 @@ def test_deepinfra_drops_unsupported_tool_choice_when_asked(monkeypatch, tool_ch
 
 
 @pytest.mark.parametrize("tool_choice", UNSUPPORTED_TOOL_CHOICES)
-def test_deepinfra_drops_unsupported_tool_choice_via_global_flag(monkeypatch, tool_choice):
-    """The module-level litellm.drop_params flag drops it the same way."""
+def test_deepinfra_drops_unsupported_tool_choice_via_global_flag(
+    monkeypatch, tool_choice
+):
     from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
 
     monkeypatch.setattr(litellm, "drop_params", True)
@@ -281,7 +276,6 @@ def test_deepinfra_drops_unsupported_tool_choice_via_global_flag(monkeypatch, to
 
 
 def test_deepinfra_tool_choice_guard_leaves_other_params_alone(monkeypatch):
-    """Params sharing the mapping loop with tool_choice still map, including renames."""
     from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
 
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -312,12 +306,11 @@ def test_deepinfra_tool_choice_guard_leaves_other_params_alone(monkeypatch):
         ("meta-llama/Meta-Llama-3.1-70B-Instruct", 0),
     ],
 )
-def test_deepinfra_zero_temperature_rewrite_survives(monkeypatch, model, expected_temperature):
-    """
-    Mistral-7B rewrites temperature 0 to a near-zero value and relies on falling through
-    to the generic copy to emit it. Chaining the tool_choice guard onto that branch would
-    silently swallow the rewritten value.
-    """
+def test_deepinfra_zero_temperature_rewrite_survives(
+    monkeypatch, model, expected_temperature
+):
+    """Mistral-7B's zero-temperature rewrite emits via the generic copy, so the
+    tool_choice guard must not chain onto that branch and swallow it."""
     from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
 
     monkeypatch.setattr(litellm, "drop_params", False)
