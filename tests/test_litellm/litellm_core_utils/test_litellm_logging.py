@@ -45,6 +45,24 @@ def logging_obj():
     )
 
 
+class _RecordingCustomLogger(CustomLogger):
+    def __init__(self, turn_off_message_logging: bool):
+        super().__init__(turn_off_message_logging=turn_off_message_logging)
+        self.received_kwargs: list[dict] = []
+
+    def log_stream_event(self, kwargs: dict, response_obj: object, start_time, end_time):
+        self.received_kwargs.append(kwargs)
+
+    def log_success_event(self, kwargs: dict, response_obj: object, start_time, end_time):
+        self.received_kwargs.append(kwargs)
+
+    def log_failure_event(self, kwargs: dict, response_obj: object, start_time, end_time):
+        self.received_kwargs.append(kwargs)
+
+    async def async_log_failure_event(self, kwargs: dict, response_obj: object, start_time, end_time):
+        self.received_kwargs.append(kwargs)
+
+
 def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
     assert logging_obj.get_combined_callback_list(
         dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
@@ -974,6 +992,128 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
         assert any(type(cb) is DataDogLogger for cb in logging_module._in_memory_loggers)
     finally:
         logging_module._in_memory_loggers.clear()
+
+
+def test_init_custom_logger_applies_callback_settings_turn_off_message_logging(monkeypatch):
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setattr(litellm, "callback_settings", {"langsmith": {"turn_off_message_logging": True}})
+    logging_module._in_memory_loggers.clear()
+    try:
+        configured_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="langsmith",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        default_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="literalai",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        assert configured_logger is not None
+        assert configured_logger.turn_off_message_logging is True
+        assert default_logger is not None
+        assert default_logger.turn_off_message_logging is False
+
+        monkeypatch.setattr(litellm, "callback_settings", {})
+        logging_module._in_memory_loggers.clear()
+        empty_settings_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="langsmith",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        assert empty_settings_logger is not None
+        assert empty_settings_logger.turn_off_message_logging is False
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+def test_success_handler_redacts_custom_logger_payload_per_callback(logging_obj):
+    redacting_logger = _RecordingCustomLogger(turn_off_message_logging=True)
+    plain_logger = _RecordingCustomLogger(turn_off_message_logging=False)
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    standard_logging_object = {
+        "messages": [{"role": "user", "content": "original message"}],
+        "response": {"choices": []},
+    }
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[redacting_logger, plain_logger],
+    ):
+        logging_obj.success_handler(
+            result={"id": "response"},
+            standard_logging_object=standard_logging_object,
+        )
+
+    assert redacting_logger.received_kwargs[0]["standard_logging_object"]["messages"][0]["content"] == (
+        "redacted-by-litellm"
+    )
+    assert plain_logger.received_kwargs[0]["standard_logging_object"]["messages"][0]["content"] == "original message"
+    assert (
+        logging_obj.model_call_details["standard_logging_object"]["messages"][0]["content"] == "original message"
+    )
+
+
+def test_failure_handler_redacts_custom_logger_payload_per_callback(logging_obj):
+    redacting_logger = _RecordingCustomLogger(turn_off_message_logging=True)
+    plain_logger = _RecordingCustomLogger(turn_off_message_logging=False)
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.model_call_details["messages"] = [{"role": "user", "content": "original message"}]
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[redacting_logger, plain_logger],
+    ):
+        logging_obj.failure_handler(
+            exception=Exception("test error"),
+            traceback_exception="",
+        )
+
+    assert redacting_logger.received_kwargs[0]["standard_logging_object"]["messages"][0]["content"] == (
+        "redacted-by-litellm"
+    )
+    assert plain_logger.received_kwargs[0]["standard_logging_object"]["messages"][0]["content"] == "original message"
+    assert (
+        logging_obj.model_call_details["standard_logging_object"]["messages"][0]["content"] == "original message"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_redacts_custom_logger_payload_per_callback(logging_obj):
+    redacting_logger = _RecordingCustomLogger(turn_off_message_logging=True)
+    plain_logger = _RecordingCustomLogger(turn_off_message_logging=False)
+    logging_obj.stream = False
+    logging_obj.call_type = "acompletion"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.model_call_details["messages"] = [{"role": "user", "content": "original message"}]
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[redacting_logger, plain_logger],
+    ):
+        await logging_obj.async_failure_handler(
+            exception=Exception("test error"),
+            traceback_exception="",
+        )
+
+    assert redacting_logger.received_kwargs[0]["standard_logging_object"]["messages"][0]["content"] == (
+        "redacted-by-litellm"
+    )
+    assert plain_logger.received_kwargs[0]["standard_logging_object"]["messages"][0]["content"] == "original message"
+    assert (
+        logging_obj.model_call_details["standard_logging_object"]["messages"][0]["content"] == "original message"
+    )
 
 
 @pytest.mark.asyncio

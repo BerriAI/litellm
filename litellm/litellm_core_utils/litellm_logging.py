@@ -2856,7 +2856,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
-                                kwargs=self.model_call_details,
+                                kwargs=redact_streaming_responses_for_custom_logger(
+                                    model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                        model_call_details=self.model_call_details
+                                    ),
+                                    custom_logger=callback,
+                                ),
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
@@ -2869,7 +2874,12 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = self.model_call_details["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=self.model_call_details,
+                                kwargs=redact_streaming_responses_for_custom_logger(
+                                    model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                        model_call_details=self.model_call_details
+                                    ),
+                                    custom_logger=callback,
+                                ),
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
@@ -3493,7 +3503,9 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=result,
-                            kwargs=self.model_call_details,
+                            kwargs=callback.redact_standard_logging_payload_from_model_call_details(
+                                model_call_details=self.model_call_details
+                            ),
                         )
                     if callback == "langfuse":
                         global langFuseLogger
@@ -3624,7 +3636,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     continue
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
-                        kwargs=self.model_call_details,
+                        kwargs=callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=self.model_call_details
+                        ),
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
@@ -4236,8 +4250,27 @@ def _init_custom_logger_compatible_class(
     custom_logger_init_args: dict | None = {},
 ) -> CustomLogger | None:
     """
-    Initialize a custom logger compatible class
+    Initialize a custom logger compatible class and apply its proxy `callback_settings`.
     """
+    custom_logger: Final = _construct_custom_logger_compatible_class(
+        logging_integration, internal_usage_cache, llm_router, custom_logger_init_args
+    )
+    if custom_logger is None:
+        return None
+    turn_off_message_logging: Final = _get_custom_logger_settings_from_proxy_server(
+        callback_name=logging_integration
+    ).get("turn_off_message_logging")
+    if isinstance(turn_off_message_logging, bool):
+        custom_logger.turn_off_message_logging = turn_off_message_logging
+    return custom_logger
+
+
+def _construct_custom_logger_compatible_class(
+    logging_integration: _custom_logger_compatible_callbacks_literal,
+    internal_usage_cache: DualCache | None,
+    llm_router: Any | None,  # expect litellm.Router, but typing errors due to circular import
+    custom_logger_init_args: dict | None = None,
+) -> CustomLogger | None:
     try:
         custom_logger_init_args = custom_logger_init_args or {}
         if logging_integration == "agentops":  # Add AgentOps initialization
@@ -5222,6 +5255,8 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> dict:
     callback_settings:
         otel:
             message_logging: False
+        langsmith:
+            turn_off_message_logging: true
     """
     if litellm.callback_settings:
         return dict(litellm.callback_settings.get(callback_name, {}))
