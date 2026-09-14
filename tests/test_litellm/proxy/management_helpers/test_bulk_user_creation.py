@@ -221,6 +221,18 @@ async def test_creates_users_and_team_membership_in_every_store():
 
 
 @pytest.mark.asyncio
+async def test_user_id_already_on_the_roster_keeps_the_team_and_is_not_added_twice():
+    prisma = _FakePrisma(teams=[_team("t1", [Member(user_id="u1", role="user")])])
+    response = await _run(prisma, [{"user_id": "u1", "teams": ["t1"]}, {"user_id": "u2", "teams": ["t1"]}])
+
+    assert [r.success for r in response.results] == [True, True]
+    assert [r.teams for r in response.results] == [("t1",), ("t1",)]
+    assert [r.error for r in response.results] == [None, None]
+    assert prisma.db.litellm_usertable.rows["u1"].teams == ["t1"]
+    assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u1", "u2"]
+
+
+@pytest.mark.asyncio
 async def test_one_insert_and_one_locked_write_per_team():
     prisma = _FakePrisma(teams=[_team("t1"), _team("t2")])
     await _run(

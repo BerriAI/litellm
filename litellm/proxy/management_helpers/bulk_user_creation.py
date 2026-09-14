@@ -572,7 +572,7 @@ async def _write_team_roster(
         return _TeamWrite(
             team_id=team.team_id,
             after=after,
-            added=frozenset(member.user_id for member in new_members),
+            added=frozenset(member.user_id for member in members),
             failed=MappingProxyType({}),
         )
     except Exception as exc:  # noqa: BLE001  # the team write failure is reported on each affected row
