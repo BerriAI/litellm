@@ -315,3 +315,10 @@ def test_to_openai_chunk_from_orchestration_result():
     assert chunk is not None
     assert chunk.choices[0].delta.content == "Hello "
     assert chunk.choices[0].logprobs is None
+
+
+def test_to_openai_chunk_ignores_non_dict_final_result():
+    from litellm.llms.sap.chat.handler import _StreamParser
+
+    assert _StreamParser.to_openai_chunk({"final_result": None}) is None
+    assert _StreamParser.to_openai_chunk({"final_result": "not-a-chunk"}) is None
