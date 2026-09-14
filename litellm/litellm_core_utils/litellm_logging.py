@@ -1269,27 +1269,29 @@ class Logging(LiteLLMLoggingBaseClass):
             else additional_args
         )
 
-    def _pre_call(self, input, api_key, model=None, additional_args={}):
+    def _pre_call(self, input, api_key, model=None, additional_args=None):
         """
         Common helper function across the sync + async pre-call function
         """
 
+        effective_additional_args: Final[dict[str, object]] = additional_args if additional_args is not None else {}
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
-        self.model_call_details["additional_args"] = additional_args
+        self.model_call_details["additional_args"] = effective_additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
         if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
             self.classifier_input = (
                 None
                 if should_redact_message_logging(self.model_call_details)
                 else classifier_input_snapshot(
-                    additional_args.get("complete_input_dict"), openai_sdk=additional_args.get("openai_sdk") is True
+                    effective_additional_args.get("complete_input_dict"),
+                    openai_sdk=effective_additional_args.get("openai_sdk") is True,
                 )
             )
         if model:  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
         self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
-            additional_args.get("api_base", "")
+            effective_additional_args.get("api_base", "")
         )
 
     def record_api_call_start_time(self) -> None:
@@ -1297,14 +1299,15 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.model_call_details.get("first_api_call_start_time") is None:
             self.model_call_details["first_api_call_start_time"] = self.model_call_details["api_call_start_time"]
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):
+    def pre_call(self, input, api_key, model=None, additional_args=None):
         # Log the exact input to the LLM API
         try:
+            effective_additional_args: Final[dict[str, object]] = additional_args if additional_args is not None else {}
             self._pre_call(
                 input=input,
                 api_key=api_key,
                 model=model,
-                additional_args=additional_args,
+                additional_args=effective_additional_args,
             )
             callback_additional_args: Final[dict[str, object]] = (  # mutable-ok: callbacks mutate request data
                 self.model_call_details["additional_args"]

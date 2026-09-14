@@ -15,7 +15,6 @@ from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.constants import EMPTY_MAPPING as _EMPTY_MAPPING
 from litellm.constants import request_timeout
 from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -1159,14 +1158,12 @@ def responses(
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
         effective_extra_headers: Final = (
             add_provider_affinity_header(
-                headers=extra_headers or _EMPTY_MAPPING,
+                headers=extra_headers or {},
                 litellm_params=litellm_params,
             )
             if litellm_params.provider_affinity_header is not None
             else extra_headers
         )
-        if litellm_params.provider_affinity_header is not None:
-            local_vars["extra_headers"] = effective_extra_headers
 
         #########################################################
         # MOCK RESPONSE LOGIC
