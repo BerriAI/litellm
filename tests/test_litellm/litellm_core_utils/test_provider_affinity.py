@@ -217,3 +217,25 @@ def test_pre_call_callback_redacts_affinity_and_preserves_header_mutations():
         "X-Conversation-Id": PROVIDER_AFFINITY_REDACTED_VALUE,
         "X-Customer-Header": "edited",
     }
+
+
+def test_pre_call_does_not_share_omitted_additional_args():
+    logging = Logging(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="call-123",
+        function_id="function-123",
+    )
+
+    logging.pre_call(input="first", api_key="test-key")
+    first_additional_args = logging.model_call_details["additional_args"]
+    first_additional_args["sentinel"] = True
+
+    logging.pre_call(input="second", api_key="test-key")
+    second_additional_args = logging.model_call_details["additional_args"]
+
+    assert second_additional_args == {}
+    assert second_additional_args is not first_additional_args
