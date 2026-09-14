@@ -284,6 +284,17 @@ def test_non_string_observation_id_is_normalized(supplied):
     assert resolved == resolve_observation_id(supplied)
 
 
+def test_all_zero_ids_are_hashed_instead_of_passed_through():
+    zero_trace = "0" * 32
+    zero_span = "0" * 16
+
+    assert resolve_trace_id(zero_trace) != zero_trace
+    assert resolve_trace_id(zero_trace) == resolve_trace_id(zero_trace)
+    assert int(resolve_trace_id(zero_trace), 16) != 0
+    assert resolve_observation_id(zero_span) != zero_span
+    assert int(resolve_observation_id(zero_span), 16) != 0
+
+
 def test_hyphen_only_trace_ids_are_deterministic():
     assert resolve_trace_id("---") == resolve_trace_id("---")
 

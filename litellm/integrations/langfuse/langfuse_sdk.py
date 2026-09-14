@@ -44,8 +44,8 @@ __all__ = (
 AS_ROOT_ATTRIBUTE: Final = "langfuse.internal.as_root"
 PUBLIC_ATTRIBUTE: Final = "langfuse.trace.public"
 RELEASE_ATTRIBUTE: Final = "langfuse.release"
-_TRACE_ID_PATTERN: Final = re.compile(r"^[0-9a-f]{32}$")
-_OBSERVATION_ID_PATTERN: Final = re.compile(r"^[0-9a-f]{16}$")
+_TRACE_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{32}$")
+_OBSERVATION_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{16}$")
 
 
 def to_unix_nanos(value: datetime | float | None) -> int | None:
