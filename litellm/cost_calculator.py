@@ -60,9 +60,6 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.deepseek.cost_calculator import (
     cost_per_token as deepseek_cost_per_token,
 )
-from litellm.llms.fireworks_ai.cost_calculator import (
-    cost_per_token as fireworks_ai_cost_per_token,
-)
 from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
 from litellm.llms.lemonade.cost_calculator import (
     cost_per_token as lemonade_cost_per_token,
@@ -75,9 +72,6 @@ from litellm.llms.openai.cost_calculation import (
 )
 from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
-)
-from litellm.llms.perplexity.cost_calculator import (
-    cost_per_token as perplexity_cost_per_token,
 )
 from litellm.llms.tencent.cost_calculator import (
     cost_per_token as tencent_cost_per_token,
@@ -647,6 +641,10 @@ def cost_per_token(
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
+        from litellm.llms.fireworks_ai.cost_calculator import (
+            cost_per_token as fireworks_ai_cost_per_token,
+        )
+
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
         return azure_openai_cost_per_token(
@@ -662,6 +660,10 @@ def cost_per_token(
     elif custom_llm_provider == "tencent":
         return tencent_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
+        from litellm.llms.perplexity.cost_calculator import (
+            cost_per_token as perplexity_cost_per_token,
+        )
+
         return perplexity_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "xai":
         return xai_cost_per_token(model=model, usage=usage_block)
