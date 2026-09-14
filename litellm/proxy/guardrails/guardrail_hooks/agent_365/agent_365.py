@@ -60,6 +60,10 @@ GATEWAY_SCOPE_TEMPLATE: Final = "api://{client_id}/access_as_user"
 _GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
     {"invalid_client", "unauthorized_client", "invalid_scope", "invalid_resource"}
 )
+# Entra reports a malformed or unverifiable assertion as ``invalid_client`` too; only its AADSTS50027xx
+# (InvalidJwtToken) sub-codes tell that apart from a bad gateway secret.
+_INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
+_AADSTS_CODES_ADAPTER: Final = TypeAdapter(tuple[int, ...])
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
 _TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
@@ -74,6 +78,13 @@ def _parse_expires_in(raw: object) -> float:
         return float(raw)
     except ValueError:
         return _DEFAULT_TOKEN_TTL_SECONDS
+
+
+def _parse_aadsts_codes(raw: object) -> tuple[int, ...]:
+    try:
+        return _AADSTS_CODES_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return ()
 
 
 def _parse_tool_input_schema(raw: object) -> Mapping[str, object] | None:
@@ -117,11 +128,20 @@ class _BlockedDetail(TypedDict):
 
 
 class Agent365TokenExchangeError(Exception):
-    def __init__(self, status_code: int, error_code: str, description: str) -> None:
+    def __init__(self, status_code: int, error_code: str, description: str, aadsts_codes: tuple[int, ...] = ()) -> None:
         super().__init__(f"{error_code}: {description}")
         self.status_code = status_code
         self.error_code = error_code
         self.description = description
+        self.aadsts_codes = aadsts_codes
+
+    @property
+    def gateway_owned(self) -> bool:
+        """Whether the gateway's own client credentials, scope or resource were refused, as opposed to the
+        caller's assertion. The caller cannot fix a gateway-owned rejection by signing in again."""
+        if self.error_code not in _GATEWAY_OWNED_TOKEN_ERRORS:
+            return False
+        return not any(str(code).startswith(_INVALID_ASSERTION_AADSTS_PREFIX) for code in self.aadsts_codes)
 
 
 class Agent365MalformedResponseError(Exception):
@@ -219,7 +239,7 @@ class Agent365Guardrail(CustomGuardrail):
         try:
             obo_token: Final = await self._get_obo_token(assertion)
         except Agent365TokenExchangeError as exc:
-            if exc.error_code in _GATEWAY_OWNED_TOKEN_ERRORS:
+            if exc.gateway_owned:
                 return self._handle_unavailable(
                     data=data,
                     tool_name=tool_name,
@@ -446,7 +466,7 @@ class Agent365Guardrail(CustomGuardrail):
         try:
             await self._get_obo_token(assertion)
         except Agent365TokenExchangeError as exc:
-            return exc.error_code not in _GATEWAY_OWNED_TOKEN_ERRORS
+            return not exc.gateway_owned
         except (Agent365ThrottledError, Agent365MalformedResponseError, httpx.HTTPError, LitellmTimeout, TimeoutError):
             return False
         return False
@@ -492,6 +512,7 @@ class Agent365Guardrail(CustomGuardrail):
                 status_code=response.status_code,
                 error_code=str(body.get("error", "invalid_grant")),
                 description=str(body.get("error_description", ""))[:512],
+                aadsts_codes=_parse_aadsts_codes(body.get("error_codes")),
             )
         if "access_token" not in body:
             raise Agent365MalformedResponseError("the Entra token endpoint returned no access_token")

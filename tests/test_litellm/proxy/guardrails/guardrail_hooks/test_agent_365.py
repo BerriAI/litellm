@@ -632,6 +632,30 @@ class TestUnreachableFallback:
         assert "client_secret" in info["guardrail_response"]["reason"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("aadsts_code", [5002710, 5002723], ids=["malformed-header", "no-kid"])
+    async def test_malformed_assertion_reported_as_invalid_client_is_a_caller_401(self, aadsts_code: int):
+        """Entra answers ``invalid_client`` for a forged or garbled assertion (AADSTS50027xx) exactly as for a
+        bad gateway secret; the sub-code is what says the caller, not the gateway, has to fix it."""
+        handler: Final = FakeHandler(
+            [
+                _response(
+                    401,
+                    {
+                        "error": "invalid_client",
+                        "error_description": f"AADSTS{aadsts_code}: Invalid JWT token.",
+                        "error_codes": [aadsts_code],
+                    },
+                )
+            ]
+        )
+        guardrail: Final = _make_guardrail(handler)
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 401
+        assert "client_secret" not in _guardrail_info(data)["guardrail_response"]["reason"]
+
+    @pytest.mark.asyncio
     async def test_gateway_credential_rejection_follows_fail_open(self):
         handler: Final = FakeHandler(
             [_response(401, {"error": "invalid_client", "error_description": "AADSTS7000215: invalid client secret"})]

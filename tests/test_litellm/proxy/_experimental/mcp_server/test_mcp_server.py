@@ -9066,13 +9066,24 @@ class TestAgent365ChallengeAtConnect:
         assert await self._connect(self._server([self.GATEWAY_SCOPE]), self.ENTRA_BEARER) is None
 
     @pytest.mark.asyncio
-    async def test_assertion_entra_refuses_to_exchange_is_challenged(self, agent_365_guardrail):
+    @pytest.mark.parametrize(
+        "entra_body",
+        [
+            {"error": "invalid_grant", "error_description": "AADSTS700084: The refresh token was issued..."},
+            {
+                "error": "invalid_client",
+                "error_description": "AADSTS5002723: Invalid JWT token.",
+                "error_codes": [5002723],
+            },
+        ],
+        ids=["expired-or-wrong-audience", "forged-reported-as-invalid_client"],
+    )
+    async def test_assertion_entra_refuses_to_exchange_is_challenged(self, agent_365_guardrail, entra_body):
         """An expired, wrong-audience, or forged Entra token looks like a valid one. Only the OBO exchange
         can tell, and its verdict must arrive at connect, where WWW-Authenticate reaches the client,
-        rather than inside every tools/call JSON-RPC error."""
-        agent_365_guardrail.async_handler.post.return_value = self._entra_response(
-            400, {"error": "invalid_grant", "error_description": "AADSTS700084: The refresh token was issued..."}
-        )
+        rather than inside every tools/call JSON-RPC error. Entra files a forged assertion under
+        ``invalid_client`` with an AADSTS50027xx sub-code, which must not read as a gateway secret problem."""
+        agent_365_guardrail.async_handler.post.return_value = self._entra_response(400, entra_body)
 
         challenge = await self._connect(self._server([self.GATEWAY_SCOPE]), self.ENTRA_BEARER)
 
@@ -9088,7 +9099,16 @@ class TestAgent365ChallengeAtConnect:
     @pytest.mark.parametrize(
         "entra_outcome",
         [
-            {"return_value": _entra_response(401, {"error": "invalid_client"})},
+            {
+                "return_value": _entra_response(
+                    401,
+                    {
+                        "error": "invalid_client",
+                        "error_description": "AADSTS7000215: Invalid client secret",
+                        "error_codes": [7000215],
+                    },
+                )
+            },
             {"return_value": _entra_response(503, {"error": "temporarily_unavailable"})},
             {"side_effect": httpx.ConnectError("dns")},
         ],
