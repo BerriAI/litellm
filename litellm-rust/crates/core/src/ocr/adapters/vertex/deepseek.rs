@@ -57,9 +57,15 @@ impl OcrAdapter for VertexDeepSeekAdapter {
         let document = request.document.clone();
         let body =
             deepseek::transform_ocr_request(&provider_model(&request.model), document, &params)?;
-        transform_request_body(client, request, &url, &authentication.headers, body, |_| {
-            Ok(())
-        })
+        transform_request_body(
+            client,
+            request,
+            &url,
+            &authentication.headers,
+            false,
+            body,
+            |_| Ok(()),
+        )
         .await
     }
 

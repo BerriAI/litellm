@@ -27,6 +27,8 @@ jobs:
           sparse-checkout: |
             .github/e2e-stack
             tests/e2e/access_control
+            tests/e2e/management/test_jwt_management_e2e.py
+            tests/e2e/other/test_jwt_auth_e2e.py
           persist-credentials: false
           ref: ${{ github.sha }}
 
@@ -45,7 +47,8 @@ jobs:
             --jq '.[] | select(.status != "removed") | .filename')"
           gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha' | grep -Fxq "${HEAD_SHA}"
           tests="$(printf '%s\n' "${files}" \
-            | python3 .github/e2e-stack/select_tests.py tests/e2e/access_control/test_*.py)"
+            | python3 .github/e2e-stack/select_tests.py tests/e2e/access_control/test_*.py \
+                tests/e2e/management/test_jwt_management_e2e.py tests/e2e/other/test_jwt_auth_e2e.py)"
           echo "tests=${tests}" >> "${GITHUB_OUTPUT}"
           if [ -n "${tests}" ]; then
             echo "any=true" >> "${GITHUB_OUTPUT}"

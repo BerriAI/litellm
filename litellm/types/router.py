@@ -268,6 +268,12 @@ class CredentialLiteLLMParams(BaseModel):
     # callers see it, breaking Azure deployments configured with
     # ``azure_ad_token`` instead of a static ``api_key`` (#30235).
     azure_ad_token: str | None = None
+    tenant_id: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    azure_scope: str | None = None
+    azure_username: str | None = None
+    azure_password: str | None = None
     ## VERTEX AI ##
     vertex_project: str | None = None
     vertex_location: str | None = None

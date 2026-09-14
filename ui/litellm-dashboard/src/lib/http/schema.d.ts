@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/agent-skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_agent_skills_index_json_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/jwks.json": {
         parameters: {
             query?: never;
@@ -207,17 +227,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Oauth Protected Resource Mcp
-         * @description OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
-         *
-         *     Legacy pattern: /{server_name}/mcp
-         *     Discovery path: /.well-known/oauth-protected-resource/{server_name}/mcp
-         *
-         *     This endpoint is kept for backward compatibility. New integrations should
-         *     use the standard MCP pattern (/mcp/{server_name}) instead.
-         */
-        get: operations["oauth_protected_resource_mcp__well_known_oauth_protected_resource_get"];
+        /** Oauth Protected Resource Root */
+        get: operations["oauth_protected_resource_root__well_known_oauth_protected_resource_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -311,6 +322,26 @@ export interface paths {
         };
         /** Openid Configuration */
         get: operations["openid_configuration__well_known_openid_configuration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_skills_index_json_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1178,6 +1209,23 @@ export interface paths {
         };
         /** Authorize Flow */
         get: operations["authorize_flow_authorize_flow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/authorize/mcp-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authorize Mcp Session */
+        get: operations["authorize_mcp_session_authorize_mcp_session_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4161,6 +4209,7 @@ export interface paths {
          *
          *     Returns:
          *     - worker_pid: Process ID
+         *     - hostname: Host (the pod on Kubernetes) the worker runs on
          *     - status: Overall health based on memory usage
          *     - memory: Process memory usage and RAM info
          *     - caches: Cache item counts and descriptions
@@ -8080,6 +8129,7 @@ export interface paths {
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
+         *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - models: Optional[list] - Model_name's a user is allowed to call
@@ -16731,7 +16781,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16837,7 +16886,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -19967,6 +20015,26 @@ export interface paths {
          *     Returns: DeleteSkillResponse with type="skill_deleted"
          */
         delete: operations["delete_skill_v1_skills__skill_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{skill_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Archive
+         * @description Stored skill upload, repacked so SKILL.md sits at the archive root.
+         */
+        get: operations["agent_skills_archive_v1_skills__skill_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -23127,6 +23195,32 @@ export interface components {
             }[] | null;
             /** Tags */
             tags?: string[];
+        };
+        /** AgentSkillsIndex */
+        AgentSkillsIndex: {
+            /**
+             * $Schema
+             * @default https://schemas.agentskills.io/discovery/0.2.0/schema.json
+             */
+            $schema: string;
+            /** Skills */
+            skills: components["schemas"]["AgentSkillsIndexEntry"][];
+        };
+        /** AgentSkillsIndexEntry */
+        AgentSkillsIndexEntry: {
+            /** Description */
+            description: string;
+            /** Digest */
+            digest: string;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "archive";
+            /** Url */
+            url: string;
         };
         /**
          * AlertType
@@ -28364,6 +28458,8 @@ export interface components {
             team_id?: string | null;
             /** User Email */
             user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * KeyMetricWithMetadata
@@ -29541,6 +29637,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -29589,6 +29691,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -29802,6 +29908,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -37982,6 +38090,11 @@ export interface components {
             } | null;
             /** Policies */
             policies?: string[] | null;
+            /**
+             * Project Id
+             * @description Omit to retain the project, or send null to detach. Assigning a different project is not supported.
+             */
+            project_id?: string | null;
             /** Prompts */
             prompts?: string[] | null;
             /** Rotation Interval */
@@ -39738,6 +39851,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -39786,6 +39905,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -39999,6 +40122,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -40077,6 +40202,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_skills_index__well_known_agent_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
                 };
             };
         };
@@ -40285,11 +40430,9 @@ export interface operations {
             };
         };
     };
-    oauth_protected_resource_mcp__well_known_oauth_protected_resource_get: {
+    oauth_protected_resource_root__well_known_oauth_protected_resource_get: {
         parameters: {
-            query?: {
-                mcp_server_name?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -40302,16 +40445,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": {
+                        [key: string]: string | string[];
+                    };
                 };
             };
         };
@@ -40414,6 +40550,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_skills_index__well_known_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
                 };
             };
         };
@@ -41639,6 +41795,43 @@ export interface operations {
         parameters: {
             query: {
                 flow: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    authorize_mcp_session_authorize_mcp_session_get: {
+        parameters: {
+            query: {
+                redirect_uri: string;
+                client_id: string;
+                state?: string;
+                code_challenge?: string | null;
+                code_challenge_method?: string | null;
+                response_type?: string | null;
+                resource?: string | null;
             };
             header?: never;
             path?: never;
@@ -50279,7 +50472,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive). */
                 search?: string | null;
@@ -50303,7 +50496,7 @@ export interface operations {
                 access_group_id?: string | null;
                 /** @description Filter keys by agent ID */
                 agent_id?: string | null;
-                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                /** @description If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys. */
                 substring_matching?: boolean;
                 /** @description Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration. */
                 expires?: string | null;
@@ -65098,6 +65291,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSkillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_skills_archive_v1_skills__skill_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */
