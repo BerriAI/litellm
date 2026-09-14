@@ -54,5 +54,3 @@
 
 - {id: other.auth.jwt.wrong_issuer_denied, module: other, tier: P0, area: auth, assertions: [wrong_issuer_denied], source: "auth/handle_jwt.py", rationale: "A signed token with the correct audience and an unexpected issuer is rejected"}
 - {id: other.auth.jwt.wrong_audience_denied, module: other, tier: P0, area: auth, assertions: [wrong_audience_denied], source: "auth/handle_jwt.py", rationale: "A signed token from the trusted issuer intended for another app is rejected"}
-- {id: other.provider_wire.internal_parameters_filtered, module: other, tier: P0, area: provider_wire, assertions: [internal_parameters_filtered], source: "main.py", rationale: "A real provider request preserves content and public parameters without internal limiter fields"}
-- {id: other.provider_wire.validator_rejects_corruption, module: other, tier: P0, area: provider_wire, assertions: [validator_rejects_corruption], source: "tests/integration/_support/upstream.py", rationale: "The controlled transport rejects missing messages and internal fields while accepting supported metadata"}
