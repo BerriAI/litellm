@@ -1667,7 +1667,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _translate_streaming_openai_chunk_to_anthropic_content_block(
         self,
-        choices: Sequence["OpenAIStreamingChoice | StreamingChoices | Choices"],
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
         thinking_disabled: bool = False,
     ) -> tuple[
         Literal["text", "tool_use", "thinking", "redacted_thinking"],
@@ -1709,8 +1709,16 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "redacted_thinking", cast("ContentBlockContentBlockDict", redacted_block)
 
             if block_type == "tool_use":
-                raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
-                tool_name = choice.delta.tool_calls[0].function.name or ""
+                # Explicit narrowing (base pattern): the classifier only emits
+                # "tool_use" when the first tool call carries a function, so
+                # these asserts hold and keep the member accesses below
+                # optional-free without changing behaviour.
+                tool_calls = choice.delta.tool_calls
+                assert tool_calls is not None and len(tool_calls) > 0
+                first_tool_call = tool_calls[0]
+                assert first_tool_call.function is not None
+                raw_id = first_tool_call.id or str(uuid.uuid4())
+                tool_name = first_tool_call.function.name or ""
                 thought_sig: str | None = None
                 if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
                     parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
@@ -1732,7 +1740,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _translate_streaming_openai_chunk_to_anthropic(
         self,
-        choices: Sequence["OpenAIStreamingChoice | StreamingChoices | Choices"],
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
         thinking_disabled: bool = False,
     ) -> tuple[
         StreamingContentBlockDeltaType,

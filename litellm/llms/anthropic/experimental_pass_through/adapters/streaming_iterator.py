@@ -31,7 +31,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
+from litellm.types.utils import AdapterCompletionStreamWrapper, Delta, StreamingChoices
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -1164,16 +1164,45 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         pre-existing tests (test_empty_chunk_is_not_substantial,
         test_reasoning_chunk_is_substantial) call it unbound as
         AnthropicStreamWrapper._chunk_has_substantial_content(chunk) — converting
-        to an instance method would break those calls."""
-        from .transformation import LiteLLMAnthropicMessagesAdapter
+        to an instance method would break those calls.
 
-        return (
-            LiteLLMAnthropicMessagesAdapter._classify_streaming_chunk(
-                choices=chunk.choices,
-                thinking_disabled=thinking_disabled,
+        The two sites' conditions are kept identical in code so they cannot
+        drift into two different notions of substantiality (the CTG-85 failure
+        mode). Rules mirrored from the classifier, per choice, with the same
+        getattr-with-default guards (Delta deletes reasoning_content /
+        thinking_blocks entirely when unset):
+
+        - a reasoning-only chunk is not substantial when thinking is disabled;
+        - a structured thinking / redacted block is always substantial (even
+          with an empty payload) when thinking is enabled;
+        - a flat reasoning_content string is substantial only when it carries
+          non-whitespace, when thinking is enabled;
+        - a tool call with a function, and a truthy (NOT .strip()-based) text
+          content, are substantial regardless of thinking state."""
+        for choice in chunk.choices:
+            reasoning_text = ""
+            has_structured_thinking_block = False
+            if isinstance(choice, StreamingChoices):
+                thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
+                if len(thinking_blocks) > 0:
+                    first_block = thinking_blocks[0]
+                    if first_block.get("type") in ("thinking", "redacted_thinking"):
+                        has_structured_thinking_block = True
+                        reasoning_text = str(first_block.get("thinking") or "")
+                if not has_structured_thinking_block:
+                    reasoning_text = str(getattr(choice.delta, "reasoning_content", "") or "")
+            has_substantial_reasoning = bool(reasoning_text.strip()) or has_structured_thinking_block
+            has_tool_calls = (
+                choice.delta.tool_calls is not None
+                and len(choice.delta.tool_calls) > 0
+                and choice.delta.tool_calls[0].function is not None
             )
-            != "skip"
-        )
+            text_content = str(choice.delta.content or "")
+            if has_tool_calls or bool(text_content):
+                return True
+            if not thinking_disabled and has_substantial_reasoning:
+                return True
+        return False
 
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
