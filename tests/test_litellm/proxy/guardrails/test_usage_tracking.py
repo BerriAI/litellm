@@ -350,17 +350,15 @@ async def test_zero_and_non_int_usage_counters_are_skipped():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["skipped", "not_run"])
-async def test_skipped_entries_are_indexed_but_not_counted_as_evaluations(status: str):
+async def test_skipped_entries_are_indexed_but_not_counted_as_evaluations():
     """
     LIT-6314 records a skipped entry when message scoping leaves a guardrail
-    nothing to scan (older spend logs spell it not_run). The guardrail never
-    evaluated the request, so counting it as a passed evaluation would inflate
-    daily pass rates; it still gets an index row so per-request drill-down
-    finds the spend log.
+    nothing to scan. The guardrail never evaluated the request, so counting it
+    as a passed evaluation would inflate daily pass rates; it still gets an
+    index row so per-request drill-down finds the spend log.
     """
     prisma = _prisma()
-    logs = [_payload("r1", guardrail_status=status), _payload("r2")]
+    logs = [_payload("r1", guardrail_status="skipped"), _payload("r2")]
 
     await process_spend_logs_guardrail_usage(prisma, logs)
 

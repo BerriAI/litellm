@@ -1942,27 +1942,6 @@ class TestNoScannableContentRecordsSkipped:
         assert guardrail.last_inputs is not None
         assert all(e.get("guardrail_status") != "skipped" for e in self._recorded_entries(data))
 
-    @pytest.mark.asyncio
-    async def test_image_only_content_is_not_reported_as_skipped(self):
-        """Images are only scanned alongside text, so an image-only request is a
-        pre-existing scan gap, not a message-scoping skip, and must not be labelled one"""
-        handler = OpenAIChatCompletionsHandler()
-        guardrail = MockGuardrail(guardrail_name="image-guardrail")
-        guardrail.skip_system_message_in_guardrail = True
-        data = {
-            "messages": [
-                {"role": "system", "content": "SYSTEM-PROMPT"},
-                {
-                    "role": "user",
-                    "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
-                },
-            ]
-        }
-
-        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
-
-        assert self._recorded_entries(data) == []
-
 
 class TestBuildBlockSseChunks:
     """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE chunks"""

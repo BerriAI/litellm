@@ -210,7 +210,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         task_mappings=tool_call_task_mappings,
                     )
 
-        elif not images_to_check and not guardrail_to_apply.records_own_guardrail_information:
+        elif not guardrail_to_apply.records_own_guardrail_information:
             guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response="no scannable content after message scoping",
                 request_data=data,
