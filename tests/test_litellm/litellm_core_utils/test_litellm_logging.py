@@ -1046,6 +1046,26 @@ def test_init_custom_logger_applies_callback_settings_turn_off_message_logging(m
         logging_module._in_memory_loggers.clear()
 
 
+def test_init_custom_logger_tolerates_null_callback_settings(monkeypatch):
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setattr(litellm, "callback_settings", {"langsmith": None})
+    logging_module._in_memory_loggers.clear()
+    try:
+        logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="langsmith",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        assert logger is not None
+        assert logger.turn_off_message_logging is False
+        assert logging_module._get_custom_logger_settings_from_proxy_server("langsmith") == {}
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
 def test_success_handler_redacts_custom_logger_payload_per_callback(logging_obj):
     redacting_logger = _RecordingCustomLogger(turn_off_message_logging=True)
     plain_logger = _RecordingCustomLogger(turn_off_message_logging=False)

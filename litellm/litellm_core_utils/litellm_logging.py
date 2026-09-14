@@ -5278,9 +5278,8 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> dict:
         langsmith:
             turn_off_message_logging: true
     """
-    if litellm.callback_settings:
-        return dict(litellm.callback_settings.get(callback_name, {}))
-    return {}
+    callback_settings: Final = litellm.callback_settings.get(callback_name) if litellm.callback_settings else None
+    return dict(callback_settings) if isinstance(callback_settings, dict) else {}
 
 
 def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
