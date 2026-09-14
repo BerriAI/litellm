@@ -14,7 +14,8 @@ guard6_installed=false
 cleanup() {
   original_status=$?
   trap - EXIT INT TERM
-  sudo .venv/bin/python .circleci/scripts/stop_integration_processes.py "$integration_identity" "$(id -u)" \
+  sudo .venv/bin/python .circleci/scripts/stop_integration_processes.py \
+    "$integration_identity" "$(id -u)" "$proxy_pid" "$upstream_pid" \
     > "$results/process-cleanup.txt" 2>&1 || original_status=1
   for owned_pid in "$proxy_pid" "$upstream_pid"; do
     if [ -n "$owned_pid" ]; then
