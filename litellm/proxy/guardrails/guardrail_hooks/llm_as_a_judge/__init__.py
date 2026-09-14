@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.llm_judge import (
     judge_acompletion,
     parse_json_verdict,
 )
-from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
+from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingEvalInformation
 
 JudgeInputType = Literal["request", "response"]
+JudgeEventHook = GuardrailEventHooks | list[GuardrailEventHooks] | Mode
+JudgeModeParam = str | list[str] | Mode | GuardrailEventHooks | list[GuardrailEventHooks] | None
 
 _JUDGE_SYSTEM_PROMPT_TEMPLATE: Final = """You are a quality judge. Evaluate the {subject} against the criteria provided.
 For each criterion, assign a score from 0 to 100 and provide concise reasoning.
@@ -41,13 +43,13 @@ Return ONLY valid JSON in this exact format:
 
 JUDGE_SYSTEM_PROMPTS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
     {
-        "request": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="user's request"),
+        "request": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="request"),
         "response": _JUDGE_SYSTEM_PROMPT_TEMPLATE.format(subject="assistant's response"),
     }
 )
 
 _JUDGE_SUBJECT_LABELS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
-    {"request": "User request to evaluate", "response": "Assistant response to evaluate"}
+    {"request": "Request text to evaluate", "response": "Assistant response to evaluate"}
 )
 
 _VALID_ON_FAILURE: Final = frozenset({"block", "log"})
@@ -100,6 +102,16 @@ def _get_litellm_param(
     return default
 
 
+def _coerce_event_hook(mode: JudgeModeParam) -> JudgeEventHook:
+    if mode is None:
+        return GuardrailEventHooks.post_call
+    if isinstance(mode, Mode):
+        return mode
+    if isinstance(mode, list):
+        return [GuardrailEventHooks(hook) for hook in mode]
+    return GuardrailEventHooks(mode)
+
+
 def _build_judge_prompt(
     criteria: Sequence[JudgeCriterion],
     messages: Sequence[JudgeMessage],
@@ -132,22 +144,15 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         criteria: Sequence[JudgeCriterion],
         overall_threshold: float = 80.0,
         on_failure: Literal["block", "log"] = "block",
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None,
+        event_hook: JudgeModeParam = None,
         default_on: bool = False,
         router_provider: "Callable[[], Router | None] | None" = None,
         **kwargs: Any,
     ) -> None:
-        _event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None
-        if event_hook is not None:
-            if isinstance(event_hook, list):
-                _event_hook = [GuardrailEventHooks(h) if isinstance(h, str) else h for h in event_hook]
-            else:
-                _event_hook = GuardrailEventHooks(event_hook) if isinstance(event_hook, str) else event_hook
-
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=list(self.get_supported_event_hooks()),
-            event_hook=_event_hook or GuardrailEventHooks.post_call,
+            event_hook=_coerce_event_hook(event_hook),
             default_on=default_on,
             **kwargs,
         )
@@ -302,10 +307,7 @@ def initialize_guardrail(
 
     overall_threshold: Final = float(_get_litellm_param(litellm_params, guardrail, "overall_threshold", 80.0))
 
-    mode: Final[str | None] = _get_litellm_param(litellm_params, guardrail, "mode", None)
-    event_hook: GuardrailEventHooks | None = None
-    if isinstance(mode, str) and mode in {e.value for e in GuardrailEventHooks}:
-        event_hook = GuardrailEventHooks(mode)
+    mode: Final[JudgeModeParam] = _get_litellm_param(litellm_params, guardrail, "mode", None)
 
     instance: Final = LLMAsAJudgeGuardrail(
         guardrail_name=guardrail_name,
@@ -313,7 +315,7 @@ def initialize_guardrail(
         criteria=criteria,
         overall_threshold=overall_threshold,
         on_failure=on_failure,
-        event_hook=event_hook,
+        event_hook=mode,
         default_on=bool(_get_litellm_param(litellm_params, guardrail, "default_on", False)),
     )
     litellm.logging_callback_manager.add_litellm_callback(instance)
