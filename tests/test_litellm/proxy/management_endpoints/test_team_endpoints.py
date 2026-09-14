@@ -4204,6 +4204,10 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
         where={"user_id": "org_admin_user"}, include={"organization_memberships": True}
     )
 
+    prisma_client.db.litellm_usertable.find_unique.side_effect = RuntimeError("db down")
+    with pytest.raises(ValueError, match="db down"):
+        await list_teams("org_admin_user")
+
 
 @pytest.mark.asyncio
 async def test_list_team_v1_org_admin_own_query_keeps_memberships_in_other_orgs():
