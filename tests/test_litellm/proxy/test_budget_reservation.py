@@ -2789,6 +2789,49 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
 
 
 @pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_a_second_cancellation_while_shielded():
+    # A second CancelledError arriving while the shielded reconcile is in flight must not
+    # propagate: the reconcile keeps running detached regardless, and there is nothing more
+    # for this call to do but return.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-twice"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=asyncio.CancelledError()),
+    ):
+        # must return without raising
+        await release_budget_reservation_on_cancel(reservation)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_invalidate_failure_after_every_retry_fails():
+    # If both the reconcile retries and the invalidate fallback fail (e.g. a persistent
+    # outage), there is nothing left to try: the failure must be logged and swallowed,
+    # not propagated, and the reservation still ends up finalized so it is not reprocessed.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-double-failure"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ), patch(
+        "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+        new=AsyncMock(side_effect=RuntimeError("redis still down")),
+    ):
+        # must return without raising
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
 async def test_release_budget_reservation_on_cancel_invalidates_counter_when_reconcile_persistently_fails(
     spend_counter_state,
 ):

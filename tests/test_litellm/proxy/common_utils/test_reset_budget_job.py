@@ -3479,6 +3479,30 @@ def test_invalidate_spend_counter_retries_then_deletes_on_persistent_redis_failu
     spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:key:sk-inflated")
 
 
+def test_invalidate_spend_counter_swallows_a_delete_failure_after_reset_already_failed(monkeypatch):
+    """The fallback delete is itself best-effort: if it also fails (e.g. the same
+    outage that broke the reset), there is nothing left to try, and the failure
+    must be logged and swallowed rather than propagate out of the reset job."""
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_get_cache = AsyncMock(return_value=80.0)
+    spend_counter_cache.redis_cache.async_reset_preserving_delta = AsyncMock(
+        side_effect=RuntimeError("elasticache timeout")
+    )
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("elasticache timeout"))
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    # must not raise
+    asyncio.run(ResetBudgetJob._invalidate_spend_counter("spend:key:sk-double-failure", new_spend=0.0))
+
+    spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:key:sk-double-failure")
+
+
 def test_invalidate_spend_counter_recovers_after_a_transient_redis_failure(monkeypatch):
     """A reset that fails once and then succeeds must not fall back to delete:
     the counter ends up reset to the real value, not merely absent."""
