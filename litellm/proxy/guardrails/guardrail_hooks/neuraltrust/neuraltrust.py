@@ -91,9 +91,9 @@ def _texts_from_messages(messages: Sequence[Mapping[str, object]]) -> tuple[str,
 
 
 def _tool_calls_in_message(message: Mapping[str, object]) -> tuple[object, ...] | None:
-    if "tool_calls" not in message:
+    raw: Final = message.get("tool_calls")
+    if raw is None:
         return None
-    raw: Final = message["tool_calls"]
     if not isinstance(raw, list):
         raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
     return tuple(raw)
@@ -112,8 +112,6 @@ def _rewrite_last_user_message(
 ) -> tuple[Mapping[str, object], ...]:
     user_indices: Final = tuple(index for index, message in enumerate(messages) if message.get("role") == "user")
     target: Final = user_indices[-1] if user_indices else len(messages) - 1
-    if target < 0:
-        return ({"role": "user", "content": redacted},)  # mutable-ok: write-back message
     return tuple(
         {**message, "content": redacted} if index == target else dict(message)  # mutable-ok: write-back message
         for index, message in enumerate(messages)
