@@ -561,12 +561,30 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
     browser_findings: Final = tuple(
         Finding(path, "browser integration contract is explicitly selected by GitHub Actions")
         for path in browser_paths
-        if any(path in command or pathlib.Path(path).name in command or "integrationCritical" in command or "integration.config.ts" in command or ("run_integration.sh" in command and "browser" in command) for command in browser_commands)
-    ) + tuple(Finding(path, "canonical browser integration file is missing") for path in browser_paths if not (repo_root / path).is_file())
+        if any(
+            path in command
+            or pathlib.Path(path).name in command
+            or "integrationCritical" in command
+            or "integration.config.ts" in command
+            or ("run_integration.sh" in command and "browser" in command)
+            for command in browser_commands
+        )
+    ) + tuple(
+        Finding(path, "canonical browser integration file is missing")
+        for path in browser_paths
+        if not (repo_root / path).is_file()
+    )
     default_browser: Final = repo_root / "tests/e2e/ui/playwright.config.ts"
     exclusion_findings: Final = (
-        (Finding(str(default_browser.relative_to(repo_root)), "default Playwright selection must exclude integrationCritical"),)
-        if browser_paths and (not default_browser.exists() or "**/integrationCritical/**" not in default_browser.read_text()) else ()
+        (
+            Finding(
+                str(default_browser.relative_to(repo_root)),
+                "default Playwright selection must exclude integrationCritical",
+            ),
+        )
+        if browser_paths
+        and (not default_browser.exists() or "**/integrationCritical/**" not in default_browser.read_text())
+        else ()
     )
     group_findings: Final = tuple(
         Finding(group, "canonical integration group is not scheduled by CircleCI")

@@ -16,7 +16,9 @@ from integration._support.mcp import call_tool, mcp_peer, register_mcp, tool_nam
 def test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "integration" + uuid.uuid4().hex
-        identity: Final = register_mcp(scenario, peer, alias, static_headers={"X-Integration-Saved": "synthetic-header-value"})
+        identity: Final = register_mcp(
+            scenario, peer, alias, static_headers={"X-Integration-Saved": "synthetic-header-value"}
+        )
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         for generation in range(2):
             names: Final = tool_names(gateway, key, identity)
@@ -34,7 +36,9 @@ def test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit(gateway: G
             assert calls[0]["body"]["params"]["name"] == "add"
             assert calls[0]["body"]["params"]["arguments"] == {"a": 3, "b": 5}
             if generation == 0:
-                updated: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "server_name": alias + "renamed"})
+                updated: Final = gateway.request(
+                    "PUT", "/v1/mcp/server", {"server_id": identity, "server_name": alias + "renamed"}
+                )
                 assert updated.status_code == 202, updated.text
         rows: Final = read_rows('SELECT server_name FROM "LiteLLM_MCPServerTable" WHERE server_id = %s', (identity,))
         assert rows == [{"server_name": alias + "renamed"}]
@@ -60,6 +64,7 @@ def test_tool_error_remains_error_and_healthy_sibling_returns_value(gateway: Gat
 @pytest.mark.covers("other.mcp.lifecycle.generated_save_reload_preserves_effective_headers")
 def test_generated_mcp_edits_preserve_actual_headers_and_tool_results(gateway: Gateway) -> None:
     with mcp_peer() as peer, bounded_http_requests((gateway,), limit=1500) as budget:
+
         class Servers(RuleBasedStateMachine):
             def __init__(self) -> None:
                 super().__init__()
@@ -68,7 +73,9 @@ def test_generated_mcp_edits_preserve_actual_headers_and_tool_results(gateway: G
                 self.name = "integration" + uuid.uuid4().hex
                 try:
                     scenario = self.resources.enter_context(gateway.scenario())
-                    self.identity = register_mcp(scenario, peer, self.name, static_headers={"X-Integration-Saved": self.marker})
+                    self.identity = register_mcp(
+                        scenario, peer, self.name, static_headers={"X-Integration-Saved": self.marker}
+                    )
                     self.key = scenario.key(object_permission={"mcp_servers": [self.identity]})
                 except BaseException:
                     with budget.cleanup():
@@ -77,13 +84,19 @@ def test_generated_mcp_edits_preserve_actual_headers_and_tool_results(gateway: G
 
             @rule(value=st.sampled_from(("first", "second", "third")))
             def header(self, value: str) -> None:
-                response: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": self.identity, "static_headers": {"X-Integration-Saved": value}})
+                response: Final = gateway.request(
+                    "PUT",
+                    "/v1/mcp/server",
+                    {"server_id": self.identity, "static_headers": {"X-Integration-Saved": value}},
+                )
                 assert response.status_code == 202, response.text
                 self.marker = value
 
             @rule(value=st.sampled_from(("original", "renamed")))
             def rename(self, value: str) -> None:
-                response: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": self.identity, "server_name": self.name + value})
+                response: Final = gateway.request(
+                    "PUT", "/v1/mcp/server", {"server_id": self.identity, "server_name": self.name + value}
+                )
                 assert response.status_code == 202, response.text
 
             @invariant()
@@ -96,7 +109,12 @@ def test_generated_mcp_edits_preserve_actual_headers_and_tool_results(gateway: G
                 assert result.json()["content"][0]["text"] == "8"
                 calls: Final = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
                 assert len(calls) == 1 and calls[0]["headers"][b"x-integration-saved"] == self.marker.encode()
-                assert len(read_rows('SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=%s', (self.identity,))) == 1
+                assert (
+                    len(
+                        read_rows('SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=%s', (self.identity,))
+                    )
+                    == 1
+                )
 
             def teardown(self) -> None:
                 with budget.cleanup():

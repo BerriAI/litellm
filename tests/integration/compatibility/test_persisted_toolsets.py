@@ -18,12 +18,18 @@ def test_existing_toolset_format_loads_before_start_and_keeps_sibling_denied(gat
     with mcp_peer() as peer, gateway.scenario() as scenario:
         identity: Final = register_mcp(scenario, peer, "integration" + uuid.uuid4().hex)
         toolset: Final = str(uuid.uuid4())
+
         def cleanup() -> None:
             response: Final = gateway.request("DELETE", f"/v1/mcp/toolset/{toolset}")
             assert response.status_code == 202, response.text
             assert read_rows('SELECT toolset_id FROM "LiteLLM_MCPToolsetTable" WHERE toolset_id=%s', (toolset,)) == []
+
         with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
-            connection.execute('INSERT INTO "LiteLLM_MCPToolsetTable" (toolset_id, toolset_name, tools, updated_at) VALUES (%s,%s,%s::jsonb,NOW())', (toolset, "integration" + uuid.uuid4().hex, json.dumps([{"server_id": identity, "tool_name": "add"}])))
+            connection.execute(
+                'INSERT INTO "LiteLLM_MCPToolsetTable" (toolset_id, toolset_name, tools, updated_at) '
+                'VALUES (%s,%s,%s::jsonb,NOW())',
+                (toolset, "integration" + uuid.uuid4().hex, json.dumps([{"server_id": identity, "tool_name": "add"}])),
+            )
         scenario.cleanups.callback(cleanup)
         key: Final = scenario.key(object_permission={"mcp_toolsets": [toolset]})
         control: Final = scenario.key(object_permission={"mcp_servers": [identity]})

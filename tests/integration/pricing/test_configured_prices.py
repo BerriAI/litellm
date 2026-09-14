@@ -123,7 +123,13 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                         "model_info": {"id": alias, **pricing},
                     }
                     for alias, pricing in zip(
-                        aliases, ({}, {"input_cost_per_token": None, "output_cost_per_token": None}, {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}), strict=True
+                        aliases,
+                        (
+                            {},
+                            {"input_cost_per_token": None, "output_cost_per_token": None},
+                            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+                        ),
+                        strict=True,
                     )
                 ]
             }
