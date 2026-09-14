@@ -726,7 +726,10 @@ async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplo
         async def async_increment(self, key, value, **kwargs):
             raise RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
 
-    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_TimingOutRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    cache = DualCache(
+        in_memory_cache=InMemoryCache(),
+        redis_cache=_TimingOutRedis(),  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
     increments = [RedisPipelineIncrementOperation(key="k", increment_value=1.0, ttl=60)]
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
