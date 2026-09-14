@@ -17298,6 +17298,14 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "flowspeech/flowspeech-tts": {
+        "litellm_provider": "flowspeech",
+        "mode": "audio_speech",
+        "source": "https://flowspeech.io/",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "elevenlabs/eleven_v3": {
         "input_cost_per_character": 0.00018,
         "litellm_provider": "elevenlabs",
