@@ -95,6 +95,9 @@ class _TeamTable:
     async def find_unique(self, where: Mapping[str, str]) -> LiteLLM_TeamTable | None:
         return self.rows.get(where["team_id"])
 
+    async def find_many(self, where: Mapping[str, object]) -> list[LiteLLM_TeamTable]:
+        return [t for t in self.rows.values() if _matches({"team_id": t.team_id}, where)]
+
     async def update(self, where: Mapping[str, str], data: Mapping[str, str]) -> LiteLLM_TeamTable:
         self.update_calls += 1
         team = self.rows[where["team_id"]]
@@ -143,7 +146,7 @@ class _Tx:
             self.locks.append(team_id)
             self._on_lock(team_id)
             return []
-        assert self.locks == [team_id], "roster must be read under this team's advisory lock"
+        assert team_id in self.locks, "roster must be read under this team's advisory lock"
         self.roster_reads.append(team_id)
         team = self.litellm_teamtable.rows.get(team_id)
         if team is None:
@@ -162,22 +165,22 @@ class _FakePrisma:
         org_memberships: Sequence[Mapping[str, object]] = (),
         on_lock: Callable[[str], None] = lambda _: None,
         fail_locks: frozenset[str] = frozenset(),
-        fail_user_delete: bool = False,
+        fail_commit: bool = False,
     ) -> None:
         self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships)
         self._on_lock = on_lock
         self._fail_locks = fail_locks
-        self._fail_user_delete = fail_user_delete
+        self._fail_commit = fail_commit
         self.locks: list[str] = []
         self.roster_reads: list[str] = []
 
     @asynccontextmanager
-    async def tx(self):
+    async def tx(self, *, timeout: object = None):
         snapshot = copy.deepcopy(self.db)
         tx = _Tx(self.db, self._on_lock, self._fail_locks)
         try:
             yield tx
-            if self._fail_user_delete and tx.locks == []:
+            if self._fail_commit:
                 raise RuntimeError("connection reset")
         except BaseException:
             self.db.__dict__.update(snapshot.__dict__)
@@ -271,7 +274,7 @@ async def test_bulk_delete_removes_users_from_every_team_and_store():
     assert [t["token"] for t in prisma.db.litellm_deletedverificationtoken.rows] == ["k1"]
     assert [i["id"] for i in prisma.db.litellm_invitationlink.rows] == ["i3"]
     assert prisma.db.litellm_organizationmembership.rows == []
-    assert sorted(prisma.locks) == ["t1", "t2"] and sorted(prisma.roster_reads) == ["t1", "t2"]
+    assert prisma.locks == ["t1", "t2"] and prisma.roster_reads == ["t1", "t2"]
 
 
 @pytest.mark.asyncio
@@ -320,22 +323,36 @@ async def test_bulk_delete_reports_missing_and_duplicate_ids_per_item_and_still_
 
 
 @pytest.mark.asyncio
-async def test_bulk_delete_keeps_user_when_a_team_rewrite_fails_and_deletes_the_others():
+async def test_bulk_delete_rolls_back_every_team_and_user_when_one_team_rewrite_fails():
     prisma = _FakePrisma(
-        users=[_user("u1", "bad", "good"), _user("u2", "good")],
-        teams=[_team("bad", "u1"), _team("good", "u1", "u2")],
-        fail_locks=frozenset({"bad"}),
+        users=[_user("u1", "a-good", "z-bad"), _user("u2", "a-good")],
+        teams=[_team("a-good", "u1", "u2"), _team("z-bad", "u1")],
+        tokens=[{"token": "k1", "user_id": "u1", "team_id": "a-good"}],
+        fail_locks=frozenset({"z-bad"}),
     )
+    cache = _cache_with("k1")
 
-    response = await _delete(prisma, ["u1", "u2"])
+    response = await _delete(prisma, ["u1", "u2"], cache=cache)
 
-    assert [(r.user_id, r.success, r.teams_removed) for r in response.results] == [
-        ("u1", False, ("good",)),
-        ("u2", True, ("good",)),
+    assert [(r.user_id, r.success, r.teams_removed, r.error) for r in response.results] == [
+        ("u1", False, (), "Failed to delete user: lock timeout"),
+        ("u2", False, (), "Failed to delete user: lock timeout"),
     ]
-    assert response.results[0].error == "Failed to remove from team bad: lock timeout"
-    assert set(prisma.db.litellm_usertable.rows) == {"u1"}
-    assert _roster(prisma, "bad") == ["u1"] and _roster(prisma, "good") == []
+    assert set(prisma.db.litellm_usertable.rows) == {"u1", "u2"}
+    assert _roster(prisma, "a-good") == ["u1", "u2"] and _roster(prisma, "z-bad") == ["u1"]
+    assert [t["token"] for t in prisma.db.litellm_verificationtoken.rows] == ["k1"]
+    assert cache.get_cache(key="k1") is not None
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_skips_teams_the_user_still_names_but_which_no_longer_exist():
+    prisma = _FakePrisma(users=[_user("u1", "gone", "t1")], teams=[_team("t1", "u1", "keep")])
+
+    response = await _delete(prisma, ["u1"])
+
+    assert [(r.success, r.teams_removed) for r in response.results] == [(True, ("t1",))]
+    assert prisma.db.litellm_usertable.rows == {} and _roster(prisma, "t1") == ["keep"]
+    assert prisma.locks == ["t1"]
 
 
 @pytest.mark.asyncio
@@ -344,7 +361,7 @@ async def test_bulk_delete_rolls_back_every_user_row_and_reports_it_per_row_when
         users=[_user("u1", "t1"), _user("u2")],
         teams=[_team("t1", "u1")],
         tokens=[{"token": "k1", "user_id": "u1"}],
-        fail_user_delete=True,
+        fail_commit=True,
     )
     cache = _cache_with("k1")
 
