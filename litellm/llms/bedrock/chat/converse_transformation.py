@@ -1037,7 +1037,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return optional_params
 
-    def _map_request_metadata_param(self, value: Any, optional_params: dict) -> None:
+    def _map_request_metadata_param(self, value: object, optional_params: dict) -> None:
         if value is not None and isinstance(value, dict):
             self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value

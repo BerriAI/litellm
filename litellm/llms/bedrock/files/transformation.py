@@ -386,7 +386,7 @@ def _listed_managed_file(
     )
 
 
-def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Response) -> int:
+def _uploaded_object_size(litellm_params: Mapping[str, object], response_headers: Mapping[str, str]) -> int:
     """
     S3 answers PutObject with an empty body, so the stored object size comes from the
     signed request recorded by `transform_create_file_request`, not the response headers.
@@ -394,7 +394,7 @@ def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Re
     uploaded_size: Final = litellm_params.get(UPLOAD_CONTENT_LENGTH_PARAM)
     if isinstance(uploaded_size, int):
         return uploaded_size
-    response_content_length: Final = raw_response.headers.get("Content-Length", "0")
+    response_content_length: Final = response_headers.get("Content-Length", "0")
     return int(response_content_length) if response_content_length.isdigit() else 0
 
 
@@ -1300,7 +1300,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             filename=filename,
             created_at=int(time.time()),  # Current timestamp
             status="uploaded",
-            bytes=_uploaded_object_size(litellm_params=litellm_params, raw_response=raw_response),
+            bytes=_uploaded_object_size(litellm_params=litellm_params, response_headers=raw_response.headers),
             object="file",
         )
 

@@ -16,7 +16,7 @@ class CoroutineChecker:
     """
 
     def __init__(self):
-        self._cache = WeakKeyDictionary()
+        self._cache: WeakKeyDictionary[object, bool] = WeakKeyDictionary()
         self._max_size = COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY
 
     def is_async_callable(self, callback: Any) -> bool:
@@ -33,10 +33,10 @@ class CoroutineChecker:
             pass
 
         # Determine target - optimized path for common cases
-        target = callback
+        target: object = callback
         if not inspect.isfunction(target) and not inspect.ismethod(target):
             try:
-                call_attr: Final = getattr(target, "__call__", None)
+                call_attr: Final[object] = getattr(target, "__call__", None)
                 if call_attr is not None:
                     target = call_attr
             except Exception:

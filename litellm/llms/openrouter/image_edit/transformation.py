@@ -90,20 +90,21 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         drop_params: bool,
     ) -> dict:
         supported_params: Final = self.get_supported_openai_params(model)
-        mapped_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
+        image_config: Final[dict[str, str]] = {}
 
         for key, value in image_edit_optional_params.items():
             if key in supported_params:
                 if key == "size":
                     if "image_config" not in mapped_params:
-                        mapped_params["image_config"] = {}
-                    mapped_params["image_config"]["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
+                        mapped_params["image_config"] = image_config
+                    image_config["aspect_ratio"] = self._map_size_to_aspect_ratio(cast(str, value))
                 elif key == "quality":
                     image_size = self._map_quality_to_image_size(cast(str, value))
                     if image_size:
                         if "image_config" not in mapped_params:
-                            mapped_params["image_config"] = {}
-                        mapped_params["image_config"]["image_size"] = image_size
+                            mapped_params["image_config"] = image_config
+                        image_config["image_size"] = image_size
                 else:
                     mapped_params[key] = value
 

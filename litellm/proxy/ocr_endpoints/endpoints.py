@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Mapping
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
@@ -31,7 +31,7 @@ def _build_document_from_upload(
     return convert_upload_to_url_document(file_content, filename, content_type)
 
 
-def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
+def _with_request_format(data: Mapping[str, object], request: Request) -> Mapping[str, object]:
     """
     Resolve the requested response format from the body or the `x-req-format` header.
 
@@ -73,7 +73,7 @@ def _native_response(response: object, fastapi_response: Response) -> Response |
     )
 
 
-async def _parse_multipart_form(request: Request) -> dict[str, Any]:
+async def _parse_multipart_form(request: Request) -> dict[str, object]:
     """
     Extract OCR data from a multipart form request.
 
@@ -113,7 +113,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
         content_type=uploaded_file.content_type,
     )
 
-    data: Final[dict[str, Any]] = {"document": document}
+    data: Final[dict[str, object]] = {"document": document}
 
     for field_name, field_value in form.items():
         if field_name in ("file", "document"):
@@ -137,12 +137,12 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     return data
 
 
-async def _parse_ocr_request(request: Request) -> Mapping[str, Any]:
+async def _parse_ocr_request(request: Request) -> Mapping[str, object]:
     """Parse an OCR request and apply the `x-req-format` header, if any."""
     return _with_request_format(await _parse_ocr_request_body(request), request)
 
 
-async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
+async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
     """
     Parse an OCR request, supporting both JSON and multipart form data.
 
@@ -303,7 +303,7 @@ async def ocr(
         # Process request using ProxyBaseLLMRequestProcessing
         processor = ProxyBaseLLMRequestProcessing(data=data)
 
-        response: Final = await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,

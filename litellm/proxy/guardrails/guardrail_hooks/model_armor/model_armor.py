@@ -360,7 +360,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"byteItem": {"byteDataType": file_type, "byteData": base64_data}}}
 
-    def _should_block_content(self, armor_response: Mapping[str, Any], allow_sanitization: bool = False) -> bool:
+    def _should_block_content(self, armor_response: Mapping[str, object], allow_sanitization: bool = False) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         for filt in self._filter_result_items(armor_response):
             # Check RAI, PI/Jailbreak, Malicious URI, CSAM, Virus scan as before
@@ -429,7 +429,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return filter_results
         return []
 
-    def _has_deidentify_match(self, armor_response: Mapping[str, Any]) -> bool:
+    def _has_deidentify_match(self, armor_response: Mapping[str, object]) -> bool:
         """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
         for filter_entry in self._filter_result_items(armor_response):
             sdp = filter_entry.get("sdpFilterResult")
@@ -439,7 +439,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _resolve_streaming_outcome(
         self,
-        armor_response: Mapping[str, Any],
+        armor_response: Mapping[str, object],
         assembled_response: object,
         content: str,
     ) -> tuple[bool, str | None]:
