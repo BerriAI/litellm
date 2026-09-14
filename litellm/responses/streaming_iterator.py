@@ -374,9 +374,7 @@ class BaseResponsesAPIStreamingIterator:
                             # missing/invalid/duplicate index: append after the highest known
                             # index so the fallback can never collide with a real index and
                             # silently discard a streamed item
-                            _fallback_index: Final = (
-                                max(self._streamed_output_items.keys(), default=-1) + 1
-                            )
+                            _fallback_index: Final = max(self._streamed_output_items.keys(), default=-1) + 1
                             self._streamed_output_items[_fallback_index] = _done_item
                 elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
                     _annotation: Final[object] = getattr(openai_responses_api_chunk, "annotation", None)
