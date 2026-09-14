@@ -3194,18 +3194,18 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    callback_model_call_details: Final[dict] = self.model_call_details
+                    callback_model_call_details: Final[dict] = self.model_call_details  # mutable-ok: callback payload API
                     ##################################
                     # call redaction hook for custom logger
-                    standard_redacted_model_call_details: Final[dict] = (
+                    standard_redacted_model_call_details: Final[dict] = (  # mutable-ok: callback payload API
                         callback.redact_standard_logging_payload_from_model_call_details(
                             model_call_details=callback_model_call_details
                         )
                     )
-                    streaming_redacted_model_call_details: Final[dict] = redact_streaming_responses_for_custom_logger(
+                    streaming_redacted_model_call_details: Final[dict] = redact_streaming_responses_for_custom_logger(  # mutable-ok: callback payload API
                         model_call_details=standard_redacted_model_call_details, custom_logger=callback
                     )
-                    redacted_model_call_details: Final[dict] = redact_model_call_details_for_custom_logger(
+                    redacted_model_call_details: Final[dict] = redact_model_call_details_for_custom_logger(  # mutable-ok: callback payload API
                         model_call_details=streaming_redacted_model_call_details, custom_logger=callback
                     )
                     ##################################
@@ -4291,7 +4291,7 @@ def _construct_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: DualCache | None,
     llm_router: Any | None,  # expect litellm.Router, but typing errors due to circular import
-    custom_logger_init_args: dict | None = None,
+    custom_logger_init_args: dict | None = None,  # mutable-ok: callback constructor API
 ) -> CustomLogger | None:
     try:
         custom_logger_init_args = custom_logger_init_args or {}

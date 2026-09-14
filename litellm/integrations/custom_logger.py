@@ -914,9 +914,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return model_call_details
 
         redacted_model_call_details: Final = (
-            {
+            {  # mutable-ok: callback payload copy
                 **model_call_details,
-                "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+                "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],  # mutable-ok: callback payload copy
                 "prompt": "",
                 "input": "",
             }

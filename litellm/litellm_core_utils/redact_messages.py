@@ -75,7 +75,9 @@ def redact_response_for_custom_logger(result: object, custom_logger: CustomLogge
     )
     if not opted_out or custom_logger.redacts_messages_itself():
         return result
-    return perform_redaction(model_call_details={}, result=result, redact_streaming_responses=False)
+    return perform_redaction(  # mutable-ok: redaction scratch payload
+        model_call_details={}, result=result, redact_streaming_responses=False
+    )
 
 
 def redact_model_call_details_for_custom_logger(
@@ -93,11 +95,11 @@ def redact_model_call_details_for_custom_logger(
         raw_request_typed_dict.get("raw_request_body") if isinstance(raw_request_typed_dict, dict) else None
     )
     redacted_raw_request_typed_dict: Final = (
-        {
+        {  # mutable-ok: callback payload copy
             **raw_request_typed_dict,
             "raw_request_body": {
-                **raw_request_body,
-                "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
+                **raw_request_body,  # mutable-ok: callback payload copy
+                "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],  # mutable-ok: callback payload copy
                 "input": "",
                 "prompt": "",
             },
@@ -105,15 +107,15 @@ def redact_model_call_details_for_custom_logger(
         if isinstance(raw_request_typed_dict, dict) and isinstance(raw_request_body, dict)
         else raw_request_typed_dict
     )
-    return {
+    return {  # mutable-ok: callback payload copy
         **model_call_details,
-        **{
+        **{  # mutable-ok: callback payload copy
             key: redact_response_for_custom_logger(result=model_call_details[key], custom_logger=custom_logger)
             for key in response_keys
             if model_call_details.get(key) is not None
         },
         **(
-            {"raw_request_typed_dict": redacted_raw_request_typed_dict}
+            {"raw_request_typed_dict": redacted_raw_request_typed_dict}  # mutable-ok: callback payload copy
             if redacted_raw_request_typed_dict is not raw_request_typed_dict
             else {}
         ),
