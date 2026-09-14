@@ -3937,6 +3937,7 @@ async def test_list_team_v2_org_admin_sees_org_teams():
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
         mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+        mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
 
         result = await list_team_v2(
             http_request=mock_request,
@@ -4036,6 +4037,7 @@ async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
         )
         mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
         mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+        mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
 
         # UI sends the caller's own user_id for non-Admin roles
         result = await list_team_v2(
@@ -4065,12 +4067,45 @@ async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
         assert "organization_id" not in where
 
 
+def _team_where_matches(team, where) -> bool:
+    for key, cond in where.items():
+        if key == "AND":
+            if not all(_team_where_matches(team, c) for c in cond):
+                return False
+        elif key == "OR":
+            if not any(_team_where_matches(team, c) for c in cond):
+                return False
+        else:
+            value = getattr(team, key)
+            if not isinstance(cond, dict):
+                if value != cond:
+                    return False
+            elif "in" in cond and value not in cond["in"]:
+                return False
+            elif "contains" in cond and cond["contains"].lower() not in (value or "").lower():
+                return False
+    return True
+
+
+def _org_membership(user_id: str, organization_id: str, user_role: str) -> LiteLLM_OrganizationMembershipTable:
+    return LiteLLM_OrganizationMembershipTable(
+        user_id=user_id,
+        organization_id=organization_id,
+        user_role=user_role,
+        spend=0.0,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(monkeypatch):
     """
-    An org admin of org_A who is only a member of a team in org_B must still
-    see that team when listing their own teams: the where clause must union
-    org scope with membership instead of intersecting them.
+    /v2/team/list: an org admin of org_A who is a member of a team in org_B
+    gets that team back on a self query (with and without user_id, with and
+    without search), alongside every org_A team. The membership half of the
+    union comes from the DB, so a stale cached user object cannot hide it.
+    A query for another user stays scoped to org_A.
 
     Regression test for LIT-3723.
     """
@@ -4083,46 +4118,66 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
         key="org_admin_user",
         value=LiteLLM_UserTable(
             user_id="org_admin_user",
-            teams=["team_in_org_A", "team_in_org_B"],
+            teams=["team_in_org_A"],
             organization_memberships=[
-                LiteLLM_OrganizationMembershipTable(
-                    user_id="org_admin_user",
-                    organization_id="org_A",
-                    user_role="org_admin",
-                    spend=0.0,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
-                ),
-                LiteLLM_OrganizationMembershipTable(
-                    user_id="org_admin_user",
-                    organization_id="org_B",
-                    user_role="internal_user",
-                    spend=0.0,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
-                ),
+                _org_membership("org_admin_user", "org_A", "org_admin"),
+                _org_membership("org_admin_user", "org_B", "internal_user"),
             ],
         ),
         model_type=LiteLLM_UserTable,
     )
+    await cache.async_set_cache(
+        key="other_user",
+        value=LiteLLM_UserTable(
+            user_id="other_user",
+            teams=["other_team_in_org_A", "team_in_org_B", "unrelated_team_in_org_B"],
+            organization_memberships=[_org_membership("other_user", "org_B", "internal_user")],
+        ),
+        model_type=LiteLLM_UserTable,
+    )
+
+    def team(team_id, organization_id, *member_ids):
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias=team_id,
+            organization_id=organization_id,
+            members_with_roles=[Member(user_id=m, role="user") for m in member_ids],
+        )
+
+    all_teams = [
+        team("team_in_org_A", "org_A", "org_admin_user"),
+        team("other_team_in_org_A", "org_A", "other_user"),
+        team("team_in_org_B", "org_B", "org_admin_user", "other_user"),
+        team("unrelated_team_in_org_B", "org_B", "other_user"),
+    ]
+
+    async def find_many(where=None, **kwargs):
+        return [t for t in all_teams if where is None or _team_where_matches(t, where)]
+
+    async def count(where=None, **kwargs):
+        return len(await find_many(where))
+
     prisma_client = MagicMock()
-    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
-    prisma_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+    prisma_client.db.litellm_teamtable.count = AsyncMock(side_effect=count)
     prisma_client.db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(teams=["team_in_org_A", "team_in_org_B"])
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
 
-    for own_user_id in ("org_admin_user", None):
-        await list_team_v2(
+    async def list_teams(user_id, search=None):
+        result = await list_team_v2(
             http_request=MagicMock(),
-            user_id=own_user_id,
+            user_id=user_id,
             organization_id=None,
             team_id=None,
             team_alias=None,
-            search="team",
+            search=search,
             user_api_key_dict=org_admin,
             page=1,
             page_size=10,
@@ -4130,22 +4185,15 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
             sort_order="asc",
             status=None,
         )
+        assert result["total"] == len(result["teams"])
+        return [t.team_id for t in result["teams"]]
 
-        where = prisma_client.db.litellm_teamtable.find_many.call_args.kwargs["where"]
-        assert where["AND"] == [
-            {
-                "OR": [
-                    {"organization_id": {"in": ["org_A"]}},
-                    {"team_id": {"in": ["team_in_org_A", "team_in_org_B"]}},
-                ]
-            }
-        ]
-        assert where["OR"] == [
-            {"team_id": "team"},
-            {"team_alias": {"contains": "team", "mode": "insensitive"}},
-        ]
-        assert "organization_id" not in where
-        assert "team_id" not in where
+    own_view = ["team_in_org_A", "other_team_in_org_A", "team_in_org_B"]
+    assert await list_teams("org_admin_user") == own_view
+    assert await list_teams(None) == own_view
+    assert await list_teams("org_admin_user", search="team_in_org_B") == ["team_in_org_B"]
+    assert await list_teams("other_user") == ["other_team_in_org_A"]
+    prisma_client.db.litellm_usertable.find_unique.assert_awaited_with(where={"user_id": "org_admin_user"})
 
 
 @pytest.mark.asyncio
@@ -4167,16 +4215,7 @@ async def test_list_team_v1_org_admin_own_query_keeps_memberships_in_other_orgs(
         value=LiteLLM_UserTable(
             user_id="org_admin_user",
             teams=["team_in_org_A", "team_in_org_B"],
-            organization_memberships=[
-                LiteLLM_OrganizationMembershipTable(
-                    user_id="org_admin_user",
-                    organization_id="org_A",
-                    user_role="org_admin",
-                    spend=0.0,
-                    created_at=datetime.now(),
-                    updated_at=datetime.now(),
-                ),
-            ],
+            organization_memberships=[_org_membership("org_admin_user", "org_A", "org_admin")],
         ),
         model_type=LiteLLM_UserTable,
     )
