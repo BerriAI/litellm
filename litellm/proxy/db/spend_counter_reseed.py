@@ -8,13 +8,15 @@ writes from other pods, so trusting it allows budget bypass in multi-pod
 deployments. This module reseeds from the authoritative DB instead.
 
 A per-counter singleflight lock collapses concurrent reseeds on the same pod
-to one DB query per cold-cache window. The lock dict is bounded LRU to cap
-memory in long-lived deployments.
+to one DB query per cold-cache window. The lock registry retains active locks
+and bounds idle entries with LRU eviction in long-lived deployments.
 """
 
 import asyncio
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional
@@ -66,6 +68,12 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
+@dataclass(frozen=True, slots=True)
+class _CounterLock:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 class SpendCounterReseed:
     """
     Reseeds spend counters from the authoritative DB and warms the cache,
@@ -87,29 +95,37 @@ class SpendCounterReseed:
     is the row the reset zeroed.
     """
 
-    _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
-    _registry_lock: ClassVar[asyncio.Lock | None] = None
+    _locks: ClassVar["OrderedDict[str, _CounterLock]"] = OrderedDict()
+    _idle_locks: ClassVar["OrderedDict[str, None]"] = OrderedDict()
 
     @staticmethod
-    async def _get_lock(counter_key: str) -> asyncio.Lock:
-        if SpendCounterReseed._registry_lock is None:
-            SpendCounterReseed._registry_lock = asyncio.Lock()
-        async with SpendCounterReseed._registry_lock:
-            lock = SpendCounterReseed._locks.get(counter_key)
-            if lock is not None:
-                SpendCounterReseed._locks.move_to_end(counter_key)
-                return lock
-            lock = asyncio.Lock()
-            SpendCounterReseed._locks[counter_key] = lock
-            if len(SpendCounterReseed._locks) > SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE:
-                SpendCounterReseed._locks.popitem(last=False)
-            return lock
+    def _prune_idle_locks() -> None:
+        while len(SpendCounterReseed._locks) > SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE and SpendCounterReseed._idle_locks:
+            idle_key, _ = SpendCounterReseed._idle_locks.popitem(last=False)
+            SpendCounterReseed._locks.pop(idle_key)
+
+    @staticmethod
+    @asynccontextmanager
+    async def _counter_lock(counter_key: str) -> AsyncGenerator[None]:
+        counter_lock: Final = SpendCounterReseed._locks.get(counter_key) or _CounterLock(lock=asyncio.Lock())
+        SpendCounterReseed._locks[counter_key] = replace(counter_lock, users=counter_lock.users + 1)
+        SpendCounterReseed._idle_locks.pop(counter_key, None)
+        SpendCounterReseed._prune_idle_locks()
+        try:
+            async with counter_lock.lock:
+                yield
+        finally:
+            current: Final = SpendCounterReseed._locks[counter_key]
+            remaining: Final = replace(current, users=current.users - 1)
+            SpendCounterReseed._locks[counter_key] = remaining
+            if remaining.users == 0:
+                SpendCounterReseed._idle_locks[counter_key] = None
+            SpendCounterReseed._prune_idle_locks()
 
     @staticmethod
     async def increment_in_memory(spend_counter_cache: "DualCache", counter_key: str, increment: float) -> float | None:
         """Apply local deltas after an in-flight reseed establishes the spend balance."""
-        lock: Final = await SpendCounterReseed._get_lock(counter_key)
-        async with lock:
+        async with SpendCounterReseed._counter_lock(counter_key):
             return await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=increment, local_only=True, refresh_ttl=True
             )
@@ -215,8 +231,7 @@ class SpendCounterReseed:
         Returns the spend value (including 0.0 from a fresh budget reset)
         when the DB read succeeds, or None when the DB is unavailable.
         """
-        lock: Final = await SpendCounterReseed._get_lock(counter_key)
-        async with lock:
+        async with SpendCounterReseed._counter_lock(counter_key):
             batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
             if batched is not None and batched[0] is not None:
                 return batched[0]
@@ -412,8 +427,7 @@ class SpendCounterReseed:
         window_duration: str | None,
         window_start: datetime,
     ) -> float | None:
-        lock: Final = await SpendCounterReseed._get_lock(counter_key)
-        async with lock:
+        async with SpendCounterReseed._counter_lock(counter_key):
             batched: Final = await SpendCounterReseed._read_active_batch(counter_key)
             if batched is not None and batched[0] is not None:
                 return batched[0]
