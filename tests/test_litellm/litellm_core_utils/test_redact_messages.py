@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.responses.main import mock_responses_api_response
+from litellm.types.utils import ChatCompletionAudioResponse
 
 
 @pytest.fixture(autouse=True)
@@ -415,6 +416,55 @@ class TestPerformRedaction:
         assert result.choices[0].message.tool_calls[0].function.arguments == (
             '{"city": "sensitive-city"}'
         )
+
+    def test_redacts_audio_on_model_response_object(self):
+        result = litellm.ModelResponse(
+            id="resp-2",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        audio=ChatCompletionAudioResponse(
+                            data="<base64-audio>",
+                            expires_at=1_752_000_000,
+                            transcript="sensitive transcript",
+                        ),
+                    )
+                )
+            ],
+            model="gpt-4o-audio-preview",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted.choices[0].message.audio is None
+        assert result.choices[0].message.audio is not None
+        assert result.choices[0].message.audio.transcript == "sensitive transcript"
+
+    def test_redacts_audio_on_streaming_response_object(self):
+        streaming_choice = litellm.utils.StreamingChoices(
+            delta=litellm.utils.Delta(
+                content="delta content",
+                role="assistant",
+                audio=ChatCompletionAudioResponse(
+                    data="<base64-audio>",
+                    expires_at=1_752_000_000,
+                    transcript="sensitive transcript",
+                ),
+            )
+        )
+        streaming_response = SimpleNamespace(choices=[streaming_choice])
+        details = {
+            "stream": True,
+            "complete_streaming_response": streaming_response,
+        }
+
+        perform_redaction(details, None)
+
+        delta = streaming_response.choices[0].delta
+        assert delta.audio is None
+        assert delta.content == "redacted-by-litellm"
 
     def test_redacts_tool_call_arguments_on_streaming_response_object(self):
         """Reproduces the Stream=True path where tool calls arrive as deltas."""
