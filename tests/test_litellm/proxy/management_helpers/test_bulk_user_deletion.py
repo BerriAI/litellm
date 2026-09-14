@@ -278,6 +278,37 @@ async def test_bulk_delete_removes_users_from_every_team_and_store():
 
 
 @pytest.mark.asyncio
+async def test_bulk_delete_leaves_teammates_who_share_the_deleted_users_email_alone():
+    twin = _UserRow(user_id="twin", user_email="u1@example.com", teams=["t1"])
+    team = LiteLLM_TeamTable(
+        team_id="t1",
+        members_with_roles=[
+            Member(user_id="u1", user_email="u1@example.com", role="user"),
+            Member(user_id="twin", user_email="u1@example.com", role="user"),
+        ],
+    )
+    prisma = _FakePrisma(
+        users=[_user("u1", "t1"), twin],
+        teams=[team],
+        memberships=[("t1", "u1"), ("t1", "twin")],
+        tokens=[
+            {"token": "k1", "user_id": "u1", "team_id": "t1"},
+            {"token": "k-twin", "user_id": "twin", "team_id": "t1"},
+        ],
+    )
+
+    response = await _delete(prisma, ["u1"])
+
+    assert [(r.success, r.teams_removed) for r in response.results] == [(True, ("t1",))]
+    assert _roster(prisma, "t1") == ["twin"]
+    assert set(prisma.db.litellm_usertable.rows) == {"twin"} and prisma.db.litellm_usertable.rows["twin"].teams == [
+        "t1"
+    ]
+    assert prisma.db.litellm_teammembership.rows == [{"team_id": "t1", "user_id": "twin"}]
+    assert [t["token"] for t in prisma.db.litellm_verificationtoken.rows] == ["k-twin"]
+
+
+@pytest.mark.asyncio
 async def test_bulk_delete_finds_teams_through_membership_rows_when_user_teams_array_is_stale():
     prisma = _FakePrisma(
         users=[_user("u1")],
