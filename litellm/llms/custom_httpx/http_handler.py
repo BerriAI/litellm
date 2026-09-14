@@ -773,21 +773,6 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                )
-            finally:
-                await new_client.aclose()
         except httpx.TimeoutException as e:
             end_time: Final = time.time()
             time_delta: Final = round(end_time - start_time, 3)
@@ -841,29 +826,6 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                retry_data, retry_content = _prepare_request_data_and_content(data, content)
-                retry: Final = new_client.build_request(
-                    "PUT",
-                    url,
-                    data=retry_data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    timeout=timeout,
-                    content=retry_content,
-                )
-                retried: Final = await new_client.send(retry, stream=stream, follow_redirects=_follow_redirects)
-                try:
-                    retried.raise_for_status()
-                except httpx.HTTPStatusError as retried_error:
-                    await _raise_masked_async_error(retried_error, stream)
-                return retried
-            finally:
-                await new_client.aclose()
         except httpx.TimeoutException as e:
             headers = {}
             error_response: Final[httpx.Response | None] = getattr(e, "response", None)
@@ -913,21 +875,6 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                )
-            finally:
-                await new_client.aclose()
         except httpx.TimeoutException as e:
             headers = {}
             error_response: Final[httpx.Response | None] = getattr(e, "response", None)
@@ -977,57 +924,10 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                )
-            finally:
-                await new_client.aclose()
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
-
-    async def single_connection_post_request(
-        self,
-        url: str,
-        client: httpx.AsyncClient,
-        data: dict | str | bytes | None = None,
-        json: dict | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
-        stream: bool = False,
-        content: _RequestContent | None = None,
-    ):
-        """
-        Making POST request for a single connection client.
-
-        Used for retrying connection client errors.
-        """
-        # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-        request_data, request_content = _prepare_request_data_and_content(data, content)
-
-        req: Final = client.build_request(
-            "POST",
-            url,
-            data=request_data,
-            json=json,
-            params=params,
-            headers=headers,
-            content=request_content,
-        )
-        response: Final = await client.send(req, stream=stream)
-        response.raise_for_status()
-        return response
 
     # Strong references to finalizer-scheduled client-close tasks. A bare
     # create_task() result may be garbage-collected before it runs, leaving
