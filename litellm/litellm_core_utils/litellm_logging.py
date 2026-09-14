@@ -1274,7 +1274,9 @@ class Logging(LiteLLMLoggingBaseClass):
         Common helper function across the sync + async pre-call function
         """
 
-        effective_additional_args: Final[dict[str, object]] = additional_args if additional_args is not None else {}
+        effective_additional_args: Final[dict[str, object]] = (  # mutable-ok: input callbacks mutate request data
+            additional_args if additional_args is not None else {}
+        )
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
         self.model_call_details["additional_args"] = effective_additional_args
@@ -1302,7 +1304,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def pre_call(self, input, api_key, model=None, additional_args=None):
         # Log the exact input to the LLM API
         try:
-            effective_additional_args: Final[dict[str, object]] = additional_args if additional_args is not None else {}
+            effective_additional_args: Final[dict[str, object]] = (  # mutable-ok: input callbacks mutate request data
+                additional_args if additional_args is not None else {}
+            )
             self._pre_call(
                 input=input,
                 api_key=api_key,
