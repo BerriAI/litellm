@@ -1,3 +1,4 @@
+import asyncio
 import json
 from copy import deepcopy
 from typing import Final
@@ -8,6 +9,8 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 
 URL: Final = "https://reasoning-test.invalid/v1/chat/completions"
 MODEL: Final = "hosted_vllm/reasoning-test"
@@ -117,3 +120,111 @@ async def test_router_aliases_isolate_reasoning_flag_on_same_backend(async_mode:
             assert messages == original_messages
         assert route.call_count == 4
     assert model_list == original_models
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("surface", ["sdk", "router", "responses"])
+async def test_local_cache_separates_forwarded_reasoning_history(
+    async_mode: bool, surface: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local", namespace="reasoning-cache-test"))
+    messages: Final = _messages()
+    original_messages: Final = deepcopy(messages)
+    input_items: Final = [
+        {"role": "user", "content": "Compare both records"},
+        {
+            "type": "reasoning",
+            "id": "rs_previous",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": REASONING}],
+        },
+        {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "first record"},
+        {"type": "function_call_output", "call_id": "call_2", "output": "second record"},
+    ]
+    original_input: Final = deepcopy(input_items)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": alias,
+                "litellm_params": {
+                    "model": MODEL,
+                    "api_base": URL.removesuffix("/chat/completions"),
+                    "api_key": "test-key",
+                    **({} if enabled is None else {"forward_reasoning_content": enabled}),
+                },
+            }
+            for alias, enabled in (("default", None), ("disabled", False), ("enabled", True))
+        ],
+        cache_responses=True,
+        caching_groups=[("default", "disabled", "enabled")],
+        num_retries=0,
+    )
+
+    def backend(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert "forward_reasoning_content" not in body
+        enabled: Final = body["messages"][1].get("reasoning_content") == REASONING
+        return httpx.Response(
+            200,
+            json={
+                "id": "provider-cache-reasoning",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "reasoning-test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "forwarded" if enabled else "omitted"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            },
+        )
+
+    with respx.mock(assert_all_called=True) as mock:
+        route: Final = mock.post(URL).mock(side_effect=backend)
+        for alias, forward, expected_calls in (
+            ("default", None, 1),
+            ("disabled", False, 1),
+            ("enabled", True, 2),
+            ("disabled", False, 2),
+            ("enabled", True, 2),
+        ):
+            kwargs: Final = {
+                "model": MODEL,
+                "api_base": URL.removesuffix("/chat/completions"),
+                "api_key": "test-key",
+                "caching": True,
+                **({} if forward is None else {"forward_reasoning_content": forward}),
+            }
+            if surface == "router":
+                response = (
+                    await router.acompletion(model=alias, messages=messages)
+                    if async_mode
+                    else router.completion(model=alias, messages=messages)
+                )
+            elif surface == "responses":
+                response = (
+                    await litellm.aresponses(input=input_items, use_chat_completions_api=True, **kwargs)
+                    if async_mode
+                    else litellm.responses(input=input_items, use_chat_completions_api=True, **kwargs)
+                )
+            else:
+                response = (
+                    await litellm.acompletion(messages=messages, **kwargs)
+                    if async_mode
+                    else litellm.completion(messages=messages, **kwargs)
+                )
+            await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+            content: Final = (
+                response.output[0].content[0].text if surface == "responses" else response.choices[0].message.content
+            )
+            assert content == ("forwarded" if forward is True else "omitted")
+            assert route.call_count == expected_calls
+            assert messages == original_messages
+            assert input_items == original_input
