@@ -3,16 +3,13 @@ Functions for sending Email Alerts
 """
 
 import os
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy._types import WebhookEvent
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
@@ -70,20 +67,21 @@ async def get_all_team_member_emails(team_id: str | None = None) -> list:
     return emails
 
 
-async def get_team_admin_emails(team: LiteLLM_TeamTable, prisma_client: "PrismaClient") -> tuple[str, ...]:
-    """Emails of the team's admins: members_with_roles admins plus the legacy admins list, deduped"""
+async def get_team_admin_emails(team: LiteLLM_TeamTable, prisma_client: object) -> tuple[str, ...]:
+    """Emails of the team's admins: members_with_roles admins by user id or inline email, plus the legacy admins list, deduped"""
+    admins: Final = tuple(member for member in team.members_with_roles if member.role == "admin")
+    inline_emails: Final = tuple(member.user_email for member in admins if member.user_email and not member.user_id)
     admin_ids: Final = frozenset(
-        (
-            *(member.user_id for member in team.members_with_roles if member.role == "admin" and member.user_id),
-            *(user_id for user_id in team.admins if user_id),
+        (*(member.user_id for member in admins if member.user_id), *(user_id for user_id in team.admins if user_id))
+    )
+    rows: Final = (
+        await UserRepository(prisma_client).find_many(
+            where={"user_id": {"in": sorted(admin_ids)}}  # mutable-ok: prisma filter payloads are plain dict/list
         )
+        if admin_ids
+        else ()
     )
-    if not admin_ids:
-        return ()
-    rows: Final = await UserRepository(prisma_client).find_many(
-        where={"user_id": {"in": sorted(admin_ids)}}  # mutable-ok: prisma filter payloads are plain dict/list
-    )
-    return tuple(dict.fromkeys(row.user_email for row in rows if row.user_email))
+    return tuple(dict.fromkeys((*inline_emails, *(row.user_email for row in rows if row.user_email))))
 
 
 async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:

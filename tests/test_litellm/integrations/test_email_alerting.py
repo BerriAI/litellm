@@ -70,7 +70,7 @@ async def test_should_not_query_when_team_has_no_admins():
 
 
 @pytest.mark.asyncio
-async def test_should_skip_email_only_members_and_blank_legacy_ids_and_dedupe():
+async def test_should_include_email_only_admins_and_dedupe_ids_and_emails():
     prisma: Final = _prisma(
         (
             {"user_id": "u-admin", "user_email": "admin@example.com"},
@@ -85,5 +85,19 @@ async def test_should_skip_email_only_members_and_blank_legacy_ids_and_dedupe():
             Member(user_email="mail-only@example.com", role="admin"),
         ],
     )
-    assert await get_team_admin_emails(team, prisma) == ("admin@example.com",)
+    assert await get_team_admin_emails(team, prisma) == ("mail-only@example.com", "admin@example.com")
     assert prisma.db.litellm_usertable.queries == [{"user_id": {"in": ["u-admin", "u-legacy"]}}]
+
+
+@pytest.mark.asyncio
+async def test_should_email_an_email_only_admin_without_querying_the_database():
+    prisma: Final = _prisma(USERS)
+    team: Final = LiteLLM_TeamTable(
+        team_id="t1",
+        members_with_roles=[
+            Member(user_email="mail-only@example.com", role="admin"),
+            Member(user_id="u-member", role="user"),
+        ],
+    )
+    assert await get_team_admin_emails(team, prisma) == ("mail-only@example.com",)
+    assert prisma.db.litellm_usertable.queries == []
