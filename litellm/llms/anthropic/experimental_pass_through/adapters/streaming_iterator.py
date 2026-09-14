@@ -527,7 +527,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             cache_read_input_tokens=0,
         )
 
-    def __next__(self):  # noqa: PLR0915
+    def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
         try:

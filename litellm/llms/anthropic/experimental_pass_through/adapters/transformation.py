@@ -1738,6 +1738,34 @@ class LiteLLMAnthropicMessagesAdapter:
         StreamingContentBlockDeltaType,
         ContentTextBlockDelta | ContentJsonBlockDelta | ContentThinkingBlockDelta | ContentThinkingSignatureBlockDelta,
     ]:
+        text, reasoning_content, reasoning_signature, partial_json = self._accumulate_streaming_chunk_payloads(
+            choices, thinking_disabled=thinking_disabled
+        )
+        if partial_json is not None:
+            return "input_json_delta", ContentJsonBlockDelta(type="input_json_delta", partial_json=partial_json)
+        elif reasoning_signature:
+            return "signature_delta", ContentThinkingSignatureBlockDelta(
+                type="signature_delta", signature=reasoning_signature
+            )
+        elif reasoning_content:
+            return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
+        else:
+            refusal_text: Final = "".join(
+                refusal for choice in choices if (refusal := openai_chat_refusal_text(choice.delta)) is not None
+            )
+            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text + refusal_text)
+
+    def _accumulate_streaming_chunk_payloads(
+        self,
+        choices: list[OpenAIStreamingChoice | StreamingChoices],
+        thinking_disabled: bool = False,
+    ) -> tuple[str, str, str, str | None]:
+        """Fold a chunk's choices into (text, reasoning_content, reasoning_signature, partial_json).
+
+        ``partial_json`` is ``None`` when the chunk carries no tool calls — the
+        caller uses that to decide the delta type's precedence (tool JSON beats
+        thinking/thinking-signature text).
+        """
         text: str = ""
         reasoning_content: str = ""
         reasoning_signature: str = ""
@@ -1749,17 +1777,13 @@ class LiteLLMAnthropicMessagesAdapter:
                 continue
 
             if block_type == "thinking":
-                if (
-                    isinstance(choice, StreamingChoices)
-                    and hasattr(choice.delta, "thinking_blocks")
-                    and choice.delta.thinking_blocks
-                    and len(choice.delta.thinking_blocks) > 0
-                ):
-                    for thinking_block in choice.delta.thinking_blocks:
+                thinking_blocks = getattr(choice.delta, "thinking_blocks", None)
+                if isinstance(choice, StreamingChoices) and thinking_blocks:
+                    for thinking_block in thinking_blocks:
                         if thinking_block.get("type") in ("thinking", "redacted_thinking"):
                             reasoning_content += str(thinking_block.get("thinking") or "")
                             reasoning_signature += str(thinking_block.get("signature") or "")
-                elif isinstance(choice, StreamingChoices) and getattr(choice.delta, "reasoning_content", None):
+                elif getattr(choice.delta, "reasoning_content", None):
                     reasoning_content += str(choice.delta.reasoning_content)
 
             elif block_type == "redacted_thinking":
@@ -1778,19 +1802,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if choice.delta.content is not None and len(choice.delta.content) > 0:
                     text += choice.delta.content
 
-        if partial_json is not None:
-            return "input_json_delta", ContentJsonBlockDelta(type="input_json_delta", partial_json=partial_json)
-        elif reasoning_signature:
-            return "signature_delta", ContentThinkingSignatureBlockDelta(
-                type="signature_delta", signature=reasoning_signature
-            )
-        elif reasoning_content:
-            return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
-        else:
-            refusal_text: Final = "".join(
-                refusal for choice in choices if (refusal := openai_chat_refusal_text(choice.delta)) is not None
-            )
-            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text + refusal_text)
+        return text, reasoning_content, reasoning_signature, partial_json
 
     def translate_streaming_openai_response_to_anthropic(
         self,
