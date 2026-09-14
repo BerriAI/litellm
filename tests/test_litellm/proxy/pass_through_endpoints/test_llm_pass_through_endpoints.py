@@ -3415,8 +3415,12 @@ def test_custom_pass_through_endpoint_prefix_wins_over_native_provider_routes():
 
     # app is the real, process-wide proxy app -- registering routes on it leaks
     # into every other test (e.g. test_component_allowlists.py's full-route-coverage
-    # check) unless restored, so snapshot and restore app.router.routes afterward.
-    original_routes = list(app.router.routes)
+    # check) unless removed again. Track exactly the paths this test adds and
+    # filter only those back out afterward, rather than restoring a full
+    # snapshot -- under pytest-xdist, another test on the same worker can
+    # legitimately register routes between this test's start and its cleanup,
+    # and a wholesale snapshot restore would silently drop those too.
+    added_paths = {f"/claude-aws/v1/{suffix}" for suffix in ("files", "batches")}
     try:
         for suffix in ("files", "batches"):
             InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -3441,7 +3445,10 @@ def test_custom_pass_through_endpoint_prefix_wins_over_native_provider_routes():
         assert _resolve_route_name("POST", "/v1/files") == "create_file"
         assert _resolve_route_name("POST", "/v1/batches") == "create_batch"
     finally:
-        app.router.routes = original_routes
+        app.router.routes = [
+            route for route in app.router.routes
+            if getattr(route, "path", None) not in added_paths
+        ]
 
 
 def test_move_before_generic_provider_routes_is_a_no_op_without_a_generic_route():
