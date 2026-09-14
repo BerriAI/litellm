@@ -16,7 +16,10 @@ import pytest
 
 # Add the project root to Python path
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.utils import get_token_type_cost_breakdown
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _resolve_cache_read_cost_rate,
+    get_token_type_cost_breakdown,
+)
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
 )
@@ -35,6 +38,43 @@ class TestDashscopeCostCalculator:
         """Set up the model cost map for testing by loading it locally."""
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    @pytest.mark.parametrize("provider", [None, "not-a-provider"])
+    def test_provider_neutral_cache_rate_resolver_ignores_unhandled_providers(
+        self,
+        provider: str | None,
+    ):
+        assert (
+            _resolve_cache_read_cost_rate(
+                custom_llm_provider=provider,
+                model_info={"key": "cache-rate-fallback-test"},
+                usage=Usage(prompt_tokens=1, completion_tokens=0),
+                current_time=None,
+            )
+            is None
+        )
+
+    def test_provider_neutral_cache_rate_resolver_allows_configs_without_an_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from litellm.litellm_core_utils.llm_cost_calc import utils as cost_utils
+
+        monkeypatch.setattr(
+            cost_utils.ProviderConfigManager,
+            "get_provider_chat_config",
+            lambda **_: None,
+        )
+
+        assert (
+            _resolve_cache_read_cost_rate(
+                custom_llm_provider="openai",
+                model_info={"key": "cache-rate-fallback-test"},
+                usage=Usage(prompt_tokens=1, completion_tokens=0),
+                current_time=None,
+            )
+            is None
+        )
 
     def test_dashscope_flat_pricing_fallback(self):
         """
