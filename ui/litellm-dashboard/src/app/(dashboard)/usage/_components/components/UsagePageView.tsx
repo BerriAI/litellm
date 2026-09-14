@@ -27,7 +27,7 @@ import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { all_admin_roles, internalUserRoles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -105,16 +105,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // filter reads as loading rather than as a range with no customers.
   const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
-  const { data: projectsResponse } = useProjects();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
+  const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userID || "");
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
-  const canViewProjectUsage = hasCapability(userRole, "viewProjectUsage") && enableProjectsUI;
+  const canViewProjectUsage = hasCapability(userRole, "viewProjectUsage", isOrgAdmin, isTeamAdmin) && enableProjectsUI;
+  const { data: projectsResponse } = useProjects(canViewProjectUsage);
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
@@ -489,6 +490,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
+              isTeamAdmin={isTeamAdmin}
               enableProjectsUI={enableProjectsUI}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />

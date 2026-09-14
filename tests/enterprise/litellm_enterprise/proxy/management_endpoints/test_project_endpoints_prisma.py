@@ -1438,10 +1438,11 @@ async def test_get_project_daily_activity_admin_groups_by_day_and_project(monkey
     )
 
     sql, *params = mock_prisma.db.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-02", "project-alpha", "project-beta"]
+    assert params == ["2026-09-01", "2026-09-02", "project-alpha", "team-1", "project-beta", "team-1"]
     assert 'FROM "LiteLLM_SpendLogs" sl' in sql
-    assert "sl.metadata->>'user_api_key_project_id' IN ($3, $4)" in sql
-    assert "GROUP BY spend_date, project_id" in sql
+    assert "JOIN (VALUES ($3::text, $4::text), ($5::text, $6::text)) AS scoped(project_id, team_id)" in sql
+    assert "sl.team_id IS NOT DISTINCT FROM scoped.team_id" in sql
+    assert "GROUP BY spend_date, scoped.project_id" in sql
 
     assert response.start_date == "2026-09-01"
     assert response.end_date == "2026-09-02"
@@ -1450,6 +1451,86 @@ async def test_get_project_daily_activity_admin_groups_by_day_and_project(monkey
         ("2026-09-02", "project-beta", "Beta", 0.25, 1),
     ]
     assert (response.results[0].successful_requests, response.results[0].failed_requests) == (2, 1)
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_dedupes_repeated_project_ids(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    project = MagicMock(project_id="project-alpha", project_alias="Alpha", team_id="team-1")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[project])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    await get_project_daily_activity(
+        user_api_key_dict=admin,
+        project_ids=",".join(["project-alpha"] * 5000),
+        start_date="2026-09-01",
+        end_date="2026-09-02",
+    )
+
+    mock_prisma.db.litellm_projecttable.find_many.assert_awaited_once_with(where={"project_id": {"in": ["project-alpha"]}})
+    sql, *params = mock_prisma.db.query_raw.call_args.args
+    assert params == ["2026-09-01", "2026-09-02", "project-alpha", "team-1"]
+    assert "(VALUES ($3::text, $4::text))" in sql
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_rejects_too_many_project_ids(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    too_many_ids = ",".join(f"project-{i}" for i in range(51))
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_project_daily_activity(
+            user_api_key_dict=admin,
+            project_ids=too_many_ids,
+            start_date="2026-09-01",
+            end_date="2026-09-02",
+        )
+    assert exc_info.value.status_code == 400
+    assert "At most 50 project_ids" in str(exc_info.value.detail)
+    mock_prisma.db.litellm_projecttable.find_many.assert_not_awaited()
+    mock_prisma.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_project_daily_activity_scopes_spend_by_team_to_prevent_reused_id_leak(monkeypatch):
+    """A project_id can be reused by a different team after the original project is deleted.
+    The query must join on (project_id, team_id) together so a reused id cannot pull in the
+    prior team's historical spend."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    project_alpha = MagicMock(project_id="project-alpha", project_alias="Alpha", team_id="team-1")
+    project_beta = MagicMock(project_id="project-beta", project_alias="Beta", team_id="team-2")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[project_alpha, project_beta])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    await get_project_daily_activity(
+        user_api_key_dict=admin,
+        project_ids="project-alpha,project-beta",
+        start_date="2026-09-01",
+        end_date="2026-09-02",
+    )
+
+    sql, *params = mock_prisma.db.query_raw.call_args.args
+    assert params == ["2026-09-01", "2026-09-02", "project-alpha", "team-1", "project-beta", "team-2"]
+    assert "sl.team_id IS NOT DISTINCT FROM scoped.team_id" in sql
 
 
 @pytest.mark.asyncio

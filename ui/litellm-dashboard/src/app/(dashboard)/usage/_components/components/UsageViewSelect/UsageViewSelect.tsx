@@ -21,6 +21,7 @@ export interface UsageViewSelectProps {
   userRole: string | null;
   canViewTagUsage?: boolean;
   isOrgAdmin?: boolean;
+  isTeamAdmin?: boolean;
   enableProjectsUI?: boolean;
   title?: string;
   description?: string;
@@ -119,6 +120,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   userRole,
   canViewTagUsage = false,
   isOrgAdmin = false,
+  isTeamAdmin = false,
   enableProjectsUI = true,
   title = "Usage View",
   description = "Select the usage data you want to view",
@@ -131,7 +133,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
         return false;
       }
       if (option.capability) {
-        return hasCapability(userRole, option.capability, isOrgAdmin);
+        return hasCapability(userRole, option.capability, isOrgAdmin, isTeamAdmin);
       }
       if (option.value === "tag" && canViewTagUsage) {
         return true;

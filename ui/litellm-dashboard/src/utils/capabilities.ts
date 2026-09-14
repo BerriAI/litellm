@@ -25,12 +25,18 @@ const ORG_ADMIN_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   "viewOrganizationUsage",
 ]);
 
+const TEAM_ADMIN_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>(["viewProjectUsage"]);
+
 export const hasCapability = (
   userRole: string | null | undefined,
   capability: Capability,
   isOrgAdmin: boolean = false,
-): boolean =>
-  (isOrgAdmin && ORG_ADMIN_CAPABILITIES.has(capability)) ||
-  (userRole != null && CAPABILITY_ROLES[capability].includes(userRole));
+  isTeamAdmin: boolean = false,
+): boolean => {
+  const grantedViaOrgAdmin = isOrgAdmin && ORG_ADMIN_CAPABILITIES.has(capability);
+  const grantedViaTeamAdmin = isTeamAdmin && TEAM_ADMIN_CAPABILITIES.has(capability);
+  const grantedViaRole = userRole != null && CAPABILITY_ROLES[capability].includes(userRole);
+  return grantedViaOrgAdmin || grantedViaTeamAdmin || grantedViaRole;
+};
 
 export const rolesWithCapability = (capability: Capability): string[] => [...CAPABILITY_ROLES[capability]];
