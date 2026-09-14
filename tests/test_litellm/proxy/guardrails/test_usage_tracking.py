@@ -370,6 +370,34 @@ async def test_not_run_entries_are_indexed_but_not_counted_as_evaluations():
 
 
 @pytest.mark.asyncio
+async def test_not_run_entry_shares_index_key_with_evaluated_sibling_of_same_name():
+    """
+    The not_run entry from the shared base guardrail carries only guardrail_name,
+    while the evaluated entry from the same guardrail (e.g. content filter on the
+    output of a logging_only run) carries its guardrail_id. Keying them differently
+    lists one request twice in the monitor, once as not_run and once as passed.
+    """
+    prisma = _prisma()
+    payload = _payload("r1")
+    payload["metadata"] = json.dumps(
+        {
+            "guardrail_information": [
+                {"guardrail_name": "cf", "guardrail_status": "not_run"},
+                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+                {"guardrail_name": "other", "guardrail_status": "not_run"},
+            ]
+        }
+    )
+
+    await process_spend_logs_guardrail_usage(prisma, [payload])
+
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert sorted(row["guardrail_id"] for row in index_rows) == ["cf-uuid", "cf-uuid", "other"]
+    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert (metrics_create["guardrail_id"], metrics_create["requests_evaluated"]) == ("cf-uuid", 1)
+
+
+@pytest.mark.asyncio
 async def test_batch_of_only_not_run_entries_writes_no_metrics_row():
     prisma = _prisma()
 
