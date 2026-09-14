@@ -1237,11 +1237,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _assistant_has_tool_calls(message: object) -> bool:
-        return (
-            isinstance(message, dict)
-            and message.get("role") == "assistant"
-            and bool(message.get("tool_calls"))
-        )
+        return isinstance(message, dict) and message.get("role") == "assistant" and bool(message.get("tool_calls"))
 
     @staticmethod
     def _opens_with_tool_result(message: object) -> bool:
@@ -1281,20 +1277,32 @@ class AmazonConverseConfig(BaseConfig):
         place so the cached prefix stays byte-identical."""
         message: Final = messages[index]
         if self._opens_with_tool_result(message):
-            run: Final = self._system_run_before(messages, index)
-            prev_idx: Final = index - len(run) - 1
+            # With consecutive tool results, emit the run only after the last
+            # one so the results stay in one unbroken block.
+            if index + 1 < len(messages) and self._opens_with_tool_result(messages[index + 1]):
+                return (message,)
+            tool_run_start: Final = next(
+                (j + 1 for j in range(index, -1, -1) if not self._opens_with_tool_result(messages[j])),
+                0,
+            )
+            run: Final = self._system_run_before(messages, tool_run_start)
+            prev_idx: Final = tool_run_start - len(run) - 1
             if run and prev_idx >= 0 and self._assistant_has_tool_calls(messages[prev_idx]):
                 return (message, *run)
             return (message,)
         if not self._is_system_role_message(message):
             return (message,)
+        run_start: Final = next(
+            (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
+            0,
+        )
         run_end: Final = self._system_run_end(messages, index)
         follower: Final = messages[run_end] if run_end < len(messages) else None
         if (
             follower is not None
             and self._opens_with_tool_result(follower)
-            and index > 0
-            and self._assistant_has_tool_calls(messages[index - 1])
+            and run_start > 0
+            and self._assistant_has_tool_calls(messages[run_start - 1])
         ):
             return ()
         return (message,)
