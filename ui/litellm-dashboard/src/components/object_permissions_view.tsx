@@ -30,6 +30,7 @@ export function ObjectPermissionsView({
   const agents = objectPermission?.agents || [];
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
   const searchTools = objectPermission?.search_tools || [];
+  const skills = objectPermission?.skills || [];
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>
@@ -56,6 +57,16 @@ export function ObjectPermissionsView({
           </p>
         ) : (
           <p className="mt-1 block text-xs break-words text-foreground">{searchTools.join(", ")}</p>
+        )}
+      </div>
+      <div className="min-w-0 rounded-md border border-border p-4">
+        <p className="text-sm font-medium text-foreground">Skills</p>
+        {skills.length === 0 ? (
+          <p className="mt-1 block text-xs text-muted-foreground">
+            No private skills granted. Only enabled (public) Claude Code plugins are visible.
+          </p>
+        ) : (
+          <p className="mt-1 block text-xs break-words text-foreground">{skills.join(", ")}</p>
         )}
       </div>
     </div>
