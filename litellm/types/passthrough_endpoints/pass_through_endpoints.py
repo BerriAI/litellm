@@ -22,6 +22,7 @@ LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__
 
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
+    GEMINI = "gemini"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     GENERIC = "generic"

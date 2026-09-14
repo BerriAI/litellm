@@ -24,7 +24,6 @@ seen the red and accepted it.
 Usage:
     python scripts/budget_ratchet_check.py [--base REF] [budget.json ...]
 
-Stdlib only.
 """
 
 from __future__ import annotations
@@ -33,17 +32,21 @@ import argparse
 import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from types import MappingProxyType
-from typing import NamedTuple
+from typing import Final, NamedTuple
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_BASE = "origin/litellm_internal_staging"
 DEFAULT_BUDGETS: tuple[str, ...] = (
     "ruff-strict-budget.json",
     "type-discipline-budget.json",
     "basedpyright-code-budget.json",
+    "test-quality-budget.json",
 )
 GRADUATION_CONFIGS = MappingProxyType({"ruff-strict-budget.json": "ruff.toml"})
 
@@ -178,12 +181,15 @@ def regressions_for(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("budgets", nargs="*", help="budget files to check")
     args = parser.parse_args()
+    from default_branch import resolve_base_ref
+
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
     budgets = args.budgets or list(DEFAULT_BUDGETS)
 
-    ref = _merge_base(args.base)
+    ref = _merge_base(base_ref)
     if not _ref_is_commit(ref):
         print(
             f"FAIL: base ref {ref!r} does not resolve to a commit, so the ratchet has nothing "
@@ -200,14 +206,14 @@ def main() -> int:
         if base is None and head is None:
             continue
         if base is None:
-            print(f"skip {rel}: new file (no base at {args.base} to ratchet against)")
+            print(f"skip {rel}: new file (no base at {base_ref} to ratchet against)")
             continue
         checked.append(rel)
         regressions.extend(regressions_for(rel, base, head, graduated_selectors(rel)))
 
     if regressions:
         print(
-            f"FAIL: budget limit(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
+            f"FAIL: budget limit(s) loosened vs base {base_ref} (merge-base {ref[:12]}):"
         )
         for reg in regressions:
             print(f"  {reg.budget}  {reg.rule}: {reg.detail}")
@@ -219,7 +225,7 @@ def main() -> int:
         return 1
 
     suffix = f" ({', '.join(checked)})" if checked else ""
-    print(f"OK: no budget limit increased vs base {args.base}{suffix}")
+    print(f"OK: no budget limit increased vs base {base_ref}{suffix}")
     return 0
 
 

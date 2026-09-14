@@ -30,6 +30,34 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
     return key
 
 
+class TestMcpKeyGrantByAlias:
+    def test_alias_grant_persists_verbatim_and_lists_tools(
+        self,
+        client: McpClient,
+        resources: ResourceManager,
+    ) -> None:
+        """A key granted an MCP server by its alias must store the alias, not the
+        resolved server_id: in a shared-DB multi-region deployment each instance
+        derives a different id for the same config server, so only the alias
+        grants access on every region. The same key must still see the server's
+        tools, proving the alias grant is honored at request time."""
+        server_id = register_datadog_mcp(client, resources)
+        client.await_registered(server_id)
+        alias = next(row.alias for row in client.registered_servers() if row.server_id == server_id)
+        assert alias, f"registered server {server_id} has no alias to grant by"
+
+        key = _key(client, resources, mcp_servers=[alias])
+
+        stored = client.proxy.key_info(key).object_permission
+        assert stored is not None and stored.mcp_servers == [alias], (
+            f"alias grant was rewritten before persisting (expected [{alias!r}]): "
+            f"{stored.mcp_servers if stored else None}. A stored server_id is region-local "
+            f"and breaks the grant on every other instance sharing this database"
+        )
+
+        _ = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
+
+
 class TestMcpKeyWithoutAccessIsDenied:
     @pytest.mark.covers("mcp.list_tools.api_key.denied_without_permission")
     def test_list_tools_denied_without_permission(
@@ -51,16 +79,6 @@ class TestMcpKeyWithoutAccessIsDenied:
             f"boundary: {denied_tools}"
         )
 
-    @pytest.mark.skip(
-        reason=(
-            "LIT-5052: the control call proving a granted key CAN invoke the tool sends a "
-            "`telemetry` argument that Datadog's search_datadog_logs tool now rejects, so it "
-            "errors with 'unexpected additional properties [\"telemetry\"]' and the denial "
-            "assertion is never reached. `telemetry` was never a documented Datadog "
-            "parameter; the test relied on the server ignoring unknown properties. Unskip "
-            "once the argument is dropped."
-        )
-    )
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")
     def test_call_tool_denied_without_permission(
         self,
@@ -80,7 +98,6 @@ class TestMcpKeyWithoutAccessIsDenied:
             "from": DD_SEARCH_FROM,
             "to": "now",
             "max_tokens": 1000,
-            "telemetry": {"intent": "e2e control call proving granted key can invoke Datadog MCP"},
         }
         permitted_call = client.await_call_tool(
             permitted_key, server_id=server_id, name=tool_name, arguments=search_args

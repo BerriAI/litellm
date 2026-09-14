@@ -149,7 +149,7 @@ graph TD
 | `parallel_request_limiter` | `proxy/hooks/parallel_request_limiter_v3.py` | Rate limiting per key/user |
 | `cache_control_check` | `proxy/hooks/cache_control_check.py` | Cache validation |
 | `responses_id_security` | `proxy/hooks/responses_id_security.py` | Response ID validation |
-| `litellm_skills` | `proxy/hooks/skills_injection.py` | Skills injection |
+| `litellm_skills` | `proxy/hooks/litellm_skills/main.py` | Skills injection |
 
 To add a new proxy hook, implement `CustomLogger` and register in `PROXY_HOOKS`.
 
@@ -220,20 +220,20 @@ graph LR
 | Job | Interval | Purpose | Key Files |
 |-----|----------|---------|-----------|
 | `update_spend` | 60s | Batch write spend logs to PostgreSQL | `proxy/db/db_spend_update_writer.py` |
-| `reset_budget` | 10-12min | Reset budgets for keys/users/teams | `proxy/management_helpers/budget_reset_job.py` |
+| `reset_budget` | 10-12min | Reset budgets for keys/users/teams | `proxy/common_utils/reset_budget_job.py` |
 | `add_deployment` | 10s | Sync new model deployments from DB | `proxy/proxy_server.py` (`ProxyConfig`) |
-| `cleanup_old_spend_logs` | cron/interval | Delete old spend logs | `proxy/management_helpers/spend_log_cleanup.py` |
-| `check_batch_cost` | 30min | Calculate costs for batch jobs | `proxy/management_helpers/check_batch_cost_job.py` |
-| `check_responses_cost` | 30min | Calculate costs for responses API | `proxy/management_helpers/check_responses_cost_job.py` |
-| `process_rotations` | 1hr | Auto-rotate API keys | `proxy/management_helpers/key_rotation_manager.py` |
+| `cleanup_old_spend_logs` | cron/interval | Delete old spend logs | `proxy/db/db_transaction_queue/spend_log_cleanup.py` |
+| `check_batch_cost` | 30min | Calculate costs for batch jobs | `enterprise/litellm_enterprise/proxy/common_utils/check_batch_cost.py` |
+| `check_responses_cost` | 30min | Calculate costs for responses API | `enterprise/litellm_enterprise/proxy/common_utils/check_responses_cost.py` |
+| `process_rotations` | 1hr | Auto-rotate API keys | `proxy/common_utils/key_rotation_manager.py` |
 | `_run_background_health_check` | continuous | Health check model deployments | `proxy/proxy_server.py` |
 | `send_weekly_spend_report` | weekly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
 | `send_monthly_spend_report` | monthly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
 
 **Cost Attribution Flow:**
 1. LLM response returns to `utils.py` wrapper after `litellm.acompletion()` completes
-2. `update_response_metadata()` (`llm_response_utils/response_metadata.py`) is called
-3. `logging_obj._response_cost_calculator()` (`litellm_logging.py`) calculates cost via `litellm.completion_cost()` (`cost_calculator.py`)
+2. `update_response_metadata()` (`litellm_core_utils/llm_response_utils/response_metadata.py`) is called
+3. `logging_obj._response_cost_calculator()` (`litellm_core_utils/litellm_logging.py`) calculates cost via `litellm.completion_cost()` (`cost_calculator.py`)
 4. Cost is stored in `response._hidden_params["response_cost"]`
 5. `proxy/common_request_processing.py` extracts cost from `hidden_params` and adds to response headers (`x-litellm-response-cost`)
 6. `logging_obj.async_success_handler()` triggers callbacks including `_ProxyDBLogger.async_log_success_event()`

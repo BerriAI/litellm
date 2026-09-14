@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 import click
@@ -7,7 +7,8 @@ import pytest
 import yaml
 from click.testing import CliRunner
 from InquirerPy.base.control import Choice
-from prompt_toolkit.application import create_app_session
+from InquirerPy.prompts.fuzzy import InquirerPyFuzzyControl
+from prompt_toolkit.application import AppSession, create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -283,27 +284,45 @@ class TestRunConfigureWizardNotInteractive:
         assert not config_path.exists()
 
 
+def _highlighted_choice(session: AppSession) -> Optional[str]:
+    if session.app is None:
+        return None
+    controls = [c for c in session.app.layout.find_all_controls() if isinstance(c, InquirerPyFuzzyControl)]
+    if not controls or controls[0].choice_count == 0:
+        return None
+    return controls[0].selection["name"]
+
+
+async def _wait_until_highlighted(session: AppSession, name: str) -> None:
+    async def _poll() -> None:
+        while _highlighted_choice(session) != name:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=5)
+
+
 def _drive_fuzzy_pick(
     models: Tuple[DiscoveredModel, ...],
     prompt_label: str,
     multiselect: bool,
-    key_events: List[Tuple[str, float]],
+    key_events: List[Tuple[str, Optional[str]]],
 ) -> List[str]:
     """Drives the real InquirerPy fuzzy prompt through prompt_toolkit's own test input/output,
     exercising the actual widget (filtering, tab-to-toggle, enter-to-confirm) rather than mocking
     it away. asyncio.to_thread propagates the create_app_session context into the worker thread
-    running _fuzzy_pick's synchronous .execute() call."""
+    running _fuzzy_pick's synchronous .execute() call. Each key event names the choice the widget
+    must highlight before the next key is sent (None sends the next key immediately)."""
 
     async def _run() -> List[str]:
         with create_pipe_input() as pipe_input:
-            with create_app_session(input=pipe_input, output=DummyOutput()):
+            with create_app_session(input=pipe_input, output=DummyOutput()) as session:
                 task = asyncio.ensure_future(
                     asyncio.to_thread(wizard_module._fuzzy_pick, models, prompt_label, multiselect)
                 )
-                await asyncio.sleep(0.05)
-                for text, delay in key_events:
+                for text, highlighted in key_events:
                     pipe_input.send_text(text)
-                    await asyncio.sleep(delay)
+                    if highlighted is not None:
+                        await _wait_until_highlighted(session, highlighted)
                 return await task
 
     return asyncio.run(_run())
@@ -315,13 +334,13 @@ class TestFuzzyPickWidget:
 
     def test_single_select_filters_and_returns_highlighted_match(self):
         result = _drive_fuzzy_pick(
-            self._models(), "test", multiselect=False, key_events=[("model-13", 0.3), ("\r", 0.1)]
+            self._models(), "test", multiselect=False, key_events=[("model-13", "model-13"), ("\r", None)]
         )
         assert result == ["model-13"]
 
     def test_multiselect_requires_tab_to_toggle_before_enter(self):
         result = _drive_fuzzy_pick(
-            self._models(), "test", multiselect=True, key_events=[("model-7", 0.3), ("\t", 0.1), ("\r", 0.1)]
+            self._models(), "test", multiselect=True, key_events=[("model-7", "model-7"), ("\t", None), ("\r", None)]
         )
         assert result == ["model-7"]
 
@@ -331,12 +350,12 @@ class TestFuzzyPickWidget:
             "test",
             multiselect=True,
             key_events=[
-                ("model-3", 0.3),
-                ("\t", 0.1),
-                *[("\x7f", 0.02) for _ in range("model-3".__len__())],
-                ("model-15", 0.3),
-                ("\t", 0.1),
-                ("\r", 0.1),
+                ("model-3", "model-3"),
+                ("\t", None),
+                ("\x7f" * len("model-3"), None),
+                ("model-15", "model-15"),
+                ("\t", None),
+                ("\r", None),
             ],
         )
         assert set(result) == {"model-3", "model-15"}

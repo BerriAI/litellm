@@ -193,7 +193,7 @@ class AzureTextCompletion(BaseAzureLLM):
         data: dict,
         timeout: Any,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         max_retries: int,
         azure_ad_token: str | None = None,
         client=None,  # this is the AsyncAzureOpenAI

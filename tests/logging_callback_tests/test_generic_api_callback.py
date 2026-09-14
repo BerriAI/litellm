@@ -1,9 +1,7 @@
 import io
 import os
-import sys
 
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import litellm
@@ -16,7 +14,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_pubsub.pub_sub import *

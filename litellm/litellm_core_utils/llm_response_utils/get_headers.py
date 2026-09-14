@@ -1,7 +1,8 @@
+from collections.abc import Mapping
 from typing import Final
 
 
-def get_response_headers(_response_headers: dict | None = None) -> dict:
+def get_response_headers(_response_headers: Mapping[str, str] | None = None) -> dict:
     """
 
     Sets the Appropriate OpenAI headers for the response and forward all headers as llm_provider-{header}
@@ -31,7 +32,7 @@ def get_response_headers(_response_headers: dict | None = None) -> dict:
     return {**llm_provider_headers, **openai_headers}
 
 
-def _get_llm_provider_headers(response_headers: dict) -> dict:
+def _get_llm_provider_headers(response_headers: Mapping[str, str]) -> dict:
     """
     Adds a llm_provider-{header} to all headers that are not already prefixed with llm_provider
 

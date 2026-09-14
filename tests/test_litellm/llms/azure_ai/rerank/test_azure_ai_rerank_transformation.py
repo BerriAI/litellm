@@ -1,12 +1,8 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
+import litellm
 from litellm.llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 
 
@@ -16,7 +12,7 @@ class TestAzureAIRerankConfigGetCompleteUrl:
         self.model = "azure_ai/cohere-rerank-v3-english"
 
     def test_api_base_required(self):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Azure AI API Base is required\\. api_base=None\\. Set in') as exc_info:
             self.config.get_complete_url(api_base=None, model=self.model)
 
         assert "api_base=None" in str(exc_info.value)
@@ -31,7 +27,7 @@ class TestAzureAIRerankConfigGetCompleteUrl:
         ],
     )
     def test_api_base_requires_scheme(self, api_base):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Azure AI API Base must be an absolute URL including scheme') as exc_info:
             self.config.get_complete_url(api_base=api_base, model=self.model)
 
         error_message = str(exc_info.value).lower()
@@ -97,3 +93,26 @@ class TestAzureAIRerankConfigGetCompleteUrl:
             model=self.model,
         )
         assert url == "https://my-resource.services.ai.azure.com/v1/rerank?r=1"
+
+
+class TestAzureAIRerankConfigValidateEnvironment:
+    def test_uses_api_key_when_set(self):
+        headers = AzureAIRerankConfig().validate_environment(
+            headers={},
+            model="azure_ai/cohere-rerank-v3-english",
+            api_key="my-key",
+        )
+
+        assert headers["Authorization"] == "Bearer my-key"
+
+    def test_falls_back_to_entra_token(self, monkeypatch):
+        monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "azure_key", None)
+
+        headers = AzureAIRerankConfig().validate_environment(
+            headers={},
+            model="azure_ai/cohere-rerank-v3-english",
+            litellm_params={"azure_ad_token": "entra-token"},
+        )
+
+        assert headers["Authorization"] == "Bearer entra-token"

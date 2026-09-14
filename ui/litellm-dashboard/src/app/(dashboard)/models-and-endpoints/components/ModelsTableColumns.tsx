@@ -123,7 +123,7 @@ function CredentialsHeader() {
           <div className="flex flex-col gap-3">
             <span className="text-sm font-medium text-foreground">Credential types</span>
             <div className="flex flex-col gap-1">
-              <span className="flex items-center gap-1.5 text-sm font-medium text-blue-600">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-info">
                 <RefreshCw className="size-3.5" />
                 Reusable
               </span>
@@ -158,7 +158,7 @@ function CredentialsCell({ credentialName }: { credentialName: string | undefine
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-blue-600" title={credentialName}>
+    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-info" title={credentialName}>
       <RefreshCw className="size-3 shrink-0" />
       <span className="truncate">{credentialName}</span>
     </span>
@@ -220,7 +220,7 @@ function AccessGroupsCell({ accessGroups }: { accessGroups: string[] | null }) {
 
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <Badge variant="outline" className="max-w-36 truncate border-blue-200 bg-blue-50 font-normal text-blue-600">
+      <Badge variant="outline" className="max-w-36 truncate border-info/20 bg-info/10 font-normal text-info">
         {first}
       </Badge>
       {overflow.length > 0 && (
@@ -247,6 +247,7 @@ interface ModelRowActionsProps {
   model: ModelData;
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   isPausing: boolean;
   onDeleteClick?: (modelId: string) => void;
   onTogglePauseClick?: (modelId: string, blocked: boolean) => void | Promise<void>;
@@ -256,14 +257,15 @@ function ModelRowActions({
   model,
   userRole,
   userID,
+  isViewOnly,
   isPausing,
   onDeleteClick,
   onTogglePauseClick,
 }: ModelRowActionsProps) {
   const modelId = model.model_info?.id;
   const isConfigModel = !model.model_info?.db_model;
-  const isAdmin = userRole === "Admin";
-  const canEditModel = isAdmin || model.model_info?.created_by === userID;
+  const isAdmin = userRole === "Admin" && !isViewOnly;
+  const canEditModel = !isViewOnly && (isAdmin || model.model_info?.created_by === userID);
   const isBlocked = model.model_info?.blocked === true;
   const isPauseToggleable = !isConfigModel && isAdmin && Boolean(onTogglePauseClick);
 
@@ -340,6 +342,7 @@ function ModelRowActions({
 export interface ModelsTableColumnDeps {
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   onModelIdClick: (modelId: string) => void;
   onTeamIdClick: (teamId: string) => void;
   onDeleteClick?: (modelId: string) => void;
@@ -350,6 +353,7 @@ export interface ModelsTableColumnDeps {
 export const getModelsTableColumns = ({
   userRole,
   userID,
+  isViewOnly,
   onModelIdClick,
   onTeamIdClick,
   onDeleteClick,
@@ -479,6 +483,7 @@ export const getModelsTableColumns = ({
         model={row.original}
         userRole={userRole}
         userID={userID}
+        isViewOnly={isViewOnly}
         isPausing={pausingModelId === row.original.model_info?.id}
         onDeleteClick={onDeleteClick}
         onTogglePauseClick={onTogglePauseClick}
