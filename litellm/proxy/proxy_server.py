@@ -11912,6 +11912,7 @@ async def _reject_realtime_session(
         await websocket.close(code=code, reason=reason)
     finally:
         await _release_realtime_budget_reservation(user_api_key_dict)
+        await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)  # pyright: ignore[reportPrivateUsage]  # same release idiom the HTTP disconnect path uses
 
 
 @app.websocket("/openai/v1/realtime")
@@ -12050,6 +12051,7 @@ async def realtime_websocket_endpoint(
 
         if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
             await _release_realtime_budget_reservation(user_api_key_dict)
+        await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)  # pyright: ignore[reportPrivateUsage]  # same release idiom the HTTP disconnect path uses
 
 
 ######################################################################
