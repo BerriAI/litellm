@@ -85,7 +85,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         if hasattr(source, "read"):
             if hasattr(source, "seek"):
                 try:
-                    source.seek(0)  # type: ignore[attr-defined]
+                    source.seek(0)
                 except (OSError, ValueError):
                     pass
             line_iter: object = source
@@ -108,7 +108,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
         output: Final = InMemoryFile(b"", name="modified_file.jsonl", content_type="application/jsonl")
         wrote_any = False
         buffer = ""
-        for raw_line in line_iter:  # type: ignore[attr-defined]
+        for raw_line in line_iter:
             buffer += raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
             stripped = buffer.strip()
             if not stripped:
@@ -132,7 +132,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             verbose_logger.error("error parsing trailing batch content: %s...", buffer[:100])
             if hasattr(source, "seek"):
                 try:
-                    source.seek(0)  # type: ignore[attr-defined]
+                    source.seek(0)
                 except (OSError, ValueError):
                     pass
             return file_content
@@ -142,7 +142,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
             return file_content
 
         output.seek(0)
-        return output  # type: ignore
+        return output
 
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         # return the original file content if there is an error replacing the model name

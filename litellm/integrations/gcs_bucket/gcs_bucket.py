@@ -29,8 +29,6 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: str | None = None) -> None:
         from litellm.proxy.proxy_server import premium_user
 
-        super().__init__(bucket_name=bucket_name)
-
         self.batch_size = int(os.getenv("GCS_BATCH_SIZE", GCS_DEFAULT_BATCH_SIZE))
         self.flush_interval = int(os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS))
         self.use_batched_logging = (
@@ -38,13 +36,12 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         )
         self.flush_lock = asyncio.Lock()
         super().__init__(
+            bucket_name=bucket_name,
             flush_lock=self.flush_lock,
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
-        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(  # type: ignore[assignment]
-            maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
-        )
+        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
         asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 

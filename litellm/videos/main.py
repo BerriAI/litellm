@@ -5,6 +5,8 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import Final, Literal, overload
 
+from httpx._types import FileContent
+
 import litellm
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -183,7 +185,7 @@ def video_generation(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -311,7 +313,7 @@ def video_content(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -571,7 +573,7 @@ def video_remix(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -786,7 +788,7 @@ def video_list(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -838,7 +840,7 @@ def video_list(
         litellm_logging_obj.call_type = CallTypes.video_list.value
 
         # Call the handler with _is_async flag instead of directly calling the async handler
-        return base_llm_http_handler.video_list_handler(  # type: ignore[return-value]
+        return base_llm_http_handler.video_list_handler(
             after=after,
             limit=limit,
             order=order,
@@ -1004,7 +1006,7 @@ def video_status(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -1152,7 +1154,7 @@ def video_create_character(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -1277,7 +1279,7 @@ def video_get_character(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -1344,6 +1346,8 @@ async def avideo_edit(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
+    *,
+    video: FileContent | None = None,
     **kwargs,
 ) -> VideoObject:
     """
@@ -1359,6 +1363,7 @@ async def avideo_edit(
             video_edit,
             video_id=video_id,
             prompt=prompt,
+            video=video,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
@@ -1396,6 +1401,8 @@ def video_edit(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
+    *,
+    video: FileContent | None = None,
     **kwargs,
 ) -> VideoObject | Coroutine[object, object, VideoObject]:
     """
@@ -1404,7 +1411,7 @@ def video_edit(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
@@ -1444,6 +1451,7 @@ def video_edit(
         return base_llm_http_handler.video_edit_handler(
             prompt=prompt,
             video_id=video_id,
+            video_file=video,
             video_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
@@ -1537,7 +1545,7 @@ def video_extension(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 

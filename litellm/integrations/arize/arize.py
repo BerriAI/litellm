@@ -6,7 +6,7 @@ this file has Arize ai specific helper functions
 
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Protocol = Any
     Span = Any

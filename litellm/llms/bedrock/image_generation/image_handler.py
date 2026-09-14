@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import BaseModel
@@ -29,7 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import ImageResponse
 
-from ..base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from ..common_utils import BedrockError
 
 if TYPE_CHECKING:
@@ -49,12 +49,12 @@ class BedrockImagePreparedRequest(BaseModel):
     data: dict
 
 
-BedrockImageConfigClass = Union[
-    type[AmazonTitanImageGenerationConfig],
-    type[AmazonNovaCanvasConfig],
-    type[AmazonStability3Config],
-    type[AmazonStabilityConfig],
-]
+BedrockImageConfigClass = (
+    type[AmazonTitanImageGenerationConfig]
+    | type[AmazonNovaCanvasConfig]
+    | type[AmazonStability3Config]
+    | type[AmazonStabilityConfig]
+)
 
 
 class BedrockImageGeneration(BaseAWSLLM):
@@ -115,11 +115,16 @@ class BedrockImageGeneration(BaseAWSLLM):
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
         ### FORMAT RESPONSE TO OPENAI FORMAT ###
@@ -158,11 +163,16 @@ class BedrockImageGeneration(BaseAWSLLM):
                 url=prepared_request.endpoint_url,
                 headers=prepared_request.prepped.headers,
                 data=prepared_request.body,
-            )  # type: ignore
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -220,7 +230,9 @@ class BedrockImageGeneration(BaseAWSLLM):
             prepped (httpx.Request): The prepared request object
             body (bytes): The request body
         """
-        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
+            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+        )
 
         # Use the existing ARN-aware provider detection method
         bedrock_provider: Final = self.get_bedrock_invoke_provider(model)

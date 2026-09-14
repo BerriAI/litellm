@@ -19,6 +19,8 @@ from litellm.utils import token_counter
 from ..common_utils import ReplicateError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
@@ -235,7 +237,7 @@ class ReplicateConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -259,7 +261,7 @@ class ReplicateConfig(BaseConfig):
 
         ## Building RESPONSE OBJECT
         if len(response_str) >= 1:
-            model_response.choices[0].message.content = response_str  # type: ignore
+            model_response.choices[0].message.content = response_str
 
         # Calculate usage
         prompt_tokens: Final = token_counter(model=model, messages=messages)

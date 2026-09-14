@@ -10,6 +10,7 @@ Usage:
 
 import os
 import time
+from collections.abc import AsyncIterable, Iterable
 from typing import Final
 from urllib.parse import urlparse
 
@@ -84,7 +85,7 @@ def _mock_http_handler_post(
     timeout=None,
     stream=False,
     files=None,
-    content=None,
+    content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
     logging_obj=None,
 ):
     """Monkey-patched HTTPHandler.post that intercepts Braintrust calls with endpoint-specific responses."""
@@ -150,7 +151,7 @@ def create_mock_braintrust_client():
 
     if _original_http_handler_post is None:
         _original_http_handler_post = HTTPHandler.post
-        HTTPHandler.post = _mock_http_handler_post  # type: ignore
+        HTTPHandler.post = _mock_http_handler_post
         verbose_logger.debug("[BRAINTRUST MOCK] Patched HTTPHandler.post")
 
     # CRITICAL: Call the factory's initialization function to patch AsyncHTTPHandler.post

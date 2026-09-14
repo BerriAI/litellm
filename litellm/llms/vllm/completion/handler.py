@@ -1,4 +1,4 @@
-import time  # type: ignore
+import time
 from collections.abc import Callable
 from typing import Final
 
@@ -26,7 +26,7 @@ class VLLMError(Exception):
 def validate_environment(model: str):
     global llm
     try:
-        from vllm import LLM, SamplingParams  # type: ignore
+        from vllm import LLM, SamplingParams
 
         if llm is None:
             llm = LLM(model=model)
@@ -90,7 +90,7 @@ def completion(
         )
         print_verbose(f"raw model_response: {outputs}")
         ## RESPONSE OBJECT
-        model_response.choices[0].message.content = outputs[0].outputs[0].text  # type: ignore
+        model_response.choices[0].message.content = outputs[0].outputs[0].text
 
         ## CALCULATING USAGE
         prompt_tokens: Final = len(outputs[0].prompt_token_ids)
@@ -165,7 +165,7 @@ def batch_completions(model: str, messages: list, optional_params=None, custom_p
     for output in outputs:
         model_response = ModelResponse()
         ## RESPONSE OBJECT
-        model_response.choices[0].message.content = output.outputs[0].text  # type: ignore
+        model_response.choices[0].message.content = output.outputs[0].text
 
         ## CALCULATING USAGE
         prompt_tokens = len(output.prompt_token_ids)

@@ -228,7 +228,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 ## UPDATE CACHE WITH ACTIVE PROJECT
                 asyncio.create_task(
                     self.internal_usage_cache.async_set_cache_sadd(  # this is a set
-                        model=data["model"],  # type: ignore
+                        model=data["model"],
                         value=[user_api_key_dict.token or "default_key"],
                     )
                 )

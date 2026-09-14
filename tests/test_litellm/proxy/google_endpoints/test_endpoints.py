@@ -13,7 +13,6 @@ from starlette.requests import Request
 
 load_dotenv()
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 
 @pytest.mark.asyncio

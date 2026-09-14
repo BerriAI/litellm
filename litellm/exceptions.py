@@ -10,12 +10,14 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
+from collections.abc import Sequence
 from typing import Any, Final
 
 import httpx
 import openai
 
 from litellm.types.utils import LiteLLMCommonStrings
+from litellm.types.vector_stores import VectorStoreSearchFailure
 
 
 class RateLimitErrorCategory(str, enum.Enum):
@@ -85,7 +87,7 @@ _RATE_LIMIT_CATEGORY_VALUES: Final = frozenset(c.value for c in RateLimitErrorCa
 _RATE_LIMIT_TYPE_VALUES: Final = frozenset(t.value for t in RateLimitType)
 
 
-def validate_rate_limit_category(value: Any) -> str | None:
+def validate_rate_limit_category(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitErrorCategory`.
 
     Used at duck-typed read sites (StandardLoggingPayload extraction, Prometheus
@@ -100,7 +102,7 @@ def validate_rate_limit_category(value: Any) -> str | None:
     return None
 
 
-def validate_rate_limit_type(value: Any) -> str | None:
+def validate_rate_limit_type(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitType`.
 
     See :func:`validate_rate_limit_category` for the rationale.
@@ -126,7 +128,7 @@ def _get_minimal_error_response() -> httpx.Response:
     return _MINIMAL_ERROR_RESPONSE
 
 
-class AuthenticationError(openai.AuthenticationError):  # type: ignore
+class AuthenticationError(openai.AuthenticationError):
     def __init__(
         self,
         message,
@@ -170,7 +172,7 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
 
 
 # raise when invalid models passed, example gpt-8
-class NotFoundError(openai.NotFoundError):  # type: ignore
+class NotFoundError(openai.NotFoundError):
     def __init__(
         self,
         message,
@@ -213,7 +215,7 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         return _message
 
 
-class BadRequestError(openai.BadRequestError):  # type: ignore
+class BadRequestError(openai.BadRequestError):
     def __init__(
         self,
         message,
@@ -288,7 +290,30 @@ class ImageFetchError(BadRequestError):
         )
 
 
-class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
+VECTOR_STORE_SEARCH_FAILED_CODE: Final = "vector_store_search_failed"
+
+
+class VectorStoreSearchError(BadRequestError):
+    def __init__(
+        self,
+        failures: Sequence[VectorStoreSearchFailure],
+        model: str | None = None,
+        llm_provider: str | None = None,
+    ) -> None:
+        self.failures: Final[tuple[VectorStoreSearchFailure, ...]] = tuple(failures)
+        detail: Final = "; ".join(f"{failure['vector_store_id']}: {failure['error']}" for failure in self.failures)
+        super().__init__(
+            message=(
+                "The request could not be grounded in every configured vector store. "
+                f"{len(self.failures)} vector store search(es) failed: {detail}"
+            ),
+            model=model,
+            llm_provider=llm_provider,
+            body={"type": "invalid_request_error", "code": VECTOR_STORE_SEARCH_FAILED_CODE},
+        )
+
+
+class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
         message,
@@ -327,7 +352,7 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
         return _message
 
 
-class Timeout(openai.APITimeoutError):  # type: ignore
+class Timeout(openai.APITimeoutError):
     def __init__(
         self,
         message,
@@ -338,6 +363,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         num_retries: int | None = None,
         headers: dict | None = None,
         exception_status_code: int | None = None,
+        response: httpx.Response | None = None,
     ):
         request: Final = httpx.Request(
             method="POST",
@@ -352,6 +378,8 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         self.max_retries = max_retries
         self.num_retries = num_retries
         self.headers = headers
+        if response is not None:
+            self.response = response
 
     # custom function to convert to str
     def __str__(self):
@@ -371,7 +399,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         return _message
 
 
-class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
+class PermissionDeniedError(openai.PermissionDeniedError):
     def __init__(
         self,
         message,
@@ -410,7 +438,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
         return _message
 
 
-class RateLimitError(openai.RateLimitError):  # type: ignore
+class RateLimitError(openai.RateLimitError):
     """
     Unified rate-limit error.
 
@@ -501,7 +529,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
-class ContextWindowExceededError(BadRequestError):  # type: ignore
+class ContextWindowExceededError(BadRequestError):
     def __init__(
         self,
         message,
@@ -516,8 +544,8 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         super().__init__(
             message=message,
-            model=self.model,  # type: ignore
-            llm_provider=self.llm_provider,  # type: ignore
+            model=self.model,
+            llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
@@ -543,7 +571,7 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
 
 
 # sub class of bad request error - meant to help us catch guardrails-related errors on proxy.
-class RejectedRequestError(BadRequestError):  # type: ignore
+class RejectedRequestError(BadRequestError):
     def __init__(
         self,
         message,
@@ -562,8 +590,8 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         response: Final = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
-            model=self.model,  # type: ignore
-            llm_provider=self.llm_provider,  # type: ignore
+            model=self.model,
+            llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
@@ -585,7 +613,7 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         return _message
 
 
-class ContentPolicyViolationError(BadRequestError):  # type: ignore
+class ContentPolicyViolationError(BadRequestError):
     #  Error code: 400 - {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Image descriptions generated from your prompt may contain text that is not allowed by our safety system. If you believe this was done in error, your request may succeed if retried, or by adjusting your prompt.', 'param': None, 'type': 'invalid_request_error'}}
     def __init__(
         self,
@@ -605,8 +633,8 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         self.provider_specific_fields = provider_specific_fields
         super().__init__(
             message=self.message,
-            model=self.model,  # type: ignore
-            llm_provider=self.llm_provider,  # type: ignore
+            model=self.model,
+            llm_provider=self.llm_provider,
             response=response,
             litellm_debug_info=self.litellm_debug_info,
             body=body,
@@ -630,7 +658,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         return _message
 
 
-class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
+class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
         self,
         message,
@@ -678,7 +706,7 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         return _message
 
 
-class BadGatewayError(openai.APIStatusError):  # type: ignore
+class BadGatewayError(openai.APIStatusError):
     def __init__(
         self,
         message,
@@ -726,7 +754,7 @@ class BadGatewayError(openai.APIStatusError):  # type: ignore
         return _message
 
 
-class InternalServerError(openai.InternalServerError):  # type: ignore
+class InternalServerError(openai.InternalServerError):
     def __init__(
         self,
         message,
@@ -775,7 +803,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
 
 
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
-class APIError(openai.APIError):  # type: ignore
+class APIError(openai.APIError):
     def __init__(
         self,
         status_code: int,
@@ -796,7 +824,7 @@ class APIError(openai.APIError):  # type: ignore
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)  # type: ignore
+        super().__init__(self.message, request=request, body=None)
 
     def __str__(self):
         _message = self.message
@@ -816,7 +844,7 @@ class APIError(openai.APIError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIConnectionError(openai.APIConnectionError):  # type: ignore
+class APIConnectionError(openai.APIConnectionError):
     def __init__(
         self,
         message,
@@ -855,7 +883,7 @@ class APIConnectionError(openai.APIConnectionError):  # type: ignore
 
 
 # raised if an invalid request (not get, delete, put, post) is made
-class APIResponseValidationError(openai.APIResponseValidationError):  # type: ignore
+class APIResponseValidationError(openai.APIResponseValidationError):
     def __init__(
         self,
         message,
@@ -902,7 +930,7 @@ class JSONSchemaValidationError(APIResponseValidationError):
         super().__init__(model=model, message=message, llm_provider=llm_provider)
 
 
-class OpenAIError(openai.OpenAIError):  # type: ignore
+class OpenAIError(openai.OpenAIError):
     def __init__(self, original_exception=None):
         super().__init__()
         self.llm_provider = "openai"
@@ -987,7 +1015,7 @@ class BudgetExceededError(Exception):
 
 
 ## DEPRECATED ##
-class InvalidRequestError(openai.BadRequestError):  # type: ignore
+class InvalidRequestError(openai.BadRequestError):
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message
@@ -1024,7 +1052,7 @@ class MockException(openai.APIError):
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)  # type: ignore
+        super().__init__(self.message, request=request, body=None)
 
 
 class LiteLLMUnknownProvider(BadRequestError):
@@ -1039,16 +1067,29 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
+    """
+    Raised both when a guardrail judged content and when it could not judge it at all, since a
+    guardrail that fails closed refuses the request the same way a policy violation does.
+
+    ``blocked_content`` separates the two. Set it only where the guardrail actually reached a
+    verdict on the payload; leave it alone for an unreachable backend, a timeout, or a response
+    the integration could not parse. Callers that treat a block as something other than a plain
+    failure, such as the batch path dropping one record and submitting the rest, must gate on it,
+    because dropping a record no guardrail ever inspected is a silent loss of enforcement.
+    """
+
     def __init__(
         self,
         guardrail_name: str | None = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
         status_code: int = 400,
+        blocked_content: bool = False,
     ):
         default_message: Final = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.status_code = status_code
+        self.blocked_content = blocked_content
         self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
@@ -1070,7 +1111,7 @@ class BlockedPiiEntityError(Exception):
         super().__init__(self.message)
 
 
-class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
+class MidStreamFallbackError(ServiceUnavailableError):
     def __init__(
         self,
         message: str,

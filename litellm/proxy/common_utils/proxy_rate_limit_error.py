@@ -98,7 +98,7 @@ def _coerce_message(detail: Any) -> str:
 # Both narrowings are intentional and handled at construction time — every
 # instance always has status_code == 429 and a Dict-typed headers — so we
 # silence the ATTR-overlap check rather than relax the annotations.
-class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
+class ProxyRateLimitError(HTTPException, RateLimitError):
     """
     A 429 raised by litellm's proxy-side rate limiting hooks.
 

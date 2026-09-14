@@ -74,14 +74,14 @@ class AmazonTitanV2Config:
         return optional_params
 
     def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanV2EmbeddingRequest:
-        return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)  # type: ignore
+        return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)
 
     def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanV2EmbeddingResponse(**response)  # type: ignore
+            _parsed_response = AmazonTitanV2EmbeddingResponse(**response)
 
             # According to AWS docs, embeddingsByType is always present
             # If binary was requested (encoding_format="base64"), use binary data

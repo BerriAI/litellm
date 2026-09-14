@@ -38,7 +38,9 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
             "CustomSecretManagerException - key_management_settings is required with custom_secret_manager field"
         )
 
-    custom_secret_manager_path: Final = getattr(litellm._key_management_settings, "custom_secret_manager", None)
+    custom_secret_manager_path: Final[str | None] = getattr(
+        litellm._key_management_settings, "custom_secret_manager", None
+    )
 
     if not custom_secret_manager_path:
         raise ValueError(
@@ -58,12 +60,12 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
     directory: Final = os.path.dirname(config_file_path)
     module_file_path: Final = os.path.join(directory, _file_name) + ".py"
 
-    spec: Final = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
+    spec: Final = importlib.util.spec_from_file_location(_class_name, module_file_path)
     if not spec:
         raise ImportError(f"Could not find a module specification for {module_file_path}")
 
-    module: Final = importlib.util.module_from_spec(spec)  # type: ignore
-    spec.loader.exec_module(module)  # type: ignore
+    module: Final = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     _secret_manager_class: Final = getattr(module, _class_name)
 
     # Validate that it's a CustomSecretManager subclass

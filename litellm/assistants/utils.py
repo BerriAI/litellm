@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import litellm
@@ -8,22 +9,24 @@ from ..types.llms.openai import *
 
 def get_optional_params_add_message(
     role: str | None,
-    content: str | List[MessageContentTextObject | MessageContentImageFileObject | MessageContentImageURLObject] | None,
-    attachments: List[Attachment] | None,
-    metadata: dict | None,
+    content: str | list[MessageContentTextObject | MessageContentImageFileObject | MessageContentImageURLObject] | None,
+    attachments: list[Attachment] | None,
+    metadata: Mapping[str, object] | None,
     custom_llm_provider: str,
-    **kwargs,
-):
+    **kwargs: object,
+) -> dict[str, object]:
     """
     Azure doesn't support 'attachments' for creating a message
 
     Reference - https://learn.microsoft.com/en-us/azure/ai-services/openai/assistants-reference-messages?tabs=python#create-message
     """
-    passed_params: Final = locals()
-    custom_llm_provider = passed_params.pop("custom_llm_provider")
-    special_params: Final = passed_params.pop("kwargs")
-    for k, v in special_params.items():
-        passed_params[k] = v
+    passed_params: Final[Mapping[str, object]] = {
+        "role": role,
+        "content": content,
+        "attachments": attachments,
+        "metadata": metadata,
+        **kwargs,
+    }
 
     default_params: Final = {
         "role": None,
@@ -33,10 +36,10 @@ def get_optional_params_add_message(
     }
 
     non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
-    optional_params = {}
+    optional_params: dict[str, object] = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
-    def _check_valid_arg(supported_params):
+    def _check_valid_arg(supported_params: Sequence[str]) -> Mapping[str, object] | None:
         if len(non_default_params.keys()) > 0:
             keys: Final = list(non_default_params.keys())
             for k in keys:
@@ -57,7 +60,7 @@ def get_optional_params_add_message(
         optional_params = litellm.AzureOpenAIAssistantsAPIConfig().map_openai_params_create_message_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
-    for k in passed_params.keys():
+    for k in passed_params:
         if k not in default_params:
             optional_params[k] = passed_params[k]
     return optional_params
@@ -71,14 +74,18 @@ def get_optional_params_image_gen(
     style: str | None = None,
     user: str | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
-):
+    **kwargs: object,
+) -> dict[str, object]:
     # retrieve all parameters passed to the function
-    passed_params: Final = locals()
-    custom_llm_provider = passed_params.pop("custom_llm_provider")
-    special_params: Final = passed_params.pop("kwargs")
-    for k, v in special_params.items():
-        passed_params[k] = v
+    passed_params: Final[Mapping[str, object]] = {
+        "n": n,
+        "quality": quality,
+        "response_format": response_format,
+        "size": size,
+        "style": style,
+        "user": user,
+        **kwargs,
+    }
 
     default_params: Final = {
         "n": None,
@@ -90,10 +97,10 @@ def get_optional_params_image_gen(
     }
 
     non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
-    optional_params = {}
+    optional_params: dict[str, object] = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
-    def _check_valid_arg(supported_params):
+    def _check_valid_arg(supported_params: Sequence[str]) -> Mapping[str, object] | None:
         if len(non_default_params.keys()) > 0:
             keys: Final = list(non_default_params.keys())
             for k in keys:
@@ -128,7 +135,7 @@ def get_optional_params_image_gen(
         if n is not None:
             optional_params["sampleCount"] = int(n)
 
-    for k in passed_params.keys():
+    for k in passed_params:
         if k not in default_params:
             optional_params[k] = passed_params[k]
     return optional_params

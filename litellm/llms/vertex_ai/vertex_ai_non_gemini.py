@@ -28,7 +28,7 @@ class TextStreamer:
     Fake streaming iterator for Vertex AI Model Garden calls
     """
 
-    def __init__(self, text):
+    def __init__(self, text: str):
         self.text = text.split()  # let's assume words as a streaming unit
         self.index = 0
 
@@ -109,13 +109,13 @@ def completion(
             message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
         )
     try:
-        import google.auth  # type: ignore
-        from google.cloud import aiplatform  # type: ignore
+        import google.auth
+        from google.cloud import aiplatform
         from google.cloud.aiplatform_v1beta1.types import (
-            content as gapic_content_types,  # type: ignore
+            content as gapic_content_types,
         )
-        from google.protobuf import json_format  # type: ignore
-        from google.protobuf.struct_pb2 import Value  # type: ignore
+        from google.protobuf import json_format
+        from google.protobuf.struct_pb2 import Value
         from vertexai.language_models import CodeGenerationModel, TextGenerationModel
         from vertexai.preview.generative_models import GenerativeModel
         from vertexai.preview.language_models import ChatModel, CodeChatModel
@@ -218,10 +218,7 @@ def completion(
 
             instances = [optional_params.copy()]
             instances[0]["prompt"] = prompt
-            instances = [
-                json_format.ParseDict(instance_dict, Value())  # type: ignore[misc]
-                for instance_dict in instances
-            ]
+            instances = [json_format.ParseDict(instance_dict, Value()) for instance_dict in instances]
             # Will determine the API used based on async parameter
             llm_model = None
 
@@ -337,7 +334,7 @@ def completion(
             )
             llm_model = aiplatform.gapic.PredictionServiceClient(
                 client_options=client_options,
-                credentials=creds,  # type: ignore[arg-type]
+                credentials=creds,
             )
             request_str += f"llm_model = aiplatform.gapic.PredictionServiceClient(client_options={client_options}, credentials=...)\n"
             endpoint_path = llm_model.endpoint_path(project=vertex_project, location=vertex_location, endpoint=model)
@@ -382,16 +379,14 @@ def completion(
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
-            model_response.choices[0].message = completion_response  # type: ignore
+            model_response.choices[0].message = completion_response
         elif len(str(completion_response)) > 0:
-            model_response.choices[0].message.content = str(completion_response)  # type: ignore
+            model_response.choices[0].message.content = str(completion_response)
         model_response.created = int(time.time())
         model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response.choices[0].finish_reason = map_finish_reason(  # type: ignore[assignment]
-                response_obj.candidates[0].finish_reason.name
-            )
+            model_response.choices[0].finish_reason = map_finish_reason(response_obj.candidates[0].finish_reason.name)
             usage = Usage(
                 prompt_tokens=response_obj.usage_metadata.prompt_token_count,
                 completion_tokens=response_obj.usage_metadata.candidates_token_count,
@@ -484,7 +479,7 @@ async def async_completion(
             """
             Vertex AI Model Garden
             """
-            from google.cloud import aiplatform  # type: ignore
+            from google.cloud import aiplatform
 
             if vertex_project is None or vertex_location is None:
                 raise ValueError("Vertex project and location are required for custom endpoint")
@@ -531,18 +526,14 @@ async def async_completion(
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
-            model_response.choices[0].message = completion_response  # type: ignore
+            model_response.choices[0].message = completion_response
         elif len(str(completion_response)) > 0:
-            model_response.choices[0].message.content = str(  # type: ignore
-                completion_response
-            )
+            model_response.choices[0].message.content = str(completion_response)
         model_response.created = int(time.time())
         model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response.choices[0].finish_reason = map_finish_reason(  # type: ignore[assignment]
-                response_obj.candidates[0].finish_reason.name
-            )
+            model_response.choices[0].finish_reason = map_finish_reason(response_obj.candidates[0].finish_reason.name)
             usage = Usage(
                 prompt_tokens=response_obj.usage_metadata.prompt_token_count,
                 completion_tokens=response_obj.usage_metadata.candidates_token_count,
@@ -625,7 +616,7 @@ async def async_streaming(
         )
         response = llm_model.predict_streaming_async(prompt, **optional_params)
     elif mode == "custom":
-        from google.cloud import aiplatform  # type: ignore
+        from google.cloud import aiplatform
 
         if vertex_project is None or vertex_location is None:
             raise ValueError("Vertex project and location are required for custom endpoint")

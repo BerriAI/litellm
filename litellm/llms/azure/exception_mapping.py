@@ -69,7 +69,7 @@ class AzureOpenAIExceptionMapping:
         # Some SDKs place the payload under "error".
         azure_error: dict[str, Any]
         if isinstance(body_dict.get("error"), dict):
-            azure_error = body_dict.get("error", {})  # type: ignore[assignment]
+            azure_error = body_dict.get("error", {})
         else:
             azure_error = body_dict
 

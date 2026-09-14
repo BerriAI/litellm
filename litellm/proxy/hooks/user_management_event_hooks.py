@@ -20,7 +20,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.management_helpers.audit_logs import (
+    create_audit_log_for_update,
+    is_audit_logging_enabled,
+)
 from litellm.repositories.user_repository import UserRepository
 
 
@@ -96,42 +99,66 @@ class UserManagementEventHooks:
             key_alias=response.key_alias,
         )
 
-        #########################################################
-        ########## V2 USER INVITATION EMAIL ################
-        #########################################################
-        try:
-            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-                BaseEmailLogger,
-            )
-
-            use_enterprise_email_hooks = True
-        except ImportError:
-            verbose_proxy_logger.warning(
-                "Defaulting to using Legacy Email Hooks." + CommonProxyErrors.missing_enterprise_package.value
-            )
-            use_enterprise_email_hooks = False
-
-        if use_enterprise_email_hooks and (data.send_invite_email is True):
-            initialized_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=BaseEmailLogger  # type: ignore
-            )
-            if len(initialized_email_loggers) > 0:
-                for email_logger in initialized_email_loggers:
-                    if isinstance(email_logger, BaseEmailLogger):  # type: ignore
-                        await email_logger.send_user_invitation_email(  # type: ignore
-                            event=event,
-                        )
+        sent_via_v2: Final = await UserManagementEventHooks._send_v2_user_invitation_emails(
+            event=event, send_invite_email=data.send_invite_email
+        )
 
         #########################################################
-        ########## LEGACY V1 USER INVITATION EMAIL ################
+        ########## LEGACY V1 USER INVITATION EMAIL (FALLBACK) ####
         #########################################################
-        if data.send_invite_email is True:
+        if data.send_invite_email is True and not sent_via_v2:
             await UserManagementEventHooks.send_legacy_v1_user_invitation_email(
                 data=data,
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 event=event,
             )
+
+    @staticmethod
+    async def _send_v2_user_invitation_emails(event: WebhookEvent, send_invite_email: bool | None) -> bool:
+        """
+        Send the modern (V2) invitation email via any registered enterprise email logger.
+
+        Returns True if at least one logger delivered, so the caller only falls back to
+        the legacy email when V2 did not send (enterprise package absent, no email logger
+        configured, or every send raised).
+        """
+        if send_invite_email is not True:
+            return False
+
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,
+            )
+        except ImportError:
+            verbose_proxy_logger.warning(
+                "Defaulting to using Legacy Email Hooks." + CommonProxyErrors.missing_enterprise_package.value
+            )
+            return False
+
+        email_loggers: Final = tuple(
+            email_logger
+            for email_logger in litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger
+            )
+            if isinstance(email_logger, BaseEmailLogger)
+        )
+        if len(email_loggers) == 0:
+            return False
+
+        send_outcomes: Final = await asyncio.gather(
+            *(email_logger.send_user_invitation_email(event=event) for email_logger in email_loggers),
+            return_exceptions=True,
+        )
+        for outcome in send_outcomes:
+            if isinstance(outcome, BaseException):
+                verbose_proxy_logger.error(
+                    "Error sending v2 user invitation email for user_id=%s: %s",
+                    event.user_id,
+                    str(outcome),
+                )
+
+        return any(not isinstance(outcome, BaseException) for outcome in send_outcomes)
 
     @staticmethod
     async def send_legacy_v1_user_invitation_email(
@@ -179,7 +206,7 @@ class UserManagementEventHooks:
         - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
         - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
         """
-        if not litellm.store_audit_logs:
+        if not is_audit_logging_enabled():
             return
 
         from litellm.proxy.management_helpers.audit_logs import (

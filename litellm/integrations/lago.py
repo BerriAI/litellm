@@ -23,9 +23,9 @@ def get_utc_datetime():
     from datetime import datetime
 
     if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
+        return datetime.now(dt.UTC)
     else:
-        return datetime.utcnow()  # type: ignore
+        return datetime.utcnow()
 
 
 class LagoLogger(CustomLogger):
@@ -92,7 +92,7 @@ class LagoLogger(CustomLogger):
                 "user_id",
                 "team_id",
             ]:
-                charge_by = os.environ["LAGO_API_CHARGE_BY"]  # type: ignore
+                charge_by = os.environ["LAGO_API_CHARGE_BY"]
             else:
                 raise Exception("invalid LAGO_API_CHARGE_BY set")
 

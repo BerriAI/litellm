@@ -26,7 +26,7 @@ def load_google_kms(use_google_kms: bool | None):
     if use_google_kms is None or use_google_kms is False:
         return
     try:
-        from google.cloud import kms_v1  # type: ignore
+        from google.cloud import kms_v1
 
         validate_environment()
 

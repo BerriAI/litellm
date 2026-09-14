@@ -16,6 +16,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     ollama_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_inline_remote_media,
+    inline_remote_image_urls,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
@@ -31,6 +35,8 @@ from litellm.types.utils import (
 from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -246,7 +252,7 @@ class OllamaConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -264,7 +270,7 @@ class OllamaConfig(BaseConfig):
             if not response_text or not response_text.strip():
                 # Handle empty response gracefully - set empty content
                 message = litellm.Message(content="")
-                model_response.choices[0].message = message  # type: ignore
+                model_response.choices[0].message = message
                 model_response.choices[0].finish_reason = "stop"
             else:
                 try:
@@ -291,14 +297,14 @@ class OllamaConfig(BaseConfig):
                                 }
                             ],
                         )
-                        model_response.choices[0].message = message  # type: ignore
+                        model_response.choices[0].message = message
                         model_response.choices[0].finish_reason = "tool_calls"
                     else:
                         # Handle as regular JSON (new behavior)
                         message = litellm.Message(
                             content=json.dumps(response_content),
                         )
-                        model_response.choices[0].message = message  # type: ignore
+                        model_response.choices[0].message = message
                         model_response.choices[0].finish_reason = "stop"
                 except json.JSONDecodeError:
                     # If JSON parsing fails, treat as regular text response
@@ -308,7 +314,7 @@ class OllamaConfig(BaseConfig):
                     if response_text is not None:
                         reasoning_content, content = _parse_content_for_reasoning(response_text)
                     message = litellm.Message(content=content, reasoning_content=reasoning_content)
-                    model_response.choices[0].message = message  # type: ignore
+                    model_response.choices[0].message = message
                     model_response.choices[0].finish_reason = "stop"
         else:
             response_text = response_json.get("response", "")
@@ -317,15 +323,16 @@ class OllamaConfig(BaseConfig):
             if response_text is not None and isinstance(response_text, str):
                 reasoning_content, content = _parse_content_for_reasoning(response_text)
             else:
-                content = response_text  # type: ignore
-            model_response.choices[0].message.content = content  # type: ignore
-            model_response.choices[0].message.reasoning_content = reasoning_content  # type: ignore
+                content = response_text
+            model_response.choices[0].message.content = content
+            model_response.choices[0].message.reasoning_content = reasoning_content
         model_response.created = int(time.time())
         model_response.model = "ollama/" + model
         _prompt: Final = request_data.get("prompt", "")
+        tokenizer: Final = encoding if encoding is not None else litellm.encoding
         prompt_tokens: Final = response_json.get(
             "prompt_eval_count",
-            len(encoding.encode(_prompt, disallowed_special=())),  # type: ignore
+            len(tokenizer.encode(_prompt, disallowed_special=())),
         )
         completion_tokens: Final = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))
@@ -340,6 +347,26 @@ class OllamaConfig(BaseConfig):
             ),
         )
         return model_response
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return True
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        return self.transform_request(
+            model=model,
+            messages=await async_inline_remote_media(messages, should_inline=inline_remote_image_urls),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def transform_request(
         self,

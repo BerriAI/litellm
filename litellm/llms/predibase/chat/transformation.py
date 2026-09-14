@@ -18,6 +18,8 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from ..common_utils import PredibaseError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -64,9 +66,24 @@ class PredibaseConfig(BaseConfig):
         typical_p: float | None = None,
         watermark: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        locals_: Final = (
+            ("best_of", best_of),
+            ("decoder_input_details", decoder_input_details),
+            ("details", details),
+            ("max_new_tokens", max_new_tokens),
+            ("repetition_penalty", repetition_penalty),
+            ("return_full_text", return_full_text),
+            ("seed", seed),
+            ("stop", stop),
+            ("temperature", temperature),
+            ("top_k", top_k),
+            ("top_p", top_p),
+            ("truncate", truncate),
+            ("typical_p", typical_p),
+            ("watermark", watermark),
+        )
+        for key, value in locals_:
+            if value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
@@ -133,7 +150,7 @@ class PredibaseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -165,9 +182,7 @@ class PredibaseConfig(BaseConfig):
             )
 
         if len(completion_response["generated_text"]) > 0:
-            model_response.choices[0].message.content = self.output_parser(  # type: ignore
-                completion_response["generated_text"]
-            )
+            model_response.choices[0].message.content = self.output_parser(completion_response["generated_text"])
 
         if "details" in completion_response and "tokens" in completion_response["details"]:
             model_response.choices[0].finish_reason = map_finish_reason(completion_response["details"]["finish_reason"])
@@ -176,7 +191,7 @@ class PredibaseConfig(BaseConfig):
                 if token["logprob"] is not None:
                     sum_logprob += token["logprob"]
             setattr(
-                model_response.choices[0].message,  # type: ignore
+                model_response.choices[0].message,
                 "_logprob",
                 sum_logprob,  # [TODO] move this to using the actual logprobs
             )
@@ -219,7 +234,7 @@ class PredibaseConfig(BaseConfig):
             # Keep usage calculation non-blocking if token counting fails.
             pass
         output_text: Final = model_response["choices"][0]["message"].get("content", "")
-        if output_text is not None and len(output_text) > 0:
+        if encoding is not None and output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
                 completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
@@ -238,7 +253,7 @@ class PredibaseConfig(BaseConfig):
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
         )
-        model_response.usage = usage  # type: ignore
+        model_response.usage = usage
 
         predibase_headers: Final = raw_response.headers
         response_headers: Final = {}

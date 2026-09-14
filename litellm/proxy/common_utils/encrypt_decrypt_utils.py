@@ -1,6 +1,9 @@
 import base64
 import os
+from collections.abc import Mapping
 from typing import Final, Literal, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 
@@ -101,7 +104,7 @@ def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
                 # is returned directly with no extra base64 wrapper.
                 return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
 
-            encrypted_value = encrypt_value(value=value, signing_key=signing_key)  # type: ignore
+            encrypted_value = encrypt_value(value=value, signing_key=signing_key)
             # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
             encrypted_value = base64.urlsafe_b64encode(encrypted_value).decode("utf-8")
 
@@ -139,7 +142,7 @@ def decrypt_value_helper(
                 # If URL-safe decoding fails, try standard base64 decoding for backwards compatibility
                 decoded_b64 = base64.b64decode(value)
 
-            value = decrypt_value(value=decoded_b64, signing_key=signing_key)  # type: ignore
+            value = decrypt_value(value=decoded_b64, signing_key=signing_key)
             return value
 
         # if it's not str - do not decrypt it, return the value
@@ -199,7 +202,44 @@ def decrypt_value(value: bytes, signing_key: str) -> str:
             return ""
 
         plaintext = box.decrypt(value)
-        plaintext = plaintext.decode("utf-8")  # type: ignore
-        return plaintext  # type: ignore
+        plaintext = plaintext.decode("utf-8")
+        return plaintext
     except Exception as e:
         raise e
+
+
+class SecretMapDecodeError(RuntimeError):
+    pass
+
+
+_SECRET_MAP: Final = TypeAdapter(Mapping[str, str])
+_STORED_SECRET_MAP: Final = TypeAdapter(Mapping[str, str] | str)
+_SECRET_STRING: Final = TypeAdapter(str)
+
+
+def encrypt_secret_map(value: Mapping[str, str], new_encryption_key: str | None = None) -> str:
+    if not value:
+        return "{}"
+    ciphertext: Final = _SECRET_STRING.validate_python(
+        encrypt_value_helper(_SECRET_MAP.dump_json(value).decode(), new_encryption_key=new_encryption_key), strict=True
+    )
+    return _SECRET_STRING.dump_json(ciphertext).decode()
+
+
+def decode_secret_map(value: object, *, key: str) -> Mapping[str, str] | None:
+    if value is None:
+        return None
+    try:
+        stored: Final = (
+            _STORED_SECRET_MAP.validate_json(value, strict=True)
+            if isinstance(value, str) and value.lstrip().startswith(("{", '"'))
+            else _STORED_SECRET_MAP.validate_python(value, strict=True)
+        )
+        if not isinstance(stored, str):
+            return stored
+        decrypted: Final = decrypt_value_helper(
+            value=stored, key=key, exception_type="debug", return_original_value=False
+        )
+        return _SECRET_MAP.validate_json(decrypted, strict=True)
+    except ValidationError:
+        raise SecretMapDecodeError(f"Cannot decode encrypted MCP {key}; check LITELLM_SALT_KEY") from None

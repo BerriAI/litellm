@@ -4,6 +4,7 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
+import ssl
 from typing import Any, Final, cast
 
 from litellm._logging import _redact_string, verbose_logger
@@ -56,7 +57,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             headers["OpenAI-Beta"] = "realtime=v1"
         return headers
 
-    def _get_ssl_config(self, url: str) -> Any:
+    def _get_ssl_config(self, url: str) -> bool | str | ssl.SSLContext | None:
         """
         Get SSL configuration for WebSocket connection.
         Override this in subclasses to customize SSL behavior.
@@ -111,12 +112,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
-        client: Any | None = None,
+        client: object | None = None,
         timeout: float | None = None,
         query_params: RealtimeQueryParams | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -154,9 +155,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "complete_input_dict": {"query_params": query_params},
                 },
             )
-            async with websockets.connect(  # type: ignore
+            async with websockets.connect(
                 url,
-                additional_headers=headers,  # type: ignore
+                additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_ws:
@@ -174,7 +175,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 )
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        except websockets.exceptions.InvalidStatusCode as e:
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             try:

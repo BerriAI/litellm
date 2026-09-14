@@ -249,7 +249,7 @@ def _content_filter(category: str):
     guardrail: Final = ContentFilterGuardrail(
         guardrail_name=f"{category}_eval",
         categories=[
-            {  # type: ignore[list-item]
+            {
                 "category": category,
                 "enabled": True,
                 "action": "BLOCK",
@@ -532,7 +532,7 @@ class _LlmJudgeChecker:
             temperature=0,
             max_tokens=5,
         )
-        decision: Final = (response.choices[0].message.content or "").strip().upper()  # type: ignore[union-attr]
+        decision: Final = (response.choices[0].message.content or "").strip().upper()
 
         if "BLOCK" in decision:
             raise HTTPException(

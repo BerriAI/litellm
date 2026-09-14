@@ -64,13 +64,13 @@ class OpenAIImageVariationsHandler:
                 "base_url": api_base,
                 "http_client": litellm.client_session,
                 "timeout": timeout,
-                "max_retries": max_retries,  # type: ignore
+                "max_retries": max_retries,
                 "organization": organization,
             }
 
             client = self.get_async_client(client=client, init_client_params=init_client_params)
 
-            raw_response: Final = await client.images.with_raw_response.create_variation(**data)  # type: ignore
+            raw_response: Final = await client.images.with_raw_response.create_variation(**data)
             response: Final = raw_response.parse()
             response_json: Final = response.model_dump()
 
@@ -104,7 +104,7 @@ class OpenAIImageVariationsHandler:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
@@ -174,20 +174,20 @@ class OpenAIImageVariationsHandler:
                     image=image,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                )  # type: ignore
+                )
 
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
                 "http_client": litellm.client_session,
                 "timeout": timeout,
-                "max_retries": max_retries,  # type: ignore
+                "max_retries": max_retries,
                 "organization": organization,
             }
 
             client = self.get_sync_client(client=client, init_client_params=init_client_params)
 
-            raw_response: Final = client.images.with_raw_response.create_variation(**json_data)  # type: ignore
+            raw_response: Final = client.images.with_raw_response.create_variation(**json_data)
             response: Final = raw_response.parse()
             response_json: Final = response.model_dump()
 
@@ -221,7 +221,7 @@ class OpenAIImageVariationsHandler:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)

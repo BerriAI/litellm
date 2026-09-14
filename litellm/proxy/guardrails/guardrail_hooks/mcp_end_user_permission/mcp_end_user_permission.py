@@ -22,6 +22,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "mcp_end_user_permission"
@@ -54,7 +55,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"] = "request",
-        logging_obj: Any | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Filters MCP tools the end user cannot access based on their
@@ -138,7 +139,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    async def _fetch_end_user_object(end_user_id: str):  # type: ignore[return]
+    async def _fetch_end_user_object(end_user_id: str):
         """
         Fetch end user object via the same cached path used during auth.
         No extra DB round-trip when the cache is warm.

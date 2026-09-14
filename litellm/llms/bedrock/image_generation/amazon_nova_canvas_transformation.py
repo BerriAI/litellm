@@ -76,9 +76,7 @@ class AmazonNovaCanvasConfig:
             text_to_image_params: dict[str, Any] = image_generation_config.pop("textToImageParams", {})
             text_to_image_params = {"text": text, **text_to_image_params}
             try:
-                text_to_image_params_typed: Final = AmazonNovaCanvasTextToImageParams(
-                    **text_to_image_params  # type: ignore
-                )
+                text_to_image_params_typed: Final = AmazonNovaCanvasTextToImageParams(**text_to_image_params)
             except Exception as e:
                 raise ValueError(
                     f"Error transforming text to image params: {e}. Got params: {text_to_image_params}, Expected params: {AmazonNovaCanvasTextToImageParams.__annotations__}"
@@ -106,7 +104,7 @@ class AmazonNovaCanvasConfig:
             }
             try:
                 color_guided_generation_params_typed: Final = AmazonNovaCanvasColorGuidedGenerationParams(
-                    **color_guided_generation_params  # type: ignore
+                    **color_guided_generation_params
                 )
             except Exception as e:
                 raise ValueError(
@@ -129,9 +127,7 @@ class AmazonNovaCanvasConfig:
             inpainting_params: dict[str, Any] = image_generation_config.pop("inpaintingParams", {})
             inpainting_params = {"text": text, **inpainting_params}
             try:
-                inpainting_params_typed: Final = AmazonNovaCanvasInpaintingParams(
-                    **inpainting_params  # type: ignore
-                )
+                inpainting_params_typed: Final = AmazonNovaCanvasInpaintingParams(**inpainting_params)
             except Exception as e:
                 raise ValueError(
                     f"Error transforming inpainting params: {e}. Got params: {inpainting_params}, Expected params: {AmazonNovaCanvasInpaintingParams.__annotations__}"

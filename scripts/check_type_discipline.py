@@ -17,19 +17,30 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
         Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
         Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
-        generator (`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass /
-        NamedTuple / ReadOnly TypedDict. Generator expressions and `tuple`/`frozenset`
-        calls are not construction and pass. Annotation-internal lists (`Callable[[int],
-        str]`) are exempt, as is a value passed directly to a freezing wrapper
-        (`tuple(...)`, `frozenset(...)`, `MappingProxyType(...)`): it is frozen before
-        it can escape, though anything mutable nested inside it still counts.
-        Suppress with `# mutable-ok: <reason>`.
+        generator (`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass /
+        NamedTuple, a TypedDict-annotated dict literal, or (if it really must be
+        dynamic) a MappingProxyType wrapping a dict literal or comprehension. Generator
+        expressions and freezing-wrapper calls (`tuple(...)`, `frozenset(...)`,
+        `MappingProxyType(...)`) are not construction and pass, as does the value passed
+        directly to a wrapper: it is frozen before it can escape, though anything
+        mutable nested inside it still counts. Annotation-internal lists
+        (`Callable[[int], str]`) are exempt. A dict literal whose assignment is
+        annotated with a TypedDict (`x: Final[MyTD] = {...}`; bare `x: Final = {...}`
+        does not qualify) is a fixed-shape build basedpyright checks key-by-key against
+        fields LIT012 keeps ReadOnly, not a growable accumulator, so it is exempt along
+        with the dict literals nested in it (nested TypedDict fields); any other
+        construction inside still counts. Detection is name-based: Final/ClassVar/
+        Optional (and Annotated's first argument) unwrap, a PEP 604 union
+        (`MyTD | None`) qualifies through either arm, and any remaining named head
+        outside the mutable collections and Mapping/Any/object is taken to be a
+        TypedDict, since a dict literal assigned to any other named type would not
+        survive basedpyright. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
-LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok`
-        suppression without a reason.
+LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
+        `# rebind-ok` / `# writable-ok` suppression without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -79,6 +90,15 @@ LIT011  Function-argument mutation: a parameter that is re-bound (`param = ...`,
         instance), not from re-binding. Method-call mutation (`param.append(x)`) is
         out of reach without type information; LIT001/LIT002 keep mutable collections
         off signatures instead. Suppress with `# rebind-ok: <reason>`.
+LIT012  TypedDict field without a `ReadOnly[...]` qualifier. A writable key lets any
+        holder of the payload rewrite it after construction; qualify every field with
+        `ReadOnly[...]` (PEP 705), which nests freely with Required/NotRequired/
+        Annotated in any order. Detection is name-based, like MUTABLE_COLLECTIONS:
+        a class is a TypedDict when `TypedDict` appears among its bases or when it
+        inherits, transitively within the same module, from a class that has it;
+        the functional form (`X = TypedDict("X", {...})`) is checked too. A base
+        imported from another module is out of reach without import resolution.
+        Suppress with `# writable-ok: <reason>`.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -94,10 +114,12 @@ from __future__ import annotations
  
 import ast
 import io
+import os
 import re
 import sys
 import tokenize
 from dataclasses import dataclass
+from multiprocessing import Pool
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import NamedTuple
@@ -128,7 +150,20 @@ MUTABLE_CONSTRUCTORS = frozenset((
 # qualified `collections.deque(...)` still counts.
 QUALIFIED_CONSTRUCTORS = MUTABLE_CONSTRUCTORS - frozenset(("dict", "list", "set"))
 FREEZING_WRAPPERS = frozenset(("tuple", "frozenset", "MappingProxyType"))
+# Wrappers unwrapped when deciding whether an assignment's annotation names a
+# TypedDict (the LIT002 dict-literal exemption); bare, they name no type. Annotated
+# is handled separately: only its first argument is type syntax.
+TYPEDDICT_ANNOTATION_WRAPPERS = frozenset(("Final", "ClassVar", "Optional"))
+# Heads that can type a dict literal without being a TypedDict. Every other named
+# head counts as one: a dict literal assigned to any other named type would not
+# survive basedpyright, which is the second gate behind this name-based check.
+NON_TYPEDDICT_HEADS = MUTABLE_COLLECTIONS | frozenset(("Mapping", "Any", "object"))
 UNSAFE_GUARDS = frozenset(("TypeGuard", "TypeIs"))
+READONLY_QUALIFIER = "ReadOnly"
+# Qualifiers ReadOnly may nest under, in any order (PEP 705); for Annotated only the
+# first argument is type syntax, the rest is metadata and never qualifies the field.
+FIELD_QUALIFIER_WRAPPERS = frozenset(("Required", "NotRequired", "Annotated"))
+TYPEDDICT_BASE = "TypedDict"
 MIN_REASON_LEN = 3
  
 NOQA_RE = re.compile(
@@ -146,6 +181,7 @@ CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
 GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
+WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -154,6 +190,7 @@ OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("guard-ok", GUARD_OK_RE),
     ("kwargs-ok", KWARGS_OK_RE),
     ("rebind-ok", REBIND_OK_RE),
+    ("writable-ok", WRITABLE_OK_RE),
 )
  
  
@@ -176,6 +213,7 @@ class Comments:
     guard_ok_lines: frozenset[int]
     kwargs_ok_lines: frozenset[int]
     rebind_ok_lines: frozenset[int]
+    writable_ok_lines: frozenset[int]
  
  
 # --------------------------------------------------------------------------- #
@@ -231,7 +269,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
+        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
 
     def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
         return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
@@ -243,6 +281,7 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
             guard_ok_lines=_lines_with(GUARD_OK_RE),
             kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
             rebind_ok_lines=_lines_with(REBIND_OK_RE),
+            writable_ok_lines=_lines_with(WRITABLE_OK_RE),
         ),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
@@ -251,26 +290,48 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
 # --------------------------------------------------------------------------- #
  
  
-def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
+def _head_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _is_literal_subscript(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Subscript):
+        return False
+    base: Final = node.value
+    return (isinstance(base, ast.Name) and base.id == "Literal") or (
+        isinstance(base, ast.Attribute) and base.attr == "Literal"
+    )
+
+
+def mutable_names_in(annotation: ast.AST) -> Iterator[str]:
     """Yield mutable-collection names anywhere inside an annotation expression.
 
     Matches bare names (`dict`, `MutableMapping`) and dotted access (`typing.Dict`,
     `collections.deque`, `collections.abc.MutableMapping`), descends through nesting
     (`Mapping[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
+    Skips `Literal[...]` subtrees: their string arguments are values, not forward
+    references, so `Literal["list"]` is not the `list` type.
     """
-    for node in ast.walk(annotation):
-        if isinstance(node, ast.Name) and node.id in MUTABLE_COLLECTIONS:
-            yield node.id
-        elif isinstance(node, ast.Attribute) and node.attr in MUTABLE_COLLECTIONS:
-            yield node.attr
-        elif isinstance(node, ast.Constant):
-            value: object = node.value  # forward references arrive as string constants
-            if isinstance(value, str):
-                try:
-                    inner = ast.parse(value, mode="eval").body
-                except SyntaxError:
-                    continue
-                yield from mutable_names_in(inner)
+    if _is_literal_subscript(annotation):
+        return
+    if isinstance(annotation, ast.Name) and annotation.id in MUTABLE_COLLECTIONS:
+        yield annotation.id
+    elif isinstance(annotation, ast.Attribute) and annotation.attr in MUTABLE_COLLECTIONS:
+        yield annotation.attr
+    elif isinstance(annotation, ast.Constant):
+        value: object = annotation.value  # forward references arrive as string constants
+        if isinstance(value, str):
+            try:
+                inner = ast.parse(value, mode="eval").body
+            except SyntaxError:
+                return
+            yield from mutable_names_in(inner)
+    for child in ast.iter_child_nodes(annotation):
+        yield from mutable_names_in(child)
  
  
 def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
@@ -452,6 +513,61 @@ def _frozen_argument_ids(tree: ast.AST) -> frozenset[int]:
     )
 
 
+def _is_typeddict_annotation(annotation: ast.expr) -> bool:
+    """True iff the annotation names a TypedDict, by the name-based heuristic.
+
+    Final/ClassVar/Optional unwrap (as does Annotated's first argument, the only
+    one that is type syntax), a PEP 604 union qualifies through either arm, string
+    forward references are parsed, and whatever named head remains counts as a
+    TypedDict unless it is a mutable collection or Mapping/Any/object -- the heads
+    that can type a dict literal without being one. Bare wrappers
+    (`x: Final = ...`) name no type and never qualify.
+    """
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            inner = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return False
+        return _is_typeddict_annotation(inner)
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return _is_typeddict_annotation(annotation.left) or _is_typeddict_annotation(annotation.right)
+    if isinstance(annotation, ast.Subscript):
+        head = _head_name(annotation.value)
+        if head in TYPEDDICT_ANNOTATION_WRAPPERS:
+            return _is_typeddict_annotation(annotation.slice)
+        if head == "Annotated":
+            first = annotation.slice.elts[0] if isinstance(annotation.slice, ast.Tuple) and annotation.slice.elts else None
+            return first is not None and _is_typeddict_annotation(first)
+        return head is not None and head not in NON_TYPEDDICT_HEADS
+    name = _head_name(annotation)
+    return (
+        name is not None
+        and name not in NON_TYPEDDICT_HEADS
+        and name not in TYPEDDICT_ANNOTATION_WRAPPERS
+        and name != "Annotated"
+    )
+
+
+def _typeddict_build_ids(tree: ast.AST) -> frozenset[int]:
+    """ids() of every dict literal built under a TypedDict-annotated assignment.
+
+    `x: Final[MyTD] = {...}` is a fixed-shape build: basedpyright checks each key
+    against the declared fields, which LIT012 keeps ReadOnly, so nothing here is
+    the seed-then-mutate accumulator LIT002 hunts. Dict literals nested in the
+    value (nested TypedDict fields) share the exemption; any other construction
+    inside it still counts, and a bare `x: Final = {...}` stays flagged.
+    """
+    return frozenset(
+        id(sub)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.value, ast.Dict)
+        and _is_typeddict_annotation(node.annotation)
+        for sub in ast.walk(node.value)
+        if isinstance(sub, ast.Dict)
+    )
+
+
 def _construction_kind(node: ast.expr) -> str | None:
     """Human label if `node` builds a mutable collection, else None."""
     if isinstance(node, ast.List):
@@ -478,8 +594,14 @@ def _construction_kind(node: ast.expr) -> str | None:
 def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
     in_annotation = _annotation_node_ids(tree)
     frozen_arguments = _frozen_argument_ids(tree)
+    typeddict_builds = _typeddict_build_ids(tree)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.expr) or id(node) in in_annotation or id(node) in frozen_arguments:
+        if (
+            not isinstance(node, ast.expr)
+            or id(node) in in_annotation
+            or id(node) in frozen_arguments
+            or id(node) in typeddict_builds
+        ):
             continue
         kind = _construction_kind(node)
         if kind is None or node.lineno in comments.mutable_ok_lines:
@@ -488,8 +610,10 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
             path, node.lineno, "LIT002",
             f"mutable {kind}: this builds a collection that can be grown or rewritten. "
             f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
-            f"(`tuple(f(x) for x in xs)`), a tuple literal, or a frozen dataclass / NamedTuple "
-            f"/ ReadOnly TypedDict (suppress: `# mutable-ok: <reason>`)",
+            f"(`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass / NamedTuple, "
+            f"a TypedDict-annotated dict literal (`x: Final[MyTD] = {{...}}`), or (if it "
+            f"really must be dynamic) a MappingProxyType wrapping a dict literal or "
+            f"comprehension (suppress: `# mutable-ok: <reason>`)",
         )
  
  
@@ -813,6 +937,103 @@ def iter_param_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
 
 
 # --------------------------------------------------------------------------- #
+# Writable TypedDict fields (LIT012)
+# --------------------------------------------------------------------------- #
+
+
+def _base_names(cls: ast.ClassDef) -> frozenset[str]:
+    """The names of a class's bases; a subscripted base (`Foo[int]`) counts as `Foo`."""
+    return frozenset(
+        name
+        for base in cls.bases
+        for name in (_head_name(base.value if isinstance(base, ast.Subscript) else base),)
+        if name is not None
+    )
+
+
+def _typeddict_classes(tree: ast.AST) -> tuple[ast.ClassDef, ...]:
+    """ClassDefs that are TypedDicts: `TypedDict` among the bases, or -- transitively,
+    within this module -- a base that is itself one of these classes. A base defined
+    in another module is invisible here; that subclass goes unchecked."""
+    classes = tuple(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
+    bases_of = {cls.name: _base_names(cls) for cls in classes}
+
+    def expand(known: frozenset[str]) -> frozenset[str]:
+        grown = known | frozenset(name for name, bases in bases_of.items() if bases & known)
+        return grown if grown == known else expand(grown)
+
+    names = expand(frozenset((TYPEDDICT_BASE,)))
+    return tuple(cls for cls in classes if cls.name in names)
+
+
+def _has_readonly_qualifier(annotation: ast.expr) -> bool:
+    """True iff the annotation is `ReadOnly[...]`, possibly nested under
+    Required/NotRequired/Annotated (in any order) or a string forward reference."""
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            inner = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return False
+        return _has_readonly_qualifier(inner)
+    if not isinstance(annotation, ast.Subscript):
+        return False
+    name = _head_name(annotation.value)
+    if name == READONLY_QUALIFIER:
+        return True
+    if name not in FIELD_QUALIFIER_WRAPPERS:
+        return False
+    if name == "Annotated":
+        if isinstance(annotation.slice, ast.Tuple) and annotation.slice.elts:
+            return _has_readonly_qualifier(annotation.slice.elts[0])
+        return False
+    return _has_readonly_qualifier(annotation.slice)
+
+
+class _Field(NamedTuple):
+    owner: str
+    name: str
+    annotation: ast.expr
+    line: int
+
+
+def _class_fields(cls: ast.ClassDef) -> Iterator[_Field]:
+    for stmt in cls.body:
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            yield _Field(cls.name, stmt.target.id, stmt.annotation, stmt.lineno)
+
+
+def _functional_fields(tree: ast.AST) -> Iterator[_Field]:
+    """Fields of the functional form: `X = TypedDict("X", {"field": type, ...})`."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _head_name(node.func) != TYPEDDICT_BASE:
+            continue
+        if len(node.args) < 2 or not isinstance(node.args[1], ast.Dict):
+            continue
+        first = node.args[0]
+        owner = first.value if isinstance(first, ast.Constant) and isinstance(first.value, str) else "<TypedDict>"
+        for key, value in zip(node.args[1].keys, node.args[1].values):
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                yield _Field(owner, key.value, value, value.lineno)
+
+
+def iter_typeddict_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+    fields = (
+        *(f for cls in _typeddict_classes(tree) for f in _class_fields(cls)),
+        *_functional_fields(tree),
+    )
+    for field in fields:
+        if _has_readonly_qualifier(field.annotation) or field.line in comments.writable_ok_lines:
+            continue
+        yield Violation(
+            path, field.line, "LIT012",
+            f"TypedDict field `{field.name}` of `{field.owner}` is writable: any holder "
+            f"of the payload can rewrite the key after construction. Qualify it as "
+            f"`ReadOnly[...]` (PEP 705; nests freely with Required/NotRequired/Annotated) "
+            f"(suppress: `# writable-ok: <reason>`)",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
  
@@ -838,6 +1059,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
         *iter_construction_violations(path, tree, comments),
         *iter_final_violations(path, tree, comments),
         *iter_param_violations(path, tree, comments),
+        *iter_typeddict_violations(path, tree, comments),
     )
  
  
@@ -850,13 +1072,36 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
             yield p
  
  
+PARALLEL_MIN_PATHS = 200
+MAX_WORKERS = 8
+
+
+def _worker_count(path_count: int) -> int:
+    """1 when the run is too small to repay process startup, else one worker per
+    core up to MAX_WORKERS."""
+    if path_count < PARALLEL_MIN_PATHS:
+        return 1
+    return max(1, min(os.cpu_count() or 1, MAX_WORKERS))
+
+
+def scan_paths(paths: Sequence[Path]) -> tuple[Violation, ...]:
+    """check_file over every path. Pure per-file work, so it fans out across
+    processes; callers sort, which is what keeps output order stable."""
+    workers = _worker_count(len(paths))
+    if workers == 1:
+        return tuple(v for path in paths for v in check_file(path))
+    with Pool(workers) as pool:
+        return tuple(v for found in pool.imap_unordered(check_file, paths, chunksize=32) for v in found)
+
+
 def main(argv: Sequence[str]) -> int:
     paths = tuple(a for a in argv if not a.startswith("-"))
     if not paths:
         print("usage: check_type_discipline.py <files-or-dirs>...", file=sys.stderr)
         return 2
  
-    violations = sorted(v for path in collect_paths(paths) for v in check_file(path))
+    targets = tuple(collect_paths(paths))
+    violations = sorted(scan_paths(targets))
     for v in violations:
         print(v.render())
  

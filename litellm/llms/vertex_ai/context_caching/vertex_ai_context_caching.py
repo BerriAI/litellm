@@ -62,7 +62,7 @@ class ContextCachingEndpoints(VertexBase):
         """
         auth_header: str | None
         if custom_llm_provider == "gemini":
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
             endpoint = "cachedContents"
             url = f"https://generativelanguage.googleapis.com/v1beta/{endpoint}"
         elif custom_llm_provider == "vertex_ai":
@@ -361,7 +361,7 @@ class ContextCachingEndpoints(VertexBase):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = HTTPHandler(**_params)  # type: ignore
+            client = HTTPHandler(**_params)
         else:
             client = client
 
@@ -414,7 +414,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,  # type: ignore
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -569,7 +569,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = await client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,  # type: ignore
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:

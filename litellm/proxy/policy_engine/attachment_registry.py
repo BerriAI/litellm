@@ -6,7 +6,8 @@ This allows the same policy to be attached to multiple scopes.
 """
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.table_repositories import PolicyAttachmentRepository
@@ -18,7 +19,33 @@ from litellm.types.proxy.policy_engine import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from prisma.models import LiteLLM_PolicyAttachmentTable
+
     from litellm.proxy.utils import PrismaClient
+
+
+class PolicyAttachmentMatch(TypedDict):
+    policy_name: str
+    matched_via: str
+
+
+def _attachment_specificity(attachment: PolicyAttachment) -> tuple[int, int]:
+    if attachment.is_global():
+        return (0, 0)
+
+    dims: Final = tuple(
+        specificity
+        for values, specificity in (
+            (attachment.teams, 1),
+            (attachment.keys, 2),
+            (attachment.tags, 3),
+            (attachment.models, 4),
+        )
+        if values
+    )
+    return (max(dims, default=0), len(dims))
 
 
 class AttachmentRegistry:
@@ -40,7 +67,7 @@ class AttachmentRegistry:
     ```
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._attachments: list[PolicyAttachment] = []
         self._config_attachments: tuple[PolicyAttachment, ...] = ()
         self._initialized: bool = False
@@ -98,7 +125,7 @@ class AttachmentRegistry:
         """
         return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context)]
 
-    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[dict[str, Any]]:
+    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[PolicyAttachmentMatch]:
         """
         Get list of policy names and match reasons for the given context.
 
@@ -107,31 +134,29 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        results: Final[list[dict[str, Any]]] = []
-        seen_policies: Final[set] = set()
+        matching_attachments: Final = sorted(
+            (
+                attachment
+                for attachment in self._attachments
+                if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
+            ),
+            key=_attachment_specificity,
+        )
+        broadest_attachment_by_policy: Final = MappingProxyType(
+            {attachment.policy: attachment for attachment in reversed(matching_attachments)}
+        )
+        unique_attachments: Final = tuple(
+            broadest_attachment_by_policy[policy_name]
+            for policy_name in dict.fromkeys(attachment.policy for attachment in matching_attachments)
+        )
 
-        for attachment in self._attachments:
-            scope = attachment.to_policy_scope()
-            if PolicyMatcher.scope_matches(scope=scope, context=context):
-                if attachment.policy not in seen_policies:
-                    seen_policies.add(attachment.policy)
-                    matched_via = self._describe_match_reason(attachment, context)
-                    results.append(
-                        {
-                            "policy_name": attachment.policy,
-                            "matched_via": matched_via,
-                        }
-                    )
-                    verbose_proxy_logger.debug(
-                        "Attachment matched: policy=%s, matched_via=%s, context=(team=%s, key=%s, model=%s)",
-                        attachment.policy,
-                        matched_via,
-                        context.team_alias,
-                        context.key_alias,
-                        context.model,
-                    )
-
-        return results
+        return [
+            {
+                "policy_name": attachment.policy,
+                "matched_via": self._describe_match_reason(attachment, context),
+            }
+            for attachment in unique_attachments
+        ]
 
     @staticmethod
     def _describe_match_reason(attachment: PolicyAttachment, context: PolicyMatchContext) -> str:
@@ -280,7 +305,9 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse with the created attachment
         """
         try:
-            created_attachment: Final = await PolicyAttachmentRepository(prisma_client).table.create(
+            created_attachment: Final[LiteLLM_PolicyAttachmentTable] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.create(
                 data={
                     "policy_name": attachment_request.policy_name,
                     "scope": attachment_request.scope,
@@ -340,9 +367,9 @@ class AttachmentRegistry:
         """
         try:
             # Get attachment before deleting
-            attachment: Final = await PolicyAttachmentRepository(prisma_client).table.find_unique(
-                where={"attachment_id": attachment_id}
-            )
+            attachment: Final[LiteLLM_PolicyAttachmentTable | None] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 raise Exception(f"Attachment with ID {attachment_id} not found")
@@ -375,9 +402,9 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse if found, None otherwise
         """
         try:
-            attachment: Final = await PolicyAttachmentRepository(prisma_client).table.find_unique(
-                where={"attachment_id": attachment_id}
-            )
+            attachment: Final[LiteLLM_PolicyAttachmentTable | None] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 return None
@@ -413,7 +440,9 @@ class AttachmentRegistry:
             List of PolicyAttachmentDBResponse objects
         """
         try:
-            attachments: Final = await PolicyAttachmentRepository(prisma_client).table.find_many(
+            attachments: Final[Sequence[LiteLLM_PolicyAttachmentTable]] = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_many(
                 order={"created_at": "desc"},
             )
 
