@@ -4776,7 +4776,6 @@ def test_create_file_empty_allowlist_rejects_every_upload(monkeypatch, llm_route
 
 
 def test_create_file_allowlist_runs_before_blocklist(monkeypatch, llm_router: Router):
-    """An extension in both lists is refused by the allowlist message, and the blocklist still holds on its own."""
     import litellm.proxy.proxy_server as ps
 
     forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
