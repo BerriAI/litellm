@@ -7898,7 +7898,9 @@ async def test_websocket_auth_forwards_a_missing_key_as_none(headers):
     while accepting every HTTP route."""
     websocket: Final = _websocket_for_auth(headers)
 
-    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_auth:
+    with patch(  # test-quality-ok: what is under test is the value handed to the delegate, so it has to be observed
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_auth:
         await user_api_key_auth_websocket(websocket)
 
     assert mock_auth.call_args.kwargs["api_key"] is None
@@ -7910,7 +7912,9 @@ async def test_websocket_auth_without_master_key_returns_an_internal_user():
     """With no master key configured, a keyless connection authenticates."""
     websocket: Final = _websocket_for_auth({})
 
-    with patch.multiple("litellm.proxy.proxy_server", master_key=None, **_KEYLESS_PROXY_STATE):
+    with patch.multiple(  # test-quality-ok: master_key is a proxy_server module global with no injection seam
+        "litellm.proxy.proxy_server", master_key=None, **_KEYLESS_PROXY_STATE
+    ):
         result = await user_api_key_auth_websocket(websocket)
 
     assert isinstance(result, UserAPIKeyAuth)
@@ -7924,7 +7928,9 @@ async def test_websocket_auth_with_master_key_still_refuses_a_keyless_client():
 
     websocket: Final = _websocket_for_auth({})
 
-    with patch.multiple("litellm.proxy.proxy_server", master_key="sk-master-key", **_KEYLESS_PROXY_STATE):
+    with patch.multiple(  # test-quality-ok: master_key is a proxy_server module global with no injection seam
+        "litellm.proxy.proxy_server", master_key="sk-master-key", **_KEYLESS_PROXY_STATE
+    ):
         with pytest.raises(WebSocketException):
             await user_api_key_auth_websocket(websocket)
 
@@ -7963,7 +7969,9 @@ async def test_websocket_auth_still_reads_every_key_source(headers, expected):
     keyless assertions above and drop real keys on the floor."""
     websocket: Final = _websocket_for_auth(headers)
 
-    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_auth:
+    with patch(  # test-quality-ok: what is under test is the value handed to the delegate, so it has to be observed
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_auth:
         await user_api_key_auth_websocket(websocket)
 
     assert mock_auth.call_args.kwargs["api_key"] == expected
