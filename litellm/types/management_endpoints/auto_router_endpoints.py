@@ -195,6 +195,10 @@ class AutoRouterBenchmarkTotals(BaseModel):
     avg_session_seconds: float
     avg_tokens_per_session: float
     spend: float = Field(description="What the routed traffic actually cost")
+    classifier_cost: float | None = Field(
+        description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
+        "subtotal recording, and zero for an empty window"
+    )
     saved_spend: float = Field(
         description="Signed dollars saved versus each router's savings baseline (derived from its hardest "
         "tier, or the configured override), from the same per-request savings record the usage tab reads"
@@ -219,6 +223,30 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
         "'REASONING', a quality router reports its numeric quality tier, and an adaptive router "
         "records no tier at all. Turns no tier served (the classifier fell back to default_model) "
         "are absent rather than pooled under a sentinel key, so the values may sum to less than turns",
+    )
+
+
+class AutoRouterSessionResponse(BaseModel):
+    """One auto-routed session as its own key sees it: what the last turn ran on, and what the session cost
+    against the router's savings baseline (the priciest model in its hardest tier)."""
+
+    session_id: str
+    router_name: str = Field(description="The auto-router alias the session's requests were sent to")
+    router_type: str = Field(description="complexity, adaptive or quality")
+    turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
+    last_model: str = Field(description="The deployment model the most recent turn was routed to")
+    spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
+    saved_spend: float = Field(description="Estimated savings against the baseline, net of classifier cost")
+    baseline_spend: float = Field(description="spend plus saved_spend: the estimated single-model cost")
+    baseline_model: str | None = Field(
+        description="The savings baseline most of this session's turns were priced against, recorded turn by "
+        "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
+        "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
+        "which derive no baseline and so report no savings"
+    )
+    baseline_models: Mapping[str, int] = Field(
+        description="Turns priced against each baseline model; more than one entry means the router's "
+        "baseline changed mid-session and baseline_spend mixes both"
     )
 
 
@@ -251,7 +279,11 @@ DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 
 # Sample-count ceiling written on every new job: a zero-cost error loop (a shadow arm that
 # fails before billing) never consumes spend budget, so it must terminate on count instead.
+# A multi-router job writes one attempt row per router arm, so the valve is reached
+# proportionally sooner; it is a safety valve, not a sample budget.
 SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
+
+SHADOW_EVAL_MAX_ROUTERS: Final[int] = 4
 
 
 class StartShadowEvalRequest(BaseModel):
@@ -288,7 +320,36 @@ class StartShadowEvalRequest(BaseModel):
             "to across all their teams: JWT requests carrying their subject claim and virtual keys they own"
         ),
     )
-    router_name: str = Field(description="The auto-router under evaluation, in either direction")
+    models: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+        description=(
+            "Model groups to narrow the sampled traffic to, matched on the group the caller "
+            "requested and resolved through model_group_alias, so an alias and its target are one "
+            "name. Empty samples every model the targets use. This ANDs with the targets: a job "
+            "over a user and one model samples that user's requests on that model across every key "
+            "they own, and none of their other traffic. Forward jobs only: a reverse job samples "
+            "exactly the traffic its own router served, which no other model group can name"
+        ),
+    )
+    router_name: str | None = Field(
+        default=None,
+        description=(
+            "The auto-router under evaluation, in either direction: the single-router spelling of "
+            "router_names. Provide exactly one of the two fields"
+        ),
+    )
+    router_names: tuple[str, ...] = Field(
+        default=(),
+        max_length=SHADOW_EVAL_MAX_ROUTERS,
+        description=(
+            "The auto-routers under evaluation, at most "
+            f"{SHADOW_EVAL_MAX_ROUTERS}. Every sampled request runs through every router listed and each "
+            "arm is judged independently against the same real response, so routers compare head-to-head "
+            "on identical traffic. More than one router requires direction 'forward'. After validation "
+            "this field always carries the full deduplicated set, whichever spelling the caller used"
+        ),
+    )
     direction: ShadowEvalDirection = Field(
         default="forward",
         description=(
@@ -332,7 +393,8 @@ class StartShadowEvalRequest(BaseModel):
             "Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with "
             "the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval "
             "spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight "
-            "samples can overshoot the cap by one sampling cache window"
+            "samples can overshoot the cap by one sampling cache window. Every router arm draws from the "
+            "same per-target budget, so a multi-router job reaches it proportionally sooner"
         ),
     )
 
@@ -350,11 +412,19 @@ class StartShadowEvalRequest(BaseModel):
     def _round_percentage(cls, value: float) -> float:
         return round(value, 2)
 
-    @field_validator("api_key_ids", "team_ids", "user_ids")
+    @field_validator("api_key_ids", "team_ids", "user_ids", "models")
     @classmethod
     def _dedupe_targets(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """A target named twice would collide with itself on the one-active-per-(target, direction) index."""
+        """A target named twice would collide with itself on the one-active-per-(target, direction)
+        index; a model named twice is one scope entry."""
         return tuple(dict.fromkeys(value))
+
+    @field_validator("models")
+    @classmethod
+    def _models_are_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not all(name.strip() for name in value):
+            raise ValueError("models must be non-empty model group names")
+        return value
 
     @model_validator(mode="after")
     def _at_least_one_target_at_most_hundred(self) -> "StartShadowEvalRequest":
@@ -366,11 +436,40 @@ class StartShadowEvalRequest(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _model_scope_is_forward_only(self) -> "StartShadowEvalRequest":
+        """A reverse job admits exactly the requests its own router served, so every one of
+        them names that router and nothing else; any other scope would sample nothing and
+        the router itself is a no-op. Both readings are rejected rather than shipped as a
+        job that silently never samples."""
+        if self.models and self.direction == "reverse":
+            raise ValueError(
+                "models is only meaningful for a forward job; a reverse job samples its own router's traffic"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _baseline_model_matches_direction(self) -> "StartShadowEvalRequest":
         if self.direction == "reverse" and self.baseline_model is None:
             raise ValueError("baseline_model is required when direction is 'reverse'")
         if self.direction == "forward" and self.baseline_model is not None:
             raise ValueError("baseline_model is only meaningful when direction is 'reverse'")
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_router_set(self) -> "StartShadowEvalRequest":
+        """Whichever spelling the caller used, router_names leaves validation as the full
+        deduplicated set, so every downstream reader consumes one field."""
+        if (self.router_name is None) == (not self.router_names):
+            raise ValueError("provide exactly one of router_name or router_names")
+        single: Final = () if self.router_name is None else (self.router_name,)
+        routers: Final = tuple(dict.fromkeys(self.router_names or single))
+        if not all(name.strip() for name in routers):
+            raise ValueError("router names must be non-empty strings")
+        if len(routers) > 1 and self.direction == "reverse":
+            raise ValueError("a reverse job evaluates one router against baseline_model; pass a single router")
+        # A returned model_copy is ignored on the __init__ construction path, so the
+        # normalization must land as a self attribute store to hold for every caller.
+        self.router_names = routers
         return self
 
 
@@ -428,15 +527,28 @@ class ShadowEvalResult(BaseModel):
             "and in reverse the models the router itself picked"
         )
     )
+    by_router: tuple[ShadowEvalSlice, ...] = Field(
+        default=(),
+        description=(
+            "One slice per router arm, grouped on the router name. Every arm of a multi-router job is "
+            "judged against the same real responses over the same sampled requests, so these slices "
+            "compare routers head-to-head: like-for-like win rates and spends on identical traffic. "
+            "Verdicts from before arm stamping existed count toward the job's own router"
+        ),
+    )
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
     sampled_real_spend: float = Field(
         default=0.0,
-        description="USD the real arm billed across all judged turns, cache-served turns excluded",
+        description=(
+            "USD the real arm billed across all judged turns, cache-served turns excluded. A judged turn "
+            "is one (request, router arm) verdict, so a multi-router job counts the real response once per "
+            "arm it was judged against; per-router comparisons read by_router"
+        ),
     )
     sampled_shadow_spend: float = Field(
         default=0.0,
-        description="USD the shadow arm billed across the same turns, judge excluded, like for like",
+        description="USD the shadow arms billed across the same turns, judge excluded, like for like",
     )
     not_sampled_count: int | None = Field(
         default=None,
@@ -540,7 +652,17 @@ class ShadowEvalJobResponse(BaseModel):
         min_length=1,
         description="The targets whose traffic this job evaluates, and only theirs, each with its own budget",
     )
-    router_name: str
+    router_names: tuple[str, ...] = Field(
+        min_length=1,
+        description=(
+            "Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of "
+            "traffic and judge every arm against the same real responses"
+        ),
+    )
+    models: tuple[str, ...] = Field(
+        default=(),
+        description="Model groups the sampled traffic is narrowed to; empty means every model the targets use",
+    )
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
     judge_model: str
@@ -561,6 +683,13 @@ class ShadowEvalJobResponse(BaseModel):
     judge_spend: float | None = Field(default=None, description="Judge cost so far; detail endpoint only")
     last_error: str | None = Field(default=None, description="Most recent attempt error; detail endpoint only")
     results: ShadowEvalResult | None = Field(default=None, description="Stratified verdicts; detail endpoint only")
+
+    @computed_field
+    @property
+    def router_name(self) -> str:
+        """The first router, kept for callers that predate router_names; derived so the
+        two fields can never disagree."""
+        return self.router_names[0]
 
     @computed_field
     @property

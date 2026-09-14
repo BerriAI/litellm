@@ -6,3 +6,4 @@ class AzureCredentialType(str, Enum):
     ManagedIdentityCredential = "ManagedIdentityCredential"
     CertificateCredential = "CertificateCredential"
     DefaultAzureCredential = "DefaultAzureCredential"
+    DeploymentIdentityCredential = "DeploymentIdentityCredential"

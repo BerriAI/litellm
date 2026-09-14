@@ -51,15 +51,13 @@ else:
     AsyncHTTPHandler = Any
 
 
-class _AzureRawAnnotation(TypedDict, total=False):
-    type: ReadOnly[str]
+class _AzureRawAnnotation(ChatCompletionAnnotation, total=False):
     text: ReadOnly[str]
     start_index: ReadOnly[int]
     end_index: ReadOnly[int]
-    url_citation: ReadOnly[ChatCompletionAnnotationURLCitation]
 
 
-_TransformedAnnotation: TypeAlias = ChatCompletionAnnotation | _AzureRawAnnotation
+_TransformedAnnotation: TypeAlias = ChatCompletionAnnotation
 
 
 class _AzureText(TypedDict, total=False):
@@ -223,18 +221,11 @@ class AzureAIAgentsHandler:
         """Build the ModelResponse from agent output."""
         from litellm.types.utils import Choices, Message, Usage
 
-        message_kwargs: Final[dict[str, Any]] = {
-            "content": content,
-            "role": "assistant",
-        }
-        if annotations:
-            message_kwargs["annotations"] = annotations
-
         model_response.choices = [
             Choices(
                 finish_reason="stop",
                 index=0,
-                message=Message(**message_kwargs),
+                message=Message(content=content, role="assistant", annotations=annotations or None),
             )
         ]
         model_response.model = model
@@ -655,9 +646,6 @@ class AzureAIAgentsHandler:
 
                 if data_str == "[DONE]":
                     # Send final chunk with finish_reason
-                    final_delta_kwargs: dict[str, Any] = {"content": None}
-                    if collected_annotations:
-                        final_delta_kwargs["annotations"] = collected_annotations
                     final_chunk = ModelResponseStream(
                         id=response_id,
                         created=created,
@@ -667,7 +655,7 @@ class AzureAIAgentsHandler:
                             StreamingChoices(
                                 finish_reason="stop",
                                 index=0,
-                                delta=Delta(**final_delta_kwargs),
+                                delta=Delta(content=None, annotations=collected_annotations or None),
                             )
                         ],
                     )

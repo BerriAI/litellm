@@ -33,13 +33,32 @@ describe("GuardrailViewer", () => {
     expect(screen.getByText("1235ms")).toBeInTheDocument();
   });
 
-  it("renders not_run entries as not run instead of failed", () => {
+  it("renders guardrail_flagged as FLAGGED (warning), not FAILED", () => {
+    const data = makeGuardrailInformation({
+      guardrail_name: "cc-flag",
+      guardrail_status: "guardrail_flagged",
+      guardrail_provider: "custom_code",
+    });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    expect(screen.getByText(/0 Passed/)).toBeInTheDocument();
+    expect(screen.getByText(/1 Flagged/)).toBeInTheDocument();
+    const badges = screen.getAllByText("FLAGGED");
+    expect(badges.length).toBeGreaterThan(0);
+    expect(badges[0]).toHaveClass("text-warning");
+    expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
+  });
+
+  it("renders not_run as NOT RUN (muted) and keeps it out of the evaluated and passed counts", () => {
     const data = makeGuardrailInformation({ guardrail_status: "not_run", guardrail_mode: "pre_call" });
     renderWithProviders(<GuardrailViewer data={data} />);
 
+    expect(screen.getByText(/0 guardrails evaluated/)).toBeInTheDocument();
+    expect(screen.getByText(/0 Passed/)).toHaveClass("text-muted-foreground");
     expect(screen.getByText(/1 Not run/)).toBeInTheDocument();
-    // one NOT RUN badge in the timeline, one in the evaluation card
-    expect(screen.getAllByText("NOT RUN")).toHaveLength(2);
+    const badges = screen.getAllByText("NOT RUN");
+    expect(badges).toHaveLength(2);
+    expect(badges[0]).toHaveClass("text-muted-foreground");
     expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
   });
 

@@ -127,7 +127,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-def declared_authenticating_provider(model: str, custom_llm_provider: str | None = None) -> str | None:
+def declared_authenticating_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
     """The authenticating provider this pair already names, or None.
 
     get_llm_provider runs the OAuth device flow for github_copilot and chatgpt, because their
@@ -135,7 +135,7 @@ def declared_authenticating_provider(model: str, custom_llm_provider: str | None
     and for a declared pair the resolver's answer is the declaration itself, so metadata callers
     adopt the declaration instead of resolving.
     """
-    declared: Final = custom_llm_provider or model.split("/", 1)[0]
+    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
@@ -536,6 +536,14 @@ def get_llm_provider(
             )
 
 
+def _dashscope_family_chat_config(custom_llm_provider: str) -> "litellm.DashScopeChatConfig":
+    if custom_llm_provider == "qwencloud":
+        return litellm.QwenCloudChatConfig()
+    if custom_llm_provider == "qwen_ai_platform":
+        return litellm.QwenAIPlatformChatConfig()
+    return litellm.DashScopeChatConfig()
+
+
 def _get_openai_compatible_provider_info(
     model: str,
     api_base: str | None,
@@ -593,12 +601,15 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "bedrock_mantle":
+        from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
         (
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key, litellm_params=litellm_params, model=model
         )
+        model = split_mantle_region_prefix(model)[1]  # rebind-ok: the prefix is routing only, not a Mantle model id
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("NVIDIA_NIM_API_BASE") or "https://integrate.api.nvidia.com/v1"
@@ -785,11 +796,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.HerokuChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "dashscope":
+    elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         (
             api_base,
             dynamic_api_key,
-        ) = litellm.DashScopeChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = _dashscope_family_chat_config(custom_llm_provider)._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "modelscope":
         (
             api_base,
