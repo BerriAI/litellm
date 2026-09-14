@@ -48,19 +48,32 @@ def logging_obj():
 class _RecordingCustomLogger(CustomLogger):
     def __init__(self, turn_off_message_logging: bool):
         super().__init__(turn_off_message_logging=turn_off_message_logging)
-        self.received_kwargs: list[dict] = []
+        self.received_kwargs: tuple[dict[str, object], ...] = ()
+        self.received_response_objs: tuple[object, ...] = ()
 
-    def log_stream_event(self, kwargs: dict, response_obj: object, start_time, end_time):
-        self.received_kwargs.append(kwargs)
+    def log_stream_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
+        self.received_kwargs += (kwargs,)
+        self.received_response_objs += (response_obj,)
 
-    def log_success_event(self, kwargs: dict, response_obj: object, start_time, end_time):
-        self.received_kwargs.append(kwargs)
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
+        self.received_kwargs += (kwargs,)
+        self.received_response_objs += (response_obj,)
 
-    def log_failure_event(self, kwargs: dict, response_obj: object, start_time, end_time):
-        self.received_kwargs.append(kwargs)
+    def log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
+        self.received_kwargs += (kwargs,)
+        self.received_response_objs += (response_obj,)
 
-    async def async_log_failure_event(self, kwargs: dict, response_obj: object, start_time, end_time):
-        self.received_kwargs.append(kwargs)
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
+        self.received_kwargs += (kwargs,)
+        self.received_response_objs += (response_obj,)
 
 
 def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
@@ -1038,6 +1051,9 @@ def test_success_handler_redacts_custom_logger_payload_per_callback(logging_obj)
     plain_logger = _RecordingCustomLogger(turn_off_message_logging=False)
     logging_obj.stream = False
     logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.model_call_details["original_response"] = {
+        "choices": [{"message": {"content": "original response"}}]
+    }
     standard_logging_object = {
         "messages": [{"role": "user", "content": "original message"}],
         "response": {"choices": []},
@@ -1060,6 +1076,34 @@ def test_success_handler_redacts_custom_logger_payload_per_callback(logging_obj)
     assert (
         logging_obj.model_call_details["standard_logging_object"]["messages"][0]["content"] == "original message"
     )
+    assert redacting_logger.received_kwargs[0]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert (
+        redacting_logger.received_kwargs[0]["original_response"]["choices"][0]["message"]["content"]
+        == "redacted-by-litellm"
+    )
+    assert (
+        plain_logger.received_kwargs[0]["original_response"]["choices"][0]["message"]["content"] == "original response"
+    )
+    assert redacting_logger.received_response_objs[0] == {"text": "redacted-by-litellm"}
+    assert plain_logger.received_response_objs[0] == {"id": "response"}
+
+
+def test_redact_standard_logging_payload_redacts_top_level_fields_without_standard_payload():
+    logger = CustomLogger(turn_off_message_logging=True)
+    model_call_details = {
+        "messages": [{"role": "user", "content": "original message"}],
+        "input": "original input",
+        "prompt": "original prompt",
+    }
+
+    redacted_details = logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
+
+    assert redacted_details["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert redacted_details["input"] == ""
+    assert redacted_details["prompt"] == ""
+    assert model_call_details["messages"][0]["content"] == "original message"
+    assert model_call_details["input"] == "original input"
+    assert model_call_details["prompt"] == "original prompt"
 
 
 def test_failure_handler_redacts_custom_logger_payload_per_callback(logging_obj):

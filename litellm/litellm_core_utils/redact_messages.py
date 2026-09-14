@@ -68,6 +68,36 @@ def redact_streaming_responses_for_custom_logger(model_call_details: dict, custo
     return {**model_call_details, **redacted_entries}
 
 
+def redact_response_for_custom_logger(result: object, custom_logger: CustomLogger) -> object:
+    opted_out: Final = (
+        getattr(custom_logger, "message_logging", True) is not True
+        or getattr(custom_logger, "turn_off_message_logging", False) is True
+    )
+    if not opted_out or custom_logger.redacts_messages_itself():
+        return result
+    return perform_redaction(model_call_details={}, result=result, redact_streaming_responses=False)
+
+
+def redact_model_call_details_for_custom_logger(
+    model_call_details: dict[str, object], custom_logger: CustomLogger
+) -> dict[str, object]:
+    opted_out: Final = (
+        getattr(custom_logger, "message_logging", True) is not True
+        or getattr(custom_logger, "turn_off_message_logging", False) is True
+    )
+    if not opted_out or custom_logger.redacts_messages_itself():
+        return model_call_details
+    response_keys: Final = ("response", "original_response", "complete_response")
+    return {
+        **model_call_details,
+        **{
+            key: redact_response_for_custom_logger(result=model_call_details[key], custom_logger=custom_logger)
+            for key in response_keys
+            if model_call_details.get(key) is not None
+        },
+    }
+
+
 def _redacted_streaming_response_copy(streaming_response):
     redacted_response: Final = copy.deepcopy(streaming_response)
     _redact_streaming_response(redacted_response)
