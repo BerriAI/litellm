@@ -3,6 +3,7 @@ import os
 import sys
 
 import pytest
+from openai.types.completion_usage import CompletionUsage
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -595,6 +596,37 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
+
+
+def test_calculate_usage_normalizes_openai_completion_usage():
+    chunk = ModelResponseStream(
+        id="chatcmpl-completion-usage",
+        created=0,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="test"),
+                finish_reason="stop",
+            )
+        ],
+    )
+    chunk.usage = CompletionUsage(
+        prompt_tokens=37,
+        completion_tokens=125,
+        total_tokens=162,
+    )
+
+    usage = ChunkProcessor(chunks=[chunk]).calculate_usage(
+        chunks=[chunk],
+        model="gpt-4o-mini",
+        completion_output="test",
+    )
+
+    assert usage.prompt_tokens == 37
+    assert usage.completion_tokens == 125
+    assert usage.total_tokens == 162
 
 
 def test_get_model_from_chunks_azure_model_router():

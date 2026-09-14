@@ -530,7 +530,11 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
-        return usage_chunk
+
+        if usage_chunk is None or isinstance(usage_chunk, Usage):
+            return usage_chunk
+
+        return Usage(**usage_chunk.model_dump())
 
     def _calculate_usage_per_chunk(
         self,
