@@ -72,6 +72,7 @@ from litellm.proxy.auth.budget_throttle import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
@@ -80,6 +81,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
+    NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
     end_user_cache_key,
@@ -2164,10 +2166,10 @@ async def get_team_membership(
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
     # check if in cache
-    cached_membership_obj: Final = await user_api_key_cache.async_get_cache(
-        key=_key,
-        model_type=LiteLLM_TeamMembership,
-    )
+    cached: Final[object] = await user_api_key_cache.async_get_cache(key=_key)
+    if cached == NO_TEAM_MEMBERSHIP_SENTINEL:
+        return None
+    cached_membership_obj: Final = CacheCodec.deserialize(cached, model_type=LiteLLM_TeamMembership)
     if cached_membership_obj is not None:
         return cached_membership_obj
 
@@ -2179,6 +2181,11 @@ async def get_team_membership(
         )
 
         if response is None:
+            await user_api_key_cache.async_set_cache(
+                key=_key,
+                value=NO_TEAM_MEMBERSHIP_SENTINEL,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
             return None
 
         _response: Final = LiteLLM_TeamMembership.model_validate(response.dict())

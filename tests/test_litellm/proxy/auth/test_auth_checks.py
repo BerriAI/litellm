@@ -6391,6 +6391,106 @@ async def test_get_team_membership_db_fetch_returns_validated_membership():
 
 
 @pytest.mark.asyncio
+async def test_get_team_membership_negative_caches_a_missing_row():
+    """
+    Regression (LIT-7358): a member with no LiteLLM_TeamMembership row is the common lite-login case,
+    and the session-token refresh reads this loader on every request. Before the fix a missing row
+    returned None without caching, so every request re-queried the DB. The miss must be cached so the
+    second request serves from cache and never touches the DB.
+    """
+    from litellm.proxy.auth.auth_checks import get_team_membership
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        NO_TEAM_MEMBERSHIP_SENTINEL,
+        team_membership_reservation_cache_key,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+
+    cache = UserApiKeyCache()
+
+    first = await get_team_membership(
+        user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
+    )
+    second = await get_team_membership(
+        user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
+    )
+
+    assert first is None
+    assert second is None
+    mock_prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+    cached = await cache.async_get_cache(
+        key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1")
+    )
+    assert cached == NO_TEAM_MEMBERSHIP_SENTINEL
+
+
+@pytest.mark.asyncio
+async def test_get_team_membership_reads_sentinel_as_no_membership_not_a_model():
+    """
+    The negative-cache sentinel is a plain string sharing the key a serialized membership uses.
+    A pre-seeded sentinel must read back as None (no DB read), never be mistaken for a membership.
+    """
+    from litellm.proxy.auth.auth_checks import get_team_membership
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        NO_TEAM_MEMBERSHIP_SENTINEL,
+        team_membership_reservation_cache_key,
+    )
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1"),
+        value=NO_TEAM_MEMBERSHIP_SENTINEL,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+
+    result = await get_team_membership(
+        user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
+    )
+
+    assert result is None
+    mock_prisma_client.db.litellm_teammembership.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_evicts_the_negative_cache_sentinel():
+    """
+    A member who later gains a per-member budget writes a membership row and calls
+    invalidate_team_member_spend_state. That must drop a cached "no membership" sentinel so the next
+    request re-reads the DB and honors the new budget instead of serving the stale miss until TTL.
+    """
+    from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_spend_state
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    cache = UserApiKeyCache()
+    membership_row = MagicMock()
+    membership_row.dict = lambda: {"user_id": "u-1", "team_id": "t-1", "spend": 0.0}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=[None, membership_row])
+
+    before = await get_team_membership(
+        user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
+    )
+    assert before is None
+
+    await invalidate_team_member_spend_state(user_id="u-1", team_id="t-1", user_api_key_cache=cache)
+    assert (
+        await cache.async_get_cache(key=team_membership_reservation_cache_key(user_id="u-1", team_id="t-1"))
+        is None
+    )
+
+    after = await get_team_membership(
+        user_id="u-1", team_id="t-1", prisma_client=mock_prisma_client, user_api_key_cache=cache
+    )
+    assert after is not None
+    assert after.user_id == "u-1"
+    assert mock_prisma_client.db.litellm_teammembership.find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_get_access_object_db_fetch_returns_validated_access_group():
     from litellm.proxy._types import LiteLLM_AccessGroupTable
     from litellm.proxy.auth.auth_checks import get_access_object
