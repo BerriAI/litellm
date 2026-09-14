@@ -19,6 +19,7 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _resolve_cache_read_cost_rate,
     calculate_prompt_caching_savings,
+    generic_cost_per_token,
     get_token_type_cost_breakdown,
 )
 from litellm.llms.dashscope.cost_calculator import (
@@ -403,6 +404,29 @@ class TestDashscopeCostCalculator:
         )
 
         assert math.isclose(savings, 600 * (1e-06 - 2e-07), rel_tol=1e-10)
+
+    def test_openai_compatible_qwen_total_uses_implicit_cache_read_rate(self):
+        model_info: ModelInfo = {
+            "key": "qwen-generic-cache-mode-test",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 4e-06,
+            "cache_read_input_token_cost": 1e-07,
+            "implicit_cache_read_input_token_cost": 2e-07,
+        }
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 600},
+        )
+
+        prompt_cost, _ = generic_cost_per_token(
+            model="custom-qwen",
+            usage=usage,
+            custom_llm_provider="openai",
+            model_info=model_info,
+        )
+
+        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * 2e-07), rel_tol=1e-10)
 
     @pytest.mark.parametrize(
         ("cache_type", "expected_cache_rate"),

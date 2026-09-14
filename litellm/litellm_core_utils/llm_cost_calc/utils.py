@@ -1283,12 +1283,19 @@ def generic_cost_per_token(
         current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
+    resolved_cache_read_cost: Final = _resolve_cache_read_cost_rate(
+        model_info=model_info,
+        usage=usage,
+        current_time=billing_time,
+        service_tier=service_tier,
+    )
+    effective_cache_read_cost: Final = cache_read_cost if resolved_cache_read_cost is None else resolved_cache_read_cost
 
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
         model_info=model_info,
         prompt_base_cost=prompt_base_cost,
-        cache_read_cost=cache_read_cost,
+        cache_read_cost=effective_cache_read_cost,
         cache_creation_cost=cache_creation_cost,
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
         service_tier=service_tier,
