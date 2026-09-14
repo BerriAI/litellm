@@ -2,6 +2,8 @@
 Translate from OpenAI's `/v1/chat/completions` to Hyperbolic's `/v1/chat/completions`
 """
 
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
@@ -24,8 +26,8 @@ class HyperbolicChatConfig(OpenAILikeChatConfig):
             api_base
             or get_secret_str("HYPERBOLIC_API_BASE")
             or "https://api.hyperbolic.xyz/v1"  # Default Hyperbolic API base URL
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("HYPERBOLIC_API_KEY")
+        )
+        dynamic_api_key: Final = api_key or get_secret_str("HYPERBOLIC_API_KEY")
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:

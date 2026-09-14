@@ -13,14 +13,14 @@ pattern: global spend, feature flags, config, or other shared read-through data.
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 
 T = TypeVar("T")
 
 
-class AsyncCacheProtocol(Protocol):
+class AsyncCacheProtocol(Protocol[T]):
     """Protocol for cache backends used by EventDrivenCacheCoordinator.
 
     Matches ``DualCache`` / ``UserApiKeyCache`` call shapes (explicit optional params
@@ -30,18 +30,18 @@ class AsyncCacheProtocol(Protocol):
     async def async_get_cache(
         self,
         key: str,
-        parent_otel_span: Any = None,
+        parent_otel_span: object = None,
         local_only: bool = False,
-        **kwargs: Any,
-    ) -> Any: ...
+        **kwargs: object,
+    ) -> T | None: ...
 
     async def async_set_cache(
         self,
         key: str,
-        value: Any,
+        value: T,
         local_only: bool = False,
-        **kwargs: Any,
-    ) -> Any: ...
+        **kwargs: object,
+    ) -> object: ...
 
 
 class EventDrivenCacheCoordinator:
@@ -64,11 +64,11 @@ class EventDrivenCacheCoordinator:
         self._query_in_progress = False
         self._log_prefix = log_prefix
 
-    async def _get_cached(self, cache_key: str, cache: AsyncCacheProtocol) -> Any | None:
+    async def _get_cached(self, cache_key: str, cache: AsyncCacheProtocol[T]) -> T | None:
         """Return value from cache if present, else None."""
         return await cache.async_get_cache(key=cache_key)
 
-    def _log_cache_hit(self, value: T) -> None:
+    def _log_cache_hit(self, value: object) -> None:
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Cache hit, value: %s", self._log_prefix, value)
 
@@ -98,13 +98,13 @@ class EventDrivenCacheCoordinator:
         self,
         event: asyncio.Event,
         cache_key: str,
-        cache: AsyncCacheProtocol,
+        cache: AsyncCacheProtocol[T],
     ) -> T | None:
         """Wait for loader to finish, then read from cache."""
         await event.wait()
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Signal received, reading from cache", self._log_prefix)
-        value: T | None = await cache.async_get_cache(key=cache_key)
+        value: Final[T | None] = await cache.async_get_cache(key=cache_key)
         if value is not None and self._log_prefix:
             verbose_proxy_logger.debug(
                 "%s Cache filled by other request, value: %s",
@@ -118,7 +118,7 @@ class EventDrivenCacheCoordinator:
     async def _load_and_cache(
         self,
         cache_key: str,
-        cache: AsyncCacheProtocol,
+        cache: AsyncCacheProtocol[T],
         load_fn: Callable[[], Awaitable[T]],
     ) -> T | None:
         """Double-check cache, run load_fn, set cache, return value. Caller must call _signal_done in finally."""
@@ -134,9 +134,9 @@ class EventDrivenCacheCoordinator:
 
         if self._log_prefix:
             verbose_proxy_logger.debug("%s Running load", self._log_prefix)
-        start = time.perf_counter()
+        start: Final = time.perf_counter()
         value = await load_fn()
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        elapsed_ms: Final = (time.perf_counter() - start) * 1000
         if self._log_prefix:
             verbose_proxy_logger.debug(
                 "%s Load completed in %.2fms, result: %s",
@@ -163,7 +163,7 @@ class EventDrivenCacheCoordinator:
     async def get_or_load(
         self,
         cache_key: str,
-        cache: AsyncCacheProtocol,
+        cache: AsyncCacheProtocol[T],
         load_fn: Callable[[], Awaitable[T]],
     ) -> T | None:
         """
@@ -178,19 +178,19 @@ class EventDrivenCacheCoordinator:
         Returns the value from cache or from load_fn, or None if load failed or
         cache was still empty after waiting.
         """
-        value = await self._get_cached(cache_key, cache)
+        value: Final = await self._get_cached(cache_key, cache)
         if value is not None:
             self._log_cache_hit(value)
             return value
 
         self._log_cache_miss()
-        event_to_wait = await self._claim_role()
+        event_to_wait: Final = await self._claim_role()
 
         if event_to_wait is not None:
             return await self._wait_for_signal_and_get(event_to_wait, cache_key, cache)
 
         try:
-            result = await self._load_and_cache(cache_key, cache, load_fn)
+            result: Final = await self._load_and_cache(cache_key, cache, load_fn)
             return result
         finally:
             await self._signal_done()

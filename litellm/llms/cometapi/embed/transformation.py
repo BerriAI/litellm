@@ -2,6 +2,8 @@
 CometAPI Embedding API support - OpenAI compatible
 """
 
+from typing import Final
+
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -38,7 +40,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         Get the complete URL for the CometAPI embedding endpoint.
         """
         api_base = "https://api.cometapi.com/v1" if api_base is None else api_base.rstrip("/")
-        complete_url = f"{api_base}/embeddings"
+        complete_url: Final = f"{api_base}/embeddings"
         return complete_url
 
     def validate_environment(
@@ -57,7 +59,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         if api_key is None:
             api_key = get_secret_str("COMETAPI_KEY")
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "Content-Type": "application/json",
@@ -89,7 +91,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         """
         Map OpenAI parameters to CometAPI format.
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
@@ -122,7 +124,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         Transform CometAPI response into standard EmbeddingResponse format.
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise CometAPIException(
                 message=raw_response.text,
@@ -134,7 +136,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )

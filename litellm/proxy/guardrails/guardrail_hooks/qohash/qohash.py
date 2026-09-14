@@ -3,7 +3,7 @@ Qostodian Nexus (by Qohash) — LiteLLM guardrail integration.
 """
 
 import os
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
@@ -17,7 +17,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-GUARDRAIL_NAME = "qostodian_nexus"
+GUARDRAIL_NAME: Final = "qostodian_nexus"
 
 
 class QostodianNexus(GenericGuardrailAPI):
@@ -31,14 +31,14 @@ class QostodianNexus(GenericGuardrailAPI):
         kwargs["guardrail_name"] = kwargs.get("guardrail_name", GUARDRAIL_NAME)
 
         # Merge built-in Qostodian Nexus identifier headers with any caller-supplied extra_headers
-        nexus_headers = [
+        nexus_headers: Final = [
             "x-qostodian-nexus-identifiers-trace",
             "x-qostodian-nexus-identifiers-source",
             "x-qostodian-nexus-identifiers-container",
             "x-qostodian-nexus-identifiers-identity",
         ]
 
-        existing = kwargs.get("extra_headers") or []
+        existing: Final = kwargs.get("extra_headers") or []
         kwargs["extra_headers"] = nexus_headers + [h for h in existing if h not in nexus_headers]
 
         super().__init__(

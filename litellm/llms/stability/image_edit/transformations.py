@@ -6,7 +6,7 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
@@ -66,21 +66,21 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         - size -> aspect_ratio
         - n -> (handled separately, Stability returns 1 image per request)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         # Define mapping from OpenAI params to Stability params
-        param_mapping = {
+        param_mapping: Final = {
             "size": "aspect_ratio",
             # "n" and "response_format" are handled separately
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: dict[str, Any] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
                 # Map param if mapping exists and value is valid
                 if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]  # type: ignore
+                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
                 # Don't copy "size" itself to final dict
             elif k == "n":
                 # Store for logic but do not add to outgoing params
@@ -139,7 +139,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         )
         base_url = base_url.rstrip("/")
 
-        endpoint = self._get_model_endpoint(model)
+        endpoint: Final = self._get_model_endpoint(model)
         return f"{base_url}{endpoint}"
 
     def validate_environment(
@@ -153,7 +153,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         """
         Validate environment and set up headers for Stability AI.
         """
-        final_api_key: str | None = api_key or get_secret_str("STABILITY_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("STABILITY_API_KEY")
 
         if not final_api_key:
             raise ValueError(
@@ -182,7 +182,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         # Build Stability request
         # Populate multipart form-data as separate text fields (data) and files.
         # Stability expects prompt/output_format/etc. as normal form fields, not file parts.
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "output_format": "png",  # Default to PNG
         }
 
@@ -190,14 +190,14 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         if prompt is not None and prompt != "":
             data["prompt"] = prompt
         # Handle image parameter - could be a single file or list
-        image_file = image[0] if isinstance(image, list) else image  # type: ignore
-        files: dict[str, Any] = {}
+        image_file = image[0] if isinstance(image, list) else image
+        files: Final[dict[str, Any]] = {}
         if image is not None:
-            image_file = image[0] if isinstance(image, list) else image  # type: ignore
+            image_file = image[0] if isinstance(image, list) else image
             files["image"] = image_file
 
         # Add optional params (already mapped in map_openai_params)
-        for key, value in image_edit_optional_request_params.items():  # type: ignore
+        for key, value in image_edit_optional_request_params.items():
             # Skip internal params (prefixed with _)
             if key.startswith("_") or value is None:
                 continue
@@ -208,7 +208,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 mask_value = value
                 if isinstance(value, list) and len(value) > 0:
                     mask_value = value[0]
-                files["mask"] = mask_value  # type: ignore
+                files["mask"] = mask_value
                 continue
 
             # File-like optional params (init_image, style_image, etc.)
@@ -217,7 +217,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 file_value = value
                 if isinstance(value, list) and len(value) > 0:
                     file_value = value[0]
-                files[key] = file_value  # type: ignore
+                files[key] = file_value
                 continue
 
             # Supported text fields
@@ -240,7 +240,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 "composition_fidelity",
                 "change_strength",
             ]:
-                data[key] = value  # type: ignore
+                data[key] = value
 
         return data, files
 
@@ -259,7 +259,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",
@@ -276,7 +276,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check finish_reason
-        finish_reason = response_data.get("finish_reason", "")
+        finish_reason: Final = response_data.get("finish_reason", "")
         if finish_reason == "CONTENT_FILTERED":
             raise self.get_error_class(
                 error_message="Content was filtered by Stability AI safety systems",
@@ -284,12 +284,12 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        model_response = ImageResponse()
+        model_response: Final = ImageResponse()
         if not model_response.data:
             model_response.data = []
 
         # Extract image from response
-        image_b64 = response_data.get("image")
+        image_b64: Final = response_data.get("image")
         if image_b64:
             model_response.data.append(
                 ImageObject(
@@ -304,8 +304,8 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         if "additional_headers" not in model_response._hidden_params:
             model_response._hidden_params["additional_headers"] = {}
         # Override: fetch model-cost from model_cost map based on the provided model name
-        model_info = get_model_info(model, custom_llm_provider="stability")
-        cost_per_image = model_info.get("output_cost_per_image", 0)
+        model_info: Final = get_model_info(model, custom_llm_provider="stability")
+        cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
             model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
                 cost_per_image

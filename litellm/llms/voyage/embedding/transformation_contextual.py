@@ -3,6 +3,9 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
+from collections.abc import Mapping
+from typing import Final
+
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -22,7 +25,10 @@ class VoyageError(BaseLLMException):
     ):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(method="POST", url="https://api.voyageai.com/v1/contextualizedembeddings")
+        self.request = httpx.Request(
+            method="POST",
+            url="https://api.voyageai.com/v1/contextualizedembeddings",
+        )
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             status_code=status_code,
@@ -54,16 +60,16 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             return api_base
         return "https://api.voyageai.com/v1/contextualizedembeddings"
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class signature
         return ["encoding_format", "dimensions"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: base class signature
+        optional_params: dict,  # mutable-ok: base class signature
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: base class signature
         """
         Map OpenAI params to Voyage params
 
@@ -77,7 +83,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: base class signature
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -95,6 +101,8 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             "Authorization": f"Bearer {api_key}",
         }
 
+    AUTO_CHUNK_SIZE: Final = 32000
+
     def transform_embedding_request(
         self,
         model: str,
@@ -103,9 +111,25 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": [input] if isinstance(input, str) else input,
             "model": model,
+            **self._auto_chunk_params(input, optional_params),
             **optional_params,
+        }
+
+    @classmethod
+    def _auto_chunk_params(
+        cls,
+        input: AllEmbeddingInputValues | list[list[str]],
+        optional_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        is_flat: Final = isinstance(input, str) or all(isinstance(item, str) for item in input)
+        if not is_flat or optional_params.get("input_type") == "query":
+            return {}
+        return {
+            "enable_auto_chunking": True,
+            "chunk_size": cls.AUTO_CHUNK_SIZE,
+            "input_type": "document",
         }
 
     def transform_embedding_response(
@@ -120,16 +144,18 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
-            raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
+            raise VoyageError(
+                message=raw_response.text,
+                status_code=raw_response.status_code,
+            )
 
-        # model_response.usage
         model_response.model = raw_response_json.get("model")
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )

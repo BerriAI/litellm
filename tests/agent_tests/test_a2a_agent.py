@@ -40,7 +40,7 @@ class MockA2AClient:
             name="mock-agent", url="http://mock-agent.local"
         )
 
-    async def send_message(self, request):
+    async def send_message(self, request, *, context=None):
         from a2a.compat.v0_3.conversions import pb2_v10
 
         for text in ("hel", "hello"):

@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 from typing_extensions import TypedDict
 
@@ -76,7 +78,7 @@ class VertexTextToSpeechAPI(VertexLLM):
             api_base=api_base,
         )
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {auth_header}",
             "x-goog-user-project": vertex_project,
             "Content-Type": "application/json",
@@ -90,7 +92,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         kwargs = kwargs or {}
         optional_params = optional_params or {}
 
-        vertex_input = VertexInput(text=input)
+        vertex_input: Final = VertexInput(text=input)
         validate_vertex_input(vertex_input, kwargs, optional_params)
 
         # required param
@@ -114,13 +116,13 @@ class VertexTextToSpeechAPI(VertexLLM):
                 speakingRate="1",
             )
 
-        request = VertexTextToSpeechRequest(
+        request: Final = VertexTextToSpeechRequest(
             input=vertex_input,
             voice=vertex_voice,
             audioConfig=vertex_audio_config,
         )
 
-        url = "https://texttospeech.googleapis.com/v1/text:synthesize"
+        url: Final = "https://texttospeech.googleapis.com/v1/text:synthesize"
         ########## End of building request ############
 
         ########## Log the request for debugging / logging ############
@@ -137,25 +139,23 @@ class VertexTextToSpeechAPI(VertexLLM):
         ########## End of logging ############
         ####### Send the request ###################
         if _is_async is True:
-            return self.async_audio_speech(  # type: ignore
-                logging_obj=logging_obj, url=url, headers=headers, request=request
-            )
-        sync_handler = _get_httpx_client()
+            return self.async_audio_speech(logging_obj=logging_obj, url=url, headers=headers, request=request)
+        sync_handler: Final = _get_httpx_client()
 
         response = sync_handler.post(
             url=url,
             headers=headers,
-            json=request,  # type: ignore
+            json=request,
         )
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}, {response.text}")
         ############ Process the response ############
-        _json_response = response.json()
+        _json_response: Final = response.json()
 
-        response_content = _json_response["audioContent"]
+        response_content: Final = _json_response["audioContent"]
 
         # Decode base64 to get binary content
-        binary_data = base64.b64decode(response_content)
+        binary_data: Final = base64.b64decode(response_content)
 
         # Create an httpx.Response object
         response = httpx.Response(
@@ -164,7 +164,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         )
 
         # Initialize the HttpxBinaryResponseContent instance
-        http_binary_response = HttpxBinaryResponseContent(response)
+        http_binary_response: Final = HttpxBinaryResponseContent(response)
         return http_binary_response
 
     async def async_audio_speech(
@@ -176,23 +176,23 @@ class VertexTextToSpeechAPI(VertexLLM):
     ) -> HttpxBinaryResponseContent:
         import base64
 
-        async_handler = get_async_httpx_client(llm_provider=litellm.LlmProviders.VERTEX_AI)
+        async_handler: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.VERTEX_AI)
 
         response = await async_handler.post(
             url=url,
             headers=headers,
-            json=request,  # type: ignore
+            json=request,
         )
 
         if response.status_code != 200:
             raise Exception(f"Request did not return a 200 status code: {response.status_code}, {response.text}")
 
-        _json_response = response.json()
+        _json_response: Final = response.json()
 
-        response_content = _json_response["audioContent"]
+        response_content: Final = _json_response["audioContent"]
 
         # Decode base64 to get binary content
-        binary_data = base64.b64decode(response_content)
+        binary_data: Final = base64.b64decode(response_content)
 
         # Create an httpx.Response object
         response = httpx.Response(
@@ -201,7 +201,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         )
 
         # Initialize the HttpxBinaryResponseContent instance
-        http_binary_response = HttpxBinaryResponseContent(response)
+        http_binary_response: Final = HttpxBinaryResponseContent(response)
         return http_binary_response
 
 
@@ -213,7 +213,7 @@ def validate_vertex_input(input_data: VertexInput, kwargs: dict, optional_params
         input_data.pop("ssml", None)
 
     # Check if use_ssml is set
-    use_ssml = kwargs.get("use_ssml", optional_params.get("use_ssml", False))
+    use_ssml: Final = kwargs.get("use_ssml", optional_params.get("use_ssml", False))
 
     if use_ssml:
         if "text" in input_data:
@@ -224,7 +224,7 @@ def validate_vertex_input(input_data: VertexInput, kwargs: dict, optional_params
         # LiteLLM will auto-detect if text is in ssml format
         # check if "text" is an ssml - in this case we should pass it as ssml instead of text
         if input_data:
-            _text = input_data.get("text", None) or ""
+            _text: Final = input_data.get("text", None) or ""
             if "<speak>" in _text:
                 input_data["ssml"] = input_data.pop("text")
 

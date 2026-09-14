@@ -2,8 +2,8 @@ import base64
 import datetime
 import json
 import math
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, Final
 
 import httpx
 
@@ -15,7 +15,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
-GEMINI_IMAGE_ASPECT_RATIOS: dict[str, float] = {
+GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
     "1:4": 1 / 4,
     "1:8": 1 / 8,
@@ -34,7 +34,7 @@ GEMINI_IMAGE_ASPECT_RATIOS: dict[str, float] = {
 
 # Supported aspect ratio dimensions from Google Gemini image generation docs:
 # https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
-GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: dict[tuple[int, int], str] = {
+GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Final[dict[tuple[int, int], str]] = {
     (512, 512): "1:1",
     (1024, 1024): "1:1",
     (2048, 2048): "1:1",
@@ -97,13 +97,13 @@ GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: dict[tuple[int, int], str] = {
 
 
 def map_openai_size_to_gemini_image_config(size: str, model: str) -> dict[str, str] | None:
-    dimensions = _parse_openai_image_size(size)
+    dimensions: Final = _parse_openai_image_size(size)
     if dimensions is None:
         return None
 
     width, height = dimensions
-    image_config = {"aspectRatio": _map_dimensions_to_gemini_aspect_ratio(width, height)}
-    image_size = _map_dimensions_to_gemini_image_size(width, height)
+    image_config: Final = {"aspectRatio": _map_dimensions_to_gemini_aspect_ratio(width, height)}
+    image_size: Final = _map_dimensions_to_gemini_image_size(width, height)
     if is_gemini_image_model(model):
         if supports_gemini_image_size(model):
             image_config["imageSize"] = image_size
@@ -114,8 +114,8 @@ def map_openai_size_to_gemini_image_config(size: str, model: str) -> dict[str, s
 
 def supports_gemini_image_size(model: str) -> bool:
     try:
-        model_info = litellm.get_model_info(model=model)
-        value = model_info.get("supports_image_size")
+        model_info: Final = litellm.get_model_info(model=model)
+        value: Final = model_info.get("supports_image_size")
         if value is not None:
             return bool(value)
     except Exception:
@@ -124,28 +124,39 @@ def supports_gemini_image_size(model: str) -> bool:
 
 
 def is_gemini_image_model(model: str) -> bool:
-    base_model = model.split("/", 1)[-1]
+    base_model: Final = model.split("/", 1)[-1]
     return "gemini" in base_model
 
 
+def _parse_image_config_string(raw_image_config: str, model: str) -> object:
+    try:
+        return json.loads(raw_image_config)
+    except json.JSONDecodeError as exc:
+        raise litellm.UnsupportedParamsError(
+            model=model,
+            message="`imageConfig` must be valid JSON when provided as a string.",
+        ) from exc
+
+
 def map_openai_image_params_to_gemini(
-    params: dict[str, Any],
+    params: Mapping[str, object],
     model: str,
     supported_params: Sequence[str],
-    optional_params: dict[str, Any] | None = None,
+    optional_params: Mapping[str, object] | None = None,
     parse_image_config_string: bool = False,
-) -> dict[str, Any]:
-    optional_params = optional_params or {}
-    filtered_params = {key: value for key, value in params.items() if key in supported_params}
+) -> dict[str, object]:
+    already_mapped: Final[Mapping[str, object]] = optional_params or {}
+    filtered_params: Final = {key: value for key, value in params.items() if key in supported_params}
 
-    mapped_params: dict[str, Any] = {}
+    mapped_params: Final[dict[str, object]] = {}
 
-    if "n" in filtered_params and "n" not in optional_params:
+    if "n" in filtered_params and "n" not in already_mapped:
         mapped_params["sampleCount"] = filtered_params["n"]
 
-    if "size" in filtered_params and "size" not in optional_params:
-        image_config = map_openai_size_to_gemini_image_config(
-            filtered_params["size"],
+    size_param: Final = filtered_params.get("size")
+    if isinstance(size_param, str) and "size" not in already_mapped:
+        image_config: Final = map_openai_size_to_gemini_image_config(
+            size_param,
             model,
         )
         if image_config is not None:
@@ -156,33 +167,30 @@ def map_openai_image_params_to_gemini(
                 if "imageSize" in image_config:
                     mapped_params["imageSize"] = image_config["imageSize"]
 
-    image_config_param = filtered_params.get("imageConfig")
-    if isinstance(image_config_param, str) and parse_image_config_string:
-        try:
-            image_config_param = json.loads(image_config_param)
-        except json.JSONDecodeError as exc:
-            raise litellm.UnsupportedParamsError(
-                model=model,
-                message="`imageConfig` must be valid JSON when provided as a string.",
-            ) from exc
+    raw_image_config: Final = filtered_params.get("imageConfig")
+    image_config_param: Final[object] = (
+        _parse_image_config_string(raw_image_config, model)
+        if isinstance(raw_image_config, str) and parse_image_config_string
+        else raw_image_config
+    )
     if isinstance(image_config_param, dict):
         mapped_params["imageConfig"] = image_config_param
 
     for key, value in filtered_params.items():
-        if key not in ("n", "size", "imageConfig", "tools", "web_search_options") and key not in optional_params:
+        if key not in ("n", "size", "imageConfig", "tools", "web_search_options") and key not in already_mapped:
             mapped_params[key] = value
 
     return mapped_params
 
 
-def _dedupe_gemini_search_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _dedupe_gemini_search_tools(tools: list[dict[str, object]]) -> list[dict[str, object]]:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    search_tool_keys = VertexGeminiConfig._search_tool_keys()
-    seen_search_keys: set[str] = set()
-    deduped_tools: list[dict[str, Any]] = []
+    search_tool_keys: Final = VertexGeminiConfig._search_tool_keys()
+    seen_search_keys: Final[set[str]] = set()
+    deduped_tools: Final[list[dict[str, object]]] = []
 
     for tool in tools:
         if not isinstance(tool, dict):
@@ -203,57 +211,60 @@ def _dedupe_gemini_search_tools(tools: list[dict[str, Any]]) -> list[dict[str, A
     return deduped_tools
 
 
-def _has_gemini_search_tool(tools: list[Any]) -> bool:
+def _has_gemini_search_tool(tools: list[object]) -> bool:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    search_tool_keys = VertexGeminiConfig._search_tool_keys()
+    search_tool_keys: Final = VertexGeminiConfig._search_tool_keys()
     return any(isinstance(tool, dict) and any(key in tool for key in search_tool_keys) for tool in tools)
 
 
 def map_gemini_image_tools_params(
-    non_default_params: dict[str, Any],
-    mapped_params: dict[str, Any],
-) -> dict[str, Any]:
+    non_default_params: Mapping[str, object],
+    mapped_params: Mapping[str, object],
+) -> dict[str, object]:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    gemini_config = VertexGeminiConfig()
+    gemini_config: Final = VertexGeminiConfig()
     result = dict(mapped_params)
     result.pop("web_search_options", None)
 
-    tools_value = non_default_params.get("tools")
+    tools_value: Final = non_default_params.get("tools")
     if isinstance(tools_value, list) and tools_value:
-        mapped_tools = gemini_config._map_function(value=tools_value, optional_params=result)
+        mapped_tools: Final = gemini_config._map_function(value=tools_value, optional_params=result)
         result = gemini_config._add_tools_to_optional_params(result, mapped_tools)
 
-    web_search_options = non_default_params.get("web_search_options")
-    existing_tools = result.get("tools")
+    web_search_options: Final = non_default_params.get("web_search_options")
+    existing_tools: Final = result.get("tools")
     if isinstance(web_search_options, dict) and not (
         isinstance(existing_tools, list) and _has_gemini_search_tool(existing_tools)
     ):
-        search_tool = gemini_config._map_web_search_options(web_search_options)
+        search_tool: Final = gemini_config._map_web_search_options(web_search_options)
         result = gemini_config._add_tools_to_optional_params(result, [search_tool])
 
     gemini_config._drop_search_tools_mixed_with_functions(result)
 
-    if isinstance(result.get("tools"), list):
-        result["tools"] = _dedupe_gemini_search_tools(result["tools"])
+    resolved_tools: Final = result.get("tools")
+    if isinstance(resolved_tools, list):
+        result["tools"] = _dedupe_gemini_search_tools(resolved_tools)
 
     return result
 
 
 def get_gemini_image_web_search_requests(
-    response_data: dict[str, Any],
+    response_data: Mapping[str, object],
 ) -> int | None:
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    grounding_metadata: list[dict[str, Any]] = []
-    for candidate in response_data.get("candidates", []):
+    raw_candidates: Final = response_data.get("candidates")
+    candidates: Final[list[object]] = raw_candidates if isinstance(raw_candidates, list) else []
+    grounding_metadata: Final[list[dict[str, object]]] = []
+    for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
         candidate_grounding = candidate.get("groundingMetadata")
@@ -267,13 +278,14 @@ def get_gemini_image_web_search_requests(
 
 def get_gemini_image_generation_config(
     model: str,
-    optional_params: dict[str, Any],
-) -> dict[str, Any]:
-    generation_config: dict[str, Any] = {"response_modalities": ["IMAGE", "TEXT"]}
+    optional_params: Mapping[str, object],
+) -> dict[str, object]:
+    generation_config: Final[dict[str, object]] = {"response_modalities": ["IMAGE", "TEXT"]}
 
-    image_config: dict[str, Any] = {}
-    if isinstance(optional_params.get("imageConfig"), dict):
-        image_config.update(optional_params["imageConfig"])
+    raw_image_config: Final = optional_params.get("imageConfig")
+    image_config: Final[dict[str, object]] = {}
+    if isinstance(raw_image_config, dict):
+        image_config.update(raw_image_config)
 
     if not supports_gemini_image_size(model):
         image_config.pop("imageSize", None)
@@ -281,7 +293,7 @@ def get_gemini_image_generation_config(
     if image_config:
         generation_config["imageConfig"] = image_config
 
-    candidate_count = next(
+    candidate_count: Final = next(
         (
             optional_params[key]
             for key in ("candidateCount", "candidate_count", "sampleCount", "n")
@@ -304,8 +316,8 @@ def _parse_openai_image_size(size: str) -> tuple[int, int] | None:
         return None
 
     try:
-        width = int(width_str)
-        height = int(height_str)
+        width: Final = int(width_str)
+        height: Final = int(height_str)
     except ValueError:
         return None
 
@@ -319,7 +331,7 @@ def _map_dimensions_to_gemini_aspect_ratio(width: int, height: int) -> str:
     if (width, height) in GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO:
         return GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO[(width, height)]
 
-    requested_ratio = width / height
+    requested_ratio: Final = width / height
     return min(
         GEMINI_IMAGE_ASPECT_RATIOS,
         key=lambda aspect_ratio: abs(math.log(GEMINI_IMAGE_ASPECT_RATIOS[aspect_ratio] / requested_ratio)),
@@ -327,7 +339,7 @@ def _map_dimensions_to_gemini_aspect_ratio(width: int, height: int) -> str:
 
 
 def _map_dimensions_to_gemini_image_size(width: int, height: int) -> str:
-    effective_square_side = math.sqrt(width * height)
+    effective_square_side: Final = math.sqrt(width * height)
     if effective_square_side < 768:
         return "512"
     if effective_square_side < 1536:
@@ -372,7 +384,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return model.replace("gemini/", "")
 
     def process_model_name(self, models: list[dict[str, str]]) -> list[str]:
-        litellm_model_names = []
+        litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
             litellm_model_name = "gemini/" + stripped_model_name
@@ -382,13 +394,13 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = GeminiModelInfo.get_api_base(api_base)
         api_key = GeminiModelInfo.get_api_key(api_key)
-        endpoint = f"/{self.api_version}/models"
+        endpoint: Final = f"/{self.api_version}/models"
         if api_base is None or api_key is None:
             raise ValueError(
                 "GEMINI_API_BASE or GEMINI_API_KEY/GOOGLE_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
 
-        response = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(
             url=f"{api_base}{endpoint}",
             headers={"x-goog-api-key": api_key},
         )
@@ -398,9 +410,9 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models = response.json()["models"]
+        models: Final[list[dict[str, str]]] = response.json()["models"]
 
-        litellm_model_names = self.process_model_name(models)
+        litellm_model_names: Final = self.process_model_name(models)
         return litellm_model_names
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -433,7 +445,7 @@ def encode_unserializable_types(data: dict[str, object], depth: int = 0) -> dict
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return data
-    processed_data: dict[str, object] = {}
+    processed_data: Final[dict[str, object]] = {}
     if not isinstance(data, dict):
         return data
     for key, value in data.items():
@@ -473,25 +485,25 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
+        messages: list[dict[str, object]] | None,
+        contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        tools: list[dict[str, object]] | None = None,
+        system: object | None = None,
     ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
 
         deployment = deployment or {}
-        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
-        count_tokens_params = {
+        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        count_tokens_params: Final = {
             "model": model_to_use,
             "contents": contents,
         }
         count_tokens_params_request.update(count_tokens_params)
-        result = await GoogleAIStudioTokenCounter().acount_tokens(
+        result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
             **count_tokens_params_request,
         )
 

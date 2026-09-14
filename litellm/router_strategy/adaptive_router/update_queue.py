@@ -19,7 +19,7 @@ to the in-memory aggregator). Flush is async and batched.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_router_logger
 from litellm.repositories.table_repositories import (
@@ -55,9 +55,9 @@ class AdaptiveRouterUpdateQueue:
         delta_beta: float,
     ) -> None:
         """Aggregate a bandit-cell delta. Multiple deltas to the same cell sum."""
-        key: StateKey = (router_name, request_type, model_name)
+        key: Final[StateKey] = (router_name, request_type, model_name)
         async with self._lock:
-            current = self._state_agg.get(key)
+            current: Final = self._state_agg.get(key)
             if current is None:
                 self._state_agg[key] = {
                     "delta_alpha": delta_alpha,
@@ -84,7 +84,7 @@ class AdaptiveRouterUpdateQueue:
         SessionState (signals counts + bookkeeping fields). The flusher will
         upsert this into LiteLLM_AdaptiveRouterSession.
         """
-        key: SessionKey = (session_id, router_name, model_name)
+        key: Final[SessionKey] = (session_id, router_name, model_name)
         async with self._lock:
             self._session_agg[key] = state_dict
             self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
@@ -97,7 +97,7 @@ class AdaptiveRouterUpdateQueue:
         Returns number of cells flushed.
         """
         async with self._lock:
-            batch = self._state_agg
+            batch: Final = self._state_agg
             self._state_agg = {}
 
         if not batch:
@@ -153,7 +153,7 @@ class AdaptiveRouterUpdateQueue:
         Returns number of session rows flushed.
         """
         async with self._lock:
-            batch = self._session_agg
+            batch: Final = self._session_agg
             self._session_agg = {}
 
         if not batch:

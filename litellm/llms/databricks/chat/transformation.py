@@ -3,14 +3,8 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 """
 
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    cast,
-    overload,
-)
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel
@@ -21,6 +15,8 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,  # pyright: ignore[reportPrivateUsage]  # same import as the OpenAI transformation
+    strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -28,7 +24,9 @@ from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
     DatabricksChoice,
+    DatabricksDelta,
     DatabricksFunction,
+    DatabricksMessage,
     DatabricksResponse,
     DatabricksTool,
 )
@@ -61,12 +59,20 @@ from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
 
+def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
+    """Databricks rejects assistant messages with neither content nor tool calls, e.g. a replayed
+    thinking-only turn once its `thinking_blocks` are stripped."""
+    return message_dict.get("role") == "assistant" and not any(
+        message_dict.get(key) for key in ("content", "tool_calls", "function_call")
+    )
+
+
 def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
     """
     Remove or filter content so empty text blocks are not sent.
     Databricks Model Serving uses Anthropic Messages API spec and rejects empty text blocks.
     """
-    content = message_dict.get("content")
+    content: Final = message_dict.get("content")
     if content is None:
         message_dict.pop("content", None)
         return
@@ -78,7 +84,7 @@ def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
         if not content:
             message_dict.pop("content")
             return
-        filtered = [
+        filtered: Final = [
             block
             for block in content
             if not (isinstance(block, dict) and block.get("type") == "text" and not (block.get("text") or "").strip())
@@ -142,6 +148,8 @@ def _split_parallel_tool_calls(messages: list[AllMessageValues]) -> list[AllMess
 
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -170,7 +178,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         stop: list[str] | str | None = None,
         n: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -213,7 +221,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # Check for custom user agent in optional_params or environment
         # This allows partners building on LiteLLM to set their own telemetry
         # Use pop() to remove these keys so they don't get sent to the API
-        custom_user_agent = (
+        custom_user_agent: Final = (
             optional_params.pop("user_agent", None)
             or optional_params.pop("databricks_user_agent", None)
             or litellm_params.get("user_agent")
@@ -242,8 +250,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = self._get_api_base(api_base)
-        complete_url = f"{api_base}/chat/completions"
+        use_ai_gateway: Final = model.removeprefix("databricks/").count(".") >= 2
+        api_base = self._get_api_base(api_base, use_ai_gateway=use_ai_gateway)
+        url_base: Final = api_base.rstrip("/") if use_ai_gateway else api_base
+        complete_url: Final = f"{url_base}/chat/completions"
         return complete_url
 
     def get_supported_openai_params(self, model: str | None = None) -> list:
@@ -262,18 +272,27 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "thinking",
         ]
 
+    @staticmethod
+    def _uses_anthropic_thinking_param(model: str) -> bool:
+        from litellm.utils import supports_anthropic_thinking_payload
+
+        normalized: Final = model.lower().replace(".", "-")
+        return "claude" in normalized or supports_anthropic_thinking_payload(
+            model=normalized, custom_llm_provider="databricks"
+        )
+
     def convert_anthropic_tool_to_databricks_tool(self, tool: AllAnthropicToolsValues | None) -> DatabricksTool | None:
         if tool is None:
             return None
 
         # Build DatabricksFunction explicitly to avoid parameter conflicts
-        function_params: DatabricksFunction = {
+        function_params: Final[DatabricksFunction] = {
             "name": tool["name"],
             "parameters": cast(dict, tool.get("input_schema") or {}),
         }
 
         # Only add description if it exists
-        description = tool.get("description")
+        description: Final = tool.get("description")
         if description is not None:
             function_params["description"] = cast(dict | str, description)
 
@@ -289,7 +308,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         # if claude, convert to anthropic tool and then to databricks tool
         anthropic_tools, _ = self._map_tools(tools=tools)  # unclear how mcp tool calling on databricks works
-        databricks_tools = [
+        databricks_tools: Final = [
             cast(DatabricksTool, self.convert_anthropic_tool_to_databricks_tool(tool)) for tool in anthropic_tools
         ]
         return databricks_tools
@@ -304,9 +323,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if value is None:
             return None
 
-        tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
+        tool: Final = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
 
-        databricks_tool = self.convert_anthropic_tool_to_databricks_tool(tool)
+        databricks_tool: Final = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
 
     def remove_cache_control_flag_from_messages_and_tools(
@@ -332,8 +351,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
-        mapped_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
+        mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if "claude" in model:
+            AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
+                model=model, optional_params=mapped_params, custom_llm_provider="databricks"
+            )
         if "tools" in mapped_params:
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(model=model, tools=mapped_params["tools"])
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
@@ -343,7 +366,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             mapped_params.pop("max_completion_tokens", None)
 
         if "response_format" in non_default_params and "claude" in model:
-            _tool = self.map_response_format_to_databricks_tool(
+            _tool: Final = self.map_response_format_to_databricks_tool(
                 model,
                 non_default_params["response_format"],
                 mapped_params,
@@ -354,7 +377,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
                 optional_params["json_mode"] = True
                 if not is_thinking_enabled:
-                    _tool_choice = ChatCompletionToolChoiceObjectParam(
+                    _tool_choice: Final = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(name=RESPONSE_FORMAT_TOOL_NAME),
                     )
@@ -363,9 +386,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
-        if "reasoning_effort" in non_default_params and "claude" in model:
-            reasoning_effort_value = non_default_params.get("reasoning_effort")
-            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+        if "reasoning_effort" in non_default_params and self._uses_anthropic_thinking_param(model):
+            reasoning_effort_value: Final = non_default_params.get("reasoning_effort")
+            mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
                 model=model,
                 custom_llm_provider="databricks",
@@ -423,6 +446,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         """
         Databricks does not support:
         - 'name' in user message.
+        - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -431,10 +455,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             else:
                 _message = message
             _message = strip_name_from_message(_message, allowed_name_roles=["user"])
+            _message = strip_litellm_internal_message_fields(_message)
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
+            if _is_bare_assistant_message(_message):
+                continue
             new_messages.append(_message)
 
         if "claude" not in model:
@@ -457,10 +484,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         This is required for Anthropic's prompt caching API when cache_control is specified
         at the message level but content is a simple string (not already an array of content blocks).
         """
-        content = message.get("content")
+        content: Final = message.get("content")
         # Create new message with cache_control moved into content block
-        transformed_message = cast(dict[str, Any], message.copy())
-        cache_control = transformed_message.pop("cache_control")
+        transformed_message: Final = cast(dict[str, Any], message.copy())
+        cache_control: Final = transformed_message.pop("cache_control")
         transformed_message["content"] = [
             {
                 "type": "text",
@@ -522,12 +549,25 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return reasoning_content, thinking_blocks
 
     @staticmethod
+    def extract_top_level_reasoning_content(delta: DatabricksDelta) -> str | None:
+        return delta.get("reasoning_content")
+
+    @staticmethod
+    def resolve_reasoning_and_content(
+        message: DatabricksMessage, block_reasoning_content: str | None
+    ) -> tuple[str | None, str | None]:
+        content_str: Final = DatabricksConfig.extract_content_str(message["content"])
+        if block_reasoning_content is not None:
+            return block_reasoning_content, content_str
+        return _extract_reasoning_content({**message, "content": content_str})
+
+    @staticmethod
     def extract_citations(
         content: AllDatabricksContentValues | None,
     ) -> list[Any] | None:
         if content is None:
             return None
-        citations = []
+        citations: Final = []
         if isinstance(content, list):
             for item in content:
                 text = item.get("text", None)
@@ -536,7 +576,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return citations or None
 
     def _transform_dbrx_choices(self, choices: list[DatabricksChoice], json_mode: bool | None = None) -> list[Choices]:
-        transformed_choices = []
+        transformed_choices: Final = []
 
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
@@ -544,7 +584,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             if tool_calls is not None:
                 _openai_tool_calls = []
                 for _tc in tool_calls:
-                    _openai_tc = ChatCompletionMessageToolCall(**_tc)  # type: ignore
+                    _openai_tc = ChatCompletionMessageToolCall(**_tc)
                     _openai_tool_calls.append(_openai_tc)
                 fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
@@ -564,14 +604,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     finish_reason = "stop"
 
             if translated_message is None:
-                ## get the content str
-                content_str = DatabricksConfig.extract_content_str(choice["message"]["content"])
-
-                ## get the reasoning content
                 (
-                    reasoning_content,
+                    block_reasoning_content,
                     thinking_blocks,
                 ) = DatabricksConfig.extract_reasoning_content(choice["message"].get("content"))
+                reasoning_content, content_str = DatabricksConfig.resolve_reasoning_and_content(
+                    choice["message"], block_reasoning_content
+                )
 
                 citations = DatabricksConfig.extract_citations(choice["message"].get("content"))
 
@@ -609,12 +648,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         # Redact sensitive data before logging to prevent credential leakage
-        redacted_request_data = self.redact_sensitive_data(request_data)
+        redacted_request_data: Final = self.redact_sensitive_data(request_data)
 
         ## LOGGING - Never log actual API keys
         logging_obj.post_call(
@@ -626,23 +665,23 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = DatabricksResponse(**raw_response.json())  # type: ignore
+            completion_response: Final = DatabricksResponse(**raw_response.json())
         except Exception as e:
-            response_headers = getattr(raw_response, "headers", None)
+            response_headers: Final = getattr(raw_response, "headers", None)
             raise DatabricksException(
-                message=f"Unable to get json response - {e!s}, Original Response: {raw_response.text}",
+                message=f"Unable to get json response - {e}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
 
-        _custom_llm_provider = litellm_params.get("custom_llm_provider") or "databricks"
-        _response_model = completion_response.get("model") or ""
+        _custom_llm_provider: Final = litellm_params.get("custom_llm_provider") or "databricks"
+        _response_model: Final = completion_response.get("model") or ""
         model_response.model = f"{_custom_llm_provider}/{_response_model}"
         model_response.id = completion_response["id"]
         model_response.created = completion_response["created"]
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
 
-        model_response.choices = self._transform_dbrx_choices(  # type: ignore
+        model_response.choices = self._transform_dbrx_choices(
             choices=completion_response["choices"],
             json_mode=json_mode,
         )
@@ -676,7 +715,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            translated_choices = []
+            translated_choices: Final = []
             for choice in chunk["choices"]:
                 tool_calls = choice["delta"].get("tool_calls")
                 if tool_calls and self.json_mode:
@@ -725,12 +764,16 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
 
                 # extract the reasoning content
                 (
-                    reasoning_content,
+                    block_reasoning_content,
                     thinking_blocks,
                 ) = DatabricksConfig.extract_reasoning_content(choice["delta"].get("content"))
 
                 choice["delta"]["content"] = content_str
-                choice["delta"]["reasoning_content"] = reasoning_content
+                choice["delta"]["reasoning_content"] = (
+                    block_reasoning_content
+                    if block_reasoning_content is not None
+                    else DatabricksConfig.extract_top_level_reasoning_content(choice["delta"])
+                )
                 choice["delta"]["thinking_blocks"] = thinking_blocks
                 translated_choices.append(choice)
             return ModelResponseStream(
@@ -739,6 +782,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                 created=chunk["created"],
                 model=chunk["model"],
                 choices=translated_choices,
+                usage=chunk.get("usage"),
             )
         except KeyError as e:
             raise DatabricksException(

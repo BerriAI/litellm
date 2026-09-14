@@ -1,5 +1,6 @@
 import enum
 import heapq
+from typing import Final
 
 from pydantic import BaseModel
 
@@ -41,7 +42,7 @@ class Scheduler:
     async def add_request(self, request: FlowItem):
         # We use the priority directly, as lower values indicate higher priority
         # get the queue
-        queue = await self.get_queue(model_name=request.model_name)
+        queue: Final = await self.get_queue(model_name=request.model_name)
         # update the queue
         heapq.heappush(queue, (request.priority, request.request_id))
 
@@ -60,7 +61,7 @@ class Scheduler:
             * If no healthy deployments available
             * AND request not at the top of queue
         """
-        queue = await self.get_queue(model_name=model_name)
+        queue: Final = await self.get_queue(model_name=model_name)
         if not queue:
             raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
@@ -88,15 +89,15 @@ class Scheduler:
         Remove a specific request from the priority queue for a model.
         Used when a request times out while waiting in the queue.
         """
-        queue = await self.get_queue(model_name=model_name)
-        filtered_queue = [item for item in queue if item[1] != request_id]
+        queue: Final = await self.get_queue(model_name=model_name)
+        filtered_queue: Final = [item for item in queue if item[1] != request_id]
         heapq.heapify(filtered_queue)  # restore heap invariant after filtering
         await self.save_queue(queue=filtered_queue, model_name=model_name)
         print_verbose(f"Removed request_id: {request_id} from queue for model: {model_name}")
 
     async def peek(self, id: str, model_name: str, health_deployments: list) -> bool:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
-        queue = await self.get_queue(model_name=model_name)
+        queue: Final = await self.get_queue(model_name=model_name)
         if not queue:
             raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
@@ -119,8 +120,8 @@ class Scheduler:
         Return a queue for that specific model group
         """
         if self.cache is not None:
-            _cache_key = f"{SchedulerCacheKeys.queue.value}:{model_name}"
-            response = await self.cache.async_get_cache(key=_cache_key)
+            _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
+            response: Final = await self.cache.async_get_cache(key=_cache_key)
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
@@ -132,5 +133,5 @@ class Scheduler:
         Save the updated queue of the model group
         """
         if self.cache is not None:
-            _cache_key = f"{SchedulerCacheKeys.queue.value}:{model_name}"
+            _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             await self.cache.async_set_cache(key=_cache_key, value=queue)

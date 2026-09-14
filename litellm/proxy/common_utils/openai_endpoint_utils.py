@@ -2,12 +2,14 @@
 Contains utils used by OpenAI compatible endpoints
 """
 
+from typing import Final
+
 from fastapi import Request
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 
-SENSITIVE_DATA_MASKER = SensitiveDataMasker()
+SENSITIVE_DATA_MASKER: Final = SensitiveDataMasker()
 
 
 def remove_sensitive_info_from_deployment(
@@ -34,11 +36,11 @@ def remove_sensitive_info_from_deployment(
     # Rate-limit config fields must never be masked — they are integers, not credentials.
     # The field names contain "key" which matches the masker's sensitive pattern, so we
     # explicitly exclude them here rather than widening the global non_sensitive_overrides.
-    _rate_limit_config_keys = {
+    _rate_limit_config_keys: Final = {
         "default_api_key_tpm_limit",
         "default_api_key_rpm_limit",
     }
-    _excluded = (excluded_keys or set()) | _rate_limit_config_keys
+    _excluded: Final = (excluded_keys or set()) | _rate_limit_config_keys
 
     deployment_dict["litellm_params"] = SENSITIVE_DATA_MASKER.mask_dict(
         deployment_dict["litellm_params"], excluded_keys=_excluded
@@ -53,7 +55,7 @@ async def get_custom_llm_provider_from_request_body(request: Request) -> str | N
 
     Safely reads the request body
     """
-    request_body: dict = await _read_request_body(request=request) or {}
+    request_body: Final[dict] = await _read_request_body(request=request) or {}
     if "custom_llm_provider" in request_body:
         return request_body["custom_llm_provider"]
     return None

@@ -1,6 +1,6 @@
 import json
 from collections.abc import Coroutine
-from typing import Any, Literal, cast, overload
+from typing import Any, Final, Literal, cast, overload
 
 import litellm
 from litellm.constants import MIN_NON_ZERO_TEMPERATURE
@@ -50,7 +50,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -60,7 +60,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        supported_openai_params = [
+        supported_openai_params: Final = [
             "stream",
             "frequency_penalty",
             "function_call",
@@ -92,7 +92,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if (
                 param == "temperature" and value == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1"
@@ -175,16 +175,16 @@ class DeepInfraConfig(OpenAIGPTConfig):
             # For async case, create an async function that awaits parent and applies our transformation
             async def _async_transform():
                 # Call parent with is_async=True (literal) for async case
-                parent_result = super(DeepInfraConfig, self)._transform_messages(
+                parent_result: Final = super(DeepInfraConfig, self)._transform_messages(
                     messages=messages, model=model, is_async=cast(Literal[True], True)
                 )
-                transformed_messages = await parent_result
+                transformed_messages: Final = await parent_result
                 return self._transform_tool_message_content(transformed_messages)
 
             return _async_transform()
         else:
             # Call parent with is_async=False (literal) for sync case
-            parent_result = super()._transform_messages(
+            parent_result: Final = super()._transform_messages(
                 messages=messages, model=model, is_async=cast(Literal[False], False)
             )
             # For sync case, parent_result is already the transformed messages
@@ -195,5 +195,5 @@ class DeepInfraConfig(OpenAIGPTConfig):
     ) -> tuple[str | None, str | None]:
         # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret_str("DEEPINFRA_API_BASE") or "https://api.deepinfra.com/v1/openai"
-        dynamic_api_key = api_key or get_secret_str("DEEPINFRA_API_KEY")
+        dynamic_api_key: Final = api_key or get_secret_str("DEEPINFRA_API_KEY")
         return api_base, dynamic_api_key

@@ -8,6 +8,8 @@ Example:
     "prometheus" -> PrometheusLogger
 """
 
+from typing import Final
+
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -41,6 +43,7 @@ from litellm.integrations.newrelic import NewRelicLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
+from litellm.integrations.pointfive import PointFiveLogger
 from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
@@ -93,6 +96,7 @@ class CustomLoggerRegistry:
         "agentops": AgentOps,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
+        "pointfive": PointFiveLogger,
         "aws_sqs": SQSLogger,
         "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
         "dynamic_rate_limiter_v3": _PROXY_DynamicRateLimitHandlerV3,
@@ -168,7 +172,7 @@ class CustomLoggerRegistry:
         Returns:
             list: List of callback strings that map to the class type
         """
-        callback_strs: list[str] = []
+        callback_strs: Final[list[str]] = []
         for (
             callback_str,
             callback_class,

@@ -1,6 +1,6 @@
 import base64
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -46,7 +46,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         drop_params: bool,
     ) -> dict[str, Any]:
         return map_openai_image_params_to_gemini(
-            params=image_edit_optional_params,  # type: ignore[arg-type]
+            params=image_edit_optional_params,
             model=model,
             supported_params=self.get_supported_openai_params(model),
             parse_image_config_string=True,
@@ -60,7 +60,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key: str | None = api_key or get_secret_str("GEMINI_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
 
@@ -82,7 +82,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         base_url = base_url.rstrip("/")
         return f"{base_url}/models/{model}:generateContent"
 
-    def transform_image_edit_request(  # type: ignore[override]
+    def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
@@ -91,40 +91,40 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict[str, Any], RequestFiles | None]:
-        inline_parts = self._prepare_inline_image_parts(image) if image else []
+        inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Gemini image edit requires at least one image.")
 
         # Build parts list with image and prompt (if provided)
-        parts = inline_parts.copy()
+        parts: Final = inline_parts.copy()
         if prompt is not None and prompt != "":
             parts.append({"text": prompt})
 
-        contents = [
+        contents: Final = [
             {
                 "parts": parts,
             }
         ]
 
-        request_body: dict[str, Any] = {"contents": contents}
+        request_body: Final[dict[str, Any]] = {"contents": contents}
 
         request_body["generationConfig"] = get_gemini_image_generation_config(
             model=model,
             optional_params=image_edit_optional_request_params,
         )
 
-        empty_files = cast(RequestFiles, [])
+        empty_files: Final = cast(RequestFiles, [])
         return request_body, empty_files
 
     def transform_image_edit_response(
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
-        model_response = ImageResponse()
+        model_response: Final = ImageResponse()
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",
@@ -132,8 +132,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        candidates = response_json.get("candidates", [])
-        data_list: list[ImageObject] = []
+        candidates: Final = response_json.get("candidates", [])
+        data_list: Final[list[ImageObject]] = []
 
         for candidate in candidates:
             content = candidate.get("content", {})
@@ -160,7 +160,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         else:
             images = [image]
 
-        inline_parts: list[dict[str, Any]] = []
+        inline_parts: Final[list[dict[str, Any]]] = []
         for img in images:
             if img is None:
                 continue

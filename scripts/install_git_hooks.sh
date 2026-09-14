@@ -35,7 +35,7 @@ These hooks enforce Conventional Commits and Conventional Branches.
 Bypass with --no-verify when you need to (e.g. for emergency hotfixes).
 
 The CI-equivalent lint is deliberately not installed as an auto-firing hook
-(it can take minutes); run it on demand with 'make pre-commit' before committing.
+(it can take minutes); run it on demand with 'make check' before committing.
 
 To uninstall:  git config --unset core.hooksPath
 EOF

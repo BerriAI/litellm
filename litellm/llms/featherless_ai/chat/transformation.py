@@ -1,3 +1,5 @@
+from typing import Final
+
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
@@ -40,7 +42,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         tool_choice: str | None = None,
         tools: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -72,7 +74,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "tool_choice" or param == "tools":
                 if param == "tool_choice" and (value == "auto" or value == "none"):

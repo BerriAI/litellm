@@ -5,7 +5,7 @@ this is OpenAI compatible - no translation needed / occurs
 """
 
 from collections.abc import Coroutine
-from typing import Any, Literal, overload
+from typing import Any, Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -45,7 +45,7 @@ class SambanovaConfig(OpenAIGPTConfig):
         tool_choice: str | None = None,
         tools: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -61,7 +61,7 @@ class SambanovaConfig(OpenAIGPTConfig):
         """
         from litellm.utils import supports_function_calling
 
-        params = [
+        params: Final = [
             "max_completion_tokens",
             "max_tokens",
             "response_format",
@@ -90,7 +90,7 @@ class SambanovaConfig(OpenAIGPTConfig):
         """
         map max_completion_tokens param to max_tokens
         """
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value

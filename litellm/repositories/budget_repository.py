@@ -2,17 +2,21 @@
 Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     """Repository for budget database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
         return self.prisma_client.db.litellm_budgettable
 
     @property
@@ -35,7 +39,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         allowed_models: list[str] | None = None,
     ) -> LiteLLM_BudgetTable:
         """Create a new budget record."""
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "created_by": created_by,
             "updated_by": created_by,
         }
@@ -72,7 +76,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         allowed_models: list[str] | None = None,
     ) -> LiteLLM_BudgetTable | None:
         """Update an existing budget record."""
-        data: dict[str, Any] = {"updated_by": updated_by}
+        data: Final[dict[str, Any]] = {"updated_by": updated_by}
         if max_budget is not None:
             data["max_budget"] = max_budget
         if soft_budget is not None:

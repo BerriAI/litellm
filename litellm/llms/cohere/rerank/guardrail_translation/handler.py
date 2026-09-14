@@ -5,7 +5,7 @@ This module provides guardrail translation support for the rerank endpoint.
 The handler processes only the 'query' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -13,6 +13,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.rerank import RerankResponse
 
 
@@ -42,7 +43,7 @@ class CohereRerankHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Any:
         """
         Process input text fields ('query' and 'instruction') by applying
@@ -58,23 +59,23 @@ class CohereRerankHandler(BaseTranslation):
         """
         # Collect every scannable text field in a stable order so the
         # guardrailed results can be written back to the right key by index.
-        fields_to_scan = [(key, data[key]) for key in self._SCANNED_FIELDS if isinstance(data.get(key), str)]
+        fields_to_scan: Final = [(key, data[key]) for key in self._SCANNED_FIELDS if isinstance(data.get(key), str)]
         if not fields_to_scan:
             verbose_proxy_logger.debug("Rerank: No query/instruction to process or not strings")
             return data
 
-        inputs = GenericGuardrailAPIInputs(texts=[value for _, value in fields_to_scan])
+        inputs: Final = GenericGuardrailAPIInputs(texts=[value for _, value in fields_to_scan])
         # Include model information if available
-        model = data.get("model")
+        model: Final = data.get("model")
         if model:
             inputs["model"] = model
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
-        guardrailed_texts = guardrailed_inputs.get("texts", [])
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
 
         for idx, (key, original) in enumerate(fields_to_scan):
             # Defensive: only write back when the guardrail returned a value for
@@ -94,7 +95,7 @@ class CohereRerankHandler(BaseTranslation):
         self,
         response: "RerankResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
     ) -> Any:

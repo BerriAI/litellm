@@ -4,7 +4,7 @@ Calls Firecrawl's /search endpoint to search the web.
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -117,7 +117,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
             # Firecrawl only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: FirecrawlSearchRequest = {
+        request_data: Final[FirecrawlSearchRequest] = {
             "query": query,
         }
 
@@ -129,7 +129,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
             request_data["country"] = optional_params["country"]
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -170,12 +170,12 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
 
-        data = response_json.get("data", {})
+        data: Final = response_json.get("data", {})
 
         if isinstance(data, list):
             # Self-hosted Firecrawl (v1) format: data is a flat list of results
@@ -191,7 +191,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
                 results.append(search_result)
         elif isinstance(data, dict):
             # Firecrawl Cloud (v2) format: data is a dict with web/news keys
-            web_results = data.get("web", [])
+            web_results: Final = data.get("web", [])
 
             for result in web_results:
                 # Use markdown if available, otherwise fall back to description
@@ -207,7 +207,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
                 results.append(search_result)
 
             # Process news results if available (they have date field)
-            news_results = data.get("news", [])
+            news_results: Final = data.get("news", [])
             for result in news_results:
                 snippet = result.get("markdown") or result.get("snippet", "")
 

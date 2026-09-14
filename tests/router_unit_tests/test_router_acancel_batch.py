@@ -4,10 +4,7 @@ Test router.acancel_batch() functionality
 This ensures the router's batch cancellation method has test coverage.
 """
 
-import sys
-import os
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock

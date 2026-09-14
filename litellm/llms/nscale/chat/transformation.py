@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -27,8 +29,8 @@ class NscaleConfig(OpenAIGPTConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         # This method is called by get_llm_provider to resolve api_base and api_key
-        resolved_api_base = NscaleConfig.get_api_base(api_base)
-        resolved_api_key = NscaleConfig.get_api_key(api_key)
+        resolved_api_base: Final = NscaleConfig.get_api_base(api_base)
+        resolved_api_key: Final = NscaleConfig.get_api_key(api_key)
         return resolved_api_base, resolved_api_key
 
     def get_supported_openai_params(self, model: str) -> list:

@@ -1,5 +1,6 @@
 import base64
 import os
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -40,7 +41,7 @@ class GoogleSecretManager(GCSBucketBase):
         _refresh_interval = int(_refresh_interval) if _refresh_interval else refresh_interval
         self.cache = InMemoryCache(default_ttl=_refresh_interval)  # store in memory for 1 day
 
-        _always_read_secret_manager = os.environ.get(
+        _always_read_secret_manager: Final = os.environ.get(
             "GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER",
         )
         if _always_read_secret_manager and _always_read_secret_manager.lower() == "true":
@@ -60,18 +61,18 @@ class GoogleSecretManager(GCSBucketBase):
             str: The secret value if successful, None otherwise.
         """
         if self.always_read_secret_manager is not True:
-            cached_secret = self.cache.get_cache(secret_name)
+            cached_secret: Final = self.cache.get_cache(secret_name)
             if cached_secret is not None:
                 return cached_secret
             if secret_name in self.cache.cache_dict:
                 return cached_secret
 
-        _secret_name = f"projects/{self.PROJECT_ID}/secrets/{secret_name}/versions/latest"
-        headers = self.sync_construct_request_headers()
-        url = f"https://secretmanager.googleapis.com/v1/{_secret_name}:access"
+        _secret_name: Final = f"projects/{self.PROJECT_ID}/secrets/{secret_name}/versions/latest"
+        headers: Final = self.sync_construct_request_headers()
+        url: Final = f"https://secretmanager.googleapis.com/v1/{_secret_name}:access"
 
         # Send the GET request to retrieve the secret
-        response = self.sync_httpx_client.get(url=url, headers=headers)
+        response: Final = self.sync_httpx_client.get(url=url, headers=headers)
 
         if response.status_code != 200:
             verbose_logger.error("Google Secret Manager retrieval error: %s", str(response.text))
@@ -84,12 +85,12 @@ class GoogleSecretManager(GCSBucketBase):
         )
 
         # Parse the JSON response and return the secret value
-        secret_data = response.json()
-        _base64_encoded_value = secret_data.get("payload", {}).get("data")
+        secret_data: Final = response.json()
+        _base64_encoded_value: Final = secret_data.get("payload", {}).get("data")
 
         # decode the base64 encoded value
         if _base64_encoded_value is not None:
-            _decoded_value = base64.b64decode(_base64_encoded_value).decode("utf-8")
+            _decoded_value: Final = base64.b64decode(_base64_encoded_value).decode("utf-8")
             self.cache.set_cache(secret_name, _decoded_value)  # Cache the retrieved secret
             return _decoded_value
 

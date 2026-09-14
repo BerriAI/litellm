@@ -2,7 +2,7 @@
 Legacy /v1/embedding transformation logic for Bedrock Cohere.
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -57,16 +57,16 @@ class CohereEmbeddingConfig:
             )
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
 
         return transformed_request
 
     def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
         input_tokens = 0
 
-        text_tokens: int | None = meta.get("billed_units", {}).get("input_tokens")
+        text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
 
-        image_tokens: int | None = meta.get("billed_units", {}).get("images")
+        image_tokens: Final[int | None] = meta.get("billed_units", {}).get("images")
 
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_tokens is None and text_tokens is None:
@@ -100,7 +100,7 @@ class CohereEmbeddingConfig:
         encoding: Any,
         input: list,
     ) -> EmbeddingResponse:
-        response_json = response.json()
+        response_json: Final = response.json()
         ## LOGGING
         logging_obj.post_call(
             input=input,
@@ -139,8 +139,8 @@ class CohereEmbeddingConfig:
                 'usage',
             }
         """
-        embeddings = response_json["embeddings"]
-        output_data = []
+        embeddings: Final = response_json["embeddings"]
+        output_data: Final = []
         is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
 
         if isinstance(embeddings, dict):

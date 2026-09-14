@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from typing import Final
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -35,13 +36,13 @@ class RequestSizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        max_request_size_mb = self.get_max_request_size_mb()
-        max_request_size_bytes = _mb_to_bytes(max_request_size_mb)
+        max_request_size_mb: Final = self.get_max_request_size_mb()
+        max_request_size_bytes: Final = _mb_to_bytes(max_request_size_mb)
         if max_request_size_bytes is None or not self.is_request_size_limit_enabled():
             await self.app(scope, receive, send)
             return
 
-        content_length = _get_content_length(scope=scope)
+        content_length: Final = _get_content_length(scope=scope)
         if content_length is not None and content_length > max_request_size_bytes:
             await _send_request_too_large(send=send, max_request_size_mb=max_request_size_mb)
             return
@@ -52,7 +53,7 @@ class RequestSizeLimitMiddleware:
         async def limited_receive() -> Message:
             nonlocal received_body_bytes
 
-            message = await receive()
+            message: Final = await receive()
             if message["type"] != "http.request":
                 return message
 
@@ -85,8 +86,8 @@ def _mb_to_bytes(max_request_size_mb: float | None) -> int | None:
 
 
 def _get_content_length(scope: Scope) -> int | None:
-    headers = dict(scope.get("headers") or [])
-    raw_content_length = headers.get(b"content-length")
+    headers: Final = dict(scope.get("headers") or [])
+    raw_content_length: Final = headers.get(b"content-length")
     if raw_content_length is None:
         return None
 
@@ -100,7 +101,7 @@ async def _send_request_too_large(
     send: Send,
     max_request_size_mb: float | None,
 ) -> None:
-    body = json.dumps(
+    body: Final = json.dumps(
         {"error": f"Request size is too large. Max size is {max_request_size_mb} MB"},
         separators=(",", ":"),
     ).encode("utf-8")

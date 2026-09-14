@@ -11,7 +11,7 @@ dict at call time.
 Reference: https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-overview.html
 """
 
-from typing import Any
+from typing import Any, Final
 
 from httpx import Headers, Response
 
@@ -29,9 +29,9 @@ from ...base_llm.audio_transcription.transformation import (
 from ..common_utils import NvidiaRivaException
 
 # Riva expects a fixed wire format for the audio chunks we stream in.
-RIVA_TARGET_SAMPLE_RATE_HZ = 16000
-RIVA_TARGET_NUM_CHANNELS = 1
-RIVA_TARGET_ENCODING = "LINEAR_PCM"
+RIVA_TARGET_SAMPLE_RATE_HZ: Final = 16000
+RIVA_TARGET_NUM_CHANNELS: Final = 1
+RIVA_TARGET_ENCODING: Final = "LINEAR_PCM"
 
 
 class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -93,16 +93,16 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         ``nvidia-riva-client`` being installed (matching how other providers
         defer SDK imports to handler-call time).
         """
-        recognition_config = self._build_recognition_config_dict(
+        recognition_config: Final = self._build_recognition_config_dict(
             model=model,
             optional_params=optional_params,
         )
 
-        endpointing_config = self._build_endpointing_config_dict(optional_params)
+        endpointing_config: Final = self._build_endpointing_config_dict(optional_params)
         if endpointing_config is not None:
             recognition_config["endpointing_config"] = endpointing_config
 
-        request_payload: dict[str, Any] = {
+        request_payload: Final[dict[str, Any]] = {
             "recognition_config": recognition_config,
             "response_format": optional_params.get("response_format") or "json",
             "timestamp_granularities": optional_params.get("timestamp_granularities"),
@@ -168,18 +168,18 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns ``None`` when neither is provided so Riva uses its built-in
         VAD defaults.
         """
-        explicit = optional_params.get("endpointing_config")
+        explicit: Final = optional_params.get("endpointing_config")
         if isinstance(explicit, dict):
             return dict(explicit)
 
-        chunking = optional_params.get("chunking_strategy")
+        chunking: Final = optional_params.get("chunking_strategy")
         if chunking in (None, "auto"):
             return None
 
         if isinstance(chunking, dict) and chunking.get("type") == "server_vad":
-            config: dict[str, Any] = {}
+            config: Final[dict[str, Any]] = {}
             if "threshold" in chunking:
-                threshold = float(chunking["threshold"])
+                threshold: Final = float(chunking["threshold"])
                 config["start_threshold"] = threshold
                 config["stop_threshold"] = threshold
             if "silence_duration_ms" in chunking:
@@ -201,7 +201,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return "en-US"
         if "-" in language:
             return language
-        bare_to_bcp47 = {
+        bare_to_bcp47: Final = {
             "en": "en-US",
             "es": "es-ES",
             "de": "de-DE",
@@ -239,13 +239,13 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         only ``result.is_final`` entries (empty/non-final chunks are
         ignored).
         """
-        full_transcript = "".join((item.get("transcript") or "") for item in final_results).strip()
+        full_transcript: Final = "".join((item.get("transcript") or "") for item in final_results).strip()
 
-        response = TranscriptionResponse(text=full_transcript)
+        response: Final = TranscriptionResponse(text=full_transcript)
         response["task"] = "transcribe"
 
         if response_format == "verbose_json":
-            words: list[dict[str, Any]] = []
+            words: Final[list[dict[str, Any]]] = []
             if timestamp_granularities and "word" in timestamp_granularities:
                 for item in final_results:
                     for word in item.get("words", []) or []:

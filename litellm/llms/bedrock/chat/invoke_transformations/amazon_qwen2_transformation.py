@@ -7,7 +7,7 @@ The main difference is in the response format: Qwen2 uses "text" field while Qwe
 Qwen2 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -19,6 +19,9 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class AmazonQwen2Config(AmazonQwen3Config):
@@ -41,7 +44,7 @@ class AmazonQwen2Config(AmazonQwen3Config):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -51,7 +54,7 @@ class AmazonQwen2Config(AmazonQwen3Config):
         Qwen2 uses "text" field, but we also support "generation" field for compatibility.
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
 
             # Extract the generated text - Qwen2 uses "text" field, but also support "generation" for compatibility
             generated_text = response_data.get("generation", "") or response_data.get("text", "")
@@ -62,13 +65,13 @@ class AmazonQwen2Config(AmazonQwen3Config):
 
             # Set the content in the existing model_response structure
             if hasattr(model_response, "choices") and len(model_response.choices) > 0:
-                choice = model_response.choices[0]
+                choice: Final = model_response.choices[0]
                 choice.message.content = generated_text
                 choice.finish_reason = "stop"
 
             # Set usage information if available in response
             if "usage" in response_data:
-                usage_data = response_data["usage"]
+                usage_data: Final = response_data["usage"]
                 setattr(
                     model_response,
                     "usage",

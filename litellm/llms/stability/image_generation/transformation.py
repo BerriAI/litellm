@@ -6,7 +6,7 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -26,6 +26,8 @@ from litellm.types.llms.stability import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -71,7 +73,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         - size -> aspect_ratio
         - n -> (handled separately, Stability returns 1 image per request)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for k, v in non_default_params.items():
             if k not in optional_params:
@@ -129,7 +131,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         base_url: str = api_base or get_secret_str("STABILITY_API_BASE") or self.DEFAULT_BASE_URL
         base_url = base_url.rstrip("/")
 
-        endpoint = self._get_model_endpoint(model)
+        endpoint: Final = self._get_model_endpoint(model)
         return f"{base_url}{endpoint}"
 
     def validate_environment(
@@ -145,7 +147,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         """
         Validate environment and set up headers for Stability AI.
         """
-        final_api_key: str | None = api_key or get_secret_str("STABILITY_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("STABILITY_API_KEY")
 
         if not final_api_key:
             raise ValueError(
@@ -171,7 +173,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         will handle the conversion from dict to form data.
         """
         # Build Stability request
-        stability_request: StabilityImageGenerationRequest = {
+        stability_request: Final[StabilityImageGenerationRequest] = {
             "prompt": prompt,
             "output_format": "png",  # Default to PNG
         }
@@ -192,7 +194,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
                 "strength",
                 "style_preset",
             ]:
-                stability_request[key] = value  # type: ignore
+                stability_request[key] = value
 
         return dict(stability_request)
 
@@ -205,7 +207,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -216,7 +218,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",
@@ -233,7 +235,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         # Check finish_reason
-        finish_reason = response_data.get("finish_reason", "")
+        finish_reason: Final = response_data.get("finish_reason", "")
         if finish_reason == "CONTENT_FILTERED":
             raise self.get_error_class(
                 error_message="Content was filtered by Stability AI safety systems",
@@ -245,7 +247,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         # Extract image from response
-        image_b64 = response_data.get("image")
+        image_b64: Final = response_data.get("image")
         if image_b64:
             model_response.data.append(
                 ImageObject(

@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -60,6 +60,9 @@ class BaseResponsesAPIConfig(ABC):
         Override in provider subclasses that support file_search without
         LiteLLM emulation (e.g. OpenAI, Azure OpenAI).
         """
+        return False
+
+    def supports_encrypted_agent_messages(self) -> bool:
         return False
 
     def sign_request(
@@ -265,7 +268,7 @@ class BaseResponsesAPIConfig(ABC):
         WebSocket path differs from their HTTP path (e.g. Azure uses
         /openai/v1/responses without api-version) should override this.
         """
-        http_url = self.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+        http_url: Final = self.get_complete_url(api_base=api_base, litellm_params=litellm_params)
         return http_url.replace("https://", "wss://").replace("http://", "ws://")
 
     def model_in_websocket_url(self) -> bool:
@@ -337,7 +340,7 @@ class BaseResponsesAPIConfig(ABC):
         """
         if not isinstance(input, list):
             return input
-        out: list[Any] = []
+        out: Final[list[Any]] = []
         for item in input:
             if isinstance(item, dict) and item.get("type") == "custom_tool_call":
                 out.append({k: v for k, v in item.items() if k != "namespace"})

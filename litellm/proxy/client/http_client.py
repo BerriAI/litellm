@@ -1,6 +1,7 @@
 """HTTP client for making requests to the LiteLLM proxy server."""
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Final
 
 import requests
 
@@ -25,8 +26,8 @@ class HTTPClient:
         method: str,
         uri: str,
         *,
-        data: dict[str, Any] | list | bytes | None = None,
-        json: dict[str, Any] | list | None = None,
+        data: Mapping[str, object] | list | bytes | None = None,
+        json: Mapping[str, object] | list | None = None,
         headers: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> Any:
@@ -70,16 +71,16 @@ class HTTPClient:
              ...
         """
         # Build complete URL
-        url = f"{self._base_url}/{uri.lstrip('/')}"
+        url: Final = f"{self._base_url}/{uri.lstrip('/')}"
 
         # Prepare headers
-        request_headers = {}
+        request_headers: Final = {}
         if headers:
             request_headers.update(headers)
         if self._api_key:
             request_headers["Authorization"] = f"Bearer {self._api_key}"
 
-        response = requests.request(
+        response: Final = requests.request(
             method=method,
             url=url,
             data=data,
