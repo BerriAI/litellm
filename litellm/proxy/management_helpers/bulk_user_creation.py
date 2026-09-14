@@ -348,7 +348,7 @@ async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _Pre
         )
         return _PreparedUser(user, _USER_ROW.validate_python(with_permission))
     except Exception as exc:  # noqa: BLE001  # any preparation failure is reported on this row only
-        verbose_proxy_logger.warning("/user/bulk_new: could not prepare user %s - %s", user.user_id, exc)
+        verbose_proxy_logger.warning("/user/bulk_new: could not prepare row %d - %s", user.index, type(exc).__name__)
         return _RowFailure(user.index, user.user_id, user.request.user_email, _error_message(exc))
 
 
@@ -560,7 +560,7 @@ async def _write_team_roster(
             failed=MappingProxyType({}),
         )
     except Exception as exc:  # noqa: BLE001  # the team write failure is reported on each affected row
-        verbose_proxy_logger.exception("/user/bulk_new: failed to add members to team %s - %s", team.team_id, exc)
+        verbose_proxy_logger.exception("/user/bulk_new: failed to add %d members to a team", len(members))
         message: Final = f"Failed to add user to team {team.team_id}: {_error_message(exc)}"
         return _TeamWrite(
             team_id=team.team_id,
