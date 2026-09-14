@@ -1,5 +1,6 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping, MutableMapping
+from contextlib import contextmanager
 from typing import Final
 
 PROVIDER_AFFINITY_REDACTED_VALUE: Final = "[REDACTED]"
@@ -109,3 +110,33 @@ def redact_provider_affinity_header(  # mutable-ok: logging callbacks may enrich
         key: PROVIDER_AFFINITY_REDACTED_VALUE if key.lower() == header_name.lower() else value
         for key, value in headers.items()
     }
+
+
+@contextmanager
+def temporarily_redact_provider_affinity_header(
+    headers: object, litellm_params: object | None
+) -> Generator[None, None, None]:
+    header_name: Final = _get_provider_affinity_header_name(litellm_params)
+    if header_name is None or not isinstance(headers, MutableMapping):
+        yield
+        return
+
+    matching_key: Final = next(
+        (key for key in headers if isinstance(key, str) and key.lower() == header_name.lower()),
+        None,
+    )
+    if matching_key is None:
+        yield
+        return
+
+    original_value: Final = headers[matching_key]
+    headers[matching_key] = PROVIDER_AFFINITY_REDACTED_VALUE
+    try:
+        yield
+    finally:
+        current_key: Final = next(
+            (key for key in headers if isinstance(key, str) and key.lower() == header_name.lower()),
+            None,
+        )
+        if current_key is not None and headers[current_key] == PROVIDER_AFFINITY_REDACTED_VALUE:
+            headers[current_key] = original_value

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.provider_affinity import (
     PROVIDER_AFFINITY_REDACTED_VALUE,
@@ -176,3 +177,43 @@ def test_pre_call_redacts_provider_affinity_header_from_all_logs_without_mutatin
     assert "session-extra-header" not in logging.model_call_details["litellm_params"]["metadata"]["raw_request"]
     assert additional_args["headers"]["X-Conversation-Id"] == "session-header"
     assert additional_args["complete_input_dict"]["extra_headers"]["x-conversation-id"] == "session-extra-header"
+
+
+def test_pre_call_callback_redacts_affinity_and_preserves_header_mutations():
+    observed_affinity_values = []
+
+    class EditHeaders(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            headers = kwargs["additional_args"]["headers"]
+            observed_affinity_values.append(headers["X-Conversation-Id"])
+            headers["X-Customer-Header"] = "edited"
+
+    logging = Logging(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="call-123",
+        function_id="function-123",
+        dynamic_input_callbacks=[EditHeaders()],
+    )
+    logging.model_call_details["litellm_params"]["provider_affinity_header"] = "X-Conversation-Id"
+    additional_args = {
+        "headers": {
+            "X-Conversation-Id": "session-header",
+            "X-Customer-Header": "original",
+        }
+    }
+
+    logging.pre_call(input="hello", api_key="test-key", additional_args=additional_args)
+
+    assert observed_affinity_values == [PROVIDER_AFFINITY_REDACTED_VALUE]
+    assert additional_args["headers"] == {
+        "X-Conversation-Id": "session-header",
+        "X-Customer-Header": "edited",
+    }
+    assert logging.model_call_details["additional_args"]["headers"] == {
+        "X-Conversation-Id": PROVIDER_AFFINITY_REDACTED_VALUE,
+        "X-Customer-Header": "edited",
+    }

@@ -90,7 +90,10 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
-from litellm.litellm_core_utils.provider_affinity import redact_provider_affinity_header
+from litellm.litellm_core_utils.provider_affinity import (
+    redact_provider_affinity_header,
+    temporarily_redact_provider_affinity_header,
+)
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -1225,18 +1228,19 @@ class Logging(LiteLLMLoggingBaseClass):
     def _get_masked_api_base(self, api_base: str) -> str:
         return str(mask_api_base_credentials(api_base))
 
-    def _pre_call(self, input, api_key, model=None, additional_args={}):
-        """
-        Common helper function across the sync + async pre-call function
-        """
-
+    def _provider_affinity_logged_additional_args(  # mutable-ok: logging callbacks require a mutable payload
+        self, additional_args: dict[str, object]
+    ) -> dict[str, object]:
         litellm_params: Final = self.model_call_details.get("litellm_params")
+        if not isinstance(litellm_params, Mapping) or litellm_params.get("provider_affinity_header") is None:
+            return additional_args
+
         request_headers: Final = additional_args.get("headers")
         complete_input_dict: Final = additional_args.get("complete_input_dict")
         should_redact_headers: Final = isinstance(request_headers, Mapping) or (
             isinstance(complete_input_dict, Mapping) and isinstance(complete_input_dict.get("extra_headers"), Mapping)
         )
-        logged_additional_args: Final = (
+        return (
             {  # mutable-ok: logging callbacks expect a mutable payload copy
                 **additional_args,
                 **(
@@ -1265,9 +1269,14 @@ class Logging(LiteLLMLoggingBaseClass):
             else additional_args
         )
 
+    def _pre_call(self, input, api_key, model=None, additional_args={}):
+        """
+        Common helper function across the sync + async pre-call function
+        """
+
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
-        self.model_call_details["additional_args"] = logged_additional_args
+        self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
         if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
             self.classifier_input = (
@@ -1297,7 +1306,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=model,
                 additional_args=additional_args,
             )
-            logged_additional_args: Final[dict] = self.model_call_details["additional_args"]
+            callback_additional_args: Final[dict[str, object]] = (  # mutable-ok: callbacks mutate request data
+                self.model_call_details["additional_args"]
+            )
+            logged_additional_args: Final[dict[str, object]] = (  # mutable-ok: logger_fn may enrich its payload
+                self._provider_affinity_logged_additional_args(callback_additional_args)
+            )
 
             # User Logging -> if you pass in a custom logging function
             self._print_llm_call_debugging_log(
@@ -1349,9 +1363,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
-                    self.logger_fn(
-                        self.model_call_details
-                    )  # Expectation: any logger function passed in by the user should accept a dict object
+                    logger_model_call_details: Final = (
+                        {  # mutable-ok: logger_fn receives a redacted payload without replacing callback state
+                            **self.model_call_details,
+                            "additional_args": logged_additional_args,
+                        }
+                        if logged_additional_args is not callback_additional_args
+                        else self.model_call_details
+                    )
+                    self.logger_fn(logger_model_call_details)
                 except Exception as e:
                     verbose_logger.exception(
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
@@ -1359,59 +1379,74 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.record_api_call_start_time()
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
-            callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
-            for callback in callbacks:
-                try:
-                    if callback == "supabase" and supabaseClient is not None:
-                        verbose_logger.debug("reaches supabase for logging!")
-                        model = self.model_call_details["model"]
-                        messages = self.model_call_details["input"]
-                        verbose_logger.debug("supabaseClient: %s", supabaseClient)
-                        supabaseClient.input_log_event(
-                            model=model,
-                            messages=messages,
-                            end_user=self.model_call_details.get("user", "default"),
-                            litellm_call_id=self.litellm_params["litellm_call_id"],
-                            print_verbose=print_verbose,
-                        )
-                    elif callback == "sentry" and add_breadcrumb:
-                        try:
-                            details_to_log = copy.deepcopy(self.model_call_details)
-                        except Exception:
-                            details_to_log = self.model_call_details
-                        if litellm.turn_off_message_logging:
-                            # make a copy of the _model_Call_details and log it
-                            details_to_log.pop("messages", None)
-                            details_to_log.pop("input", None)
-                            details_to_log.pop("prompt", None)
+            callback_headers: Final = callback_additional_args.get("headers")
+            callback_complete_input_dict: Final = callback_additional_args.get("complete_input_dict")
+            callback_extra_headers: Final = (
+                callback_complete_input_dict.get("extra_headers")
+                if isinstance(callback_complete_input_dict, Mapping)
+                else None
+            )
+            litellm_params: Final = self.model_call_details.get("litellm_params")
+            with (
+                temporarily_redact_provider_affinity_header(callback_headers, litellm_params),
+                temporarily_redact_provider_affinity_header(callback_extra_headers, litellm_params),
+            ):
+                callbacks: Final = litellm.input_callback + (self.dynamic_input_callbacks or [])
+                for callback in callbacks:
+                    try:
+                        if callback == "supabase" and supabaseClient is not None:
+                            verbose_logger.debug("reaches supabase for logging!")
+                            model = self.model_call_details["model"]
+                            messages = self.model_call_details["input"]
+                            verbose_logger.debug("supabaseClient: %s", supabaseClient)
+                            supabaseClient.input_log_event(
+                                model=model,
+                                messages=messages,
+                                end_user=self.model_call_details.get("user", "default"),
+                                litellm_call_id=self.litellm_params["litellm_call_id"],
+                                print_verbose=print_verbose,
+                            )
+                        elif callback == "sentry" and add_breadcrumb:
+                            try:
+                                details_to_log = copy.deepcopy(self.model_call_details)
+                            except Exception:
+                                details_to_log = self.model_call_details
+                            if litellm.turn_off_message_logging:
+                                # make a copy of the _model_Call_details and log it
+                                details_to_log.pop("messages", None)
+                                details_to_log.pop("input", None)
+                                details_to_log.pop("prompt", None)
 
-                        add_breadcrumb(
-                            category="litellm.llm_call",
-                            message=f"Model Call Details pre-call: {details_to_log}",
-                            level="info",
-                        )
+                            add_breadcrumb(
+                                category="litellm.llm_call",
+                                message=f"Model Call Details pre-call: {details_to_log}",
+                                level="info",
+                            )
 
-                    elif isinstance(callback, CustomLogger):  # custom logger class
-                        callback.log_pre_api_call(
-                            model=self.model,
-                            messages=self.messages,
-                            kwargs=self.model_call_details,
+                        elif isinstance(callback, CustomLogger):  # custom logger class
+                            callback.log_pre_api_call(
+                                model=self.model,
+                                messages=self.messages,
+                                kwargs=self.model_call_details,
+                            )
+                        elif callable(callback) and customLogger is not None:  # custom logger functions
+                            customLogger.log_input_event(
+                                model=self.model,
+                                messages=self.messages,
+                                kwargs=self.model_call_details,
+                                print_verbose=print_verbose,
+                                callback_func=callback,
+                            )
+                    except Exception as e:
+                        verbose_logger.exception("litellm.Logging.pre_call(): Exception occured - %s", e)
+                        verbose_logger.debug(
+                            "LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception
                         )
-                    elif callable(callback) and customLogger is not None:  # custom logger functions
-                        customLogger.log_input_event(
-                            model=self.model,
-                            messages=self.messages,
-                            kwargs=self.model_call_details,
-                            print_verbose=print_verbose,
-                            callback_func=callback,
-                        )
-                except Exception as e:
-                    verbose_logger.exception("litellm.Logging.pre_call(): Exception occured - %s", e)
-                    verbose_logger.debug(
-                        "LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception
-                    )
-                    if capture_exception:  # log this error to sentry for debugging
-                        capture_exception(e)
+                        if capture_exception:  # log this error to sentry for debugging
+                            capture_exception(e)
+            self.model_call_details["additional_args"] = self._provider_affinity_logged_additional_args(
+                callback_additional_args
+            )
         except Exception as e:
             verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
             verbose_logger.error("LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception)
