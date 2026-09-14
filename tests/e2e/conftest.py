@@ -65,6 +65,9 @@ def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
+        "markers", "migration_startup: isolated container startup tests run by the migration CI workflow"
+    )
+    config.addinivalue_line(
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",
     )
@@ -123,6 +126,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     traffic only after the latency-sensitive suites have finished."""
     for item in items:
         attach_result_properties(item)
+    if os.environ.get("LITELLM_MIGRATION_TESTS") != "1":
+        deselected = [item for item in items if item.get_closest_marker("migration_startup") is not None]
+        items[:] = [item for item in items if item.get_closest_marker("migration_startup") is None]
+        if deselected:
+            deselected[0].config.hook.pytest_deselected(items=deselected)
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
 
 
@@ -155,7 +163,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     Unmarked tests (unit coverage of the harness) don't touch the proxy, so they
     run even when none is up. Never skip for a missing proxy. Replay mode needs
     the proxy too: only provider-bound traffic replays from the bundle."""
-    if item.get_closest_marker("e2e") is None:
+    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
         return
     reason = _proxy_fail_reason()
     if reason is not None:
@@ -168,7 +176,7 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
     `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
     so they must not arm the destructive DB truncate."""
-    if item.get_closest_marker("e2e") is None:
+    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
         return
     item.session.stash[_E2E_TEST_RAN] = True
 

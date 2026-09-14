@@ -1,10 +1,33 @@
 version: 2.1
+parameters:
+  run_migration_tests:
+    type: boolean
+    default: false
+  migration_candidate_image:
+    type: string
+    default: ""
+  migration_source_sha:
+    type: string
+    default: ""
 orbs:
   codecov: codecov/codecov@4.0.1
   node: circleci/node@5.1.0 # Add this line to declare the node orb
   win: circleci/windows@5.0 # Add Windows orb
 
 commands:
+  checkout_migration_source:
+    steps:
+      - run:
+          name: Select the requested migration test revision
+          environment:
+            MIGRATION_SOURCE_SHA: << pipeline.parameters.migration_source_sha >>
+          command: |
+            revision="${MIGRATION_SOURCE_SHA:-$CIRCLE_SHA1}"
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            git init
+            git remote add origin https://github.com/BerriAI/litellm.git
+            git fetch --depth 1 origin "$revision"
+            git checkout --detach FETCH_HEAD
   skip_if_unrelated_changes:
     parameters:
       category:
@@ -2845,20 +2868,41 @@ jobs:
           destination: e2e-server-root-path-playwright-report
 
   build_docker_database_image:
+    parameters:
+      migration_qualification:
+        type: boolean
+        default: false
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
     steps:
-      - checkout
-      - skip_if_unrelated_changes
+      - when:
+          condition: << parameters.migration_qualification >>
+          steps:
+            - checkout_migration_source
+      - unless:
+          condition: << parameters.migration_qualification >>
+          steps:
+            - checkout
+            - skip_if_unrelated_changes
 
       - run:
           name: Build Docker image
+          environment:
+            MIGRATION_CANDIDATE_IMAGE: << pipeline.parameters.migration_candidate_image >>
           command: |
-            docker build \
-              -t litellm-docker-database:ci \
-              -f docker/Dockerfile.database .
+            if [ -n "$MIGRATION_CANDIDATE_IMAGE" ]; then
+              [[ "$MIGRATION_CANDIDATE_IMAGE" =~ ^ghcr.io/berriai/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || exit 1
+              docker pull "$MIGRATION_CANDIDATE_IMAGE"
+              docker tag "$MIGRATION_CANDIDATE_IMAGE" litellm-docker-database:ci
+            else
+              docker build \
+                --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
+                -t litellm-docker-database:ci \
+                -f docker/Dockerfile.database .
+            fi
+            python3 .circleci/scripts/run_migration_tests.py record-image
 
       - run:
           name: Save Docker image to workspace root
@@ -2869,6 +2913,78 @@ jobs:
           root: .
           paths:
             - litellm-docker-database.tar.zst
+            - migration-image.json
+
+  migration_startup_tests:
+    parameters:
+      suite:
+        type: enum
+        enum: [startup, recovery, legacy]
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      LITELLM_MIGRATION_TESTS: "1"
+      LITELLM_MIGRATION_TEST_IMAGE: litellm-docker-database:ci
+      MIGRATION_TEST_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      MIGRATION_TEST_CONTAINER_ADMIN_URL: postgresql://postgres:postgres@host.docker.internal:5432/postgres
+      MIGRATION_TEST_OUTPUT: /tmp/migration-results
+      PYTHONPATH: tests/e2e
+    steps:
+      - checkout_migration_source
+      - install_uv
+      - install_rust
+      - restore_cache:
+          keys:
+            - v1-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Install test dependencies
+          command: uv sync --frozen --all-groups --all-extras --python 3.12
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load the shared candidate and start PostgreSQL
+          command: |
+            zstd -d litellm-docker-database.tar.zst --stdout | docker load
+            docker run -d --name migration-postgres \
+              -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+              -p 5432:5432 \
+              postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Run migration startup regressions
+          environment:
+            MIGRATION_TEST_SUITE: << parameters.suite >>
+            MIGRATION_CANDIDATE_IMAGE: << pipeline.parameters.migration_candidate_image >>
+          command: |
+            mkdir -p /tmp/migration-results
+            uv run --no-sync python .circleci/scripts/run_migration_tests.py
+          no_output_timeout: 15m
+      - store_test_results:
+          path: /tmp/migration-results/junit
+      - run:
+          name: Package migration diagnostics
+          when: always
+          command: |
+            mkdir -p /tmp/migration-artifacts
+            if [ -d /tmp/migration-results ]; then
+              tar -czf /tmp/migration-artifacts/diagnostics.tar.gz -C /tmp/migration-results .
+              if [ -f /tmp/migration-results/verdict.json ]; then
+                cp /tmp/migration-results/verdict.json /tmp/migration-artifacts/verdict.json
+              fi
+            fi
+      - store_artifacts:
+          path: /tmp/migration-artifacts
+          destination: migration-results
+      - run:
+          name: Remove migration test containers
+          when: always
+          command: |
+            docker ps -aq --filter label=litellm-migration-test=true | xargs -r docker rm -f
+            docker rm -f migration-postgres || true
 
   test_bad_database_url:
     machine:
@@ -2913,7 +3029,33 @@ jobs:
             fi
 
 workflows:
+  migration_startup:
+    when: << pipeline.parameters.run_migration_tests >>
+    jobs: &migration_jobs
+      - build_docker_database_image:
+          migration_qualification: true
+      - migration_startup_tests:
+          name: migration-startup
+          suite: startup
+          requires: [build_docker_database_image]
+      - migration_startup_tests:
+          name: migration-recovery
+          suite: recovery
+          requires: [build_docker_database_image]
+      - migration_startup_tests:
+          name: migration-legacy-and-pooling
+          suite: legacy
+          requires: [build_docker_database_image]
+  migration_startup_scheduled:
+    triggers:
+      - schedule:
+          cron: "17 0,6,12,18 * * *"
+          filters:
+            branches:
+              only: litellm_internal_staging
+    jobs: *migration_jobs
   build_and_test:
+    unless: << pipeline.parameters.run_migration_tests >>
     jobs:
       - using_litellm_on_windows:
           filters: &main_branches

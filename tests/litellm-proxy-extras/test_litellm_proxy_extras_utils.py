@@ -728,12 +728,36 @@ ERROR: relation "SomeTable" already exists
 """
 
 
+@pytest.mark.parametrize(
+    "pooled,direct,expected",
+    (
+        ("postgresql://pool/db?pgbouncer=true", None, "postgresql://pool/db?pgbouncer=true"),
+        ("postgresql://pool/db?pgbouncer=true", "postgresql://writer/db", "postgresql://writer/db?schema=public"),
+        (
+            "postgresql://pool/db?schema=tenant%20one&pgbouncer=true",
+            "postgresql://writer/db?sslmode=require&schema=wrong",
+            "postgresql://writer/db?sslmode=require&schema=tenant+one",
+        ),
+    ),
+)
+def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(pooled, direct, expected):
+    from litellm_proxy_extras.migration_lock import migration_environment
+
+    environment = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
+    configured = {**environment, **({"DIRECT_URL": direct} if direct else {})}
+    migrated = migration_environment(configured)
+
+    assert migrated["DATABASE_URL"] == expected
+    assert migrated["PRISMA_OFFLINE_MODE"] == "true"
+    assert configured["DATABASE_URL"] == pooled
+
+
 class _MigrateDeployHarness:
     """Drives _setup_database_v2 with a scripted sequence of
     `prisma migrate deploy` outcomes, with every recovery command faked out so
     nothing touches a database or the packaged migrations directory."""
 
-    def __init__(self, monkeypatch, tmp_path, outcomes, repeat_last=False):
+    def __init__(self, monkeypatch, tmp_path, outcomes, repeat_last=False, confirmed_migrations=()):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
@@ -744,34 +768,20 @@ class _MigrateDeployHarness:
         self._outcomes = list(outcomes)
         self._repeat_last = repeat_last
         self._subprocess_module = subprocess_module
+        self.confirmed_migrations = set(confirmed_migrations)
 
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.setattr(
-            ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path))
-        )
-        monkeypatch.setattr(
-            ProxyExtrasDBManager,
-            "_create_baseline_migration",
-            staticmethod(self._fake_baseline),
-        )
-        monkeypatch.setattr(
-            ProxyExtrasDBManager,
-            "_roll_back_migration",
-            staticmethod(lambda name: None),
-        )
-        monkeypatch.setattr(
-            ProxyExtrasDBManager,
-            "_resolve_specific_migration",
-            staticmethod(self.resolved.append),
-        )
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
+        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
         monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
 
         self.baseline_succeeds = True
 
     def _fake_baseline(self, *args, **kwargs):
         self.baselines += 1
-        return self.baseline_succeeds
+        if not self.baseline_succeeds:
+            raise RuntimeError("The existing schema was not verified")
 
     def _next_outcome(self):
         if self._outcomes:
@@ -791,79 +801,126 @@ class _MigrateDeployHarness:
         raise self._subprocess_module.CalledProcessError(1, cmd, stderr=outcome)
 
     def run(self):
-        return ProxyExtrasDBManager._setup_database_v2(use_migrate=True)
+        while not ProxyExtrasDBManager._run_database_v2(
+            use_migrate=True,
+            recover_completed=self._fake_recovery,
+            baseline_existing=self._fake_baseline,
+        ):
+            continue
+        return True
+
+    def _fake_recovery(self, name):
+        if name not in self.confirmed_migrations:
+            return False
+        self.confirmed_migrations.remove(name)
+        self.resolved.append(name)
+        return True
 
 
 class TestMigrateDeployAttemptAccounting:
-    """A `prisma db push` database has a full schema and no ledger, so the v2
-    resolver baselines it and then works through every migration whose objects
-    already exist. Those recoveries make progress, so they must not spend the
-    retry budget, which is there to stop a run that is getting nowhere."""
-
-    def test_a_push_created_database_finishes_bootstrapping(
-        self, monkeypatch, tmp_path
-    ):
-        already_there = [
-            "20250329084805_new_cron_job_table",
-            "20250806095134_rename_alias_to_server_name_mcp_table",
-            "20260224203854_add_agent_object_permissions_table",
-            "20260301120000_fourth_table",
-            "20260302120000_fifth_table",
-            "20260303120000_sixth_table",
-        ]
+    def test_a_push_created_database_finishes_bootstrapping(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
-            [_P3005_STDERR]
-            + [_p3018_stderr(name) for name in already_there]
-            + ["ok"],
+            [_P3005_STDERR, "ok"],
         )
 
         assert harness.run() is True
         assert harness.baselines == 1
-        assert harness.resolved == already_there
-        assert len(harness.deploy_calls) == len(already_there) + 2
+        assert harness.resolved == []
+        assert len(harness.deploy_calls) == 2
 
-    def test_repeated_recovery_of_one_migration_still_gives_up(
-        self, monkeypatch, tmp_path
-    ):
+    def test_repeated_recovery_of_one_migration_still_gives_up(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
             [_p3018_stderr("20250329084805_new_cron_job_table")],
             repeat_last=True,
+            confirmed_migrations=("20250329084805_new_cron_job_table",),
         )
 
         with pytest.raises(RuntimeError):
             harness.run()
-        assert len(harness.deploy_calls) <= _ATTEMPT_BUDGET + 1
+        assert len(harness.deploy_calls) == 2
+        assert harness.resolved == ["20250329084805_new_cron_job_table"]
 
     def test_timeouts_still_spend_the_budget(self, monkeypatch, tmp_path):
-        harness = _MigrateDeployHarness(
-            monkeypatch, tmp_path, ["timeout"], repeat_last=True
-        )
+        harness = _MigrateDeployHarness(monkeypatch, tmp_path, ["timeout"], repeat_last=True)
 
         with pytest.raises(RuntimeError):
             harness.run()
         assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
 
-    def test_a_baseline_that_never_lands_stops_after_the_budget(
-        self, monkeypatch, tmp_path
-    ):
-        harness = _MigrateDeployHarness(
-            monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True
-        )
+    def test_an_unverified_baseline_stops_without_replaying_migrations(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True)
         harness.baseline_succeeds = False
 
         with pytest.raises(RuntimeError):
             harness.run()
-        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+        assert len(harness.deploy_calls) == 1
+
+    def test_lock_contention_does_not_spend_the_failure_budget(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            ["Error: P1002\nTimed out waiting for the advisory lock"] * 6 + ["ok"],
+        )
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 7
+
+    def test_duplicate_object_error_without_completion_proof_is_fatal(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(monkeypatch, tmp_path, [_p3018_stderr("20260101000000_x")])
+        with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+            harness.run()
+        assert harness.resolved == []
+        assert len(harness.deploy_calls) == 1
+
+    @pytest.mark.parametrize("name", ("20260101000000_x", "20260101000000_migration with spaces"))
+    def test_an_interrupted_migration_with_confirmed_sql_can_finish(self, monkeypatch, tmp_path, name):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [f"Error: P3009\nThe `{name}` migration failed", "ok"],
+            confirmed_migrations=(name,),
+        )
+        assert harness.run() is True
+        assert harness.resolved == [name]
+
+    def test_an_interrupted_migration_without_confirmation_stops(self, monkeypatch, tmp_path):
+        name = "20260101000000_x"
+        started = "2026-09-12 20:15:06.694553 UTC"
+        report = f"Error: P3009\nThe `{name}` migration started at {started} failed"
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [report],
+        )
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified") as failure:
+            harness.run()
+        message = str(failure.value)
+        assert name in message
+        assert started in message
+        assert "start record but no successful completion record" in message
+        assert "cannot determine whether its SQL committed" in message
+        assert "avoid repeating or skipping database changes" in message
+        assert "_prisma_migrations" in message
+        assert "migration.sql" in message
+        assert "same database" in message
+        assert "Only after verifying every migration change is present" in message
+        assert "prisma migrate resolve --applied <migration_name>" in message
+        assert "Only after verifying no migration changes remain" in message
+        assert "prisma migrate resolve --rolled-back <migration_name>" in message
+        assert "leave migration history unchanged" in message
+        assert "Repeated restarts alone" in message
+        assert report in message
+        assert len(harness.deploy_calls) == 1
+        assert harness.resolved == []
 
     def test_an_unrecoverable_error_is_not_retried(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
-            ["Error: P3018\n\nMigration name: 20260101000000_x\n\nERROR: syntax error at or near \"SLECT\"\n"],
+            ['Error: P3018\n\nMigration name: 20260101000000_x\n\nERROR: syntax error at or near "SLECT"\n'],
             repeat_last=True,
         )
 
@@ -871,6 +928,36 @@ class TestMigrateDeployAttemptAccounting:
             harness.run()
         assert len(harness.deploy_calls) == 1
         assert harness.resolved == []
+
+
+@pytest.mark.parametrize(
+    "steps,logs,script,expected",
+    (
+        (1, "", b"CREATE TABLE item (id int);", True),
+        (0, "", b"CREATE TABLE item (id int);", False),
+        (0, "already exists", b"CREATE TABLE item (id int);", False),
+        (1, "permission denied", b"CREATE TABLE item (id int);", False),
+        (1, "", b"CREATE TABLE item (id text);", False),
+        (2, "", b"CREATE TABLE item (id int);", False),
+    ),
+)
+def test_migration_completion_requires_a_matching_successful_script(steps, logs, script, expected):
+    import hashlib
+
+    from litellm_proxy_extras.migration_recovery import MigrationProgress
+
+    progress = MigrationProgress(hashlib.sha256(b"CREATE TABLE item (id int);").hexdigest(), steps, logs)
+    assert progress.confirms_completion(script) is expected
+
+
+def test_prisma_lock_waiting_has_its_own_deadline():
+    from litellm_proxy_extras.utils import _MigrateAttemptBudget
+
+    budget = _MigrateAttemptBudget(attempts_left=4, contention_seconds_left=2)
+    waiting = budget.after_contention(1)
+    assert waiting.attempts_left == 4
+    with pytest.raises(RuntimeError, match="advisory lock"):
+        waiting.after_contention(2)
 
 
 class TestJWTKeyMappingCascade:

@@ -112,6 +112,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
     (
         (("tests/e2e/logging/test_datadog_e2e.py", "litellm/router.py"), ("tests/e2e/logging/test_datadog_e2e.py",)),
         (("tests/e2e/ui/test_keys.py", "tests/e2e/claude_code/test_cli.py", "tests/e2e/load/test_burst.py"), ()),
+        (("tests/e2e/migrations/test_startup.py", "tests/e2e/migrations/test_recovery.py"), ()),
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
@@ -155,6 +156,10 @@ def test_harness_changes_run_the_canary_suite(harness_file: str) -> None:
 
 def test_a_changed_canary_file_is_selected_once_alongside_a_harness_change() -> None:
     assert select_tests((CANARY[1], "tests/e2e/proxy_client.py")) == CANARY
+
+
+def test_dedicated_migration_tests_do_not_suppress_shared_harness_canaries() -> None:
+    assert select_tests(("tests/e2e/migrations/test_startup.py", "tests/e2e/conftest.py")) == CANARY
 
 
 def test_the_canary_joins_directly_selected_files_in_sorted_order() -> None:
