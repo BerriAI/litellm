@@ -1066,6 +1066,19 @@ async def _common_key_generation_helper(
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
 
+    # Checked after the defaults, because default_key_generate_params can supply
+    # team_id and the project's owner is checked against the key's final team.
+    if data.project_id is not None and prisma_client is not None:
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await _check_project_key_limits(
+            project_id=data.project_id,
+            data=data,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            key_team_id=data.team_id,
+        )
+
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
     is_ui_session_team_key = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID and _requested_team_id is not None
@@ -1553,11 +1566,8 @@ async def _check_project_key_limits(
     Validate that the key belongs to the project's team, and that its models
     and budget respect the project's limits.
 
-    - The project's owning team must be the key's team. A project is created
-      under exactly one team and its budget and models are that team's, so a
-      key on another team recorded under it charges a tenant that never granted
-      anything — and issuing one needs no proxy-admin rights, only the project
-      id (#41089). A project with no team belongs to nobody and is left alone.
+    - The project's owning team must be the key's team. A project with no team
+      has no owner to protect, so it is not restricted
     - Key models must be a subset of project models, except the all-team-models / all-proxy-models
       sentinels, which inherit a parent scope and are narrowed by the project at request time
     - Key max_budget must be <= project max_budget
@@ -1574,7 +1584,6 @@ async def _check_project_key_limits(
             detail={"error": f"Project not found, project_id={project_id}"},
         )
 
-    # Validate the project's team owns the key
     if project_obj.team_id is not None and project_obj.team_id != key_team_id:
         raise HTTPException(
             status_code=403,
@@ -1608,6 +1617,33 @@ async def _check_project_key_limits(
                 "error": f"Key max_budget ({data.max_budget}) exceeds project's max_budget ({project_max_budget}). Project: {project_id}"
             },
         )
+
+
+# Touching any of these can change the project a key is under, the team it is on, or what the project must allow.
+_PROJECT_LIMIT_FIELDS: Final = frozenset({"project_id", "team_id", "models", "max_budget"})
+
+
+async def _check_project_key_limits_on_mutation(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Run _check_project_key_limits against the key as the mutation leaves it."""
+    if not data.model_fields_set & _PROJECT_LIMIT_FIELDS:
+        return
+
+    project_id: Final = data.project_id if "project_id" in data.model_fields_set else existing_key_row.project_id
+    if project_id is None:
+        return
+
+    await _check_project_key_limits(
+        project_id=project_id,
+        data=data,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        key_team_id=(data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id),
+    )
 
 
 def check_org_key_model_specific_limits(
@@ -1931,16 +1967,6 @@ async def generate_key_fn(
                 team_table=team_table,
                 data=data,
                 prisma_client=prisma_client,
-            )
-
-        # Validate key against project limits if project_id is set
-        if data.project_id is not None:
-            await _check_project_key_limits(
-                project_id=data.project_id,
-                data=data,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                key_team_id=data.team_id,
             )
 
         return await _common_key_generation_helper(
@@ -2879,23 +2905,12 @@ async def _validate_update_key_data(
         access_group_ids=data.access_group_ids,
     )
 
-    # Validate key against project limits if project_id is being set
-    _project_id_to_check: Final = (
-        data.project_id if "project_id" in data.model_fields_set else existing_key_row.project_id
+    await _check_project_key_limits_on_mutation(
+        data=data,
+        existing_key_row=existing_key_row,
+        prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
     )
-    # Also when the project itself is being set or changed: that is exactly when
-    # the team that owns it has to be checked, and a request that moves only the
-    # project carries neither models nor max_budget (#41089).
-    if _project_id_to_check is not None and (
-        "project_id" in data.model_fields_set or data.models is not None or data.max_budget is not None
-    ):
-        await _check_project_key_limits(
-            project_id=_project_id_to_check,
-            data=data,
-            prisma_client=checked_prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            key_team_id=(data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id),
-        )
 
     # When the caller asks to change the key's organization_id, require that
     # they are a member of (or a proxy admin over) the target organization.
@@ -5154,6 +5169,12 @@ async def _execute_virtual_key_regeneration(
     if data is not None:
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
+        await _check_project_key_limits_on_mutation(
+            data=data,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
         non_default_values = await prepare_key_update_data(data=data, existing_key_row=key_in_db)
         # Only validate key_alias format if it's actually being changed
         new_key_alias: Final = non_default_values.get("key_alias")

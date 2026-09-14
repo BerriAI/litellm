@@ -18297,3 +18297,321 @@ async def test_key_creator_cannot_detach_project_without_admin_access():
         )
     assert exc.value.status_code == 403
     assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)
+
+
+# --- Tests: a project may only be attached to keys of the team that owns it ---
+
+
+def _make_owned_project(team_id, models=None, project_id="proj-owned-1"):
+    return LiteLLM_ProjectTableCachedObj(
+        project_id=project_id,
+        team_id=team_id,
+        models=models or [],
+    )
+
+
+async def _check_project_limits_with(project, data, key_team_id):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_project_key_limits,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+        new_callable=AsyncMock,
+        return_value=project,
+    ):
+        await _check_project_key_limits(
+            project_id=project.project_id,
+            data=data,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            key_team_id=key_team_id,
+        )
+
+
+async def _check_project_limits_on_mutation_with(project, data, existing_key_row):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_project_key_limits_on_mutation,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+        new_callable=AsyncMock,
+        return_value=project,
+    ):
+        await _check_project_key_limits_on_mutation(
+            data=data,
+            existing_key_row=existing_key_row,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_key_may_not_point_at_another_teams_project():
+    with pytest.raises(HTTPException) as exc:
+        await _check_project_limits_with(
+            _make_owned_project(team_id="team-b"),
+            GenerateKeyRequest(team_id="team-a"),
+            key_team_id="team-a",
+        )
+    assert exc.value.status_code == 403
+    detail = str(exc.value.detail)
+    assert "team-b" in detail and "team-a" in detail
+
+
+@pytest.mark.asyncio
+async def test_a_key_with_no_team_may_not_point_at_a_teams_project():
+    with pytest.raises(HTTPException) as exc:
+        await _check_project_limits_with(
+            _make_owned_project(team_id="team-b"),
+            GenerateKeyRequest(),
+            key_team_id=None,
+        )
+    assert exc.value.status_code == 403
+    assert "no team" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_key_on_the_owning_team_is_accepted():
+    await _check_project_limits_with(
+        _make_owned_project(team_id="team-a", models=["gpt-4o"]),
+        GenerateKeyRequest(team_id="team-a", models=["gpt-4o"]),
+        key_team_id="team-a",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_project_with_no_team_is_not_restricted():
+    await _check_project_limits_with(
+        _make_owned_project(team_id=None),
+        GenerateKeyRequest(team_id="team-a"),
+        key_team_id="team-a",
+    )
+    await _check_project_limits_with(
+        _make_owned_project(team_id=None),
+        GenerateKeyRequest(),
+        key_team_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_project_is_refused_as_foreign_not_as_a_model_problem():
+    with pytest.raises(HTTPException) as exc:
+        await _check_project_limits_with(
+            _make_owned_project(team_id="team-b", models=["gpt-4o-mini"]),
+            GenerateKeyRequest(team_id="team-a", models=["gpt-4o"]),
+            key_team_id="team-a",
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_an_update_that_moves_only_the_project_uses_the_keys_stored_team():
+    existing: Final = LiteLLM_VerificationToken(token="sk-hash", team_id="team-a")
+    with pytest.raises(HTTPException) as exc:
+        await _check_project_limits_on_mutation_with(
+            _make_owned_project(team_id="team-b"),
+            UpdateKeyRequest(key="sk-x", project_id="proj-owned-1"),
+            existing,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_an_update_that_moves_only_the_team_still_checks_the_attached_project():
+    existing: Final = LiteLLM_VerificationToken(
+        token="sk-hash", team_id="team-b", project_id="proj-owned-1"
+    )
+    with pytest.raises(HTTPException) as exc:
+        await _check_project_limits_on_mutation_with(
+            _make_owned_project(team_id="team-b"),
+            UpdateKeyRequest(key="sk-x", team_id="team-a"),
+            existing,
+        )
+    assert exc.value.status_code == 403
+    assert "team-a" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_an_update_that_moves_the_key_to_the_projects_own_team_is_accepted():
+    existing: Final = LiteLLM_VerificationToken(
+        token="sk-hash", team_id=None, project_id="proj-owned-1"
+    )
+    await _check_project_limits_on_mutation_with(
+        _make_owned_project(team_id="team-b"),
+        UpdateKeyRequest(key="sk-x", team_id="team-b"),
+        existing,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_update_that_touches_neither_does_not_look_the_project_up():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _check_project_key_limits_on_mutation,
+    )
+
+    existing: Final = LiteLLM_VerificationToken(
+        token="sk-hash", team_id="team-a", project_id="proj-owned-1"
+    )
+    lookup: Final = AsyncMock(return_value=_make_owned_project(team_id="team-b"))
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+        new=lookup,
+    ):
+        await _check_project_key_limits_on_mutation(
+            data=UpdateKeyRequest(key="sk-x", key_alias="renamed"),
+            existing_key_row=existing,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+        )
+    assert lookup.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_regenerate_may_not_attach_another_teams_project():
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    existing_key: Final = LiteLLM_VerificationToken(token="abc123", team_id="team-a")
+    mock_prisma_client: Final = _make_regenerate_mock_prisma()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+            new_callable=AsyncMock,
+            return_value=_make_owned_project(team_id="team-b"),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _execute_virtual_key_regeneration(
+                prisma_client=mock_prisma_client,
+                key_in_db=existing_key,
+                hashed_api_key="abc123",
+                key="abc123",
+                data=RegenerateKeyRequest(project_id="proj-owned-1"),
+                user_api_key_dict=_make_regenerate_user_api_key_dict(),
+                litellm_changed_by=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+            )
+
+    assert exc_info.value.status_code == 403
+    # A refused regenerate must not reach the DB update.
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_regenerate_may_attach_a_project_of_the_keys_own_team():
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    existing_key: Final = LiteLLM_VerificationToken(token="abc123", team_id="team-b")
+    mock_prisma_client: Final = _make_regenerate_mock_prisma()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+            new_callable=AsyncMock,
+            return_value=_make_owned_project(team_id="team-b"),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(project_id="proj-owned-1"),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+def _make_generate_mock_prisma():
+    """Mock prisma client shaped for _common_key_generation_helper."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    return mock_prisma_client
+
+
+async def _generate_key_with_defaulted_team(monkeypatch, project_team_id):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", _make_generate_mock_prisma()
+    )
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"team_id": "team-b"})
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
+        new_callable=AsyncMock,
+        return_value=_make_owned_project(team_id=project_team_id),
+    ):
+        return await _common_key_generation_helper(
+            data=GenerateKeyRequest(project_id="proj-owned-1"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_team_supplied_by_defaults_is_what_the_project_is_checked_against(monkeypatch):
+    # default_key_generate_params fills team_id after the request is parsed, so a
+    # request with no team_id still ends up on team-b and may use its projects.
+    await _generate_key_with_defaulted_team(monkeypatch, project_team_id="team-b")
+
+
+@pytest.mark.asyncio
+async def test_a_team_supplied_by_defaults_does_not_open_another_teams_project(monkeypatch):
+    with pytest.raises(HTTPException) as exc:
+        await _generate_key_with_defaulted_team(monkeypatch, project_team_id="team-c")
+    assert exc.value.status_code == 403
