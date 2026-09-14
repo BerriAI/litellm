@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+from importlib.metadata import version
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Final
 
 import pytest
+import httpx
+from redis import Redis
 
-from integration._support.client import Gateway, gateway_from_environment
+from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.manifest import OWNED_DIRECTORIES, contracts
+from integration._support.generation import LIFECYCLE_SETTINGS
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
@@ -66,7 +70,17 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     output: Final = Path(destination)
     output.mkdir(parents=True, exist_ok=True)
     (output / "execution.json").write_text(
-        json.dumps({"collected": collected, "passed": passed, "complete": complete, "exitstatus": exitstatus}, indent=2)
+        json.dumps({
+            "collected": collected, "passed": passed, "complete": complete, "exitstatus": exitstatus,
+            "hypothesis_version": version("hypothesis"),
+            "hypothesis_seed": session.config.getoption("hypothesis_seed"),
+            "generation": {
+                "max_examples": LIFECYCLE_SETTINGS.max_examples,
+                "stateful_step_count": LIFECYCLE_SETTINGS.stateful_step_count,
+                "database": str(LIFECYCLE_SETTINGS.database),
+                "phases": [phase.name for phase in LIFECYCLE_SETTINGS.phases],
+            },
+        }, indent=2)
         + "\n"
     )
     if not complete and exitstatus == 0:
@@ -77,3 +91,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
         yield value
+
+
+@pytest.fixture
+def peer(gateway: Gateway) -> Iterator[Gateway]:
+    url: Final = os.environ["INTEGRATION_PEER_URL"]
+    assert url.rstrip("/") != str(gateway.client.base_url).rstrip("/")
+    with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+        eventually(lambda: cache.pubsub_numsub("litellm_proxy.auth_cache_invalidation")[0][1], lambda count: count >= 2)
+    with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
+        yield Gateway(client, gateway.key, gateway.upstream_url)
