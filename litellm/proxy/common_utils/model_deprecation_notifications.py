@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import BaseModel, Field, ValidationError
+
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.auth_checks import can_team_access_model
@@ -40,19 +42,27 @@ def _reached(info: ModelDeprecationInfo, thresholds: Sequence[int]) -> tuple[Mod
     return None if milestone is None else (info, milestone)
 
 
+class _TeamScope(BaseModel):
+    team_id: str | None = None
+    team_public_model_name: str | None = None
+
+
+class _OwnedDeployment(BaseModel):
+    model_name: str
+    model_info: _TeamScope = Field(default_factory=_TeamScope)
+
+
 def _owner_of(deployment: Mapping[str, object]) -> _DeploymentOwner | None:
-    model_name: Final = deployment.get("model_name")
-    model_info: Final = deployment.get("model_info")
-    if not isinstance(model_name, str) or not isinstance(model_info, Mapping):
+    try:
+        parsed: Final = _OwnedDeployment.model_validate(deployment)
+    except ValidationError:
         return None
-    team_id: Final = model_info.get("team_id")
-    if not isinstance(team_id, str) or not team_id:
+    if not parsed.model_info.team_id:
         return None
-    public_name: Final = model_info.get("team_public_model_name")
     return _DeploymentOwner(
-        model_name=model_name,
-        team_id=team_id,
-        public_name=public_name if isinstance(public_name, str) and public_name else model_name,
+        model_name=parsed.model_name,
+        team_id=parsed.model_info.team_id,
+        public_name=parsed.model_info.team_public_model_name or parsed.model_name,
     )
 
 
