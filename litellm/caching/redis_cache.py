@@ -1231,8 +1231,11 @@ class RedisCache(BaseCache):
                     end_time=time.time(),
                 )
             )
-            verbose_logger.error(
-                "LiteLLM Redis Caching: async_set_cache_pipeline_with_ttls() - Got exception from REDIS %s", str(e)
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Redis Caching: async_set_cache_pipeline_with_ttls() - Got exception from REDIS",
+                e,
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
