@@ -301,7 +301,7 @@ async def _delete_user_rows(
     litellm_changed_by: str | None,
 ) -> None:
     user_ids: Final = frozenset(u.user_id for u in users)
-    await _bounded(
+    audit_outcomes: Final = await _bounded(
         UserManagementEventHooks.create_internal_user_audit_log(
             user_id=u.user_id,
             action="deleted",
@@ -312,6 +312,9 @@ async def _delete_user_rows(
         )
         for u in users
     )
+    for u, outcome in zip(users, audit_outcomes, strict=True):
+        if isinstance(outcome, BaseException):
+            verbose_proxy_logger.warning("Failed to create audit log for user %s: %s", u.user_id, outcome)
     keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
         where=_in_filter("user_id", user_ids)
     )
