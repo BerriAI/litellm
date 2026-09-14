@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, Field, ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.auth_checks import can_team_access_model
@@ -77,6 +78,9 @@ async def _team_can_access(model_name: str, team: LiteLLM_TeamTable, llm_router:
     try:
         await can_team_access_model(model=model_name, team_object=team, llm_router=llm_router)
     except ProxyException:
+        return False
+    except Exception as e:  # noqa: BLE001  # a malformed allowlist (e.g. a wildcard with regex metacharacters) must not abort the pass
+        verbose_proxy_logger.debug("model_deprecation: access check failed for team %s: %s", team.team_id, e)
         return False
     return True
 

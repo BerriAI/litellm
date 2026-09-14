@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Final
 from unittest.mock import MagicMock
@@ -43,7 +44,7 @@ def _info(model_name: str, days_until: int, provider: str = "openai") -> ModelDe
     )
 
 
-def _router(deployments):
+def _router(deployments: Sequence[Mapping[str, object]]) -> MagicMock:
     router: Final = MagicMock()
     router.get_model_list.return_value = deployments
     router.get_model_access_groups.return_value = {}
@@ -51,7 +52,7 @@ def _router(deployments):
     return router
 
 
-def _team(team_id: str, models=(), blocked: bool = False) -> LiteLLM_TeamTable:
+def _team(team_id: str, models: Sequence[str] = (), blocked: bool = False) -> LiteLLM_TeamTable:
     return LiteLLM_TeamTable(team_id=team_id, models=list(models), blocked=blocked)
 
 
@@ -119,3 +120,38 @@ class TestResolveAffectedTeams:
             THRESHOLDS,
         )
         assert [m.info.model_name for m in affected["t1"]] == ["gpt-old", "gpt-older"]
+
+    @pytest.mark.asyncio
+    async def test_should_treat_an_ordinary_deployment_as_shared(self):
+        deployments: Final = [
+            {"model_name": "gpt-old", "litellm_params": {"model": "openai/gpt-old"}, "model_info": {"id": "1"}}
+        ]
+        affected: Final = await resolve_affected_teams(
+            (_info("gpt-old", 5),), _router(deployments), (_team("t1", ("gpt-old",)),), THRESHOLDS
+        )
+        assert set(affected) == {"t1"}
+        assert affected["t1"][0].display_name == "gpt-old"
+
+    @pytest.mark.asyncio
+    async def test_should_fall_back_to_the_internal_name_when_a_scoped_deployment_has_no_public_name(self):
+        deployments: Final = [
+            {
+                "model_name": "model_name_t2_abc",
+                "litellm_params": {"model": "openai/gpt-old"},
+                "model_info": {"id": "1", "team_id": "t2"},
+            }
+        ]
+        affected: Final = await resolve_affected_teams(
+            (_info("model_name_t2_abc", -3),), _router(deployments), (_team("t2"),), THRESHOLDS
+        )
+        assert affected["t2"][0].display_name == "model_name_t2_abc"
+
+    @pytest.mark.asyncio
+    async def test_should_deny_a_team_whose_allowlist_is_malformed_and_keep_going(self):
+        affected: Final = await resolve_affected_teams(
+            (_info("openai/gpt-old", 5),),
+            _router([]),
+            (_team("t1", ("openai/[*",)), _team("t2", ("openai/gpt-old",))),
+            THRESHOLDS,
+        )
+        assert set(affected) == {"t2"}
