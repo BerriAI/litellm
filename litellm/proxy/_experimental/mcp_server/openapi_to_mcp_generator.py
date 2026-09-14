@@ -65,8 +65,7 @@ def _import_yaml():
         return _yaml
     except ImportError:
         raise ImportError(
-            "PyYAML is required to parse YAML OpenAPI specs. "
-            "Install it with: pip install pyyaml"
+            "PyYAML is required to parse YAML OpenAPI specs. Install it with: pip install pyyaml"
         ) from None
 
 
@@ -183,9 +182,7 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     if lower.endswith((".yaml", ".yml")):
         return True
     # Check Content-Type header
-    if content_type and "yaml" in content_type:
-        return True
-    return False
+    return bool(content_type and "yaml" in content_type)
 
 
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
@@ -205,7 +202,7 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
         # proper Content-Type headers (common with raw GitHub URLs).
         try:
             return r.json()
-        except Exception:
+        except ValueError:
             return _import_yaml().safe_load(r.text)
 
     # fallback: local file
@@ -220,7 +217,7 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
     with open(filepath, "r", encoding="utf-8") as f:
         try:
             return json.load(f)
-        except Exception:
+        except ValueError:
             f.seek(0)
             return _import_yaml().safe_load(f)
 
