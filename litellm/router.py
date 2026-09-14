@@ -10270,24 +10270,6 @@ class Router:
             return None
         return deployment
 
-    def get_deployment_model_for_alias(self, model_id: str, team_id: "str | None" = None) -> "str | None":
-        """
-        Resolve a model-group alias (or deployment id / wildcard) to the
-        deployment's underlying ``litellm_params.model``.
-
-        Callers that hand a model to provider SDKs (e.g. the proxy batch-create
-        path) need the real provider model id, not the proxy alias:
-        ``get_llm_provider`` cannot resolve an alias, so passing it straight
-        through reaches the provider as an invalid model identifier. Returns
-        None when the alias resolves to nothing or to a paused deployment.
-        Pass the caller's ``team_id`` so the deployment picked here is the same
-        one the credential resolver picks for that caller.
-        """
-        deployment: Final = self._resolve_unblocked_deployment(model_id=model_id, team_id=team_id)
-        if deployment is None:
-            return None
-        return deployment.litellm_params.model
-
     @staticmethod
     def _deployment_usable_by_team(model: Mapping | Deployment, team_id: str | None) -> bool:
         """
