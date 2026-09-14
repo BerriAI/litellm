@@ -2515,15 +2515,7 @@ async def bulk_delete_user(
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
 ) -> BulkDeleteUserResponse:
-    """
-    Delete up to 500 users and remove each one from every team they belong to. Same authorization as
-    `/user/delete`. Returns one result per user id, in order.
-
-    ```bash
-    curl -X POST 'http://localhost:4000/user/bulk_delete' -H 'Authorization: Bearer sk-1234' \\
-    -H 'Content-Type: application/json' -d '{"user_ids": ["user-1", "user-2"]}'
-    ```
-    """
+    """Delete up to 500 users, removing each from every team; same authorization as `/user/delete`."""
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         prisma_client,
