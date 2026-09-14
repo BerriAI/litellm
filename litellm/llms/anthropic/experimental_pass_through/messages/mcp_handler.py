@@ -60,6 +60,23 @@ def _build_tool_result_message(tool_results: Sequence[Mapping[str, object]]) -> 
     )
 
 
+def _has_client_side_tool(
+    tool_use_blocks: Sequence[Mapping[str, object]],
+    other_tools: Sequence[Mapping[str, object]] | None,
+    tool_server_map: Mapping[str, str],
+) -> bool:
+    client_tool_names: Final = tuple(
+        t.get("name") for t in (other_tools or ()) if isinstance(t, dict) and isinstance(t.get("name"), str)
+    )  # kwargs-ok: extract client tool names tuple
+    for block in tool_use_blocks:
+        name = block.get("name")  # kwargs-ok: extract block tool name
+        if name in client_tool_names or (
+            bool(tool_server_map) and name not in tool_server_map
+        ):  # kwargs-ok: map membership test
+            return True
+    return False
+
+
 async def anthropic_messages_with_mcp(
     max_tokens: int,
     messages: Sequence[Mapping[str, object]],
@@ -89,7 +106,7 @@ async def anthropic_messages_with_mcp(
             max_tokens=max_tokens,
             messages=list(messages),
             model=model,
-            tools=list(tools) if tools else None,
+            tools=list(tools) if tools else None,  # kwargs-ok: pass tools list
             _skip_mcp_handler=True,
             **kwargs,
         )
@@ -144,6 +161,9 @@ async def anthropic_messages_with_mcp(
         if not tool_use_blocks:
             break
 
+        if _has_client_side_tool(tool_use_blocks, other_tools, tool_server_map):
+            break
+
         tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
             tool_server_map=tool_server_map,
             tool_calls=list(tool_use_blocks),
@@ -157,12 +177,10 @@ async def anthropic_messages_with_mcp(
             request_tags=list(context.request_tags) if context.request_tags else None,
         )
 
-        # Every tool call was skipped, so there is nothing to feed back; a
-        # tool_result message with empty content is rejected by Anthropic.
         if not tool_results:
             break
 
-        working_messages = (
+        working_messages = (  # rebind-ok: append assistant and tool_result turns to working context
             *working_messages,
             {"role": "assistant", "content": list(_get_response_content(response))},
             _build_tool_result_message(tool_results),
