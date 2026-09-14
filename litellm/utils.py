@@ -81,7 +81,7 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
 )
@@ -1500,6 +1500,8 @@ def post_call_processing(
 
 
 def client(original_function):
+    from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
+
     Rules: Final = litellm_utils.Rules
     rules_obj: Final = Rules()
 

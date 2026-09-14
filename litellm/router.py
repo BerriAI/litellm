@@ -241,7 +241,6 @@ from litellm.types.router import (
     ModelGroupInfo,
     OptionalPreCallChecks,
     PreRoutingStrategy,
-    RetryAttemptRecord,
     RetryPolicy,
     RouterCacheEnum,
     RouterErrors,
@@ -8362,6 +8361,8 @@ class Router:
         """
         When a retry or fallback happens, record which model group, deployment and attempt just failed and why
         """
+        from litellm.types.router import RetryAttemptRecord
+
         _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
         request_metadata: Final[Mapping[str, object]] = kwargs[_metadata_var]
         model_group: Final = kwargs.get("model")
