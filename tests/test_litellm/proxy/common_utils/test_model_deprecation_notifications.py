@@ -11,17 +11,22 @@ from unittest.mock import MagicMock
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.constants import EMAIL_MODEL_DEPRECATION_LOCK_ID
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation_notifications import (
     AffectedModel,
+    DeprecationEmailContext,
     TeamNotification,
     build_team_notifications,
     email_sent_key,
+    make_email_deliverer,
     render_model_deprecation_email,
     resolve_affected_teams,
     select_milestone,
+    send_model_deprecation_emails,
 )
-from litellm.types.proxy.model_deprecation import ModelDeprecationInfo
+from litellm.types.integrations.slack_alerting import SlackAlertingArgs, SlackAlertingCacheKeys
+from litellm.types.proxy.model_deprecation import DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS, ModelDeprecationInfo
 
 
 class TestSelectMilestone:
@@ -329,3 +334,195 @@ class TestBuildTeamNotifications:
         assert email_sent_key("t1", "gpt-old", 7) == "model_deprecation_email:t1:gpt-old:7"
         assert email_sent_key("t1", "gpt-old", 7) != email_sent_key("t2", "gpt-old", 7)
         assert email_sent_key("t1", "gpt-old", 7) != email_sent_key("t1", "gpt-old", 0)
+
+
+DEAD_DEPLOYMENT: Final = {
+    "model_name": "dead-alias",
+    "litellm_params": {"model": "openai/dead-model"},
+    "model_info": {"id": "1", "deprecation_date": "2020-01-01", "litellm_provider": "openai"},
+}
+FRESH_DEPLOYMENT: Final = {
+    "model_name": "fresh",
+    "litellm_params": {"model": "openai/fresh-model-with-no-cost-map-entry"},
+    "model_info": {"id": "x"},
+}
+
+
+class _Deliverer:
+    def __init__(self, fail_for: Sequence[str] = ()):
+        self.fail_for = fail_for
+        self.sent = []
+
+    async def __call__(self, recipients: Sequence[str], subject: str, html_body: str) -> None:
+        if any(recipient in self.fail_for for recipient in recipients):
+            raise ConnectionError("smtp down")
+        self.sent.append((tuple(recipients), subject))
+
+
+class _Lock:
+    def __init__(self, result: bool | None):
+        self.result = result
+        self.calls = []
+
+    async def acquire_lock(self, cronjob_id: str, ttl: int | None = None, allow_reentrant: bool = True) -> bool | None:
+        self.calls.append({"cronjob_id": cronjob_id, "ttl": ttl, "allow_reentrant": allow_reentrant})
+        return self.result
+
+
+def _team_row(team_id: str, alias: str = "Team") -> Mapping[str, object]:
+    return {
+        "team_id": team_id,
+        "team_alias": alias,
+        "models": [],
+        "members_with_roles": [{"user_id": f"admin-{team_id}", "role": "admin"}],
+    }
+
+
+def _prisma(team_rows: Sequence[Mapping[str, object]], user_rows: Sequence[Mapping[str, object]]) -> SimpleNamespace:
+    async def find_many_teams(where=None, take=None, skip=None, order=None):
+        return list(team_rows)
+
+    async def find_many_users(where=None, take=None, skip=None, order=None):
+        wanted: Final = where["user_id"]["in"]
+        return [row for row in user_rows if row["user_id"] in wanted]
+
+    return SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_teamtable=SimpleNamespace(find_many=find_many_teams),
+            litellm_usertable=SimpleNamespace(find_many=find_many_users),
+        )
+    )
+
+
+TWO_TEAMS: Final = (_team_row("t1", "Alpha"), _team_row("t2", "Beta"))
+TWO_ADMINS: Final = (
+    {"user_id": "admin-t1", "user_email": "a@x.io"},
+    {"user_id": "admin-t2", "user_email": "b@x.io"},
+)
+
+
+def _context(router, prisma, deliver, cache=None, pod_lock_manager=None) -> DeprecationEmailContext:
+    return DeprecationEmailContext(
+        llm_router=router,
+        prisma_client=prisma,
+        cache=cache or DualCache(),
+        alerting_args=SlackAlertingArgs(),
+        pod_lock_manager=pod_lock_manager,
+        deliver=deliver,
+    )
+
+
+class TestSendModelDeprecationEmails:
+    @pytest.mark.asyncio
+    async def test_should_email_each_affected_team_once_and_stamp_the_milestones(self):
+        cache: Final = DualCache()
+        deliverer: Final = _Deliverer()
+        ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS, TWO_ADMINS), deliverer, cache)
+
+        assert await send_model_deprecation_emails(ctx) == 2
+        assert sorted(recipients for recipients, _ in deliverer.sent) == [("a@x.io",), ("b@x.io",)]
+        assert all("deprecated" in subject for _, subject in deliverer.sent)
+        assert await cache.async_get_cache(key=email_sent_key("t1", "dead-alias", 0)) is not None
+        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
+
+        assert await send_model_deprecation_emails(ctx) == 0
+        assert len(deliverer.sent) == 2
+
+    @pytest.mark.asyncio
+    async def test_should_stamp_the_pass_and_touch_nothing_else_when_no_model_deprecates(self):
+        cache: Final = DualCache()
+        deliverer: Final = _Deliverer()
+        lock: Final = _Lock(True)
+
+        async def explode(where=None, take=None, skip=None, order=None):
+            raise AssertionError("teams must not be loaded when nothing deprecates")
+
+        prisma: Final = _prisma((), ())
+        prisma.db.litellm_teamtable.find_many = explode
+
+        assert (
+            await send_model_deprecation_emails(_context(_router([FRESH_DEPLOYMENT]), prisma, deliverer, cache, lock))
+            == 0
+        )
+        assert deliverer.sent == []
+        assert lock.calls == []
+        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
+
+    @pytest.mark.asyncio
+    async def test_should_not_claim_the_lock_when_every_milestone_was_already_sent(self):
+        cache: Final = DualCache()
+        await cache.async_set_cache(key=email_sent_key("t1", "dead-alias", 0), value=1.0)
+        lock: Final = _Lock(True)
+        deliverer: Final = _Deliverer()
+        ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, cache, lock)
+
+        assert await send_model_deprecation_emails(ctx) == 0
+        assert deliverer.sent == []
+        assert lock.calls == []
+
+    @pytest.mark.parametrize(
+        ("lock_result", "expected_sent"),
+        [(True, 1), (None, 1), (False, 0)],
+        ids=["lock won", "no redis lock", "another pod holds the lock"],
+    )
+    @pytest.mark.asyncio
+    async def test_should_send_only_from_the_pod_holding_the_daily_lock(self, lock_result, expected_sent):
+        lock: Final = _Lock(lock_result)
+        deliverer: Final = _Deliverer()
+        ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), deliverer, None, lock)
+
+        assert await send_model_deprecation_emails(ctx) == expected_sent
+        assert len(deliverer.sent) == expected_sent
+        assert lock.calls == [
+            {
+                "cronjob_id": EMAIL_MODEL_DEPRECATION_LOCK_ID,
+                "ttl": DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+                "allow_reentrant": False,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_should_keep_going_and_leave_keys_unstamped_when_one_team_fails(self):
+        cache: Final = DualCache()
+        deliverer: Final = _Deliverer(fail_for=("a@x.io",))
+        ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS, TWO_ADMINS), deliverer, cache)
+
+        assert await send_model_deprecation_emails(ctx) == 1
+        assert [recipients for recipients, _ in deliverer.sent] == [("b@x.io",)]
+        assert await cache.async_get_cache(key=email_sent_key("t1", "dead-alias", 0)) is None
+        assert await cache.async_get_cache(key=email_sent_key("t2", "dead-alias", 0)) is not None
+
+
+class TestMakeEmailDeliverer:
+    @pytest.mark.asyncio
+    async def test_should_use_the_configured_email_logger_when_present(self):
+        calls: Final = []
+
+        async def send_email(from_email, to_email, subject, html_body):
+            calls.append((from_email, tuple(to_email), subject, html_body))
+
+        logger: Final = SimpleNamespace(DEFAULT_LITELLM_EMAIL="noreply@litellm.ai", send_email=send_email)
+        deliver: Final = make_email_deliverer(logger)
+
+        await deliver(("a@x.io", "b@x.io"), "subj", "<p>hi</p>")
+        assert calls == [("noreply@litellm.ai", ("a@x.io", "b@x.io"), "subj", "<p>hi</p>")]
+
+    @pytest.mark.asyncio
+    async def test_should_fall_back_to_smtp_per_recipient_without_a_logger(self):
+        calls: Final = []
+
+        async def smtp_send(*, receiver_email, subject, html):
+            calls.append((receiver_email, subject, html))
+
+        deliver: Final = make_email_deliverer(None, smtp_send=smtp_send)
+
+        await deliver(("a@x.io", "b@x.io"), "subj", "<p>hi</p>")
+        assert calls == [("a@x.io", "subj", "<p>hi</p>"), ("b@x.io", "subj", "<p>hi</p>")]
+
+    @pytest.mark.asyncio
+    async def test_should_raise_when_smtp_is_not_configured(self, monkeypatch):
+        monkeypatch.delenv("SMTP_SENDER_EMAIL", raising=False)
+        deliver: Final = make_email_deliverer(None)
+
+        with pytest.raises(ValueError, match="SMTP_SENDER_EMAIL"):
+            await deliver(("a@x.io",), "subj", "<p>hi</p>")

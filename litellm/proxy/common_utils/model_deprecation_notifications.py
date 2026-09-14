@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import html
-from collections.abc import Mapping, Sequence
+import os
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
@@ -11,7 +13,12 @@ from typing import TYPE_CHECKING, Final, Protocol
 from pydantic import BaseModel, Field, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.email_alerting import get_team_admin_emails
+from litellm.constants import EMAIL_MODEL_DEPRECATION_LOCK_ID
+from litellm.integrations.email_alerting import (
+    LITELLM_LOGO_URL,
+    LITELLM_SUPPORT_CONTACT,
+    get_team_admin_emails,
+)
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.integrations.email_templates.model_deprecation_email import (
     MODEL_DEPRECATION_EMAIL_ROW_TEMPLATE,
@@ -20,9 +27,16 @@ from litellm.integrations.email_templates.model_deprecation_email import (
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.auth_checks import can_team_access_model
-from litellm.types.proxy.model_deprecation import ModelDeprecationInfo
+from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
+from litellm.repositories.team_repository import TeamRepository
+from litellm.types.integrations.slack_alerting import SlackAlertingArgs, SlackAlertingCacheKeys
+from litellm.types.proxy.model_deprecation import (
+    DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    ModelDeprecationInfo,
+)
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 
@@ -53,6 +67,26 @@ class DeprecationEmailCache(Protocol):
     async def async_get_cache(self, *, key: str) -> object: ...
 
     async def async_set_cache(self, *, key: str, value: float, ttl: float) -> None: ...
+
+
+class EmailSender(Protocol):
+    DEFAULT_LITELLM_EMAIL: str
+
+    async def send_email(self, from_email: str, to_email: Sequence[str], subject: str, html_body: str) -> None: ...
+
+
+class SmtpSend(Protocol):
+    def __call__(self, *, receiver_email: str, subject: str, html: str) -> Awaitable[object]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class DeprecationEmailContext:
+    llm_router: Router
+    prisma_client: PrismaClient
+    cache: DeprecationEmailCache
+    alerting_args: SlackAlertingArgs
+    pod_lock_manager: PodLockManager | None
+    deliver: Callable[[Sequence[str], str, str], Awaitable[None]]
 
 
 def select_milestone(days_until: int, thresholds: Sequence[int]) -> int | None:
@@ -236,3 +270,97 @@ def render_model_deprecation_email(
         email_support_contact=html.escape(email_support_contact),
     )
     return subject, body + EMAIL_FOOTER
+
+
+def make_email_deliverer(
+    email_logger: EmailSender | None, smtp_send: SmtpSend | None = None
+) -> Callable[[Sequence[str], str, str], Awaitable[None]]:
+    """The proxy's configured email provider when there is one, else the OSS SMTP helper per recipient"""
+    if email_logger is not None:
+
+        async def deliver_via_logger(recipients: Sequence[str], subject: str, html_body: str) -> None:
+            await email_logger.send_email(
+                from_email=email_logger.DEFAULT_LITELLM_EMAIL,
+                to_email=tuple(recipients),
+                subject=subject,
+                html_body=html_body,
+            )
+
+        return deliver_via_logger
+
+    async def deliver_over_smtp(recipients: Sequence[str], subject: str, html_body: str) -> None:
+        from litellm.proxy.utils import send_email
+
+        send: Final = smtp_send or send_email
+        for recipient in recipients:
+            await send(receiver_email=recipient, subject=subject, html=html_body)
+
+    return deliver_over_smtp
+
+
+async def _load_teams(prisma_client: PrismaClient) -> tuple[LiteLLM_TeamTable, ...]:
+    return tuple(await TeamRepository(prisma_client).find_many())
+
+
+async def _stamp_pass(cache: DeprecationEmailCache) -> None:
+    await cache.async_set_cache(
+        key=SlackAlertingCacheKeys.deprecation_email_pass_key.value,
+        value=time.time(),
+        ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    )
+
+
+async def _claimed_email_window(pod_lock_manager: PodLockManager | None) -> bool:
+    """Without a redis backed lock there is no fleet to coordinate, so a lone pod always sends"""
+    if pod_lock_manager is None:
+        return True
+    return (
+        await pod_lock_manager.acquire_lock(
+            cronjob_id=EMAIL_MODEL_DEPRECATION_LOCK_ID,
+            ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+            allow_reentrant=False,
+        )
+    ) is not False
+
+
+async def _send_team_notification(notification: TeamNotification, ctx: DeprecationEmailContext) -> bool:
+    subject, html_body = render_model_deprecation_email(
+        notification,
+        email_logo_url=os.getenv("SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", LITELLM_LOGO_URL)),
+        email_support_contact=os.getenv("EMAIL_SUPPORT_CONTACT", LITELLM_SUPPORT_CONTACT),
+    )
+    try:
+        await ctx.deliver(notification.recipients, subject, html_body)
+    except Exception as e:  # noqa: BLE001  # one team's mail failure must not block the rest; unstamped keys retry tomorrow
+        verbose_proxy_logger.exception("model_deprecation: email to team %s failed: %s", notification.team_id, e)
+        return False
+    for model in notification.models:
+        await ctx.cache.async_set_cache(
+            key=email_sent_key(notification.team_id, model.info.model_name, model.milestone),
+            value=time.time(),
+            ttl=ctx.alerting_args.model_deprecation_email_ttl,
+        )
+    return True
+
+
+async def send_model_deprecation_emails(ctx: DeprecationEmailContext) -> int:
+    """One pass: resolve affected teams, drop what was already sent, deliver one digest per team
+
+    The pass stamp is set whenever a resolution completed, sent or not, so the DB is consulted at most
+    once a day; the fleet lock is only claimed once there is something to send
+    """
+    snapshot: Final = collect_model_deprecations(llm_router=ctx.llm_router)
+    infos: Final = (*snapshot.deprecated, *snapshot.imminent, *snapshot.upcoming)
+    if not infos:
+        await _stamp_pass(ctx.cache)
+        return 0
+    teams: Final = await _load_teams(ctx.prisma_client)
+    affected: Final = await resolve_affected_teams(
+        infos, ctx.llm_router, teams, ctx.alerting_args.model_deprecation_email_thresholds
+    )
+    notifications: Final = await build_team_notifications(affected, teams, ctx.cache, ctx.prisma_client)
+    await _stamp_pass(ctx.cache)
+    if not notifications or not await _claimed_email_window(ctx.pod_lock_manager):
+        return 0
+    results: Final = tuple([await _send_team_notification(notification, ctx) for notification in notifications])
+    return sum(results)
