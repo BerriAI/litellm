@@ -8514,9 +8514,7 @@ class TestBackgroundResponseRetrievalGovernance:
 
 
 class TestShouldInjectCostForRequest:
-    """Issue #38348: ``include_cost_in_streaming_usage`` is a process-wide flag, so on its
-    own it injects ``usage.cost`` for every caller on every route. Injection must also
-    consult the caller's per-request ``stream_options.include_usage`` opt-in."""
+    """Issue #38348: cost injection honours the caller's stream_options.include_usage."""
 
     def test_global_flag_off_never_injects(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
@@ -8559,8 +8557,6 @@ class TestShouldInjectCostForRequest:
         )
 
     def test_protocol_without_stream_options_stays_always_on(self, monkeypatch):
-        """Anthropic Messages / Vertex rawPredict / Gemini give a caller no way to opt
-        in, so the flag remains always-on there."""
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         assert (
             ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
@@ -8592,10 +8588,6 @@ class TestShouldInjectCostForRequest:
 
 
 class TestProcessChunkCostInjectionGate:
-    """``_process_chunk_with_cost_injection`` takes the per-stream decision from
-    ``should_inject_cost_for_request`` and falls back to the global flag when the
-    caller does not pass one."""
-
     @staticmethod
     def _usage_chunk():
         return {
