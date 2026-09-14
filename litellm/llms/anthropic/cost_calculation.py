@@ -3,6 +3,7 @@ Helper util for handling anthropic-specific cost calculation
 - e.g.: prompt caching
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional
 
 from pydantic import BaseModel, ValidationError
@@ -31,12 +32,16 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="anthropic",
-        service_tier=service_tier,
-    )
+    iteration_costs = _cost_per_iteration(model=model, usage=usage, service_tier=service_tier)
+    if iteration_costs is not None:
+        prompt_cost, completion_cost = iteration_costs
+    else:
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider="anthropic",
+            service_tier=service_tier,
+        )
 
     # Apply provider_specific_entry multipliers for geo/speed routing
     try:
@@ -59,6 +64,50 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
         pass
 
     return prompt_cost, completion_cost
+
+
+def _attempt_is_billed(attempt: Mapping[str, object]) -> bool:
+    """Anthropic does not bill an attempt the classifier blocked before any output; every other attempt is billed."""
+    return attempt.get("type") != "message" or bool(attempt.get("output_tokens"))
+
+
+def _attempt_cost(
+    attempt: Mapping[str, object],
+    fallback_model: str,
+    usage: "Usage",
+    service_tier: str | None,
+) -> tuple[float, float]:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    model: Final = str(attempt.get("model") or fallback_model)
+    attempt_usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={**attempt, "inference_geo": getattr(usage, "inference_geo", None)},
+        reasoning_content=None,
+        speed=getattr(usage, "speed", None),
+    )
+    return generic_cost_per_token(
+        model=model,
+        usage=attempt_usage,
+        custom_llm_provider="anthropic",
+        service_tier=service_tier,
+    )
+
+
+def _cost_per_iteration(model: str, usage: "Usage", service_tier: str | None) -> tuple[float, float] | None:
+    """
+    Price a server-side fallback response one attempt at a time.
+
+    ``usage.iterations`` holds one entry per attempt with its own ``model``; the top-level ``model`` is only the
+    attempt that produced the returned message. Pricing the summed tokens at that one model charges a declined
+    attempt at the fallback model's rates. Anthropic bills each attempt at its own model, and does not bill an
+    attempt that was blocked before any output. Returns None for single-attempt responses.
+    """
+    iterations: Final = getattr(usage, "iterations", None)
+    attempts: Final = tuple(it for it in (iterations or ()) if isinstance(it, Mapping))
+    if len(attempts) < 2 or not any(it.get("model") for it in attempts):
+        return None
+    costs: Final = tuple(_attempt_cost(it, model, usage, service_tier) for it in attempts if _attempt_is_billed(it))
+    return sum(p for p, _ in costs), sum(c for _, c in costs)
 
 
 class _AnthropicServerToolUseProbe(BaseModel):
