@@ -78,8 +78,9 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
-    FORWARDED_KWARGS_KEYS,
+    AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
+    PROVIDER_AFFINITY_HEADER_KWARG_KEY,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -5563,7 +5564,11 @@ def completion(
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),
-            **{key: kwargs[key] for key in FORWARDED_KWARGS_KEYS if key in kwargs},
+            **{
+                key: kwargs[key]
+                for key in (*AWS_CREDENTIAL_KWARGS_KEYS, PROVIDER_AFFINITY_HEADER_KWARG_KEY)
+                if key in kwargs
+            },
         )
         if litellm_params.get("provider_affinity_header") is not None:
             headers = add_provider_affinity_header(
