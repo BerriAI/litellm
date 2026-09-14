@@ -5,15 +5,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
-from starlette.types import Message, Receive, Scope, Send
-from starlette.requests import Request
-
-from mcp_tests.mcp_e2e_upstream_server import add, multiply
+import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from mcp_tests.mcp_e2e_upstream_server import add, multiply
+from starlette.requests import Request
+from starlette.types import Message, Receive, Scope, Send
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +94,9 @@ def tool_names(gateway: Gateway, key: str, identity: str) -> dict[str, str]:
     }
 
 
-def call_tool(gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]):
+def call_tool(
+    gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]
+) -> httpx.Response:
     return gateway.client.post(
         "/mcp-rest/tools/call",
         headers={"x-litellm-api-key": key},
