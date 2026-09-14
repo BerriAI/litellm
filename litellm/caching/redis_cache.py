@@ -1411,18 +1411,11 @@ class RedisCache(BaseCache):
         snapshot: float,
         ttl: int | None = None,
     ) -> float:
-        """Atomically reset ``key`` to ``new_base`` while preserving any amount
-        added since ``snapshot`` was read, so a reset racing a concurrent
-        ``async_increment`` cannot erase spend reserved after the reset boundary.
-
-        ``snapshot`` is the value read once before the first attempt and held
-        fixed across retries by the caller, not re-read each attempt: replaying
-        this call after a transient failure stays correct no matter how many
-        increments landed in between, because the delta is always measured
-        against that same original baseline. The GET/compute/SET runs in a
-        single Lua call, atomic across racing callers and pods, mirroring
-        ``async_set_max``. Returns the resulting value.
-        """
+        """Reset ``key`` to ``new_base`` plus whatever was added on top of
+        ``snapshot``, atomically (single Lua GET/compute/SET, mirrors
+        ``async_set_max``), so a concurrent ``async_increment`` survives a reset
+        retry instead of being overwritten by it. ``snapshot`` is read once by
+        the caller and held fixed across retries."""
         _redis_client: Final = self.init_async_client()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)

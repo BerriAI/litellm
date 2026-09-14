@@ -54,12 +54,8 @@ class _BudgetCounter:
 
 
 _RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS: Final = 2
-"""Bounded retries of the per-reservation reconcile on the cancel path before
-falling back to invalidating the shared aggregate counters. reconcile_budget_reservation
-only ever adjusts this reservation's own recorded contribution to each counter (see
-_set_reserved_entries_actual_cost), so it is safe and idempotent to retry; the counter
-invalidation fallback below is not, since it deletes state every concurrent reservation
-and recorded spend on that counter shares."""
+"""Retries of the per-reservation reconcile before falling back to the
+counter-deleting invalidation, which a concurrent reservation also shares."""
 
 
 _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
@@ -360,37 +356,19 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def release_budget_reservation_on_cancel(
-    budget_reservation: dict | None,
+    budget_reservation: dict | None,  # mutable-ok: stamps finalized on the caller's shared reservation dict
 ) -> None:
-    """Reconcile a still-open reservation when the request is cancelled mid-flight.
+    """Reconcile a still-open reservation when the request is cancelled mid-flight,
+    since neither the success nor failure hook runs in that case. Reconciles to the
+    request's input-token cost, not zero, since that portion was already billed to
+    the provider. asyncio.shield keeps this running through the surrounding
+    cancellation.
 
-    A client disconnect or timeout cancels the request task, which surfaces as
-    CancelledError / GeneratorExit rather than a normal exception, so neither the
-    success cost callback nor the failure hook runs and the pre-call reservation
-    is never reconciled. Left alone it pins the spend counter above real spend
-    and 429s subsequent requests until the counter's TTL expires.
-
-    Reconcile to the request's input-token cost rather than refunding to zero:
-    by the time a request is cancelled in-flight the provider call was already
-    dispatched, so the input tokens were billed even if no chunk reached the
-    client. Refunding to zero would let a caller abort pre-token to dodge that
-    charge; the worst-case output portion of the reservation is still released.
-
-    asyncio.shield keeps the reconcile running to completion even though the
-    surrounding task is being cancelled. The `finalized` guard makes this a no-op
-    when success/failure handling already reconciled, so calling it on every
-    cancellation path is safe.
-
-    A reconcile failure here (e.g. a Redis timeout) is retried a bounded number of
-    times before falling back to invalidate_budget_reservation_counters: unlike that
-    fallback, the reconcile only ever adjusts this reservation's own contribution to
-    each counter, so it cannot clobber a concurrent request's reservation or recorded
-    spend on the same key/user/team counter the way deleting the aggregate can. Only
-    once every retry hits the same failure does this fall back to
-    invalidate_budget_reservation_counters, mirroring release_or_invalidate_budget_reservation's
-    handling of the same failure on the non-cancel release path: dropping the reserved counters
-    forces the next read to reseed from the DB instead of leaving the pre-charge stuck in Redis
-    with nothing left to correct it, since this is the terminal handler for a cancelled request.
+    A reconcile failure is retried before falling back to
+    invalidate_budget_reservation_counters, since unlike that fallback, reconcile
+    only ever adjusts this reservation's own contribution to each counter and can't
+    clobber a concurrent reservation sharing it. Mirrors
+    release_or_invalidate_budget_reservation's fallback on the non-cancel path.
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
@@ -400,7 +378,7 @@ async def release_budget_reservation_on_cancel(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
         )
     except asyncio.CancelledError:
-        pass
+        pass  # a second cancellation while shielded; the reconcile keeps running detached regardless
     except Exception:
         verbose_proxy_logger.exception(
             "Failed to reconcile budget reservation on cancel; retrying before invalidating reserved counters"
@@ -423,16 +401,9 @@ async def _retry_reconcile_reservation_on_cancel(
     budget_reservation: dict,  # mutable-ok: reconcile_budget_reservation stamps finalized on success
     incurred_cost: float,
 ) -> bool:
-    """Bounded retry of the reconcile that just failed once on the cancel path.
-
-    Unlike invalidate_budget_reservation_counters, reconcile_budget_reservation only
-    ever adjusts this reservation's own recorded contribution to each counter (see
-    _set_reserved_entries_actual_cost's applied_adjustment bookkeeping), so retrying it
-    is safe and idempotent, and correct on any attempt that gets through: it does not
-    touch concurrent reservations or spend the counter also aggregates. Returns whether
-    a retry succeeded, so the caller falls back to the destructive invalidation only
-    after every retry hits the same (presumably persistent) failure.
-    """
+    """Retry the reconcile that just failed once. Safe to retry since it only
+    ever adjusts this reservation's own contribution, unlike the destructive
+    invalidation the caller falls back to once every retry fails."""
     for attempt in range(_RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS):
         try:
             await reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)

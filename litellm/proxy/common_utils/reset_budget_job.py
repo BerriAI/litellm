@@ -7,14 +7,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeVar
 
 from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
@@ -22,8 +21,6 @@ from litellm.constants import (
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN,
     RESET_BUDGET_JOB_NAME,
-    RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS,
-    RESET_BUDGET_SPEND_COUNTER_RESET_RETRY_DELAY_SECONDS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
@@ -34,9 +31,6 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
-)
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    evict_and_broadcast,
 )
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
@@ -71,6 +65,9 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.services import ServiceTypes
+
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
 
 _RowT = TypeVar("_RowT")
 
@@ -537,31 +534,17 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _invalidate_spend_counter(counter_key: str, new_spend: float = 0.0) -> None:
-        """Overwrite a spend counter with the post-reset value (0, or the carried
-        overage when budget rollover is enabled) so a DB-row reset takes effect
-        immediately.
+        """Overwrite a spend counter with the post-reset value. Call AFTER the DB
+        write commits, or get_current_spend can read 0 from Redis while the DB
+        still holds the pre-reset value.
 
-        Call AFTER the DB write commits. Clearing Redis before the DB
-        commit opens a window where get_current_spend reads 0 from Redis
-        while the DB still holds the pre-reset value, allowing bypass.
-
-        The reset is delta-preserving: a snapshot of the pre-reset value is read
-        once up front and held fixed across every retry, so a concurrent
-        async_increment landing during a retry (e.g. a request reserving spend
-        against the just-reset budget) is carried forward on top of new_spend
-        instead of being erased by a later attempt's write. See
-        async_reset_preserving_delta and _reset_redis_spend_counter.
-
-        A reset that keeps failing after retrying falls back to deleting the key rather
-        than leaving the pre-reset (possibly far higher) value authoritative in Redis
-        until its TTL expires: a missing counter reads as cold and reseeds from the
-        DB on the next request (_ensure_spend_counter_initialized), which is always
-        closer to the truth than the stale value a failed reset would otherwise leave
-        behind. The same is true when the pre-reset snapshot itself cannot be read:
-        with no safe baseline to preserve increments against, deleting is the only
-        option that cannot silently erase a concurrent reservation.
+        Delta-preserving: holds one pre-reset snapshot fixed across retries so a
+        concurrent async_increment during a retry lands on top of new_spend
+        instead of being overwritten by it. Falls back to delete (reads as cold,
+        reseeds from DB) if every retry fails or the snapshot itself can't be read.
         """
         try:
+            from litellm.constants import RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS
             from litellm.proxy.proxy_server import spend_counter_cache
 
             spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_spend, ttl=60)
@@ -595,10 +578,9 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
 
     @staticmethod
-    async def _snapshot_spend_counter(redis_cache: RedisCache, counter_key: str) -> float | None:
-        """Read the pre-reset baseline the delta-preserving reset holds fixed across
-        retries. A failed read leaves no safe baseline to reconcile against, so the
-        caller skips the atomic reset and falls straight back to delete."""
+    async def _snapshot_spend_counter(redis_cache: "RedisCache", counter_key: str) -> float | None:
+        """Pre-reset baseline held fixed across retries. A failed read means no
+        safe baseline, so the caller falls straight back to delete."""
         try:
             current = await redis_cache.async_get_cache(key=counter_key)
             return float(current) if current is not None else 0.0
@@ -613,8 +595,13 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _reset_redis_spend_counter(
-        redis_cache: RedisCache, counter_key: str, new_spend: float, snapshot: float
+        redis_cache: "RedisCache", counter_key: str, new_spend: float, snapshot: float
     ) -> bool:
+        from litellm.constants import (
+            RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS,
+            RESET_BUDGET_SPEND_COUNTER_RESET_RETRY_DELAY_SECONDS,
+        )
+
         for attempt in range(RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS):
             try:
                 await redis_cache.async_reset_preserving_delta(
@@ -644,22 +631,13 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:
-        """Drop a stale management-cache entry, on every pod, so the next read
-        fetches from DB.
-
-        Tags and end-users are not reseeded by ``SpendCounterReseed.from_db``;
-        for those, when the spend counter expires the budget check falls back
-        to ``cached_obj.spend``. Keys, orgs, and team memberships are reseeded
-        from the DB, but auth still may consult ``user_api_key_cache`` objects
-        whose ``.spend`` field can lag a cross-pod DB reset.
-
-        Only one pod runs this job per tick (see ``_acquire_lease``), so a local-only
-        delete would leave every other pod's copy stale until its TTL: ``evict_and_broadcast``
-        is the same LIT-3803 cross-pod eviction every other cache-mutating endpoint already
-        uses (e.g. auth_checks.delete_cache_team_object), broadcasting the delete over Redis
-        pub/sub so every pod's copy is dropped, not just the one that ran the reset.
-        """
+        """Drop a stale management-cache entry on every pod (LIT-3803 cross-pod
+        eviction), so a pod other than the one that ran the reset doesn't keep
+        serving a cached object with the pre-reset spend."""
         try:
+            from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+                evict_and_broadcast,
+            )
             from litellm.proxy.proxy_server import user_api_key_cache
 
             await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
