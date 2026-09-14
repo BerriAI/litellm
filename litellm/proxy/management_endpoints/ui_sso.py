@@ -92,6 +92,7 @@ from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_obje
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
     has_user_setup_sso,
+    should_hide_default_credentials_hint,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -1110,10 +1111,7 @@ async def google_login(
 
     from fastapi.responses import HTMLResponse
 
-    hide_default_credentials_hint: Final = (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-    )
+    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     form_response: Final = HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=True,
