@@ -4874,7 +4874,6 @@ def test_redacted_thinking_blocks_never_carry_cache_control():
 
 
 def test_translate_anthropic_to_openai_rejects_all_unrecognized_content_blocks():
-    """A request whose blocks are all unknown must not dispatch an empty conversation (#41091)."""
     import pytest
 
     import litellm
@@ -4891,7 +4890,16 @@ def test_translate_anthropic_to_openai_rejects_all_unrecognized_content_blocks()
     with pytest.raises(litellm.BadRequestError):
         LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
 
-    # A recognized block alongside an unrecognized one still translates normally.
+    with_system = {
+        **request,
+        "messages": [
+            {"role": "system", "content": "keep this"},
+            *request["messages"],
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError):
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(with_system)
+
     mixed = {
         "model": "openai/gpt-4o",
         "max_tokens": 1024,

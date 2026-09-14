@@ -580,7 +580,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_messages.append(assistant_message)
 
         has_conversational_input = any(m.get("role") != "system" for m in replayable_messages)
-        if has_conversational_input and len(new_messages) == 0:
+        has_translated_conversation = any(m.get("role") != "system" for m in new_messages)
+        if has_conversational_input and not has_translated_conversation:
             raise litellm.BadRequestError(
                 message="Anthropic pass-through: every message's content blocks were of unrecognized types, so translation produced an empty conversation. Refusing to dispatch a request with no messages.",
                 model=model,
