@@ -10,16 +10,9 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from integration._support.client import Gateway, eventually, string_value
+from integration._support.client import Gateway, delete_key_if_present, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-
-
-def delete_if_present(candidate: Gateway, key: str) -> None:
-    digest: Final = sha256(key.encode()).hexdigest()
-    if read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)):
-        candidate.post("/key/delete", {"keys": [key]})
-    assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == []
 
 
 @pytest.mark.covers("other.database.regeneration.writer_updates_dependent_grants")
@@ -45,8 +38,8 @@ def test_key_regeneration_uses_writer_with_a_real_readonly_reader(gateway: Gatew
                     outside: Final = scenario.model()
                     old: Final = string_value(candidate.post("/key/generate", {"models": [outside]})["key"])
                     new: Final = f"sk-integration-{uuid.uuid4().hex}"
-                    scenario.cleanups.callback(delete_if_present, gateway, old)
-                    scenario.cleanups.callback(delete_if_present, gateway, new)
+                    scenario.cleanups.callback(delete_key_if_present, gateway, old)
+                    scenario.cleanups.callback(delete_key_if_present, gateway, new)
                     old_hash: Final = sha256(old.encode()).hexdigest()
                     before: Final = candidate.request("POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "no grant yet"}]}, key=old)
                     assert before.status_code == 403 and before.json()["error"]["type"] == "key_model_access_denied", before.text

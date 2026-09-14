@@ -102,7 +102,7 @@ def test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows
         key: Final = scenario.key(models=[model])
         prompt: Final = f"repeated cache {uuid.uuid4().hex}"
         upstream.get("/__observations").raise_for_status()
-        results: Final = tuple(gateway.chat(model, key=key, text=prompt) for _ in range(3))
+        results: Final = tuple(gateway.post("/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}], "metadata": {"integration_marker": f"{prompt}-{index}"}}, key=key) for index in range(3))
         assert len(upstream.get("/__observations").json()["requests"]) == 1
         assert len({result["id"] for result in results}) == 1
         for result in results:
