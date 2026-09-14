@@ -408,7 +408,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "text-completion-inception",
         "valkey",
         "xiaomi_mimo",
-        "zai",
     }
 )
 
