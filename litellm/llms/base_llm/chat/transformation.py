@@ -21,10 +21,12 @@ from litellm.types.llms.openai import (
 )
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     import tiktoken
 
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.types.utils import ModelResponse
+    from litellm.types.utils import ModelInfo, ModelResponse, Usage
 
 from ..base_utils import (
     map_developer_role_to_system_role,
@@ -69,6 +71,15 @@ class BaseLLMException(Exception):
 class BaseConfig(ABC):
     def __init__(self):
         pass
+
+    def get_cache_read_input_token_cost(
+        self,
+        model_info: "ModelInfo",
+        usage: "Usage",
+        current_time: "datetime | None" = None,
+    ) -> float | None:
+        """Return a provider-specific cache-read rate, or None for shared pricing."""
+        return None
 
     @classmethod
     def get_config(cls):
@@ -409,6 +420,10 @@ class BaseConfig(ABC):
 
     @property
     def has_custom_stream_wrapper(self) -> bool:
+        return False
+
+    @property
+    def uses_async_transform_request(self) -> bool:
         return False
 
     @property

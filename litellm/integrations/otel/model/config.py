@@ -69,9 +69,17 @@ class ExporterSpec(BaseModel):
 
     kind: str = Field(
         default="console",
-        description="console | in_memory | otlp_http | otlp_grpc | <factory kind>",
+        description="console | in_memory | otlp_http | http/json | otlp_grpc | <factory kind>",
     )
     endpoint: str | None = None
+    traces_endpoint: str | None = Field(
+        default=None,
+        description=(
+            "Complete OTLP/HTTP trace URL, used verbatim. Set this when the "
+            "collector serves traces on a path other than ``/v1/traces``; "
+            "``endpoint`` is a base URL the signal path is appended to."
+        ),
+    )
     headers: str | None = None
     owner: ExporterOwner | None = Field(
         default=None,
@@ -126,6 +134,14 @@ class OpenTelemetryV2Config(BaseSettings):
     endpoint: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"),
+    )
+    traces_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
+        description=(
+            "Complete OTLP/HTTP trace URL for the single-destination shorthand, "
+            "used verbatim instead of ``endpoint`` + ``/v1/traces``."
+        ),
     )
     headers: str | None = Field(
         default=None,
@@ -250,17 +266,22 @@ class OpenTelemetryV2Config(BaseSettings):
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
         # An endpoint with the default exporter kind implies OTLP/HTTP.
-        if self.endpoint and self.exporter == "console":
+        if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
-        # shorthand into one spec so the provider always has a destination.
+        # shorthand into one spec so the provider always has a destination. A spec
+        # with no fields set is how the presets tell "nothing configured" from an
+        # operator who asked for the console by name.
         if not self.exporters:
             self.exporters = [
                 ExporterSpec(
                     kind=self.exporter,
                     endpoint=self.endpoint,
+                    traces_endpoint=self.traces_endpoint,
                     headers=self.headers,
                 )
+                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
         names = list(self.mapper_names)

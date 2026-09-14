@@ -46,6 +46,7 @@ from litellm.types.utils import GenericImageParsingChunk
 from .common_utils import (
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
+    is_encrypted_reasoning_block,
     is_non_content_values_set,
     parse_tool_call_arguments,
 )
@@ -2299,13 +2300,16 @@ def sanitize_messages_for_tool_calling(
 
 
 def _is_unsignable_thinking_block(block: object) -> bool:
-    """A `thinking` block that Anthropic cannot accept on input.
+    """A thinking block that Anthropic cannot accept on input.
 
     Anthropic verifies the thinking signature cryptographically, so a block whose
     signature is null, empty, or missing (e.g. from an open-source reasoning model)
-    is rejected with a 400 and must be dropped rather than blanked or repaired.
-    `redacted_thinking` blocks carry no signature and are always kept.
+    is rejected with a 400 and must be dropped rather than blanked or repaired, and
+    so is a block whose signature or data carries another provider's encrypted
+    reasoning. A `redacted_thinking` block Anthropic minted is always kept.
     """
+    if is_encrypted_reasoning_block(block):
+        return True
     if not isinstance(block, dict) or block.get("type") != "thinking":
         return False
     signature: Final = block.get("signature")

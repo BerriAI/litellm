@@ -26,7 +26,56 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_tags_from_request_body,
     numeric_form_fields,
     populate_request_with_path_params,
+    read_raw_json_body,
 )
+
+
+def _starlette_request(body: bytes, content_type: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/messages",
+        "headers": [(b"content-type", content_type.encode())],
+        "query_string": b"",
+    }
+    chunks = iter((body,))
+
+    async def receive():
+        return {"type": "http.request", "body": next(chunks, b""), "more_body": False}
+
+    return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_returns_the_bytes_the_parsed_body_came_from():
+    body = b'{"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}]}'
+    request = _starlette_request(body, "application/json")
+
+    assert await _read_request_body(request) == orjson.loads(body)
+    assert await read_raw_json_body(request) == body
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_is_none_until_the_body_has_been_parsed():
+    request = _starlette_request(b'{"model": "claude-sonnet-4-5"}', "application/json")
+
+    assert await read_raw_json_body(request) is None
+    assert await read_raw_json_body(None) is None
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_is_none_for_form_bodies():
+    request = _starlette_request(b"model=claude-sonnet-4-5", "application/x-www-form-urlencoded")
+
+    assert await _read_request_body(request) == {"model": "claude-sonnet-4-5"}
+    assert await read_raw_json_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_is_none_for_a_request_that_only_mocks_the_parsed_body_path():
+    mock_request = MagicMock()
+
+    assert await read_raw_json_body(mock_request) is None
 
 
 @pytest.mark.asyncio

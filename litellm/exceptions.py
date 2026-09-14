@@ -10,12 +10,14 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
+from collections.abc import Sequence
 from typing import Any, Final
 
 import httpx
 import openai
 
 from litellm.types.utils import LiteLLMCommonStrings
+from litellm.types.vector_stores import VectorStoreSearchFailure
 
 
 class RateLimitErrorCategory(str, enum.Enum):
@@ -288,6 +290,29 @@ class ImageFetchError(BadRequestError):
         )
 
 
+VECTOR_STORE_SEARCH_FAILED_CODE: Final = "vector_store_search_failed"
+
+
+class VectorStoreSearchError(BadRequestError):
+    def __init__(
+        self,
+        failures: Sequence[VectorStoreSearchFailure],
+        model: str | None = None,
+        llm_provider: str | None = None,
+    ) -> None:
+        self.failures: Final[tuple[VectorStoreSearchFailure, ...]] = tuple(failures)
+        detail: Final = "; ".join(f"{failure['vector_store_id']}: {failure['error']}" for failure in self.failures)
+        super().__init__(
+            message=(
+                "The request could not be grounded in every configured vector store. "
+                f"{len(self.failures)} vector store search(es) failed: {detail}"
+            ),
+            model=model,
+            llm_provider=llm_provider,
+            body={"type": "invalid_request_error", "code": VECTOR_STORE_SEARCH_FAILED_CODE},
+        )
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
@@ -338,6 +363,7 @@ class Timeout(openai.APITimeoutError):
         num_retries: int | None = None,
         headers: dict | None = None,
         exception_status_code: int | None = None,
+        response: httpx.Response | None = None,
     ):
         request: Final = httpx.Request(
             method="POST",
@@ -352,6 +378,8 @@ class Timeout(openai.APITimeoutError):
         self.max_retries = max_retries
         self.num_retries = num_retries
         self.headers = headers
+        if response is not None:
+            self.response = response
 
     # custom function to convert to str
     def __str__(self):

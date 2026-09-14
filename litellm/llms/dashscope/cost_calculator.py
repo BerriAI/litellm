@@ -21,7 +21,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     parse_completion_tokens_details,
     parse_prompt_tokens_details,
-    register_cache_read_cost_rate_resolver,
 )
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
@@ -205,7 +204,7 @@ def get_token_breakdown_and_rates(
     return breakdown, rates
 
 
-def _resolve_cache_read_cost_rate(
+def resolve_cache_read_input_token_cost(
     model_info: ModelInfo,
     usage: Usage,
     current_time: datetime | None,
@@ -216,12 +215,6 @@ def _resolve_cache_read_cost_rate(
         current_time=current_time,
     )
     return rates.cache_read_rate
-
-
-register_cache_read_cost_rate_resolver(
-    providers=("dashscope", "qwencloud", "qwen_ai_platform"),
-    resolver=_resolve_cache_read_cost_rate,
-)
 
 
 def cost_per_token(

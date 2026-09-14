@@ -358,7 +358,12 @@ def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
             "azure_ad_token": fake_token,
             "aws_secret_access_key": "fake-aws-secret-0000",
             "vertex_credentials": {"private_key": "fake-pem"},
-            "extra_headers": {"Authorization": "Bearer fake-bearer-0000", "x-request-id": "abc123"},
+            "extra_headers": {
+                "Authorization": "Bearer fake-bearer-0000",
+                "Cookie": "session=fake-session",
+                "Set-Cookie": "session=fake-session; HttpOnly",
+                "x-request-id": "abc123",
+            },
             "model": "gpt-4o-mini",
             "max_tokens": 17,
             "temperature": 0.25,
@@ -373,6 +378,8 @@ def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
     assert "fake-bearer-0000" not in str(result)
     assert result["api_key"] == "REDACTED"
     assert result["extra_headers"]["Authorization"] == "REDACTED"
+    assert result["extra_headers"]["Cookie"] == "REDACTED"
+    assert result["extra_headers"]["Set-Cookie"] == "REDACTED"
     assert result["extra_headers"]["x-request-id"] == "abc123"
     assert result["model"] == "gpt-4o-mini"
     assert result["max_tokens"] == 17
