@@ -4,8 +4,8 @@ import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "../key_team_helpers/key_list";
 
 interface TeamDropdownProps {
-  value?: string;
-  onChange?: (value: string) => void;
+  value?: string | null;
+  onChange?: (value: string | null) => void;
   /** Callback with the full Team object (or null on clear). */
   onTeamSelect?: (team: Team | null) => void;
   disabled?: boolean;
@@ -46,7 +46,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     return result;
   }, [data]);
 
-  const handleChange = (teamId: string) => {
+  const handleChange = (teamId: string | null) => {
     onChange?.(teamId);
     if (onTeamSelect) {
       onTeamSelect(teamId ? teams.find((t) => t.team_id === teamId) ?? null : null);
@@ -61,7 +61,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
           value: team.team_id,
           sublabel: team.team_id,
         }))}
-        value={value || undefined}
+        value={value}
         onValueChange={handleChange}
         onSearchChange={setSearch}
         onLoadMore={fetchNextPage}

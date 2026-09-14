@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useMarginConfig } from "./use_margin_config";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => ""),
@@ -70,7 +70,7 @@ describe("useMarginConfig", () => {
         await result.current.fetchMarginConfig();
       });
 
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/failed to fetch/i));
+      expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/failed to fetch/i));
     });
   });
 
@@ -89,7 +89,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Please select a provider");
+      expect(toast.fromError).toHaveBeenCalledWith("Please select a provider");
     });
 
     it("should return false and notify when percentage is out of range", async () => {
@@ -106,7 +106,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/0%.*1000%/i));
+      expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/0%.*1000%/i));
     });
 
     it("should return false when the provider already has a margin configured", async () => {
@@ -134,7 +134,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
+      expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
     });
 
     it("should save a percentage margin and return true for a valid new provider", async () => {
@@ -160,7 +160,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(true);
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Margin configuration updated successfully");
+      expect(toast.success).toHaveBeenCalledWith("Margin configuration updated successfully");
     });
 
     it("should save a fixed amount margin and return true for a valid new provider", async () => {
@@ -189,7 +189,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(true);
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Margin configuration updated successfully");
+      expect(toast.success).toHaveBeenCalledWith("Margin configuration updated successfully");
     });
 
     it("should accept the global provider without provider_map lookup", async () => {

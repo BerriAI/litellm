@@ -114,10 +114,12 @@ from __future__ import annotations
  
 import ast
 import io
+import os
 import re
 import sys
 import tokenize
 from dataclasses import dataclass
+from multiprocessing import Pool
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import NamedTuple
@@ -1070,13 +1072,36 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
             yield p
  
  
+PARALLEL_MIN_PATHS = 200
+MAX_WORKERS = 8
+
+
+def _worker_count(path_count: int) -> int:
+    """1 when the run is too small to repay process startup, else one worker per
+    core up to MAX_WORKERS."""
+    if path_count < PARALLEL_MIN_PATHS:
+        return 1
+    return max(1, min(os.cpu_count() or 1, MAX_WORKERS))
+
+
+def scan_paths(paths: Sequence[Path]) -> tuple[Violation, ...]:
+    """check_file over every path. Pure per-file work, so it fans out across
+    processes; callers sort, which is what keeps output order stable."""
+    workers = _worker_count(len(paths))
+    if workers == 1:
+        return tuple(v for path in paths for v in check_file(path))
+    with Pool(workers) as pool:
+        return tuple(v for found in pool.imap_unordered(check_file, paths, chunksize=32) for v in found)
+
+
 def main(argv: Sequence[str]) -> int:
     paths = tuple(a for a in argv if not a.startswith("-"))
     if not paths:
         print("usage: check_type_discipline.py <files-or-dirs>...", file=sys.stderr)
         return 2
  
-    violations = sorted(v for path in collect_paths(paths) for v in check_file(path))
+    targets = tuple(collect_paths(paths))
+    violations = sorted(scan_paths(targets))
     for v in violations:
         print(v.render())
  

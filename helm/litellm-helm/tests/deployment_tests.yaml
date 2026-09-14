@@ -15,7 +15,7 @@ tests:
           pattern: -litellm$
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/berriai/litellm-database:test
+          value: ghcr.io/berriai/litellm:test
   - it: should work with tolerations
     template: deployment.yaml
     set:
@@ -80,6 +80,96 @@ tests:
               secretKeyRef:
                 name: my-secret
                 key: my-key
+  - it: should inject DATABASE_READER_HOST from readReplicaEndpointKey before DATABASE_URL_READ_REPLICA
+    template: deployment.yaml
+    set:
+      db:
+        deployStandalone: false
+        useExisting: true
+        secret:
+          name: postgres
+          usernameKey: username
+          passwordKey: password
+          readReplicaEndpointKey: reader-host
+        readReplicaUrl: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_READER_HOST):5432/$(DATABASE_NAME)?sslmode=require
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_READER_HOST
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: reader-host
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL_READ_REPLICA
+            value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_READER_HOST):5432/$(DATABASE_NAME)?sslmode=require
+      # $(VAR) interpolation only resolves vars defined EARLIER in the env
+      # array, so the reader host must precede the composed URL
+      - equal:
+          path: spec.template.spec.containers[0].env[7].name
+          value: DATABASE_READER_HOST
+      - equal:
+          path: spec.template.spec.containers[0].env[8].name
+          value: DATABASE_URL_READ_REPLICA
+  - it: should omit reader host when readReplicaUrl is unset
+    template: deployment.yaml
+    set:
+      db:
+        deployStandalone: false
+        useExisting: true
+        secret:
+          name: postgres
+          usernameKey: username
+          passwordKey: password
+          readReplicaEndpointKey: reader-host
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_READER_HOST
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: reader-host
+  - it: should prefer readReplicaUrlKey over readReplicaEndpointKey composition
+    template: deployment.yaml
+    set:
+      db:
+        useExisting: true
+        secret:
+          name: postgres
+          usernameKey: username
+          passwordKey: password
+          readReplicaUrlKey: reader-url
+          readReplicaEndpointKey: reader-host
+        readReplicaUrl: postgresql://ignored
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL_READ_REPLICA
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: reader-url
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL_READ_REPLICA
+            value: postgresql://ignored
+      # the unused reader-host secret ref must be suppressed so a missing
+      # key can't fail pod creation
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_READER_HOST
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: reader-host
   - it: should work with extraEnvVars
     template: deployment.yaml
     set:
@@ -337,7 +427,7 @@ tests:
     template: deployment.yaml
     set:
       image:
-        repository: ghcr.io/berriai/litellm-database
+        repository: ghcr.io/berriai/litellm
         tag: test
       extraInitContainers:
         - name: init-tpl
@@ -348,7 +438,7 @@ tests:
           path: spec.template.spec.initContainers
           content:
             name: init-tpl
-            image: "ghcr.io/berriai/litellm-database:test"
+            image: "ghcr.io/berriai/litellm:test"
             command: ["echo", "hello"]
   - it: should work with extraContainers
     template: deployment.yaml
@@ -366,7 +456,7 @@ tests:
     template: deployment.yaml
     set:
       image:
-        repository: ghcr.io/berriai/litellm-database
+        repository: ghcr.io/berriai/litellm
         tag: test
       extraContainers:
         - name: sidecar-tpl
@@ -376,12 +466,12 @@ tests:
           path: spec.template.spec.containers
           content:
             name: sidecar-tpl
-            image: "ghcr.io/berriai/litellm-database:test"
+            image: "ghcr.io/berriai/litellm:test"
   - it: should support tpl in podAnnotations
     template: deployment.yaml
     set:
       image:
-        repository: ghcr.io/berriai/litellm-database
+        repository: ghcr.io/berriai/litellm
         tag: test
       # Mirrors the real-world scenario this feature unblocks:
       # user disables the built-in ConfigMap (and its built-in checksum/config
@@ -398,7 +488,7 @@ tests:
           value: "test"
       - equal:
           path: spec.template.metadata.annotations["example.com/some-key"]
-          value: "ghcr.io/berriai/litellm-database"
+          value: "ghcr.io/berriai/litellm"
       - equal:
           path: spec.template.metadata.annotations["example.com/literal"]
           value: "plain-string-value"

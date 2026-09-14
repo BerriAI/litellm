@@ -13,6 +13,8 @@ All /budget management endpoints
 
 #### BUDGET TABLE MANAGEMENT ####
 import math
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -93,7 +95,7 @@ async def new_budget(
         budget_obj.budget_reset_at = get_budget_reset_time(budget_duration=budget_obj.budget_duration)
 
     budget_obj_json: Final = budget_obj.model_dump(exclude_none=True)
-    budget_obj_jsonified: Final = jsonify_object(budget_obj_json)  # json dump any dictionaries
+    budget_obj_jsonified: Final[dict[str, object]] = jsonify_object(budget_obj_json)  # mutable-ok: prisma create input
     try:
         response: Final = await BudgetRepository(prisma_client).table.create(
             data={
@@ -175,16 +177,24 @@ async def update_budget(
     recomputed_reset_at: Final = (
         {"budget_reset_at": get_budget_reset_time(budget_duration=budget_obj.budget_duration)}
         if budget_obj.budget_duration is not None and "budget_reset_at" not in budget_obj.model_fields_set
+        else MappingProxyType({"budget_reset_at": None})
+        if "budget_duration" in budget_obj.model_fields_set
+        and budget_obj.budget_duration is None
+        and "budget_reset_at" not in budget_obj.model_fields_set
         else {}
+    )
+
+    budget_obj_jsonified: Final[Mapping[str, object]] = jsonify_object(
+        {
+            **budget_obj.model_dump(exclude_unset=True),
+            **recomputed_reset_at,
+            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        }
     )
 
     response: Final = await BudgetRepository(prisma_client).table.update(
         where={"budget_id": budget_obj.budget_id},
-        data={
-            **budget_obj.model_dump(exclude_unset=True),
-            **recomputed_reset_at,
-            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        },
+        data=budget_obj_jsonified,
     )
 
     return response

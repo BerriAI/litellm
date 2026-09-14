@@ -22,6 +22,7 @@ import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/Pass
 import HealthStatusPanel from "@/app/(dashboard)/models-and-endpoints/panels/HealthStatusPanel";
 import ModelRetrySettingsPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelRetrySettingsPanel";
 import ModelGroupAliasPanel from "@/app/(dashboard)/models-and-endpoints/panels/ModelGroupAliasPanel";
+import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AccessGroupBudgetsPanel";
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -34,6 +35,7 @@ type ModelTabSlug =
   | "health"
   | "retry-settings"
   | "model-group-alias"
+  | "access-group-budgets"
   | "price-data";
 
 const BASE_TAB_KEY = "all-models";
@@ -46,6 +48,7 @@ const TAB_LABELS: Record<ModelTabSlug, string> = {
   health: "Health Status",
   "retry-settings": "Model Retry Settings",
   "model-group-alias": "Model Group Alias",
+  "access-group-budgets": "Model Access Group Budgets",
   "price-data": "Price Data Reload",
 };
 
@@ -67,6 +70,8 @@ const renderPanel = (key: string) => {
       return <ModelRetrySettingsPanel />;
     case "model-group-alias":
       return <ModelGroupAliasPanel />;
+    case "access-group-budgets":
+      return <AccessGroupBudgetsPanel />;
     case "price-data":
       return <PriceDataPanel />;
     default:
@@ -75,7 +80,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
   const queryClient = useQueryClient();
@@ -87,7 +92,7 @@ export default function ModelsAndEndpointsPage() {
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
   const canCreate = canCreateModels(
-    { userRole, userID },
+    { userRole, userID, isViewOnly },
     {
       teams: teams ?? null,
       disabledForInternalUsers:
@@ -101,17 +106,22 @@ export default function ModelsAndEndpointsPage() {
       "",
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
-      ...(isAdmin
-        ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
+      // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
+      // viewer these write-only panels; only the raw-role isViewOnly separates them. Health Status
+      // stays: it is the bucket's one read view, and viewers keep read parity with admins.
+      ...(isAdmin && !isViewOnly ? (["llm-credentials", "pass-through"] as const) : []),
+      ...(isAdmin ? (["health"] as const) : []),
+      ...(isAdmin && !isViewOnly
+        ? (["retry-settings", "model-group-alias", "access-group-budgets", "price-data"] as const)
         : []),
     ],
-    [canCreate, isAdmin],
+    [canCreate, isAdmin, isViewOnly],
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
-    if (slug === "auto-routers") {
+    if (slug === "auto-routers" || slug === "access-group-budgets") {
       return (
         <span className="flex items-center gap-2">
           {TAB_LABELS[slug]} <BetaBadge />
@@ -135,7 +145,7 @@ export default function ModelsAndEndpointsPage() {
           teamId={teamId}
           onClose={close}
           accessToken={accessToken}
-          is_team_admin={userRole === "Admin"}
+          is_team_admin={userRole === "Admin" && !isViewOnly}
           is_proxy_admin={userRole === "Proxy Admin"}
           userModels={allModelsOnProxy}
           editTeam={false}
@@ -169,6 +179,7 @@ export default function ModelsAndEndpointsPage() {
             accessToken={accessToken}
             userID={userID}
             userRole={userRole}
+            isViewOnly={isViewOnly}
             onModelUpdate={invalidateModels}
             modelAccessGroups={availableModelAccessGroups}
           />

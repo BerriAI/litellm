@@ -1,6 +1,6 @@
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getProxyBaseUrl, getPublicModelHubInfo, updateUsefulLinksCall } from "@/components/networking";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import UsefulLinksManagement from "./UsefulLinksManagement";
@@ -11,18 +11,10 @@ vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const mockedGetPublicModelHubInfo = vi.mocked(getPublicModelHubInfo);
 const mockedUpdateUsefulLinksCall = vi.mocked(updateUsefulLinksCall);
 const mockedGetProxyBaseUrl = vi.mocked(getProxyBaseUrl);
-const mockedNotifications = vi.mocked(NotificationsManager);
+const mockedNotifications = vi.mocked(toast);
 
 describe("UsefulLinksManagement", () => {
   beforeEach(() => {
@@ -54,8 +46,8 @@ describe("UsefulLinksManagement", () => {
     const displayNameInput = await screen.findByPlaceholderText("Friendly name");
     const urlInput = screen.getByPlaceholderText("https://example.com");
 
-    await user.type(displayNameInput, "Docs");
-    await user.type(urlInput, "https://docs.example.com");
+    fireEvent.change(displayNameInput, { target: { value: "Docs" } });
+    fireEvent.change(urlInput, { target: { value: "https://docs.example.com" } });
     await user.click(screen.getByRole("button", { name: /add link/i }));
 
     await waitFor(() =>
@@ -156,7 +148,7 @@ describe("UsefulLinksManagement", () => {
     // Update the display name
     const displayNameInput = screen.getByDisplayValue("Test Link");
     await user.clear(displayNameInput);
-    await user.type(displayNameInput, "Updated Link");
+    fireEvent.change(displayNameInput, { target: { value: "Updated Link" } });
 
     // Click save
     await user.click(screen.getByRole("button", { name: /save/i }));
@@ -192,7 +184,7 @@ describe("UsefulLinksManagement", () => {
     // Update the display name
     const displayNameInput = screen.getByDisplayValue("Test Link");
     await user.clear(displayNameInput);
-    await user.type(displayNameInput, "Updated Link");
+    fireEvent.change(displayNameInput, { target: { value: "Updated Link" } });
 
     // Click cancel
     await user.click(screen.getByRole("button", { name: /cancel/i }));

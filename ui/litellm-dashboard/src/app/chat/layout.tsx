@@ -8,7 +8,7 @@ import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ChatShellProvider } from "@/contexts/ChatShellContext";
 import ChatShell from "@/components/chat/ChatShell";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 
 // ChatShellProvider uses useSearchParams(), which requires a Suspense boundary for static export.
 function ChatLayoutContent({ children }: { children: React.ReactNode }) {
@@ -20,7 +20,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   const blocked = !isUISettingsLoading && !chatEnabled;
 
   useEffect(() => {
-    if (blocked) router.replace(migratedHref(""));
+    if (blocked) router.replace(uiHref(""));
   }, [blocked, router]);
 
   if (isUISettingsLoading || blocked) return null;

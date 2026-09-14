@@ -59,6 +59,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   return (
     <DataTable
       data={organizations}
+      paginationMode="client"
       columns={columns}
       getRowId={(organization, index) => organization.organization_id || String(index)}
       sortingMode="client"

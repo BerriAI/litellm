@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   cancelModelCostMapReload,
   getModelCostMapReloadStatus,
@@ -19,9 +19,6 @@ vi.mock("./networking", () => ({
   reloadModelCostMap: vi.fn(),
   scheduleModelCostMapReload: vi.fn(),
 }));
-vi.mock("./molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 
 const unscheduledStatus = { scheduled: false, interval_hours: null, last_run: null, next_run: null };
 const scheduledStatus = {
@@ -35,7 +32,15 @@ const remoteSource = {
   url: "https://pricing.example.test/model_prices.json",
   is_env_forced: false,
   fallback_reason: null,
+  loaded_at: null,
+  source_revision: null,
+  etag: null,
   model_count: 1234,
+};
+const provenance = {
+  loaded_at: "2026-09-07T10:00:00Z",
+  source_revision: "4273ec544726bf255ea920533e209e6022653bb4",
+  etag: 'W/"eb8e9a53f4cc284b"',
 };
 
 describe("PriceDataReload", () => {
@@ -54,6 +59,43 @@ describe("PriceDataReload", () => {
     expect(screen.getByText("No periodic reload scheduled")).toBeInTheDocument();
   });
 
+  it("shows which revision of the cost map is loaded when the source reports one", async () => {
+    vi.mocked(getModelCostMapSource).mockResolvedValue({ ...remoteSource, ...provenance } as never);
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    expect(await screen.findByText("Source revision:")).toBeInTheDocument();
+    expect(screen.getByText("4273ec544726")).toBeInTheDocument();
+    expect(screen.getByText("ETag:")).toBeInTheDocument();
+    expect(screen.getByText('W/"eb8e9a53f4cc284b"')).toBeInTheDocument();
+    expect(screen.getByText("Loaded at:")).toBeInTheDocument();
+    expect(screen.getByText(/worker that answered this request/)).toBeInTheDocument();
+    expect(screen.getByText(/Last run time is the latest reload any worker recorded/)).toBeInTheDocument();
+    expect(screen.getByText(new Date(provenance.loaded_at).toLocaleString())).toBeInTheDocument();
+  });
+
+  it("shows a malformed loaded_at as-is instead of Invalid Date", async () => {
+    vi.mocked(getModelCostMapSource).mockResolvedValue({
+      ...remoteSource,
+      ...provenance,
+      loaded_at: "yesterday-ish",
+    } as never);
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    expect(await screen.findByText("Loaded at:")).toBeInTheDocument();
+    expect(screen.getByText("yesterday-ish")).toBeInTheDocument();
+    expect(screen.queryByText("Invalid Date")).not.toBeInTheDocument();
+  });
+
+  it("hides the provenance rows when the loaded map carries no stamp", async () => {
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    expect(await screen.findByText("Pricing Data Source")).toBeInTheDocument();
+    expect(screen.queryByText("Source revision:")).not.toBeInTheDocument();
+    expect(screen.queryByText("ETag:")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loaded at:")).not.toBeInTheDocument();
+    expect(screen.queryByText(/worker that answered this request/)).not.toBeInTheDocument();
+  });
+
   it("confirms an immediate reload and refreshes dependent data", async () => {
     const user = userEvent.setup();
     const onReloadSuccess = vi.fn();
@@ -66,7 +108,7 @@ describe("PriceDataReload", () => {
 
     await waitFor(() => expect(reloadModelCostMap).toHaveBeenCalledWith("sk-test"));
     expect(onReloadSuccess).toHaveBeenCalledTimes(1);
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Price data reloaded successfully! 42 models updated.");
+    expect(toast.success).toHaveBeenCalledWith("Price data reloaded successfully! 42 models updated.");
   });
 
   it("schedules periodic reloads using the selected interval", async () => {
@@ -78,11 +120,11 @@ describe("PriceDataReload", () => {
     expect(screen.getByRole("dialog", { name: "Set Up Periodic Reload" })).toBeInTheDocument();
     const hours = screen.getByRole("spinbutton", { name: "Reload interval in hours" });
     await user.clear(hours);
-    await user.type(hours, "12");
+    fireEvent.change(hours, { target: { value: "12" } });
     await user.click(screen.getByRole("button", { name: "Schedule" }));
 
     await waitFor(() => expect(scheduleModelCostMapReload).toHaveBeenCalledWith("sk-test", 12));
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Periodic reload scheduled for every 12 hours");
+    expect(toast.success).toHaveBeenCalledWith("Periodic reload scheduled for every 12 hours");
   });
 
   it.each(["-1", "1.5", "169"])("should reject an invalid periodic reload interval of %s hours", async (interval) => {
@@ -94,7 +136,7 @@ describe("PriceDataReload", () => {
     await user.click(screen.getByRole("button", { name: "Schedule" }));
 
     expect(scheduleModelCostMapReload).not.toHaveBeenCalled();
-    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Hours must be a whole number between 1 and 168");
+    expect(toast.fromError).toHaveBeenCalledWith("Hours must be a whole number between 1 and 168");
   });
 
   it.each([1, 168])("should schedule a periodic reload at the inclusive %s-hour boundary", async (interval) => {
@@ -118,6 +160,6 @@ describe("PriceDataReload", () => {
     await user.click(await screen.findByRole("button", { name: /Cancel Periodic Reload/ }));
 
     await waitFor(() => expect(cancelModelCostMapReload).toHaveBeenCalledWith("sk-test"));
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Periodic reload cancelled successfully");
+    expect(toast.success).toHaveBeenCalledWith("Periodic reload cancelled successfully");
   });
 });
