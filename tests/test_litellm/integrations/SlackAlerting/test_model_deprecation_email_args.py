@@ -1,5 +1,7 @@
 """Tests for the model deprecation email settings on SlackAlertingArgs."""
 
+from typing import Final
+
 import pytest
 from pydantic import ValidationError
 
@@ -11,7 +13,7 @@ from litellm.types.integrations.slack_alerting import (
 
 
 def test_should_default_thresholds_to_30_7_0():
-    assert SlackAlertingArgs().model_deprecation_email_thresholds == [30, 7, 0]
+    assert SlackAlertingArgs().model_deprecation_email_thresholds == (30, 7, 0)
 
 
 def test_should_default_ttl_to_90_days():
@@ -19,12 +21,12 @@ def test_should_default_ttl_to_90_days():
 
 
 def test_should_dedupe_and_sort_thresholds_descending():
-    args = SlackAlertingArgs(model_deprecation_email_thresholds=[0, 7, 7, 30])
-    assert args.model_deprecation_email_thresholds == [30, 7, 0]
+    args: Final = SlackAlertingArgs(model_deprecation_email_thresholds=[0, 7, 7, 30])
+    assert args.model_deprecation_email_thresholds == (30, 7, 0)
 
 
 def test_should_allow_empty_thresholds_to_disable_emails():
-    assert SlackAlertingArgs(model_deprecation_email_thresholds=[]).model_deprecation_email_thresholds == []
+    assert SlackAlertingArgs(model_deprecation_email_thresholds=[]).model_deprecation_email_thresholds == ()
 
 
 def test_should_reject_negative_thresholds():

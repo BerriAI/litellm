@@ -125,8 +125,8 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         ge=60,
         description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
     )
-    model_deprecation_email_thresholds: list[int] = Field(
-        default_factory=lambda: [30, 7, 0],
+    model_deprecation_email_thresholds: tuple[int, ...] = Field(
+        default=(30, 7, 0),
         description=(
             "Days before a model's deprecation_date at which team admins are emailed. "
             "One email per team per threshold. An empty list disables deprecation emails."
@@ -136,17 +136,17 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=90 * 24 * 60 * 60,
         ge=1,
         description=(
-            "Seconds a sent (team, model, threshold) deprecation email is remembered to prevent re-sending. "
-            "Default is 90 days."
+            "Seconds each (team, model, threshold) deprecation email is remembered after sending so the same "
+            "milestone is not emailed twice. Default is 90 days."
         ),
     )
 
     @field_validator("model_deprecation_email_thresholds")
     @classmethod
-    def _normalize_deprecation_email_thresholds(cls, value: list[int]) -> list[int]:
+    def _normalize_deprecation_email_thresholds(cls, value: tuple[int, ...]) -> tuple[int, ...]:
         if any(threshold < 0 for threshold in value):
             raise ValueError("model_deprecation_email_thresholds must be non-negative")
-        return sorted(set(value), reverse=True)
+        return tuple(sorted(frozenset(value), reverse=True))
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):
