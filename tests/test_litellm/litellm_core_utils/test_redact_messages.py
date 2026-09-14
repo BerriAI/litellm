@@ -16,6 +16,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     perform_redaction,
+    redact_message_input_output_from_custom_logger,
     redact_streaming_responses_for_custom_logger,
     redacted_standard_logging_payload,
     should_redact_message_logging,
@@ -441,6 +442,33 @@ class TestPerformRedaction:
         assert redacted.choices[0].message.audio is None
         assert result.choices[0].message.audio is not None
         assert result.choices[0].message.audio.transcript == "sensitive transcript"
+
+    def test_opted_out_logger_redacts_audio_on_custom_logger_entry(self):
+        logger = SimpleNamespace(message_logging=False)
+        logs = SimpleNamespace(model_call_details={})
+        response = litellm.ModelResponse(
+            id="resp-3",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="message content",
+                        role="assistant",
+                        audio=ChatCompletionAudioResponse(
+                            data="<base64-audio>",
+                            expires_at=1_752_000_000,
+                            transcript="sensitive transcript",
+                        ),
+                    )
+                )
+            ],
+            model="gpt-4o-audio-preview",
+        )
+
+        redacted = redact_message_input_output_from_custom_logger(logs, response, logger)
+
+        assert redacted.choices[0].message.audio is None
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
+        assert response.choices[0].message.audio is not None
 
     def test_redacts_audio_on_streaming_response_object(self):
         streaming_choice = litellm.utils.StreamingChoices(
