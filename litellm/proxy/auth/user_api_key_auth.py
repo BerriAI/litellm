@@ -850,6 +850,7 @@ async def _auto_register_jwt_mapping(
     user_id: str | None = None,
     org_id: str | None = None,
     end_user_id: str | None = None,
+    agent_id: str | None = None,
 ) -> UserAPIKeyAuth | None:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
@@ -881,6 +882,7 @@ async def _auto_register_jwt_mapping(
         team_id=team_id,
         user_id=user_id,
         organization_id=org_id,
+        agent_id=agent_id,
         metadata={
             "auto_registered": True,
             "jwt_claim_field": virtual_key_claim_field,
@@ -969,6 +971,7 @@ async def _auto_register_jwt_mapping(
     if auto_registered_key is not None:
         auto_registered_key.org_id = org_id
         auto_registered_key.end_user_id = end_user_id
+        auto_registered_key.agent_id = agent_id
         auto_registered_key.api_key = auto_registered_key.token
     return auto_registered_key
 
@@ -1635,6 +1638,7 @@ async def _user_api_key_auth_builder(
                             user_id=user_id,
                             org_id=org_id,
                             end_user_id=end_user_id,
+                            agent_id=agent_id,
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
