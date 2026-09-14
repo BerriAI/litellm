@@ -250,6 +250,58 @@ async def test_custom_code_flag_default_reason_and_empty_metadata():
     }
 
 
+IDENTITY_ECHO_CODE = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    "    return flag('identity', metadata={\n"
+    "        'ids': [request_data['user_id'], request_data['team_id'], request_data['end_user_id']],\n"
+    "        'metadata_keys': sorted(request_data['metadata'].keys()),\n"
+    "    })\n"
+)
+CALLER_IDENTITY = {
+    "user_api_key_user_id": "someone@example.com",
+    "user_api_key_team_id": "team-1",
+    "user_api_key_end_user_id": "end-user-1",
+    "user_api_key_alias": "guardrail-repro-key",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+async def test_custom_code_sandbox_sees_caller_identity_from_proxy_metadata_bucket(metadata_key):
+    """LIT-6609: the proxy writes user_api_key_* into `metadata` (chat) or `litellm_metadata`
+    (/v1/messages, responses, batches, files); the sandbox must resolve ids from either."""
+    guardrail = _compile(IDENTITY_ECHO_CODE)
+    request_data = {"model": "m", metadata_key: dict(CALLER_IDENTITY)}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entry = request_data[metadata_key]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"]["metadata"] == {
+        "ids": ["someone@example.com", "team-1", "end-user-1"],
+        "metadata_keys": sorted(CALLER_IDENTITY),
+    }
+
+
+@pytest.mark.asyncio
+async def test_custom_code_sandbox_merges_caller_metadata_with_litellm_metadata():
+    """On litellm_metadata routes the caller's own `metadata` field must stay visible next to
+    the proxy identity block, and the proxy block wins on key collisions."""
+    guardrail = _compile(IDENTITY_ECHO_CODE)
+    request_data = {
+        "model": "m",
+        "metadata": {"trace_id": "abc", "user_api_key_user_id": "forged"},
+        "litellm_metadata": dict(CALLER_IDENTITY),
+    }
+
+    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+
+    entry = request_data["litellm_metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_response"]["metadata"] == {
+        "ids": ["someone@example.com", "team-1", "end-user-1"],
+        "metadata_keys": sorted([*CALLER_IDENTITY, "trace_id"]),
+    }
+
+
 @pytest.mark.asyncio
 async def test_custom_code_allow_still_records_success_not_flagged():
     code = "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
