@@ -701,7 +701,7 @@ async def bulk_new_user(
             user_api_key_cache=user_api_key_cache,
         )
     except Exception as e:  # noqa: BLE001  # normalize every failure to the proxy exception contract
-        verbose_proxy_logger.exception("/user/bulk_new: Exception occured - %s", e)
+        verbose_proxy_logger.exception("/user/bulk_new: Exception occured")
         raise handle_exception_on_proxy(e)
 
 
