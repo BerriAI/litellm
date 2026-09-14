@@ -8,8 +8,9 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -19,6 +20,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
@@ -6284,3 +6286,51 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
     assert isinstance(values, list)
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@contextmanager
+def _a_proxy_running_in(tz: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
+def _over_limit_429(handler: _PROXY_MaxParallelRequestsHandler) -> str:
+    over_limit = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "api_key",
+                "limit_remaining": 0,
+                "rate_limit_type": "requests",
+                "current_limit": 2,
+            }
+        ],
+    }
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        handler._handle_rate_limit_error(
+            response=over_limit,
+            descriptors=[{"key": "api_key", "value": "sk-test", "rate_limit": None}],
+            requested_model="gpt-4o-mini",
+        )
+    return str(exc_info.value).split("Limit resets at: ")[-1]
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+@pytest.mark.parametrize("tz", ["Asia/Kolkata", "Europe/Paris", "America/Los_Angeles"])
+def test_the_429_reset_time_is_utc_on_a_non_utc_proxy(tz, monkeypatch):
+    fixed_epoch = datetime(2026, 9, 4, 21, 53, 21, tzinfo=timezone.utc).timestamp()
+    with _a_proxy_running_in(tz, monkeypatch):
+        handler = _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=MagicMock(),
+            time_provider=lambda: datetime.fromtimestamp(fixed_epoch),
+        )
+        handler.window_size = 60
+        reported = _over_limit_429(handler)
+
+    assert reported == "2026-09-04 21:54:21 UTC"
