@@ -6827,6 +6827,38 @@ class TestMCPServerManager:
         listed = manager.get_listed_tool(server, "turn", other)
         assert listed is not None and listed.description == "everyone"
 
+    @pytest.mark.parametrize(
+        ("signer", "static_headers", "shared"),
+        [
+            pytest.param(MagicMock(), None, False, id="signer-mints-per-caller-authorization"),
+            pytest.param(MagicMock(), {"Authorization": "Bearer admin-token"}, True, id="static-authorization-wins"),
+            pytest.param(None, None, True, id="no-signer-stays-shared"),
+        ],
+    )
+    def test_jwt_signer_makes_a_shared_server_list_per_caller(self, signer, static_headers, shared):
+        """MCPJWTSigner hands upstream a JWT naming the caller on an otherwise shared ``auth_type: none``
+        server, so the upstream may tailor the catalog and the cache must not hand one caller another's."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", static_headers=static_headers
+        )
+        alice = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key="hashed-alice"))
+        bob = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="bob", api_key="hashed-bob"))
+
+        with patch(  # test-quality-ok: the signer is a process-wide singleton the manager reads, no injection seam
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
+            return_value=signer,
+        ):
+            manager._create_prefixed_tools(
+                [MCPTool(name="turn", description="alice view", inputSchema={})], server, caller=alice
+            )
+            for_bob = manager.get_listed_tool(server, "srv-turn", bob)
+
+        if shared:
+            assert for_bob is not None and for_bob.description == "alice view"
+        else:
+            assert for_bob is None
+
     @pytest.mark.asyncio
     async def test_call_tool_hands_hooks_the_catalog_the_same_forwarded_headers_listed(self):
         """Interleaved callers on a forwarded-header server: the hook must see the caller's own catalog."""

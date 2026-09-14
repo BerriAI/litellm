@@ -40,6 +40,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     fake_server.server_name = "openapi-petstore"
     fake_server.alias = None
     fake_server.short_prefix = None
+    fake_server.tool_name_to_description = None
 
     fake_tool = MagicMock()
     fake_tool.name = "list_pets"
@@ -123,6 +124,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     fake_server.server_name = "openapi-petstore"
     fake_server.alias = None
     fake_server.short_prefix = None
+    fake_server.tool_name_to_description = None
 
     fake_tool = MagicMock()
     fake_tool.name = "delete_pet"
