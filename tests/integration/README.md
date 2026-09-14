@@ -2,7 +2,7 @@
 
 These tests exercise a running gateway, PostgreSQL and Redis with an owned local upstream. CircleCI owns this suite. Tests are grouped by behavior, with no automatic test retries or fallback to paid provider calls
 
-Use `tests/integration/run.py management`, `accounting` or `providers` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
+Use `tests/integration/run.py management`, `accounting`, `database` or `providers` to run a selected group. Set `INTEGRATION_PROXY_URL`, `INTEGRATION_UPSTREAM_URL`, `INTEGRATION_MASTER_KEY` and `DATABASE_URL` to an isolated test deployment. The runner selects the new domain directories explicitly; the legacy OCI and sandbox selections remain separate
 
 Management also requires `INTEGRATION_PEER_URL`, `REDIS_HOST` and `REDIS_PORT`. CircleCI starts two directly addressed proxy processes sharing only that job's stores. The test-only CLI wrapper supplies enterprise route entitlement, following the existing behavior suite's convention. It does not qualify license validation; run it with one worker and no reload
 
@@ -17,3 +17,7 @@ Add contract definitions to the existing `tests/e2e/coverage_registry` and map c
 Provider sentinels currently use the controlled server, not live recordings. The provider shard also runs the existing strict replay controls for changed requests, exhausted interactions, leftover interactions and no provider connection. Future recorded scenarios must use that replay-only implementation; missing recordings cannot fall back to a real provider. The observation endpoint is destructive and the current selection runs serially against one owned upstream
 
 Fixtures must contain synthetic data only. Keep private incident records and source documents out of code, fixtures, logs and PR descriptions
+
+Database cases own their temporary schemas, roles, constraints and proxy processes. They prove reader-versus-writer execution with PostgreSQL lock observations, exercise real transaction wait limits and verify rollback after a reached database failure
+
+Accounting cases compare persisted input and output cost components against literal rates, including zero and default prices. Cache state models assert actual upstream calls, response identity and every persisted charge. Generated accounting tests have a 180-second test limit to accommodate the asynchronous spend writer; CircleCI keeps the whole shard capped at 11 minutes
