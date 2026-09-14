@@ -15056,6 +15056,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/bulk_member_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Team Member Delete
+         * @description Remove up to 500 members from one team in a single request.
+         *
+         *     Same authorization as `/team/member_delete` (proxy admin, team admin, or org admin of the team's
+         *     organization). Each member is named by `user_id` or `user_email`. The team is rewritten once under
+         *     the team lock: the roster, every removed user's `teams` array, their `LiteLLM_TeamMembership` rows and
+         *     their team-scoped keys are all cleaned up together. Members that are not on the team are reported in
+         *     `results` with `success: false` and the rest are still removed.
+         *
+         *     Example request:
+         *     ```bash
+         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_delete' \
+         *     --header 'Authorization: Bearer sk-1234' \
+         *     --header 'Content-Type: application/json' \
+         *     --data '{
+         *         "team_id": "team-1234",
+         *         "members": [{"user_id": "user1"}, {"user_email": "user2@example.com"}]
+         *     }'
+         *     ```
+         *
+         *     Returns `team_id`, `results` (one entry per input member, in order, with `user_id`, `user_email`,
+         *     `success`, `error`), `total_requested`, `successful_deletions` and `failed_deletions`.
+         */
+        post: operations["bulk_team_member_delete_team_bulk_member_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/daily/activity": {
         parameters: {
             query?: never;
@@ -16478,6 +16518,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/bulk_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete User
+         * @description Delete up to 500 internal users in one request and remove each one from every team they belong to.
+         *
+         *     Same authorization as `/user/delete`: proxy admins may delete anyone, org admins only users whose
+         *     organizations they all administer. Each team a deleted user was on is rewritten once under the team
+         *     lock, so the roster, the user's `teams` array and the `LiteLLM_TeamMembership` rows all agree afterwards.
+         *     Then the users' keys, invitation links, organization memberships and user rows are deleted.
+         *
+         *     Rows fail independently: unknown, duplicate or out-of-scope ids are reported in `results` with
+         *     `success: false` and an `error`, and the other users are still deleted.
+         *
+         *     Usage Example
+         *
+         *     ```shell
+         *     curl -X POST "http://localhost:4000/user/bulk_delete" \
+         *     -H "Content-Type: application/json" \
+         *     -H "Authorization: Bearer sk-1234" \
+         *     -d '{"user_ids": ["user-1", "user-2"]}'
+         *     ```
+         *
+         *     Returns `results` (one entry per input id, in order, with `user_id`, `user_email`, `success`,
+         *     `teams_removed`, `error`), `total_requested`, `successful_deletions` and `failed_deletions`.
+         */
+        post: operations["bulk_delete_user_user_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/bulk_update": {
         parameters: {
             query?: never;
@@ -16781,7 +16861,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16887,7 +16966,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -24505,6 +24583,22 @@ export interface components {
             /** Budgets */
             budgets: string[];
         };
+        /** BulkDeleteUserRequest */
+        BulkDeleteUserRequest: {
+            /** User Ids */
+            user_ids: string[];
+        };
+        /** BulkDeleteUserResponse */
+        BulkDeleteUserResponse: {
+            /** Failed Deletions */
+            failed_deletions: number;
+            /** Results */
+            results: components["schemas"]["UserDeleteResult"][];
+            /** Successful Deletions */
+            successful_deletions: number;
+            /** Total Requested */
+            total_requested: number;
+        };
         /**
          * BulkTeamMemberAddRequest
          * @description Request for bulk team member addition
@@ -24541,6 +24635,26 @@ export interface components {
             updated_team?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** BulkTeamMemberDeleteRequest */
+        BulkTeamMemberDeleteRequest: {
+            /** Members */
+            members: components["schemas"]["MemberDeleteRequest"][];
+            /** Team Id */
+            team_id: string;
+        };
+        /** BulkTeamMemberDeleteResponse */
+        BulkTeamMemberDeleteResponse: {
+            /** Failed Deletions */
+            failed_deletions: number;
+            /** Results */
+            results: components["schemas"]["TeamMemberDeleteResult"][];
+            /** Successful Deletions */
+            successful_deletions: number;
+            /** Team Id */
+            team_id: string;
+            /** Total Requested */
+            total_requested: number;
         };
         /**
          * BulkUpdateKeyRequest
@@ -31903,6 +32017,13 @@ export interface components {
              */
             user_id?: string | null;
         };
+        /** MemberDeleteRequest */
+        MemberDeleteRequest: {
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /** MemoryCreateRequest */
         MemoryCreateRequest: {
             /**
@@ -37167,6 +37288,20 @@ export interface components {
             user_id?: string | null;
         };
         /**
+         * TeamMemberDeleteResult
+         * @description Outcome for one row of `/team/bulk_member_delete`.
+         */
+        TeamMemberDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
          * TeamMemberInfoResponse
          * @description Response for GET /team/{team_id}/members/me — caller's own membership row.
          */
@@ -39344,6 +39479,25 @@ export interface components {
              * @enum {string}
              */
             severity: "info" | "warning" | "error";
+        };
+        /**
+         * UserDeleteResult
+         * @description Outcome for one row of `/user/bulk_delete`. `teams_removed` lists the teams the user was taken out of.
+         */
+        UserDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /**
+             * Teams Removed
+             * @default []
+             */
+            teams_removed: string[];
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /**
          * UserHeaderMapping
@@ -58887,6 +59041,39 @@ export interface operations {
             };
         };
     };
+    bulk_team_member_delete_team_bulk_member_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_team_daily_activity_team_daily_activity_get: {
         parameters: {
             query?: {
@@ -60627,6 +60814,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    bulk_delete_user_user_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

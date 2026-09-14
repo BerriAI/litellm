@@ -659,6 +659,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/update",
             "/user/bulk_update",
             "/user/delete",
+            "/user/bulk_delete",
             "/user/info",
             "/user/list",
             "/user/daily/activity",
@@ -838,6 +839,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/team/bulk_member_delete",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",

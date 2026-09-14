@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,9 +8,12 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     Member,
+    MemberDeleteRequest,
 )
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
+
+MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
 
 class GetTeamMemberPermissionsRequest(BaseModel):
@@ -116,6 +119,28 @@ class BulkTeamMemberAddResponse(BaseModel):
     successful_additions: int
     failed_additions: int
     updated_team: dict[str, Any] | None = None
+
+
+class BulkTeamMemberDeleteRequest(BaseModel):
+    team_id: str
+    members: tuple[MemberDeleteRequest, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_DELETES)
+
+
+class TeamMemberDeleteResult(BaseModel):
+    """Outcome for one row of `/team/bulk_member_delete`."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    error: str | None = None
+
+
+class BulkTeamMemberDeleteResponse(BaseModel):
+    team_id: str
+    results: tuple[TeamMemberDeleteResult, ...]
+    total_requested: int
+    successful_deletions: int
+    failed_deletions: int
 
 
 class TeamMemberInfoResponse(LiteLLM_TeamMembership):
