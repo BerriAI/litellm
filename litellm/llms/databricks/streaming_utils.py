@@ -1,5 +1,7 @@
 import json
-from typing import Final, cast
+from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -10,21 +12,30 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import GenericStreamingChunk, Usage
 
+_TOKEN_DETAIL_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _as_detail_dict(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    return _TOKEN_DETAIL_ADAPTER.validate_python(value)
+
 
 def _usage_to_chat_completion_block(usage: Usage | None) -> ChatCompletionUsageBlock | None:
     if usage is None:
         return None
     dumped: Final = usage.model_dump()
-    raw_prompt_details: Final = dumped.get("prompt_tokens_details")
-    raw_completion_details: Final = dumped.get("completion_tokens_details")
     prompt_tokens: Final = usage.prompt_tokens or 0
     completion_tokens: Final = usage.completion_tokens or 0
     total_tokens: Final = usage.total_tokens or 0
-    prompt_tokens_details: Final = raw_prompt_details if isinstance(raw_prompt_details, dict) else None
-    completion_tokens_details: Final = raw_completion_details if isinstance(raw_completion_details, dict) else None
-    field_names: Final = "prompt_tokens completion_tokens total_tokens prompt_tokens_details completion_tokens_details"
-    field_vals: Final = prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details, completion_tokens_details
-    return cast(ChatCompletionUsageBlock, dict(zip(field_names.split(), field_vals, strict=True)))
+    prompt_tokens_details: Final = _as_detail_dict(dumped.get("prompt_tokens_details"))
+    completion_tokens_details: Final = _as_detail_dict(dumped.get("completion_tokens_details"))
+    # fmt: off
+    return ChatCompletionUsageBlock(
+        prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens,
+        prompt_tokens_details=prompt_tokens_details, completion_tokens_details=completion_tokens_details,
+    )
+    # fmt: on
 
 
 class ModelResponseIterator:
