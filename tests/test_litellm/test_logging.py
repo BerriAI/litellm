@@ -2,6 +2,7 @@ import ast
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -17,6 +18,7 @@ from litellm._logging import (
     _MAX_SCRUBBED_ACCESS_ARG,
     _PLAIN_LOG_FORMAT,
     ALL_LOGGERS,
+    AccessLogPathFilter,
     AccessLogRedactionFilter,
     CorrelationContextFilter,
     CorrelationPlainFormatter,
@@ -26,6 +28,7 @@ from litellm._logging import (
     StdoutLogTruncationFilter,
     _get_uvicorn_json_log_config,
     _initialize_loggers_with_handler,
+    _parse_disabled_access_log_paths,
     _parse_json_logs_env,
     _plain_log_format,
     _stdout_truncation_marker,
@@ -1178,3 +1181,63 @@ def test_access_redaction_survives_the_uvicorn_json_log_config():
             lg.handlers[:] = handlers
             lg.setLevel(level)
             lg.propagate = True
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("", frozenset()),
+        ("/health,/metrics", frozenset({"/health", "/metrics"})),
+        (" /health , /metrics/ ,", frozenset({"/health", "/metrics/"})),
+    ],
+)
+def test_parse_disabled_access_log_paths(raw, expected):
+    assert _parse_disabled_access_log_paths(raw) == expected
+
+
+def test_access_log_path_filter_drops_a_listed_path():
+    access_log_filter = AccessLogPathFilter(frozenset({"/health/liveliness", "/metrics"}))
+
+    assert access_log_filter.filter(_access_record("/health/liveliness")) is False
+    assert access_log_filter.filter(_access_record("/metrics?format=prometheus")) is False
+
+
+def test_access_log_path_filter_keeps_an_unlisted_path():
+    access_log_filter = AccessLogPathFilter(frozenset({"/health/liveliness", "/metrics"}))
+
+    assert access_log_filter.filter(_access_record("/v1/chat/completions")) is True
+    assert access_log_filter.filter(_access_record("/health")) is True
+    assert access_log_filter.filter(_access_record("/metrics/")) is True
+
+
+def test_access_log_path_filter_is_a_no_op_when_unset():
+    assert AccessLogPathFilter(frozenset()).filter(_access_record("/health/liveliness")) is True
+
+
+def test_access_log_path_filter_keeps_a_record_without_positional_args():
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="access line",
+        args=None,
+        exc_info=None,
+    )
+
+    assert AccessLogPathFilter(frozenset({"/health/liveliness"})).filter(record) is True
+
+
+def test_uvicorn_access_logger_drops_a_listed_path_end_to_end(monkeypatch):
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", "/health/liveliness")
+    access_log_filter = AccessLogPathFilter(
+        _parse_disabled_access_log_paths(os.environ["LITELLM_DISABLE_ACCESS_LOG_PATHS"])
+    )
+    logger = logging.getLogger("uvicorn.access")
+    assert any(isinstance(f, AccessLogPathFilter) for f in logger.filters)
+    logger.addFilter(access_log_filter)
+    try:
+        assert _emit_access_line("/health/liveliness") == ""
+        assert _emit_access_line("/v1/chat/completions") != ""
+    finally:
+        logger.removeFilter(access_log_filter)
