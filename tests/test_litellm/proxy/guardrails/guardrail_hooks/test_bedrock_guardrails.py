@@ -2729,12 +2729,28 @@ async def test_grounding_output_blocked_raises_400():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_response_forwards_request_messages_for_grounding():
-    guardrail = _grounding_guardrail(from_messages=True)
-    request_messages = [
-        {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
-        {"role": "user", "content": _GROUNDING_QUERY_TEXT},
-    ]
+@pytest.mark.parametrize(
+    "from_messages, request_messages",
+    [
+        (
+            True,
+            [
+                {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
+                {"role": "user", "content": _GROUNDING_QUERY_TEXT},
+            ],
+        ),
+        (
+            False,
+            [
+                {"role": "system", "content": [{"type": "grounding_source", "text": _GROUNDING_SOURCE_TEXT}]},
+                {"role": "user", "content": [{"type": "query", "text": _GROUNDING_QUERY_TEXT}]},
+            ],
+        ),
+    ],
+    ids=["plain-messages-flag-on", "tagged-messages-flag-off"],
+)
+async def test_apply_guardrail_response_forwards_request_messages_for_grounding(from_messages, request_messages):
+    guardrail = _grounding_guardrail(from_messages=from_messages)
     expected_request = {
         "source": "OUTPUT",
         "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
