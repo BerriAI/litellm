@@ -181,8 +181,8 @@ async def test_cold_regime_is_one_mget_one_query_and_the_getters_never_touch_io_
     assert sets == sorted(
         [
             f"SET {TEAM_ID}_{USER_ID} ttl=5",
-            f"SET org_id:{ORG_ID} ttl=60",
-            f"SET org_id:{ORG_ID}:with_budget ttl=60",
+            f"SET org_id:{ORG_ID} ttl=5",
+            f"SET org_id:{ORG_ID}:with_budget ttl=5",
             f"SET {USER_ID} ttl=60",
             f"SET team_id:{TEAM_ID} ttl=60",
             f"SET team_membership:{USER_ID}:{TEAM_ID} ttl=None",
