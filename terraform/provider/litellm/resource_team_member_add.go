@@ -95,7 +95,6 @@ func applyLimits(d *schema.ResourceData, payload map[string]interface{}) {
 	}
 }
 
-// /team/member_update is a merge-patch, so a removed setting is cleared with an explicit null
 func applyUpdateSettings(d *schema.ResourceData, payload map[string]interface{}) {
 	applyAddOnlySettings(d, payload)
 	applyLimits(d, payload)
@@ -191,7 +190,6 @@ func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) e
 		return err
 	}
 
-	// ID is set before the limits call so a failure there taints the resource instead of orphaning the memberships
 	d.SetId(teamID)
 
 	if err := setMemberLimits(client, d, teamID, membersList); err != nil {
