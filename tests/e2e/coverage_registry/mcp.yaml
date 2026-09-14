@@ -127,6 +127,3 @@
   assertions: [toolset_scoped]
   source: "user_api_key_auth_mcp.py:2137"
   rationale: "A key granted a toolset lists exactly the toolset's tools: the rest of the server's catalog stays hidden and every stored name resolves"
-
-- {id: mcp.call_tool.saved_headers.reach_actual_transport, module: mcp, tier: P0, operation: call_tool, auth_family: api_key, assertions: [reach_actual_transport], source: mcp_management_endpoints.py, rationale: Saved headers reach actual tool calls after unrelated edits}
-- {id: mcp.call_tool.errors.tool_failure_is_not_success, module: mcp, tier: P0, operation: call_tool, auth_family: api_key, assertions: [tool_failure_is_not_success], source: server.py, rationale: Tool failures remain errors while a healthy sibling executes}
