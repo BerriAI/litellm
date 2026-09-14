@@ -169,6 +169,12 @@ def _addresses_member(member: Member, request: MemberDeleteRequest) -> bool:
     return request.user_id == member.user_id or (member.user_id is None and _same_email(member.user_email, request))
 
 
+def _with_row_email(request: MemberDeleteRequest, email_of: Mapping[str, str]) -> MemberDeleteRequest:
+    if request.user_id is None or request.user_email is not None:
+        return request
+    return MemberDeleteRequest(user_id=request.user_id, user_email=email_of.get(request.user_id))
+
+
 def _addresses_user(user: "prisma_models.LiteLLM_UserTable", request: MemberDeleteRequest) -> bool:
     if request.user_id is None:
         return _same_email(user.user_email, request)
@@ -207,22 +213,25 @@ async def _remove_members_from_team(
     if roster is None:
         raise _team_not_found(team_id)
 
-    removed_members: Final = tuple(m for m in roster if any(_addresses_member(m, r) for r in members))
-    kept_members: Final = tuple(m for m in roster if not any(_addresses_member(m, r) for r in members))
-    removed_ids: Final = frozenset(m.user_id for m in removed_members if m.user_id is not None)
     requested_ids: Final = frozenset(r.user_id for r in members if r.user_id is not None)
     requested_emails: Final = frozenset(r.user_email for r in members if r.user_id is None and r.user_email)
-    user_rows: Final = await _user_tx_db(tx).find_many(
-        where=_any_filter(
-            _in_filter("user_id", removed_ids | requested_ids),
-            _in_filter("user_email", requested_emails),
-        )
+    requested_rows: Final = await _user_tx_db(tx).find_many(
+        where=_any_filter(_in_filter("user_id", requested_ids), _in_filter("user_email", requested_emails))
     )
-    stale_rows: Final = tuple(u for u in user_rows if team_id in u.teams)
+    email_of: Final = MappingProxyType({u.user_id: u.user_email for u in requested_rows if u.user_email is not None})
+    requests: Final = tuple(_with_row_email(r, email_of) for r in members)
+    removed_members: Final = tuple(m for m in roster if any(_addresses_member(m, r) for r in requests))
+    kept_members: Final = tuple(m for m in roster if not any(_addresses_member(m, r) for r in requests))
+    removed_ids: Final = frozenset(m.user_id for m in removed_members if m.user_id is not None)
+    unfetched_ids: Final = removed_ids - frozenset(u.user_id for u in requested_rows)
+    removed_rows: Final = (
+        await _user_tx_db(tx).find_many(where=_in_filter("user_id", unfetched_ids)) if unfetched_ids else ()
+    )
+    stale_rows: Final = tuple(u for u in (*requested_rows, *removed_rows) if team_id in u.teams)
     cleanup_ids: Final = removed_ids | frozenset(u.user_id for u in stale_rows)
     matched: Final = frozenset(
         i
-        for i, r in enumerate(members)
+        for i, r in enumerate(requests)
         if any(_addresses_member(m, r) for m in removed_members) or any(_addresses_user(u, r) for u in stale_rows)
     )
     keys: Final = await _token_tx_db(tx).find_many(where=_team_users_filter(team_id, cleanup_ids))
