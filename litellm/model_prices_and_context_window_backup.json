@@ -65786,7 +65786,7 @@
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "vertex_ai",
-        "mode": "chat",
+        "mode": "audio_speech",
         "output_cost_per_audio_token": 1e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
@@ -65804,7 +65804,7 @@
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "vertex_ai",
-        "mode": "chat",
+        "mode": "audio_speech",
         "output_cost_per_audio_token": 2e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
