@@ -27,7 +27,12 @@ class McpPeer:
 
 @contextmanager
 def mcp_peer() -> Iterator[McpPeer]:
-    service: Final = FastMCP("integration-math", stateless_http=True, json_response=True, transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
+    service: Final = FastMCP(
+        "integration-math",
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
     service.add_tool(add)
     service.add_tool(multiply)
 
@@ -47,12 +52,14 @@ def mcp_peer() -> Iterator[McpPeer]:
         if body:
             observed.put({"body": json.loads(body), "headers": dict(scope["headers"])})
         pending = True
+
         async def replay() -> Message:
             nonlocal pending
             if pending:
                 pending = False
                 return {"type": "http.request", "body": body, "more_body": False}
             return await receive()
+
         await app(scope, replay, send)
 
     with asgi_server(capture) as url:
@@ -60,7 +67,9 @@ def mcp_peer() -> Iterator[McpPeer]:
 
 
 def register_mcp(scenario: Scenario, peer: McpPeer, alias: str, **fields: object) -> str:
-    response: Final = scenario.gateway.request("POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, "url": peer.url, "transport": "http", **fields})
+    response: Final = scenario.gateway.request(
+        "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, "url": peer.url, "transport": "http", **fields}
+    )
     identity: Final = response.json()["server_id"]
     scenario.cleanups.callback(delete_mcp, scenario.gateway, identity)
     assert response.status_code == 201, response.text
@@ -76,8 +85,18 @@ def delete_mcp(gateway: Gateway, identity: str) -> None:
 def tool_names(gateway: Gateway, key: str, identity: str) -> dict[str, str]:
     response: Final = gateway.client.get("/mcp-rest/tools/list", headers={"x-litellm-api-key": key})
     assert response.status_code == 200, response.text
-    return {name: tool["name"] for tool in response.json()["tools"] if tool.get("mcp_info", {}).get("server_id") == identity for name in ("add", "multiply", "fail") if tool["name"].endswith(name)}
+    return {
+        name: tool["name"]
+        for tool in response.json()["tools"]
+        if tool.get("mcp_info", {}).get("server_id") == identity
+        for name in ("add", "multiply", "fail")
+        if tool["name"].endswith(name)
+    }
 
 
 def call_tool(gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]):
-    return gateway.client.post("/mcp-rest/tools/call", headers={"x-litellm-api-key": key}, json={"server_id": identity, "name": name, "arguments": arguments})
+    return gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": key},
+        json={"server_id": identity, "name": name, "arguments": arguments},
+    )
