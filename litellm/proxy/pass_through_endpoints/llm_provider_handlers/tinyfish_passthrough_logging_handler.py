@@ -6,7 +6,7 @@ import urllib.parse
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final, NamedTuple
 from urllib.parse import urlparse
 
 import httpx
@@ -37,6 +37,18 @@ from litellm.types.utils import StandardPassThroughResponseObject
 _RUN_ADAPTER: Final = TypeAdapter(TinyfishRun)
 
 _EMPTY_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+class _TinyfishLoggingPayload(NamedTuple):
+    result: StandardPassThroughResponseObject
+    kwargs: Mapping[str, object]
+
+    def as_handler_result(self) -> PassThroughEndpointLoggingTypedDict:
+        handler_result: Final[PassThroughEndpointLoggingTypedDict] = {
+            "result": self.result,
+            "kwargs": {**self.kwargs},
+        }
+        return handler_result
 
 # asyncio tasks are weakly referenced by the loop; hold them until done or they can vanish mid-poll
 _BACKGROUND_BILLING_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: task registry
@@ -116,7 +128,7 @@ class TinyFishPassthroughLoggingHandler:
                 start_time=start_time,
                 end_time=end_time,
                 kwargs=kwargs,
-            )
+            ).as_handler_result()
         except Exception as e:
             verbose_proxy_logger.exception("Error in TinyFish passthrough logging handler: %s", e)
             fallback_payload: Final[PassThroughEndpointLoggingTypedDict] = {
@@ -171,24 +183,23 @@ class TinyFishPassthroughLoggingHandler:
             run: Final = (
                 await TinyFishPassthroughLoggingHandler._poll_until_terminal(run_id, client) if run_id else None
             )
+            run_end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the start_time stamped by pass_through_request
             payload: Final = TinyFishPassthroughLoggingHandler._build_logging_payload(
                 run=run,
                 logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,
-                end_time=datetime.now(),
+                end_time=run_end_time,
                 kwargs=kwargs,
             )
-            logged_result: Final = payload["result"] or StandardPassThroughResponseObject(response=result)
-            logging_kwargs: Final = cast("Mapping[str, object]", payload["kwargs"])
             await pass_through_endpoint_logging._handle_logging(  # pyright: ignore[reportPrivateUsage]  # shared passthrough logging dispatcher, same access as the assemblyai handler
                 logging_obj=logging_obj,
-                standard_logging_response_object=logged_result,
+                standard_logging_response_object=payload.result,
                 result=result,
                 start_time=start_time,
-                end_time=datetime.now(),
+                end_time=run_end_time,
                 cache_hit=cache_hit,
-                **logging_kwargs,
+                **payload.kwargs,
             )
         except Exception as e:
             verbose_proxy_logger.exception("[Non blocking logging error] TinyFish run-async billing failed: %s", e)
@@ -270,7 +281,7 @@ class TinyFishPassthroughLoggingHandler:
                 start_time=start_time,
                 end_time=end_time,
                 kwargs=_EMPTY_KWARGS,
-            )
+            ).as_handler_result()
         except Exception as e:
             verbose_proxy_logger.exception("Error in TinyFish SSE passthrough logging handler: %s", e)
             fallback_payload: Final[PassThroughEndpointLoggingTypedDict] = {
@@ -288,7 +299,7 @@ class TinyFishPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         kwargs: Mapping[str, object],
-    ) -> PassThroughEndpointLoggingTypedDict:
+    ) -> _TinyfishLoggingPayload:
         response_cost: Final = _run_cost(run)
         updated_kwargs: Final = {  # mutable-ok: the logging pipeline requires a plain kwargs dict
             **kwargs,
@@ -313,11 +324,10 @@ class TinyFishPassthroughLoggingHandler:
             logging_obj=logging_obj,
             status="success",
         )
-        handler_payload: Final[PassThroughEndpointLoggingTypedDict] = {
-            "result": logged_response,
-            "kwargs": {**updated_kwargs, "standard_logging_object": standard_logging_object},
-        }
-        return handler_payload
+        return _TinyfishLoggingPayload(
+            result=logged_response,
+            kwargs=MappingProxyType({**updated_kwargs, "standard_logging_object": standard_logging_object}),
+        )
 
 
 def _run_id_from_sse_chunks(all_chunks: Sequence[str]) -> str | None:

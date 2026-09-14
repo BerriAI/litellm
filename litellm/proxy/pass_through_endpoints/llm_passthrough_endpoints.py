@@ -2739,8 +2739,8 @@ async def tinyfish_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+) -> Response:
     """
     Pass-through for the TinyFish Agent API (goal-based web automation).
 
