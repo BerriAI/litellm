@@ -2,8 +2,8 @@
 Upload validation applied to every purpose at POST /v1/files.
 
 batch_file_validation.py checks the JSONL shape of purpose="batch" uploads; this
-module applies the same fast-fail-before-forwarding shape (size cap, blocked
-extensions, path-traversal filenames) regardless of purpose.
+module applies the same fast-fail-before-forwarding shape (size cap, allowed and
+blocked extensions, path-traversal filenames) regardless of purpose.
 """
 
 from dataclasses import dataclass
@@ -31,10 +31,13 @@ def coerce_optional_int_setting(raw: object) -> int | None:
     raise TypeError(f"expected an integer, got {raw!r}")
 
 
-def coerce_optional_str_list_setting(raw: object) -> tuple[str, ...]:
-    """A general_settings value declared as an optional list of strings, e.g. blocked_file_extensions."""
+def coerce_optional_str_list_setting(raw: object) -> tuple[str, ...] | None:
+    """A general_settings value declared as an optional list of strings, e.g. allowed_file_extensions.
+
+    None (unset) and [] (set to nothing) are different answers for an allowlist, so both survive.
+    """
     if raw is None:
-        return ()
+        return None
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise TypeError(f"expected a list of strings, got {raw!r}")
     return tuple(raw)
@@ -47,6 +50,11 @@ class UploadedFileTooLarge:
 
 
 @dataclass(frozen=True, slots=True)
+class UploadedFileExtensionNotAllowed:
+    extension: str
+
+
+@dataclass(frozen=True, slots=True)
 class UploadedFileBlockedExtension:
     extension: str
 
@@ -56,7 +64,9 @@ class UploadedFileUnsafeFilename:
     filename: str
 
 
-UploadValidationFailure = UploadedFileTooLarge | UploadedFileBlockedExtension | UploadedFileUnsafeFilename
+UploadValidationFailure = (
+    UploadedFileTooLarge | UploadedFileExtensionNotAllowed | UploadedFileBlockedExtension | UploadedFileUnsafeFilename
+)
 
 
 def _file_size_bytes(file_source: bytes | BinaryIO) -> int:
@@ -81,19 +91,36 @@ def check_upload_file_size(
     return None
 
 
+def _normalized_extension(filename: str | None) -> str:
+    if not filename:
+        return ""
+    try:
+        return Path(safe_filename(filename)).suffix.lower()
+    except ValueError:
+        return ""
+
+
+def check_allowed_extension(
+    filename: str | None,
+    allowed_extensions: tuple[str, ...] | None,
+) -> UploadedFileExtensionNotAllowed | None:
+    """None means the allowlist is not configured; an empty tuple means nothing is allowed."""
+    if allowed_extensions is None:
+        return None
+    extension: Final = _normalized_extension(filename)
+    normalized_allowed: Final = frozenset(item.lower() for item in allowed_extensions)
+    if extension and extension in normalized_allowed:
+        return None
+    return UploadedFileExtensionNotAllowed(extension=extension)
+
+
 def check_blocked_extension(
     filename: str | None,
-    blocked_extensions: tuple[str, ...],
+    blocked_extensions: tuple[str, ...] | None,
 ) -> UploadedFileBlockedExtension | None:
-    if not blocked_extensions or not filename:
+    if not blocked_extensions:
         return None
-    try:
-        extension: Final = Path(safe_filename(filename)).suffix.lower()
-    except ValueError:
-        return None
-    # The uploaded name's extension is normalized above; blocked_extensions comes
-    # straight from config.yaml or the DB and is normalized here too, so a
-    # differently-cased entry (".EXE") still catches a lowercase upload.
+    extension: Final = _normalized_extension(filename)
     normalized_blocked: Final = frozenset(item.lower() for item in blocked_extensions)
     if extension and extension in normalized_blocked:
         return UploadedFileBlockedExtension(extension=extension)
@@ -127,6 +154,17 @@ def raise_upload_validation_failure(failure: UploadValidationFailure) -> NoRetur
                 type="invalid_request_error",
                 param="file",
                 code=413,
+            )
+        case UploadedFileExtensionNotAllowed(extension=extension):
+            raise ProxyException(
+                message=(
+                    (f"File extension '{extension}'" if extension else "A file without an extension")
+                    + " is not in this proxy's allowed_file_extensions setting. "
+                    "The file was not forwarded to the provider."
+                ),
+                type="invalid_request_error",
+                param="file",
+                code=400,
             )
         case UploadedFileBlockedExtension(extension=extension):
             raise ProxyException(
