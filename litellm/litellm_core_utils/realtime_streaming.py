@@ -36,6 +36,7 @@ else:
 
 
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1153,6 +1154,7 @@ class RealTimeStreaming:
         self._logging_worker.ensure_initialized_and_enqueue(
             self.logging_obj.dispatch_failure_handlers(error, traceback.format_exc(), prefer_async_handlers=True)
         )
+        self.logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
     @staticmethod
     def _detect_beta_header(websocket: ScopedWebSocket) -> bool:
