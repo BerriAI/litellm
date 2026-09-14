@@ -432,6 +432,59 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
     }
 
 
+def test_wildcard_credential_hydration_fills_blank_deployment_params(monkeypatch):
+    """A blank api_base on the deployment must not shadow the credential's endpoint.
+
+    The dashboard's model edit form writes blank inputs into litellm_params verbatim, so a
+    stored "" counted as configured and the credential's api_base was never applied.
+    """
+    import litellm
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-credential",
+                credential_info={"provider": "openai"},
+                credential_values={
+                    "api_key": "stored-openai-key",
+                    "api_base": "https://relay.test/v1",
+                },
+            )
+        ],
+    )
+
+    captured_params = {}
+
+    def fake_get_provider_models(provider, litellm_params=None):
+        captured_params["api_base"] = litellm_params.api_base
+        captured_params["api_key"] = litellm_params.api_key
+        return ["gpt-4o"]
+
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
+
+    result = get_known_models_from_wildcard(
+        wildcard_model="openai/*",
+        litellm_params=LiteLLM_Params(
+            model="openai/*",
+            custom_llm_provider="openai",
+            api_base="",
+            litellm_credential_name="openai-credential",
+        ),
+    )
+
+    assert result == ["openai/gpt-4o"]
+    assert captured_params == {
+        "api_base": "https://relay.test/v1",
+        "api_key": "stored-openai-key",
+    }
+
+
 def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
     """Regression test for #30358.
 

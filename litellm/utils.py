@@ -686,7 +686,7 @@ def load_credentials_from_list(kwargs: dict):
         )
         return
     for key, value in credential.credential_values.items():
-        if key not in kwargs:
+        if CredentialAccessor.is_unset(kwargs.get(key)):
             kwargs[key] = value
 
 

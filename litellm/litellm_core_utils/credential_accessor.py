@@ -22,6 +22,17 @@ class CredentialAccessor:
         return {} if credential is None else credential.credential_values.copy()
 
     @staticmethod
+    def is_unset(value: object) -> bool:
+        """A credential fills in what the deployment left unset, and "" is unset just like None.
+
+        The dashboard's model edit form stores blank inputs as "" in litellm_params; counting
+        those as configured shadowed the credential's api_base and silently routed requests
+        at the provider default.
+        """
+
+        return value is None or (isinstance(value, str) and not value.strip())
+
+    @staticmethod
     def upsert_credentials(credentials: list[CredentialItem]):
         """Add a credential to the list of credentials."""
 
