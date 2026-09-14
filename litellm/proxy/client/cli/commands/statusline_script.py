@@ -7,19 +7,17 @@ status refresh (about every 300ms while typing), so the proxy is asked at most o
 TTL per session and every other refresh is served from a small on-disk cache that holds
 only the proxy's answer, never the key.
 
-Claude Code pipes a JSON payload on stdin (session_id, transcript_path, model); the routed
-model is the `message.model` of the latest foreground assistant line in the transcript,
-which is the proxy's response `model` field. That only names the tier model when the
-auto-router deployment sets `return_raw_model_name: true`; otherwise it is the alias the
-client requested. Codex pipes its Stop event instead (hook_event_name, session_id) and has
-no transcript to read, so the routed model comes from the proxy's session record and the
-result is printed as a `systemMessage` for the transcript. The proxy key is read from the
-agent's own environment (the static token `lite configure claude` writes); nothing here
-spawns a credential helper.
+Claude Code pipes a JSON payload on stdin (session_id, transcript_path, model). After the
+first foreground assistant response, the routed model comes from the proxy's session
+record, falling back to the latest foreground assistant `message.model` in the transcript
+when no record is available. Codex pipes its Stop event instead (hook_event_name, session_id)
+and prints the session record as a `systemMessage` for the transcript. The proxy key is read
+from the agent's own environment (the static token `lite configure claude` writes); nothing
+here spawns a credential helper.
 
-Cost figures come from GET /auto_router/session on the proxy, which reads the per-session
-rollup written by the spend flush. That flush is asynchronous, so a turn's cost lands a
-second or two after the turn; the cache TTL absorbs it.
+The routed model and cost figures come from GET /auto_router/session on the proxy, which
+reads the per-session rollup written by the asynchronous spend flush. The record and cache
+can briefly lag a completed turn.
 """
 
 from __future__ import annotations
@@ -348,7 +346,8 @@ def status_line(
     if not session_id or not credentials.usable:
         return render(label, None, config_dir, color_enabled(env))
     session: Final = load_session(credentials, session_id, cache_dir, fetch)
-    return render(label, session, config_dir, color_enabled(env))
+    routed_label: Final = model_label(session.last_model, config_dir) if session is not None else label
+    return render(routed_label, session, config_dir, color_enabled(env))
 
 
 def codex_stop_message(

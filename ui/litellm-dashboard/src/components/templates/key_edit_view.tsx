@@ -34,8 +34,10 @@ import {
 import {
   KeyAgentAndSkillFields,
   KeyBudgetNumberField,
+  KeyMetadataField,
   KeyTypeSelect,
   labelWithHint,
+  moveMetadataTagsToTagsField,
   TPD_HINT,
 } from "./KeyEditViewControls";
 import {
@@ -347,9 +349,12 @@ export function KeyEditView({
   return (
     <TooltipProvider>
       <form
-        onSubmit={form.handleSubmit((values) =>
-          handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
-        )}
+        onSubmit={(event) => {
+          moveMetadataTagsToTagsField(form);
+          return form.handleSubmit((values) =>
+            handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
+          )(event);
+        }}
       >
         <FieldGroup>
           <FormField control={form.control} name="key_alias" label="Key Alias">
@@ -853,9 +858,7 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <FormField control={form.control} name="metadata" label="Metadata">
-            {(field) => <Textarea {...field} value={(field.value as string | undefined) ?? ""} rows={10} />}
-          </FormField>
+          <KeyMetadataField form={form} />
 
           <div className="mb-4">
             <FormField control={form.control} name="duration">
