@@ -28,6 +28,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.ocr.input import FileReader
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 base_llm_http_handler: Final = BaseLLMHTTPHandler()
@@ -149,6 +150,7 @@ def _prepare_ocr_request(
         litellm_params={
             "litellm_call_id": litellm_call_id,
             "api_base": resolved_api_base,
+            **litellm_params.model_dump(include=frozenset(CustomPricingLiteLLMParams.model_fields), exclude_none=True),
         },
         custom_llm_provider=custom_llm_provider,
     )

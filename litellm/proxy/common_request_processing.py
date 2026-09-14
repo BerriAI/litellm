@@ -24,6 +24,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+    MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
@@ -215,6 +216,12 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 
 def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
+
+
+def resolve_litellm_call_id(client_call_id: str | None) -> str:
+    if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
+        return client_call_id
+    return str(uuid.uuid4())
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -1938,7 +1945,7 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        self.data["litellm_call_id"] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -3445,15 +3452,13 @@ class ProxyBaseLLMRequestProcessing:
             # a failed request reports no timing, matching /v1/chat/completions
             read_timing_from_logging_obj=False,
         )
-        # Extract headers from exception - check both e.headers and e.response.headers
         headers = getattr(e, "headers", None) or {}
         if not headers:
-            # Try to get headers from e.response.headers (httpx.Response)
             _response: Final = attribute_of(e, "response")
-            if _response is not None:
-                _response_headers: Final = getattr(_response, "headers", None)
-                if _response_headers:
-                    headers = get_response_headers(dict(_response_headers))
+            _response_headers: Final = getattr(_response, "headers", None) if _response is not None else None
+            _provider_headers: Final = _response_headers or getattr(e, "litellm_response_headers", None)
+            if _provider_headers:
+                headers = get_response_headers(dict(_provider_headers))
         headers.update(custom_headers)
 
         # Call response headers hook for failure

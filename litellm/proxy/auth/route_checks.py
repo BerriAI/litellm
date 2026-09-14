@@ -136,6 +136,9 @@ class RouteChecks:
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
                     if allowed_route == "llm_api_routes":
+                        if route == "/auto_router/session" and RouteChecks._get_request_method(request) == "GET":
+                            return True
+
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                             InitPassThroughEndpointHelpers,
                         )

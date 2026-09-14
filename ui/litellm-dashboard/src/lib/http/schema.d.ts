@@ -8938,7 +8938,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -16781,7 +16781,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16887,7 +16886,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -19086,7 +19084,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -25812,6 +25810,11 @@ export interface components {
              */
             allow_unmanaged_response_ids?: boolean | null;
             /**
+             * Allowed File Extensions
+             * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
+             */
+            allowed_file_extensions?: string[] | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25833,7 +25836,7 @@ export interface components {
             background_health_checks?: boolean | null;
             /**
              * Blocked File Extensions
-             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename
+             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set
              */
             blocked_file_extensions?: string[] | null;
             /**
@@ -29639,6 +29642,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -29687,6 +29696,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -29900,6 +29913,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -39841,6 +39856,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -39889,6 +39910,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -40102,6 +40127,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -50450,7 +50477,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive). */
                 search?: string | null;
@@ -50474,7 +50501,7 @@ export interface operations {
                 access_group_id?: string | null;
                 /** @description Filter keys by agent ID */
                 agent_id?: string | null;
-                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                /** @description If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys. */
                 substring_matching?: boolean;
                 /** @description Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration. */
                 expires?: string | null;

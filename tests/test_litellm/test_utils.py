@@ -7,8 +7,8 @@ import os
 import queue
 import threading
 from datetime import datetime, timedelta, timezone
-from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +29,7 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
@@ -1150,6 +1151,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
                 },
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_anthropic_thinking_payload": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
@@ -4061,6 +4063,51 @@ class TestMetadataNoneHandling:
         assert metadata == {}
 
 
+_RETRY_CAP_CASES: Final = (
+    pytest.param(5, {"attempted_retries": 5}, True, id="cap-above-four-reached"),
+    pytest.param(5, {"attempted_retries": 4}, False, id="cap-above-four-not-reached"),
+    pytest.param(0, {"attempted_retries": 0}, False, id="first-attempt-passes-cap-of-zero"),
+    pytest.param(0, {"attempted_retries": 1}, True, id="cap-of-zero-refuses-first-retry"),
+    pytest.param(5, {"previous_models": ("a", "b", "c", "d", "e")}, False, id="breadcrumb-count-is-not-the-cap"),
+    pytest.param(5, None, False, id="metadata-none"),
+)
+
+
+def _capped_completion_kwargs(metadata_key: str, metadata: object) -> dict[str, object]:
+    return {
+        "model": "openai/gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_key": "sk-fake",
+        "mock_response": "ok",
+        metadata_key: metadata,
+    }
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
+def test_num_retries_per_request_reads_attempted_retries_sync(monkeypatch, metadata_key, cap, metadata, refused):
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
+    if refused:
+        with pytest.raises(Exception, match="Max retries per request hit!"):
+            litellm.completion(**kwargs)
+    else:
+        assert litellm.completion(**kwargs).choices[0].message.content == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
+async def test_num_retries_per_request_reads_attempted_retries_async(monkeypatch, metadata_key, cap, metadata, refused):
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
+    if refused:
+        with pytest.raises(Exception, match="Max retries per request hit!"):
+            await litellm.acompletion(**kwargs)
+    else:
+        assert (await litellm.acompletion(**kwargs)).choices[0].message.content == "ok"
+
+
 class TestValidateAndFixThinkingParam:
     """Tests for validate_and_fix_thinking_param."""
 
@@ -4446,6 +4493,75 @@ def test_fireworks_models_in_backup_cost_map():
         assert model_cost.get(short_key) == model_cost.get(
             long_key
         ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+@pytest.fixture
+def fireworks_short_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "fireworks_ai/accounts/fireworks/models/glm-5p3": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "max_tokens": 100,
+            },
+            "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast": {
+                "input_cost_per_token": 2.1e-6,
+                "output_cost_per_token": 6.6e-6,
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+            },
+            "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
+                "input_cost_per_token": 8e-9,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "fireworks_ai",
+                "mode": "embedding",
+            },
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def test_fireworks_short_model_names_resolve_to_long_cost_map_keys(fireworks_short_model_cost_map: None) -> None:
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+    assert model_info["input_cost_per_token"] == 1e-6
+    assert model_info["max_tokens"] == 100
+
+    model_info = litellm.get_model_info("glm-5p3", custom_llm_provider="fireworks_ai")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/models/glm-5p3"
+
+    model_info = litellm.get_model_info("fireworks_ai/glm-5p3-fast")
+    assert model_info["key"] == "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"
+    assert model_info["input_cost_per_token"] == 2.1e-6
+
+    model_info = litellm.get_model_info("fireworks_ai/nomic-ai/nomic-embed-text-v1.5")
+    assert model_info["key"] == "fireworks_ai/nomic-ai/nomic-embed-text-v1.5"
+
+    with pytest.raises(Exception, match="isn't mapped"):
+        litellm.get_model_info("fireworks_ai/does-not-exist")
+
+
+def test_fireworks_short_model_names_price_with_completion_cost(fireworks_short_model_cost_map: None) -> None:
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(
+        model="fireworks_ai/glm-5p3",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="fireworks_ai/glm-5p3",
+        custom_llm_provider="fireworks_ai",
+    )
+
+    assert cost == pytest.approx(10 * 1e-6 + 5 * 2e-6)
 
 
 class TestBedrockBaseModelLabelKeepsTools:
@@ -6374,6 +6490,53 @@ async def test_acompletion_finishes_response_metadata_before_handing_the_respons
     assert snapshot["api_base"]
 
 
+class _GatedSyncLoggingHookRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final = queue.SimpleQueue[str | None]()
+        self.release: Final = threading.Event()
+
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        self.seen.put(result.id if isinstance(result, litellm.ModelResponse) else None)
+        self.release.wait(timeout=5)
+        return kwargs, result
+
+
+@pytest.mark.asyncio
+async def test_acompletion_runs_a_custom_logger_sync_logging_hook_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    def legacy_sync_callback(
+        kwargs: dict[str, object], response: litellm.ModelResponse, start_time: datetime, end_time: datetime
+    ) -> None:
+        pass
+
+    recorder: Final = _GatedSyncLoggingHookRecorder()
+    monkeypatch.setattr(litellm, "success_callback", [legacy_sync_callback, recorder])
+    logging_futures: Final = queue.SimpleQueue[Future[object]]()
+    real_submit: Final = logging_executor.submit
+
+    def submit_and_track(fn: Callable[..., object], *args: object, **kwargs: object) -> Future[object]:
+        future: Final = real_submit(fn, *args, **kwargs)
+        logging_futures.put(future)
+        return future
+
+    with patch(  # test-quality-ok: wraps the real submit only to collect the futures to join, the pool still runs
+        "litellm.litellm_core_utils.litellm_logging.executor.submit", side_effect=submit_and_track
+    ):
+        response: Final = await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            num_retries=0,
+        )
+        await asyncio.sleep(0)
+    recorder.release.set()
+    for _ in range(logging_futures.qsize()):
+        logging_futures.get_nowait().result(timeout=5)
+    assert [recorder.seen.get_nowait() for _ in range(recorder.seen.qsize())] == [response.id]
+
+
 def test_completion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread():
     with _recording_hidden_params_at_submit("litellm.utils.executor.submit") as seen:
         litellm.completion(
@@ -6385,3 +6548,11 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
     assert snapshot["litellm_call_id"]
     assert snapshot["response_cost"] is not None
     assert snapshot["api_base"]
+
+
+def test_get_model_info_carries_cache_read_input_audio_token_cost(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    info = litellm.get_model_info("gpt-realtime-2.1-mini", custom_llm_provider="openai")
+    assert info["cache_read_input_audio_token_cost"] == 3e-07
+    assert info["cache_read_input_token_cost"] == 6e-08
