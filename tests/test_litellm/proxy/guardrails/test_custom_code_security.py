@@ -303,40 +303,21 @@ async def test_custom_code_sandbox_merges_caller_metadata_with_litellm_metadata(
 
 
 @pytest.mark.asyncio
-async def test_custom_code_sandbox_falls_back_to_top_level_identity_for_mcp_calls():
-    """MCP pre-call hooks put user_api_key_* at the top level of the synthetic request, with a
-    metadata bucket that only carries headers; those ids must still reach the sandbox."""
-    guardrail = _compile(IDENTITY_ECHO_CODE)
-    request_data = {"model": "mcp-tool-call", **CALLER_IDENTITY, "metadata": {"headers": {}}}
-
-    await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
-
-    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
-    assert entry["guardrail_response"]["metadata"]["ids"] == ["someone@example.com", "team-1", "end-user-1"]
-
-
-@pytest.mark.asyncio
-async def test_custom_code_sandbox_ignores_top_level_identity_when_proxy_bucket_has_it():
-    """A caller cannot forge ids through top-level body fields on LLM routes: the proxy bucket
-    carries every user_api_key_* key (even when None) and it wins over the top level."""
+async def test_custom_code_sandbox_ignores_top_level_identity_fields():
+    """Only the proxy-owned metadata buckets carry identity; user_api_key_* keys at the top level
+    of the request body are caller-controlled on ordinary routes and must never become ids."""
     code = (
         "def apply_guardrail(inputs, request_data, input_type):\n"
         "    ids = [request_data['user_id'], request_data['team_id'], request_data['end_user_id']]\n"
         "    return flag('identity', metadata={'ids': str(ids)})\n"
     )
     guardrail = _compile(code)
-    request_data = {
-        "model": "m",
-        "user_api_key_user_id": "forged",
-        "user_api_key_team_id": "forged-team",
-        "user_api_key_end_user_id": "forged-end-user",
-        "metadata": {**CALLER_IDENTITY, "user_api_key_team_id": None},
-    }
+    request_data = {"model": "m", **CALLER_IDENTITY, "metadata": {"headers": {}}}
 
     await guardrail.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
 
     entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
-    assert entry["guardrail_response"]["metadata"]["ids"] == "['someone@example.com', None, 'end-user-1']"
+    assert entry["guardrail_response"]["metadata"]["ids"] == "[None, None, None]"
 
 
 @pytest.mark.asyncio
