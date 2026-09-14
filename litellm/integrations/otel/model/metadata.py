@@ -36,7 +36,7 @@ model. They coincide on the SDK path, which is correct.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -48,7 +48,20 @@ from litellm.integrations.otel.model.utils import as_str, to_seconds
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
-LANGFUSE_TRACE_NAME_HEADER: Final = "langfuse_trace_name"
+LANGFUSE_HEADER_PREFIX: Final = "langfuse_"
+
+
+@dataclass(frozen=True, slots=True)
+class TraceControls:
+    """The caller's trace-level Langfuse controls: ``metadata.trace_name`` / ``trace_user_id`` / ``session_id`` /
+    ``tags`` on the request (SDK or proxy body), with the proxy's ``langfuse_<control>`` headers winning over the
+    body for the scalar ones. Mutation controls (``trace_id``, ``existing_trace_id``, ``update_trace_keys``) are
+    deliberately not carried."""
+
+    name: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -217,7 +230,7 @@ class LLMCallEvent:
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
-    trace_name: str | None
+    trace: TraceControls
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
@@ -234,28 +247,40 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
-            trace_name=caller_trace_name(kwargs),
+            trace=caller_trace_controls(kwargs),
         )
 
 
-def caller_trace_name(kwargs: Mapping[str, object]) -> str | None:
+def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
     request: Final = _as_str_mapping(kwargs.get("litellm_params"))
     if request is None:
-        return None
+        return TraceControls()
     proxy_request: Final = _as_str_mapping(request.get("proxy_server_request"))
-    headers: Final = _as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
-    from_header: Final = as_str(headers.get(LANGFUSE_TRACE_NAME_HEADER)) if headers is not None else None
-    if from_header:
-        return from_header
-    return next(
-        (
-            name
-            for key in ("metadata", "litellm_metadata")
-            if (metadata := _as_str_mapping(request.get(key))) is not None
-            and (name := as_str(metadata.get("trace_name")))
-        ),
-        None,
+    headers: Final = (_as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None) or {}
+    bodies: Final = tuple(
+        metadata
+        for key in ("metadata", "litellm_metadata")
+        if (metadata := _as_str_mapping(request.get(key))) is not None
     )
+
+    def scalar(control: str) -> str | None:
+        from_header: Final = as_str(headers.get(f"{LANGFUSE_HEADER_PREFIX}{control}"))
+        if from_header:
+            return from_header
+        return next((value for body in bodies if (value := as_str(body.get(control)))), None)
+
+    return TraceControls(
+        name=scalar("trace_name"),
+        user_id=scalar("trace_user_id"),
+        session_id=scalar("session_id"),
+        tags=next((tags for body in bodies if (tags := _str_items(body.get("tags")))), ()),
+    )
+
+
+def _str_items(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item for item in cast("Sequence[object]", value) if isinstance(item, str) and item)
 
 
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
