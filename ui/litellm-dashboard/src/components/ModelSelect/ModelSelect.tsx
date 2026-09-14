@@ -69,6 +69,7 @@ type ModelOptionGroup = {
 
 type FilterContextArgs = {
   allProxyModels: string[];
+  organizationID?: string;
   organizationModels?: string[];
   userModels?: string[];
   options?: ModelSelectProps["options"];
@@ -88,8 +89,9 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
     return [];
   },
 
-  team: ({ allProxyModels, organizationModels }) => {
-    if (!organizationModels || isUncappedModelCeiling(organizationModels)) return allProxyModels;
+  team: ({ allProxyModels, organizationID, organizationModels }) => {
+    if (organizationModels === undefined) return organizationID ? [] : allProxyModels;
+    if (isUncappedModelCeiling(organizationModels)) return allProxyModels;
     return allProxyModels.filter((model) => organizationModels.includes(model));
   },
 
@@ -115,7 +117,13 @@ const filterModels = (
   const filterFn = contextFilters[ctx.context];
   if (!filterFn) return [];
 
-  return filterFn({ allProxyModels: deduplicatedProxyModels, ...extra, options: ctx.options });
+  const filterArgs: FilterContextArgs = {
+    allProxyModels: deduplicatedProxyModels,
+    organizationID: ctx.organizationID,
+    ...extra,
+    options: ctx.options,
+  };
+  return filterFn(filterArgs);
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
