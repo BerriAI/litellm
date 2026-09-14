@@ -47,7 +47,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: BaseAudioTranscriptionConfig signature
-        return ["language", "response_format", "timestamp_granularities"]  # mutable-ok: base contract returns a list
+        return ["language", "response_format", "timestamp_granularities"]
 
     @property
     def supports_subtitle_synthesis(self) -> bool:
@@ -59,16 +59,16 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict:
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         accepted: Final = tuple((k, v) for k, v in non_default_params.items() if k in supported_params)
-        return dict((*optional_params.items(), *accepted))  # mutable-ok: base contract returns a plain dict
+        return dict((*optional_params.items(), *accepted))
 
     def get_error_class(
         self,
         error_message: str,
         status_code: int,
-        headers: dict | Headers,  # mutable-ok: base signature and BaseLLMException take dict | Headers
+        headers: dict | Headers,
     ) -> BaseLLMException:
         return GeminiError(status_code=status_code, message=error_message, headers=headers)
 
@@ -81,14 +81,14 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict:
         resolved_api_key: Final = GeminiModelInfo.get_api_key(api_key)
         if not resolved_api_key:
             raise GeminiError(
                 status_code=401,
                 message="Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.",
             )
-        return {  # mutable-ok: the http handler passes these headers straight to httpx
+        return {
             **headers,
             "Content-Type": "application/json",
             "x-goog-api-key": resolved_api_key,
@@ -125,7 +125,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             audio_input=audio_input,
             transcription_config=_build_transcription_config(optional_params),
         )
-        return AudioTranscriptionRequestData(data=dict(request))  # mutable-ok: AudioTranscriptionRequestData wants dict
+        return AudioTranscriptionRequestData(data=dict(request))
 
     def transform_audio_transcription_response(
         self,
@@ -159,7 +159,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             if (word := _annotation_to_word(annotation)) is not None
         )
         if words:
-            response["words"] = list(words)  # mutable-ok: verbose_json words is a JSON array
+            response["words"] = list(words)
             last_word_end: Final = words[-1].get("end")
             if last_word_end is not None:
                 response["duration"] = last_word_end
@@ -244,7 +244,7 @@ def _annotation_to_word(annotation: GeminiTranscriptionWordAnnotation) -> Mappin
         ("end", _parse_offset_seconds(annotation.end_offset)),
         ("speaker", annotation.speaker),
     )
-    return {key: value for key, value in entries if value is not None}  # mutable-ok: word entries serialize to JSON
+    return {key: value for key, value in entries if value is not None}
 
 
 def _parse_offset_seconds(offset: str | None) -> float | None:

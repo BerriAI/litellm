@@ -618,7 +618,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def maybe_drop_disabled_thinking(
         model: str,
-        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
+        optional_params: MutableMapping[str, object],
         custom_llm_provider: str,
     ) -> None:
         """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
@@ -638,7 +638,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def translate_legacy_thinking_for_adaptive_model(
         model: str,
-        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
+        optional_params: MutableMapping[str, object],
         custom_llm_provider: str,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
@@ -1207,22 +1207,22 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
     return out
 
 
-def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:
     if not isinstance(message, Mapping):
         return message
     content: Final = message.get("content")
     if not isinstance(content, list):
         return message
-    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]  # mutable-ok: API message payload
+    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]
     if len(kept) == len(content):
         return message
     if not kept:
         return None
-    return {**message, "content": kept}  # mutable-ok: API message payload
+    return {**message, "content": kept}
 
 
 def strip_encrypted_reasoning_blocks_from_anthropic_messages(
-    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+    messages: Sequence[dict],
 ) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking / redacted_thinking blocks that carry another provider's encrypted
@@ -1230,7 +1230,7 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
     Anthropic, which cannot verify them. Anthropic's own signed blocks are kept.
     """
     stripped: Final = (_without_encrypted_reasoning_blocks(m) for m in messages)
-    return [m for m in stripped if m is not None]  # mutable-ok: API message payload
+    return [m for m in stripped if m is not None]
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
@@ -1512,10 +1512,10 @@ def _flatten_web_search_results_in_message(message: object) -> object:
         }
     )
     rewritten: Final = tuple(_rewrite_replayed_web_search_block(block, flattenable, queries) for block in content)
-    return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
+    return {**message, "content": [b for b in rewritten if b is not None]}
 
 
-def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok: as sibling sanitizers
+def flatten_unencrypted_web_search_results_in_anthropic_messages(
     messages: list[Any],
 ) -> list[Any]:
     """
@@ -1530,49 +1530,47 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     evidence in the conversation instead of 400ing the follow-up turn, and leaves
     genuine Anthropic-issued blocks untouched.
     """
-    return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+    return [_flatten_web_search_results_in_message(m) for m in messages]
 
 
 def _without_provider_specific_fields(block: object) -> object:
     if not isinstance(block, dict) or "provider_specific_fields" not in block:
         return block
-    return {k: v for k, v in block.items() if k != "provider_specific_fields"}  # mutable-ok: JSON wire format
+    return {k: v for k, v in block.items() if k != "provider_specific_fields"}
 
 
 def _strip_provider_specific_fields_in_message(message: object) -> object:
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return message
-    content: Final = [_without_provider_specific_fields(b) for b in message["content"]]  # mutable-ok: JSON wire format
-    return {**message, "content": content}  # mutable-ok: JSON wire format
+    content: Final = [_without_provider_specific_fields(b) for b in message["content"]]
+    return {**message, "content": content}
 
 
 def strip_provider_specific_fields_from_anthropic_messages(
     messages: Sequence[object],
 ) -> Sequence[object]:
-    return [_strip_provider_specific_fields_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+    return [_strip_provider_specific_fields_in_message(m) for m in messages]
 
 
-def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
+def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:
     if not isinstance(cache_control, Mapping):
         return None
     cache_type: Final = cache_control.get("type")
-    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}  # mutable-ok: JSON wire format
+    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}
 
 
-def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON wire format
+def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:
     if "cache_control" not in block:
-        return dict(block)  # mutable-ok: JSON wire format
+        return dict(block)
     normalized: Final = _normalized_cache_control(block["cache_control"])
-    rest: Final = {key: value for key, value in block.items() if key != "cache_control"}  # mutable-ok: JSON wire format
-    return rest if normalized is None else {**rest, "cache_control": normalized}  # mutable-ok: JSON wire format
+    rest: Final = {key: value for key, value in block.items() if key != "cache_control"}
+    return rest if normalized is None else {**rest, "cache_control": normalized}
 
 
 def _with_portable_cache_control_in_blocks(blocks: object) -> object:
     if isinstance(blocks, str) or not isinstance(blocks, Sequence):
         return blocks
-    return [  # mutable-ok: JSON wire format
-        _with_portable_cache_control(block) if isinstance(block, Mapping) else block for block in blocks
-    ]
+    return [_with_portable_cache_control(block) if isinstance(block, Mapping) else block for block in blocks]
 
 
 def _with_portable_cache_control_in_content_block(block: object) -> object:
@@ -1581,7 +1579,7 @@ def _with_portable_cache_control_in_content_block(block: object) -> object:
     portable: Final = _with_portable_cache_control(block)
     if portable.get("type") != "tool_result" or "content" not in portable:
         return portable
-    return {  # mutable-ok: JSON wire format
+    return {
         **portable,
         "content": _with_portable_cache_control_in_blocks(portable["content"]),
     }
@@ -1593,20 +1591,16 @@ def _with_portable_cache_control_in_message(message: object) -> object:
     content: Final = message["content"]
     if isinstance(content, str) or not isinstance(content, Sequence):
         return message
-    return {  # mutable-ok: JSON wire format
+    return {
         **message,
-        "content": [  # mutable-ok: JSON wire format
-            _with_portable_cache_control_in_content_block(block) for block in content
-        ],
+        "content": [_with_portable_cache_control_in_content_block(block) for block in content],
     }
 
 
 def _with_portable_cache_control_in_messages(messages: object) -> object:
     if isinstance(messages, str) or not isinstance(messages, Sequence):
         return messages
-    return [  # mutable-ok: JSON wire format
-        _with_portable_cache_control_in_message(message) for message in messages
-    ]
+    return [_with_portable_cache_control_in_message(message) for message in messages]
 
 
 def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> object:
@@ -1621,7 +1615,7 @@ def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> obj
 
 def normalize_cache_control_in_anthropic_payload(
     payload: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: JSON wire format
+) -> dict[str, object]:
     """
     Return a copy of an Anthropic /v1/messages payload with every
     ``cache_control`` entry reduced to ``{"type": <its type, or "ephemeral">}``
@@ -1638,9 +1632,7 @@ def normalize_cache_control_in_anthropic_payload(
     dropped entirely. The caller's payload is never mutated.
     """
     portable: Final = _with_portable_cache_control(payload)
-    return {  # mutable-ok: JSON wire format
-        key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()
-    }
+    return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
@@ -1667,7 +1659,7 @@ def _anthropic_model_entry(
     source: Final[Mapping[str, object]] = (
         MappingProxyType({"source_model": model["id"]}) if listed_id is not None else MappingProxyType({})
     )
-    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+    return {
         "type": "model",
         "id": listed_id or model["id"],
         **source,
@@ -1698,10 +1690,8 @@ def create_anthropic_model_list_response(
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
-        _anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models
-    ]
-    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+    data: Final = [_anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models]
+    return {
         "data": data,
         "has_more": False,
         "first_id": data[0]["id"] if data else None,

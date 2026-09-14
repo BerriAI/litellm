@@ -228,8 +228,8 @@ async def _upsert_ptu_daily_row(
     rename must not move the row. ``model_group`` carries the operator-facing name, which
     is outside the key and is what the usage views display.
     """
-    where: Final = {  # mutable-ok: prisma upsert filter payload
-        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {  # mutable-ok: prisma composite-key filter
+    where: Final = {
+        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
             "team_id": team_id,
             "date": date_str,
             "api_key": PTU_SENTINEL_API_KEY,
@@ -242,8 +242,8 @@ async def _upsert_ptu_daily_row(
     now: Final = datetime.now(timezone.utc)
     await prisma_client.db.litellm_dailyteamspend.upsert(
         where=where,
-        data={  # mutable-ok: prisma upsert data payload
-            "create": {  # mutable-ok: prisma create payload
+        data={
+            "create": {
                 "team_id": team_id,
                 "date": date_str,
                 "api_key": PTU_SENTINEL_API_KEY,
@@ -254,7 +254,7 @@ async def _upsert_ptu_daily_row(
                 "endpoint": "",
                 "ptu_flat_cost": flat_cost,
             },
-            "update": {  # mutable-ok: prisma update payload
+            "update": {
                 "model_group": model_name,
                 "ptu_flat_cost": flat_cost,
                 "updated_at": now,
@@ -502,9 +502,9 @@ async def _existing_sentinel_keys(
     The row's ``model`` column holds the deployment id, so this is an exact identity and
     survives a rename. Nothing here reads the display name.
     """
-    date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}  # mutable-ok: prisma range filter
+    date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}
     rows: Final = await prisma_client.db.litellm_dailyteamspend.find_many(
-        where={"api_key": PTU_SENTINEL_API_KEY, "date": date_range}  # mutable-ok: prisma find filter
+        where={"api_key": PTU_SENTINEL_API_KEY, "date": date_range}
     )
     return frozenset(
         (
@@ -728,11 +728,11 @@ def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...]") 
     Returns a plain dict because the query builder serialises the mapping it is handed and
     rejects a read-only view of one.
     """
-    return {  # mutable-ok: prisma delete filter
+    return {
         "date": date_str,
         "api_key": PTU_SENTINEL_API_KEY,
-        "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
-        "model": {"in": chunk},  # mutable-ok: prisma membership filter
+        "updated_at": {"lt": cutoff},
+        "model": {"in": chunk},
     }
 
 

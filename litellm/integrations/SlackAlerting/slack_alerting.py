@@ -1115,7 +1115,7 @@ Model Info:
             message=message,
             level=level,
             alert_type=AlertType.model_deprecation_warnings,
-            alerting_metadata={  # mutable-ok: send_alert takes a dict payload
+            alerting_metadata={
                 "deprecated_count": len(snapshot.deprecated),
                 "imminent_count": len(snapshot.imminent),
                 "upcoming_count": len(snapshot.upcoming),
@@ -1229,8 +1229,8 @@ Model Info:
         try:
             existing_invitations: Final = TypeAdapter(list[InvitationModel]).validate_python(
                 await InvitationLinkRepository(prisma_client).table.find_many(  # pyright: ignore[reportAny]  # untyped prisma boundary (any-ok), result validated by TypeAdapter
-                    where={"user_id": recipient_user_id},  # mutable-ok: prisma find_many requires a dict where filter
-                    order={"created_at": "desc"},  # mutable-ok: prisma find_many requires a dict order arg
+                    where={"user_id": recipient_user_id},
+                    order={"created_at": "desc"},
                 ),
                 from_attributes=True,
             )
@@ -1996,7 +1996,7 @@ Model Info:
                     message="\n\n".join(event.message for event in typed_events),
                     level="High",
                     alert_type=alert_type,
-                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
+                    alerting_metadata={},
                 )
                 for event in typed_events:
                     await self.internal_usage_cache.async_set_cache(

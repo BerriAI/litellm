@@ -1461,7 +1461,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     @overload
     def _get_boto_credentials_from_optional_params(
         self,
-        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        optional_params: dict,
         model: str | None = None,
         bearer_token: None = None,
     ) -> Boto3CredentialsInfo: ...
@@ -1469,7 +1469,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     @overload
     def _get_boto_credentials_from_optional_params(
         self,
-        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        optional_params: dict,
         model: str | None = None,
         *,
         bearer_token: str,

@@ -144,13 +144,11 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
 
 def _redact_agent_litellm_params_dict(
     litellm_params: Mapping[str, object],
-) -> dict[str, object]:  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+) -> dict[str, object]:
     """Type-narrowing wrapper: a dict in always yields a dict back from
     ``redact_sensitive_agent_litellm_params``, which the function's general
     (possible-JSON-string, possibly-None) signature can't express."""
-    return dict(  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
-        parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params))
-    )
+    return dict(parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params)))
 
 
 def _redact_sensitive_agent_fields(

@@ -164,7 +164,7 @@ def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) 
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
-    {  # mutable-ok: immediately frozen by MappingProxyType
+    {
         "server_error": 500,
         "rate_limit_exceeded": 429,
         "insufficient_quota": 429,
@@ -275,9 +275,7 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-        self._raw_response_headers: Mapping[str, str] = MappingProxyType(
-            dict(self.response.headers or {})  # mutable-ok: immediately frozen by MappingProxyType
-        )
+        self._raw_response_headers: Mapping[str, str] = MappingProxyType(dict(self.response.headers or {}))
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -499,9 +497,9 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        target._hidden_params = {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
-            "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
-            "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+        target._hidden_params = {
+            "additional_headers": {**headers},
+            "headers": {**raw_headers},
             **existing,
         }
 
@@ -1494,9 +1492,7 @@ def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple
     params: Final[Mapping[str, object]] = (
         nested
         if _is_json_object(nested) and nested
-        else MappingProxyType(  # mutable-ok: immediately frozen filtered frame
-            {k: v for k, v in msg_obj.items() if k != "type"}
-        )
+        else MappingProxyType({k: v for k, v in msg_obj.items() if k != "type"})
     )
     text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
     pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
@@ -2023,10 +2019,10 @@ class ResponsesWebSocketStreaming:
         except RateLimitError as e:
             try:
                 await self.websocket.send_text(
-                    json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
-                        {  # mutable-ok: WebSocket wire payload requires JSON objects
+                    json.dumps(
+                        {
                             "type": "error",
-                            "error": {  # mutable-ok: nested WebSocket error object
+                            "error": {
                                 "type": "rate_limit_exceeded",
                                 "message": str(e),
                             },

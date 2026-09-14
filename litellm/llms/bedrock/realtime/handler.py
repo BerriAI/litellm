@@ -262,7 +262,7 @@ class BedrockRealtime(BaseAWSLLM):
             if logged_events:
                 GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                     logging_obj.dispatch_success_handlers(
-                        list(logged_events),  # mutable-ok: realtime spend logging requires a list result
+                        list(logged_events),
                         prefer_async_handlers=True,
                     )
                 )

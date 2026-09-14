@@ -530,23 +530,19 @@ async def update_block_requests_for_models_without_pricing(
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": CommonProxyErrors.db_not_connected_error.value
-            },
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     try:
         config = await proxy_config.get_config()
         if "litellm_settings" not in config:
-            config["litellm_settings"] = {}  # mutable-ok: config is a plain-dict payload for save_config
+            config["litellm_settings"] = {}
         config["litellm_settings"]["block_requests_for_models_without_pricing"] = request.enabled
         await proxy_config.save_config(new_config=config)
 
@@ -558,9 +554,7 @@ async def update_block_requests_for_models_without_pricing(
         verbose_proxy_logger.error("Error updating block_requests_for_models_without_pricing: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": f"Failed to update setting: {e!s}"
-            },
+            detail={"error": f"Failed to update setting: {e!s}"},
         )
 
 

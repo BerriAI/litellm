@@ -1249,7 +1249,7 @@ class LiteLLMAnthropicMessagesAdapter:
             case ({"type": "text", "text": str(text)},):
                 return text
             case _:
-                return list(parts)  # mutable-ok: content must be a json list
+                return list(parts)
 
     def _tool_result_part(self, item: object) -> ToolMessageContentPart | None:
         if isinstance(item, str):

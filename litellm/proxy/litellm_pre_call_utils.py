@@ -515,7 +515,7 @@ def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
 
 
 def _strip_client_callback_credentials(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, Any],
 ) -> None:
     """Drop callback credentials and destinations supplied by the caller.
 
@@ -579,7 +579,7 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
 
 
 def _strip_router_reserved_metadata(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, Any],
 ) -> None:
     """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
     for metadata_key in ("metadata", "litellm_metadata"):
@@ -756,7 +756,7 @@ def _is_llm_inference_route(request: Request) -> bool:
 
 
 def apply_missing_session_id_policy(
-    data: dict[str, object],  # mutable-ok: stamps session ids in place on the request body the pipeline threads through
+    data: dict[str, object],
     _metadata_variable_name: str,
     general_settings: Mapping[str, object] | None,
     request: Request,
@@ -3033,7 +3033,7 @@ def _add_guardrails_from_policies_in_metadata(
 
 def add_guardrails_from_auth_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    data: dict,  # mutable-ok: writes guardrails into the live request dict, same contract as the helpers it wraps
+    data: dict,
     metadata_variable_name: str,
 ) -> None:
     """Resolve key, team, and project guardrails, direct and via policies, onto the request metadata."""

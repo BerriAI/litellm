@@ -163,7 +163,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # Per-loop semaphores bounding chunked-analyze fan-out across ALL
         # concurrent oversized blocks/requests on this instance, not per call
-        self._loop_chunk_semaphores: _LoopSemaphores = {}  # mutable-ok: per-loop semaphore cache
+        self._loop_chunk_semaphores: _LoopSemaphores = {}
 
         if mock_testing is True:  # for testing purposes only
             return
@@ -453,7 +453,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         text: str,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,  # mutable-ok: shared per-request state dict, matching analyze_text's parameter
+        request_data: dict,
     ) -> list[PresidioAnalyzeResponseItem]:  # mutable-ok: analyze_text's declared return type requires list
         """
         Analyze an oversized text by splitting it into overlapping chunks.

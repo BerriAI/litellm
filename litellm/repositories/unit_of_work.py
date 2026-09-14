@@ -25,12 +25,8 @@ from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
 
 
 def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float | None) -> Mapping[str, object]:
-    spend: Final[object] = (
-        {"decrement": spend_decrement}  # mutable-ok: prisma update payload must be a dict
-        if spend_decrement is not None
-        else 0
-    )
-    return {"spend": spend, "budget_reset_at": budget_reset_at}  # mutable-ok: prisma update payload must be a dict
+    spend: Final[object] = {"decrement": spend_decrement} if spend_decrement is not None else 0
+    return {"spend": spend, "budget_reset_at": budget_reset_at}
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +37,7 @@ class KeySpendResetWrites:
         self, token: str, budget_reset_at: datetime | None, spend_decrement: float | None = None
     ) -> None:
         self.table.update(
-            where={"token": token},  # mutable-ok: prisma where filter must be a dict
+            where={"token": token},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -54,7 +50,7 @@ class UserSpendResetWrites:
         self, user_id: str, budget_reset_at: datetime | None, spend_decrement: float | None = None
     ) -> None:
         self.table.update(
-            where={"user_id": user_id},  # mutable-ok: prisma where filter must be a dict
+            where={"user_id": user_id},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -67,7 +63,7 @@ class TeamSpendResetWrites:
         self, team_id: str, budget_reset_at: datetime | None, spend_decrement: float | None = None
     ) -> None:
         self.table.update(
-            where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
+            where={"team_id": team_id},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -84,7 +80,7 @@ class LinkedSpendResetWrites:
         cascade's read and its commit survives the reset instead of being erased."""
         self.table.update_many(
             where=where,
-            data={"spend": {"decrement": amount}},  # mutable-ok: prisma update payload must be a dict
+            data={"spend": {"decrement": amount}},
         )
 
 

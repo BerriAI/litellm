@@ -297,7 +297,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_streaming_response(
         self,
         model: str,
-        parsed_chunk: dict,  # mutable-ok: overrides the base class signature
+        parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
         event: Final = super().transform_streaming_response(

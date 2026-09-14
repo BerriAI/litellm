@@ -239,7 +239,7 @@ class ComplexityTierModel(BaseModel):
 
     @field_serializer("litellm_params")
     def _serialize_litellm_params(self, value: Mapping[str, object]) -> Mapping[str, object]:
-        return dict(value)  # mutable-ok: Pydantic JSON serialization requires a concrete mapping
+        return dict(value)
 
 
 def _normalize_tier_entries(
@@ -254,11 +254,7 @@ def _normalize_tier_entries(
     model_names: Final = tuple(entry.model_name for entry in entries)
     if len(model_names) != len(frozenset(model_names)):
         raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
-    normalized: Final = (
-        entries[0].model_name
-        if not isinstance(raw_value, (list, tuple))
-        else list(model_names)  # mutable-ok: config.tiers must preserve its existing list contract
-    )
+    normalized: Final = entries[0].model_name if not isinstance(raw_value, (list, tuple)) else list(model_names)
     return normalized, entries
 
 
@@ -1360,7 +1356,7 @@ class ComplexityRouterConfig(BaseModel):
                 or (isinstance(existing_configs, dict) and tier in existing_configs)
             }
         )
-        return {  # mutable-ok: Pydantic before-validator requires a concrete mapping
+        return {
             **value,
             "tiers": normalized_tiers,
             "tier_model_configs": tier_model_configs,

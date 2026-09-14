@@ -115,7 +115,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
 
     def __init__(self, response: httpx.Response) -> None:
         super().__init__(response)
-        self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+        self._hidden_params = {}
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -393,9 +393,7 @@ class OpenAIFileObject(BaseModel):
         serialized: Final[Mapping[str, object]] = handler(self)
         if self.litellm_batch_guardrail is not None:
             return serialized
-        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
-            key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD
-        }
+        return {key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD}
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

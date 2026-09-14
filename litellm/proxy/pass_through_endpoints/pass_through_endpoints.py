@@ -771,7 +771,7 @@ def _build_passthrough_failure_request_payload(
 class _TeamCallbackWiring:
     success_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
     failure_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
-    logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
+    logging_kwargs: dict[str, str | dict[str, str]] | None = None
 
 
 def _resolve_team_callback_wiring(
@@ -816,16 +816,16 @@ def _resolve_team_callback_wiring(
     logging_kwargs: Final = (
         None
         if not callback_vars
-        else {  # mutable-ok: Logging arg
+        else {
             **callback_vars,
             TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
-            "metadata": {},  # mutable-ok: Logging arg
-            "model_info": {},  # mutable-ok: Logging arg
+            "metadata": {},
+            "model_info": {},
         }
     )
     return _TeamCallbackWiring(
-        success_callbacks=None if success_callbacks is None else [*success_callbacks],  # mutable-ok: Logging arg
-        failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],  # mutable-ok: Logging arg
+        success_callbacks=None if success_callbacks is None else [*success_callbacks],
+        failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],
         logging_kwargs=logging_kwargs,
     )
 
@@ -879,7 +879,7 @@ async def _relay_reporting_failures(
     stream: AsyncGenerator[bytes, None],
     upstream_status: int,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+    request_payload: dict,
 ) -> AsyncGenerator[bytes, None]:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -2087,7 +2087,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     rewritten_model: Final = setup_model_rewriter(setup_model)
     if rewritten_model == setup_model:
         return text_data
-    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})  # mutable-ok: one-shot json payload
+    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
 
 
 def _truncated_close_reason(reason: str) -> str:

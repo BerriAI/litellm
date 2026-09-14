@@ -226,9 +226,9 @@ async def _teams_touching(team_table: _TeamTable, records: Sequence[_AccessGroup
     """Team rows listed on any of the groups or carrying any of them in access_group_ids."""
     group_ids: Final = tuple(record.access_group_id for record in records)
     stored_team_ids: Final = _ids_across(records, lambda record: record.assigned_team_ids)
-    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}  # mutable-ok: prisma where is a dict
-    listed: Final = {"team_id": {"in": stored_team_ids}}  # mutable-ok: prisma where is a dict
-    return await team_table.find_many(where={"OR": (carrying, listed)})  # mutable-ok: prisma where is a dict
+    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}
+    listed: Final = {"team_id": {"in": stored_team_ids}}
+    return await team_table.find_many(where={"OR": (carrying, listed)})
 
 
 async def _attached_team_ids_for(
@@ -242,7 +242,7 @@ async def _attached_team_ids_for(
 async def _require_teams_exist(tx: _AccessGroupTx, team_ids: Sequence[str]) -> None:
     if not team_ids:
         return
-    where: Final = {"team_id": {"in": team_ids}}  # mutable-ok: prisma where is a dict
+    where: Final = {"team_id": {"in": team_ids}}
     found: Final = await tx.litellm_teamtable.find_many(where=where)
     missing: Final = frozenset(team_ids) - frozenset(team.team_id for team in found)
     if missing:

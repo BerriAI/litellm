@@ -1161,10 +1161,10 @@ def _openapi_forwarded_extra_headers(
 def _resolve_openapi_tool_auth(
     mcp_server: MCPServer,
     mcp_auth_header: str | None,
-    mcp_server_auth_headers: Mapping[str, str | dict[str, str]] | None,  # mutable-ok: sink shape
-    raw_headers: dict[str, str] | None,  # mutable-ok: sink takes a concrete dict
+    mcp_server_auth_headers: Mapping[str, str | dict[str, str]] | None,
+    raw_headers: dict[str, str] | None,
     user_api_key_auth: UserAPIKeyAuth | None,
-) -> tuple[str | None, dict[str, str] | None, str | dict[str, str] | None]:  # mutable-ok: sink shapes
+) -> tuple[str | None, dict[str, str] | None, str | dict[str, str] | None]:
     """The caller's upstream credential for one ``spec_path`` server, for both OpenAPI dispatch arms.
 
     A per-server ``x-mcp-{alias}-authorization`` wins over the deprecated global / BYOK
@@ -1650,7 +1650,7 @@ def _create_elicitation_callback():
 
 
 def _record_mcp_guardrail_evaluations(
-    synthetic_llm_data: dict[str, Any],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
+    synthetic_llm_data: dict[str, Any],
     litellm_logging_obj: "LiteLLMLoggingObj | None",
 ) -> None:
     """Bridge guardrail decision records off an MCP synthetic request onto the request's logger.
@@ -1690,9 +1690,7 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
         self._ttl = ttl
         self._adapter = adapter
         self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=64, clock=clock)
-        self._pending: dict[
-            _DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]
-        ] = {}  # mutable-ok: constant-time fetch registration
+        self._pending: dict[_DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]] = {}
         self._waiters: dict[asyncio.Task[list[_DiscoveryItem]], int] = {}  # mutable-ok: constant-time waiter accounting
 
     def invalidate(self, server_id: str) -> None:
@@ -2374,7 +2372,7 @@ class MCPServerManager:
         used_aliases: Final = set()
         # server_id -> the config server_name that claimed it, so a pinned id cannot silently
         # overwrite another server's entry in self.config_mcp_servers.
-        assigned_server_ids: MutableMapping[str, str] = {}  # mutable-ok: per-load collision index
+        assigned_server_ids: MutableMapping[str, str] = {}
         _validate_config_server_names(mcp_servers_config)
         identifier_owners: Final = _config_identifier_owners(mcp_servers_config, mcp_aliases)
 
@@ -4792,7 +4790,7 @@ class MCPServerManager:
         try:
             client: Final = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": MCP_METADATA_TIMEOUT},  # mutable-ok: HTTP client factory requires a dict
+                params={"timeout": MCP_METADATA_TIMEOUT},
             )
             response: Final = await client.get(server_url)
             response.raise_for_status()

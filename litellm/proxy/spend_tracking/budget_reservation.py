@@ -396,7 +396,7 @@ async def invalidate_budget_reservation_counters(
 
 
 async def release_or_invalidate_budget_reservation(
-    budget_reservation: dict | None,  # mutable-ok: stamps finalized on the caller's shared reservation dict
+    budget_reservation: dict | None,
 ) -> None:
     """Reconcile a still-open reservation on a terminal path that settles no cost.
 
@@ -991,7 +991,7 @@ async def _release_applied_entries_best_effort(
     for entry in entries:
         try:
             await _set_reserved_entries_actual_cost(
-                entries=[entry],  # mutable-ok: the reconcile takes the reservation's list of entries
+                entries=[entry],
                 actual_cost=0.0,
                 default_reserved_cost=default_reserved_cost,
             )

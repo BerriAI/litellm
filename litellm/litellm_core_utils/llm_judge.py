@@ -27,7 +27,7 @@ def default_router_provider() -> Router | None:
     return llm_router
 
 
-def parse_json_verdict(raw: str) -> dict[str, object]:  # mutable-ok: plain parsed-JSON payload
+def parse_json_verdict(raw: str) -> dict[str, object]:
     """Parse a judge's JSON verdict, tolerating markdown fences and surrounding prose."""
     text = raw.strip()  # rebind-ok: progressively narrowed to the JSON payload
     fenced: Final = JSON_FENCE_RE.search(text)
@@ -44,7 +44,7 @@ def parse_json_verdict(raw: str) -> dict[str, object]:  # mutable-ok: plain pars
         parsed = json.loads(text[start : end + 1])
     if not isinstance(parsed, dict):
         raise ValueError("judge response is not a JSON object")
-    return {str(k): v for k, v in parsed.items()}  # mutable-ok: plain parsed-JSON payload
+    return {str(k): v for k, v in parsed.items()}
 
 
 def extract_text_from_content(content: object) -> str:

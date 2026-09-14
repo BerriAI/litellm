@@ -210,7 +210,7 @@ def _pick_model(listed: Sequence[str]) -> str | None:
 
 
 def _pick_codex_model(listed: Sequence[str]) -> str:
-    choices: Final = list(listed)  # mutable-ok: InquirerPy's choices parameter requires a list
+    choices: Final = list(listed)
     return str(inquirer.fuzzy(message="Model Codex starts on (type to filter):", choices=choices).execute())
 
 

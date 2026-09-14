@@ -137,8 +137,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _sync_post(
         client: HTTPHandler | httpx.Client | None,
         api_base: str,
-        headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
-        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
+        headers: dict[str, str],
+        request_data: dict[str, Any],
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         if isinstance(client, HTTPHandler):
@@ -172,8 +172,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     async def _async_post(
         client: AsyncHTTPHandler | httpx.AsyncClient | None,
         api_base: str,
-        headers: dict[str, str],  # mutable-ok: forwarded to post(headers: dict | None)
-        request_data: dict[str, Any],  # mutable-ok: forwarded to post(json: dict | ...)
+        headers: dict[str, str],
+        request_data: dict[str, Any],
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client

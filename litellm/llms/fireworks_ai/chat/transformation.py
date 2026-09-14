@@ -69,7 +69,7 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
 
 
 def _json_schema_response_format(schema: object, name: str) -> Mapping[str, object]:
-    return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}  # mutable-ok: JSON request body
+    return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}
 
 
 EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
@@ -339,12 +339,10 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         return optional_params
 
-    def map_extra_body_params(
-        self, optional_params: Mapping[str, object], model: str
-    ) -> dict:  # mutable-ok: http handler pops extra_body off the returned dict
+    def map_extra_body_params(self, optional_params: Mapping[str, object], model: str) -> dict:
         extra_body: Final = optional_params.get("extra_body")
         if not isinstance(extra_body, dict):
-            return dict(optional_params)  # mutable-ok: JSON request body
+            return dict(optional_params)
 
         stripped: Final = tuple(sorted(k for k in extra_body if k in NIM_VLLM_STRIP_PARAMS))
         if stripped:
@@ -368,11 +366,11 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             if k not in _EXTRA_BODY_CONSUMED_PARAMS
             and (k != "response_format" or "response_format" not in optional_params)
         )
-        base: Final = {k: v for k, v in optional_params.items() if k != "extra_body"}  # mutable-ok: JSON request body
-        return {  # mutable-ok: JSON request body
+        base: Final = {k: v for k, v in optional_params.items() if k != "extra_body"}
+        return {
             **base,
-            **dict(promoted),  # mutable-ok: JSON request body
-            **({"extra_body": dict(remaining)} if remaining else {}),  # mutable-ok: JSON request body
+            **dict(promoted),
+            **({"extra_body": dict(remaining)} if remaining else {}),
         }
 
     @staticmethod
@@ -441,12 +439,12 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if extra_body.get("guided_json") is not None:
             return (("response_format", _json_schema_response_format(extra_body["guided_json"], "response")),)
         if extra_body.get("guided_grammar") is not None:
-            grammar_response_format: Final = {  # mutable-ok: JSON request body
+            grammar_response_format: Final = {
                 "type": "grammar",
                 "grammar": extra_body["guided_grammar"],
             }
             return (("response_format", grammar_response_format),)
-        choice_schema: Final = {  # mutable-ok: JSON request body
+        choice_schema: Final = {
             "type": "string",
             "enum": extra_body["guided_choice"],
         }

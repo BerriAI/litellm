@@ -111,22 +111,18 @@ _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
 
 def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
     identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
-    return tool.model_copy(  # mutable-ok: Pydantic requires mutable update and metadata mappings
-        update={  # mutable-ok: Pydantic update payload
-            "meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}  # mutable-ok: metadata mapping
-        }
-    )
+    return tool.model_copy(update={"meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}})
 
 
 def _mcp_proxy_identity(tool: Tool) -> MCPProxyToolIdentity:
-    identity: Final = (tool.meta or {}).get(_MCP_PROXY_IDENTITY_META_KEY)  # mutable-ok: absent metadata default
+    identity: Final = (tool.meta or {}).get(_MCP_PROXY_IDENTITY_META_KEY)
     if not isinstance(identity, Mapping):
         raise TypeError("MCP proxy tool identity is missing")
     server_id: Final = identity.get("server_id")
     tool_name: Final = identity.get("tool_name")
     if not isinstance(server_id, str) or not isinstance(tool_name, str):
         raise TypeError("MCP proxy tool identity is invalid")
-    return {"server_id": server_id, "tool_name": tool_name}  # mutable-ok: TypedDict identity payload
+    return {"server_id": server_id, "tool_name": tool_name}
 
 
 def mcp_proxy_tool_id(tool: Tool) -> str:
@@ -140,7 +136,7 @@ def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
         "name": hit.tool.name,
         "description": hit.tool.description or "",
     }
-    return {**base, "score": hit.score} if hit.score is not None else base  # mutable-ok: wire result payload
+    return {**base, "score": hit.score} if hit.score is not None else base
 
 
 def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
@@ -152,7 +148,7 @@ def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
     }
     if tool.outputSchema is None:
         return base
-    return {**base, "outputSchema": tool.outputSchema}  # mutable-ok: wire schema payload
+    return {**base, "outputSchema": tool.outputSchema}
 
 
 def _tool_text(tool: Tool) -> str:
@@ -252,7 +248,7 @@ class VirtualToolDefinition(TypedDict):
 
 
 def _json_array(*items: str) -> Sequence[str]:
-    return list(items)  # mutable-ok: jsonschema's metaschema only accepts a JSON array for required
+    return list(items)
 
 
 _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
@@ -371,7 +367,7 @@ def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
     from mcp.types import CallToolResult, TextContent
 
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],  # mutable-ok: CallToolResult accepts only list content
+        content=[TextContent(type="text", text=text)],
         isError=is_error,
     )
 
@@ -495,14 +491,14 @@ async def handle_mcp_tool_search(
 
 async def handle_mcp_proxy_tool(
     name: str,
-    arguments: dict[str, object],  # mutable-ok: MCP dispatcher passes mutable call arguments
+    arguments: dict[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: str | None = None,
     mcp_servers: list[str] | None = None,  # mutable-ok: preserve MCP scope container for existing resolver
     mcp_auth_header: str | None = None,
-    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,  # mutable-ok: preserve forwarded headers
-    oauth2_headers: dict[str, str] | None = None,  # mutable-ok: preserve forwarded headers
-    raw_headers: dict[str, str] | None = None,  # mutable-ok: preserve request headers
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
 ) -> CallToolResult:
     from fastapi import HTTPException
@@ -524,7 +520,7 @@ async def handle_mcp_proxy_tool(
         raw_headers=raw_headers,
         mcp_proxy_mode=True,
     )
-    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}  # mutable-ok: lookup index
+    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}
 
     if name == MCP_PROXY_SEARCH_TOOL_NAME:
         llm_router: Final = proxy_server.llm_router
@@ -561,7 +557,7 @@ async def handle_mcp_proxy_tool(
     if name != MCP_PROXY_CALL_TOOL_NAME:
         raise HTTPException(status_code=400, detail=f"Unknown MCP proxy tool: {name}")
 
-    tool_arguments: Final = arguments.get("arguments", {})  # mutable-ok: JSON Schema validator consumes mapping
+    tool_arguments: Final = arguments.get("arguments", {})
     if not isinstance(tool_arguments, dict):
         return _text_tool_result("arguments must be an object", is_error=True)
     try:

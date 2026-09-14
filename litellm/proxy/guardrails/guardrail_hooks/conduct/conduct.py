@@ -69,7 +69,7 @@ class ConductVerdict(BaseModel):
 
 def record_decision(
     guardrail: CustomGuardrail,
-    request_data: dict[str, object],  # mutable-ok: the logging helper writes metadata into it
+    request_data: dict[str, object],
     decision: ConductDecision,
 ) -> None:
     guardrail.add_standard_logging_guardrail_information_to_request_data(
@@ -128,7 +128,7 @@ else:
         async def apply_guardrail(
             self,
             inputs: GenericGuardrailAPIInputs,
-            request_data: dict[str, object],  # mutable-ok: CustomGuardrail.apply_guardrail contract
+            request_data: dict[str, object],
             input_type: Literal["request", "response"],
             logging_obj: LiteLLMLoggingObj | None = None,
         ) -> GenericGuardrailAPIInputs:

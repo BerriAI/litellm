@@ -1514,7 +1514,7 @@ def _timing_values(
     """
     if hidden_params.get("_response_ms") is not None or not use_logging_obj or logging_obj is None:
         return hidden_params
-    return getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
+    return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -1531,7 +1531,7 @@ class ProxyBaseLLMRequestProcessing:
 
         Proxy/custom headers win on key collisions.
         """
-        excluded_headers: Final = {  # mutable-ok: set of header names to exclude from forwarding
+        excluded_headers: Final = {
             "transfer-encoding",
             "content-encoding",
             "set-cookie",
@@ -1544,7 +1544,7 @@ class ProxyBaseLLMRequestProcessing:
             "upgrade",
         }
 
-        merged_headers: Final = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
+        merged_headers: Final = {
             key: value for key, value in dict(response_headers or {}).items() if key.lower() not in excluded_headers
         }
         merged_headers.update(custom_headers)
@@ -3496,9 +3496,7 @@ class ProxyBaseLLMRequestProcessing:
             error_body: Final = await http_status_error.response.aread()
             error_text: Final = error_body.decode("utf-8")
 
-            error_headers: Final = {  # mutable-ok: HTTPException takes a plain header dict
-                k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()
-            }
+            error_headers: Final = {k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()}
             raise HTTPException(
                 status_code=http_status_error.response.status_code,
                 detail={"error": error_text},

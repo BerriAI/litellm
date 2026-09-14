@@ -502,15 +502,11 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
     return (guardrails, others)
 
 
-def _merge_pipeline_metadata_bucket(
-    data: dict, bucket_key: str, modified_bucket_value: object
-) -> None:  # mutable-ok: request payload dict, written in place
+def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
     if not isinstance(modified_bucket_value, dict):
         return
     modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
-    surviving_writes: Final = {
-        key: value for key, value in modified_bucket.items() if key != "guardrails"
-    }  # mutable-ok: merged into the live request metadata bucket in place
+    surviving_writes: Final = {key: value for key, value in modified_bucket.items() if key != "guardrails"}
     existing_bucket: Final = data.get(bucket_key)
     if isinstance(existing_bucket, dict):
         cast("dict[str, object]", existing_bucket).update(surviving_writes)  # cast-ok: metadata buckets are str-keyed
@@ -518,9 +514,7 @@ def _merge_pipeline_metadata_bucket(
         data[bucket_key] = surviving_writes
 
 
-def _merge_pipeline_metadata_writes(
-    data: dict, modified_data: Mapping[str, object]
-) -> None:  # mutable-ok: request payload dict, written in place
+def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, object]) -> None:
     """
     Copy metadata-bucket writes from a pipeline's working copy back onto the request.
 
@@ -581,16 +575,14 @@ def _guardrails_run_standalone_pre_call(data: Mapping[str, object]) -> frozenset
 
 
 def _without_names(
-    bucket: dict[str, object],  # mutable-ok: the applied_* header slots live in the request-state dict hooks write
+    bucket: dict[str, object],
     slot: str,
     names: frozenset[str],
 ) -> None:
     claimed: Final = bucket.get(slot)
     if not isinstance(claimed, list):
         return
-    remaining: Final = [  # mutable-ok: the slot stays a list, the shape every applied_* header writer appends to
-        name for name in claimed if name not in names
-    ]
+    remaining: Final = [name for name in claimed if name not in names]
     if remaining:
         bucket[slot] = remaining  # rebind-ok: the slot lives in the shared request-state dict, rewritten in place
     else:
@@ -598,7 +590,7 @@ def _without_names(
 
 
 def _withdraw_deferred_claims(
-    data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    data: dict[str, object],
     deferred: Sequence[tuple[str, "GuardrailPipeline"]],
 ) -> None:
     outside_by_policy: Final = MappingProxyType(
@@ -615,9 +607,7 @@ def _withdraw_deferred_claims(
     sources: Final = bucket.get("policy_sources")
     if not isinstance(sources, dict):
         return
-    remaining_sources: Final = {  # mutable-ok: policy_sources stays a dict, the shape its writer updates in place
-        name: reason for name, reason in sources.items() if name not in withdrawn_policies
-    }
+    remaining_sources: Final = {name: reason for name, reason in sources.items() if name not in withdrawn_policies}
     if remaining_sources:
         bucket["policy_sources"] = remaining_sources
     else:
@@ -625,7 +615,7 @@ def _withdraw_deferred_claims(
 
 
 def _defer_post_call_pipelines(
-    data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    data: dict[str, object],
     response: ResponsesAPIResponse,
 ) -> None:
     deferred: Final = _post_call_pipelines(data)
@@ -1731,11 +1721,11 @@ class ProxyLogging:
     async def _run_sequential_guardrail_callback(
         self,
         callback: CustomGuardrail,
-        data: dict,  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
-        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        data: dict,
+        raw_request_snapshot: dict | None,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
+    ) -> dict:
         """
         Run one guardrail from the sequential pre_call loop and return what the
         rest of the loop should carry forward.
@@ -1755,9 +1745,7 @@ class ProxyLogging:
         """
         scans_raw_request: Final = callback.scan_raw_request
         should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
-        input_data: Final = (  # mutable-ok: same request-payload shape as data
-            independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
-        )
+        input_data: Final = independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
         # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
         # successful run, which unconditionally stamps bookkeeping metadata onto
         # the dict regardless of whether the guardrail's own hook mutated
@@ -1767,9 +1755,7 @@ class ProxyLogging:
         # raw_request_snapshot itself) so the comparison isolates the guardrail's
         # own content mutation from this bookkeeping noise without risking a
         # premature marker write into shared state.
-        expected_if_unmutated: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
-            independent_snapshot(input_data) if scans_raw_request else None
-        )
+        expected_if_unmutated: Final[dict | None] = independent_snapshot(input_data) if scans_raw_request else None
         if expected_if_unmutated is not None:
             callback.mark_pre_call_hook_ran(expected_if_unmutated)
         result: Final = await self._process_guardrail_callback(
@@ -1915,9 +1901,9 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict | None = None,
         response: LLMResponseTypes | None = None,
-    ) -> tuple[dict, LLMResponseTypes | None]:  # mutable-ok: returns the request-payload dict onward
+    ) -> tuple[dict, LLMResponseTypes | None]:
         """
         Execute guardrail pipelines if any are configured for this request.
 
@@ -1942,9 +1928,7 @@ class ProxyLogging:
             if pipeline.mode != event_hook:
                 continue
 
-            step_input: dict = (
-                {**data, "response": current_response} if current_response is not None else data
-            )  # mutable-ok: same request-payload shape as data
+            step_input: dict = {**data, "response": current_response} if current_response is not None else data
 
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
@@ -2059,7 +2043,7 @@ class ProxyLogging:
         caps: Final = ProxyLogging._callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}  # mutable-ok: should_run_guardrail takes a dict
+        probe: Final = {"metadata": dict(request_metadata)}
         return any(
             isinstance(callback, CustomGuardrail)
             and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
@@ -2149,9 +2133,7 @@ class ProxyLogging:
             isinstance(cb, CustomGuardrail) and cb.scan_raw_request
             for cb in ProxyLogging._callback_capabilities().resolved_callbacks
         )
-        raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
-            independent_snapshot(data) if needs_raw_request_snapshot else None
-        )
+        raw_request_snapshot: Final[dict | None] = independent_snapshot(data) if needs_raw_request_snapshot else None
 
         try:
             # Execute guardrail pipelines before the normal callback loop
@@ -2280,7 +2262,7 @@ class ProxyLogging:
         self,
         guardrails: tuple[CustomGuardrail, ...],
         data: dict,
-        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict | None,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> None:
@@ -2305,7 +2287,7 @@ class ProxyLogging:
         sequential guardrail already masked or rewrote.
         """
 
-        def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
+        def _input_for(callback: CustomGuardrail) -> dict:
             if not callback.scan_raw_request or raw_request_snapshot is None:
                 return data
             return independent_snapshot(raw_request_snapshot)
@@ -3120,7 +3102,7 @@ class ProxyLogging:
 
     async def _run_post_call_pipelines(
         self,
-        data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes | None:
@@ -3645,7 +3627,7 @@ class ProxyLogging:
         self,
         response: "AsyncGenerator[object, None]",
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
+        request_data: dict,
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
         translation: "tuple[str, BaseTranslation]",
     ) -> "AsyncGenerator[Any, None]":
@@ -3994,9 +3976,7 @@ class PrismaClient:
     spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     tool_usage_transactions: list["ToolUsageTransaction"] = []
     _tool_usage_transactions_lock = asyncio.Lock()
-    autorouter_turn_transactions: ClassVar[
-        list["AutoRouterTurnTransaction"]
-    ] = []  # mutable-ok: drained queue, mirrors tool_usage_transactions
+    autorouter_turn_transactions: ClassVar[list["AutoRouterTurnTransaction"]] = []
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
     # How long a health probe failure waits for an in-flight planned engine

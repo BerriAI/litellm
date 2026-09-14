@@ -500,8 +500,8 @@ def safe_deep_copy(data):
 
 
 def independent_snapshot(
-    data: dict,  # mutable-ok: caller-defined request-payload shape
-) -> dict:  # mutable-ok: caller-defined request-payload shape
+    data: dict,
+) -> dict:
     """
     A copy of ``data`` whose top-level keys are deep-copied independently
     where possible -- always attempted, regardless of
@@ -522,7 +522,7 @@ def independent_snapshot(
     """
     sanitized: Final = {
         key: (
-            {  # mutable-ok: same request-payload shape as data
+            {
                 inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
                 for inner_key, inner_value in value.items()
             }
@@ -544,15 +544,13 @@ def independent_snapshot(
             and isinstance(original_value, dict)
             and "litellm_parent_otel_span" in original_value
         ):
-            return {  # mutable-ok: same request-payload shape as data
+            return {
                 **copied_value,
                 "litellm_parent_otel_span": original_value["litellm_parent_otel_span"],
             }
         return copied_value
 
-    return {  # mutable-ok: same request-payload shape as data
-        key: _copied_value(key, value) for key, value in sanitized.items()
-    }
+    return {key: _copied_value(key, value) for key, value in sanitized.items()}
 
 
 def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:

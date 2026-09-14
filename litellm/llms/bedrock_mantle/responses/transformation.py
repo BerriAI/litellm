@@ -214,15 +214,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             summary,
             sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
         )
-        stripped: Final = {  # mutable-ok: map_openai_params contract returns a plain dict
-            key: value for key, value in reasoning.items() if key != "summary"
-        }
+        stripped: Final = {key: value for key, value in reasoning.items() if key != "summary"}
         return (
-            {**params, "reasoning": stripped}  # mutable-ok: map_openai_params contract returns a plain dict
+            {**params, "reasoning": stripped}
             if stripped
-            else {  # mutable-ok: map_openai_params contract returns a plain dict
-                key: value for key, value in params.items() if key != "reasoning"
-            }
+            else {key: value for key, value in params.items() if key != "reasoning"}
         )
 
     def transform_responses_api_request(
@@ -372,7 +368,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
                 rewritten_types,
             )
-        kept: Final = [item for item, _ in normalized if item is not None]  # mutable-ok: ResponseInputParam is a list
+        kept: Final = [item for item, _ in normalized if item is not None]
         return kept  # pyright: ignore[reportReturnType]  # Codex passthrough items sit outside the OpenAI input union
 
     def map_openai_params(

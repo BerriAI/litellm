@@ -550,10 +550,8 @@ if MCP_AVAILABLE:
         )
         opts: Final = (
             base_options.model_copy(
-                update={  # mutable-ok: Pydantic update payload
-                    "capabilities": base_options.capabilities.model_copy(
-                        update={"prompts": None, "resources": None}  # mutable-ok: Pydantic update payload
-                    )
+                update={
+                    "capabilities": base_options.capabilities.model_copy(update={"prompts": None, "resources": None})
                 }
             )
             if _mcp_proxy_mode.get()
@@ -847,7 +845,7 @@ if MCP_AVAILABLE:
             )
 
             if _mcp_proxy_mode.get():
-                return [Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()]  # mutable-ok: MCP SDK list
+                return [Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()]
             if getattr(
                 getattr(user_api_key_auth, "object_permission", None),
                 "mcp_tool_search_enabled",
@@ -1002,9 +1000,7 @@ if MCP_AVAILABLE:
 
         if _mcp_proxy_mode.get() and name not in MCP_PROXY_TOOL_NAMES:
             return CallToolResult(
-                content=[  # mutable-ok: MCP result content
-                    TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")
-                ],
+                content=[TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")],
                 isError=True,
             )
 
@@ -1014,7 +1010,7 @@ if MCP_AVAILABLE:
             proxy_logging_obj: Final = (
                 await _build_virtual_call_logging_obj(
                     name=name,
-                    arguments=arguments or {},  # mutable-ok: logging pipeline payload
+                    arguments=arguments or {},
                     user_api_key_auth=user_api_key_auth,
                     raw_headers=raw_headers,
                     client_ip=client_ip,
@@ -1025,7 +1021,7 @@ if MCP_AVAILABLE:
             try:
                 proxy_result: Final = await handle_mcp_proxy_tool(
                     name=name,
-                    arguments=arguments or {},  # mutable-ok: proxy handler payload
+                    arguments=arguments or {},
                     user_api_key_dict=user_api_key_auth,
                     client_ip=client_ip,
                     mcp_servers=mcp_servers,
@@ -1048,7 +1044,7 @@ if MCP_AVAILABLE:
                         )
                         if not isinstance(exc, MCPUpstreamAuthError):
                             await request_logging_obj.post_call_failure_hook(
-                                request_data={  # mutable-ok: failure hook mutates its request payload
+                                request_data={
                                     "name": name,
                                     "arguments": arguments,
                                     "litellm_logging_obj": proxy_logging_obj,
@@ -2316,9 +2312,7 @@ if MCP_AVAILABLE:
                     if mcp_proxy_mode:
                         from litellm.proxy._experimental.mcp_server.tool_search import with_mcp_proxy_identity
 
-                        filtered_tools = [  # mutable-ok: MCP tool pipeline
-                            with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools
-                        ]
+                        filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
                     else:
                         filtered_tools = apply_tool_overrides(filtered_tools, server)
 

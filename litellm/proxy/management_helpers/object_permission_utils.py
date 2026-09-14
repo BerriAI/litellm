@@ -344,7 +344,7 @@ async def reject_ambiguous_mcp_tool_permission_keys(
         return
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+        detail={
             "error": (
                 f"Ambiguous mcp_tool_permissions key: {collisions}. "
                 "Key tool permissions by server_id when servers share a name or alias."

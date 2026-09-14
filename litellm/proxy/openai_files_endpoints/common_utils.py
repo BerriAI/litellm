@@ -501,7 +501,7 @@ def get_team_provider_credentials(
 
 
 def apply_team_provider_credentials(
-    data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
+    data: dict,
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
@@ -1166,7 +1166,7 @@ async def map_raw_file_ids_to_unified(
     if not raw_file_ids or not prisma_client:
         return MappingProxyType({})
     managed_files: Final = await ManagedFileRepository(prisma_client).table.find_many(
-        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}  # mutable-ok: prisma where is a plain dict
+        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}
     )
     return MappingProxyType(
         {

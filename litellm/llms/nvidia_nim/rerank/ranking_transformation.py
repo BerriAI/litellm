@@ -80,7 +80,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,  # mutable-ok: matches BaseRerankConfig's request contract
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -92,7 +92,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:  # mutable-ok: LiteLLM provider transforms return mutable request dictionaries
+    ) -> dict:
         """
         Keep Cohere's top_n as-is instead of mapping it to top_k.
 
@@ -141,9 +141,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
             self._client_side_top_n = top_n
 
         clean_model: Final = self._get_clean_model_name(model)
-        filtered_params: Final = {  # mutable-ok: the base transformer requires a mutable request dictionary
-            k: v for k, v in optional_rerank_params.items() if k not in ("top_n", "top_k")
-        }
+        filtered_params: Final = {k: v for k, v in optional_rerank_params.items() if k not in ("top_n", "top_k")}
         return super().transform_rerank_request(
             model=clean_model,
             optional_rerank_params=filtered_params,
@@ -158,9 +156,9 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
-        optional_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
-        litellm_params: dict | None = None,  # mutable-ok: matches BaseRerankConfig's response contract
+        request_data: dict | None = None,
+        optional_params: dict | None = None,
+        litellm_params: dict | None = None,
     ) -> RerankResponse:
         """
         Convert the native ranking response, then apply top_n client-side.
@@ -168,9 +166,9 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         /v1/ranking returns rankings sorted by relevance, but sort before
         truncating in case a server returns them unsorted.
         """
-        resolved_request_data: Final = request_data or {}  # mutable-ok: the base transformer requires a dictionary
-        resolved_optional_params: Final = optional_params or {}  # mutable-ok: response options are keyed lookups
-        resolved_litellm_params: Final = litellm_params or {}  # mutable-ok: the base transformer requires a dictionary
+        resolved_request_data: Final = request_data or {}
+        resolved_optional_params: Final = optional_params or {}
+        resolved_litellm_params: Final = litellm_params or {}
 
         response: Final = super().transform_rerank_response(
             model=model,

@@ -278,18 +278,18 @@ class BingGroundingSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.validate_environment signature
+        headers: dict[str, str],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment signature
-    ) -> dict[str, str]:  # mutable-ok: the http handler passes this straight to httpx as headers
+    ) -> dict[str, str]:
         """
         Validate environment and return headers.
 
         Returns a new dict rather than mutating ``headers``: the http handler calls this
         a second time after ``litellm/search/main.py`` already did, so it has to be idempotent.
         """
-        return {  # mutable-ok: httpx requires a plain dict of headers
+        return {
             **headers,
             **self._auth_header(api_key, api_base),
             "Content-Type": "application/json",
@@ -330,7 +330,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig.get_complete_url signature
+        optional_params: dict[str, object],
         data: dict[str, object] | list[dict[str, object]] | None = None,  # mutable-ok: base signature
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url signature
     ) -> str:
@@ -348,9 +348,9 @@ class BingGroundingSearchConfig(BaseSearchConfig):
     def transform_search_request(
         self,
         query: str | list[str],  # mutable-ok: BaseSearchConfig.transform_search_request signature
-        optional_params: dict[str, object],  # mutable-ok: base signature
+        optional_params: dict[str, object],
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_request signature
-    ) -> dict[str, object]:  # mutable-ok: the http handler passes this straight to httpx as the JSON body
+    ) -> dict[str, object]:
         """
         Transform Search request to the Foundry Responses API format.
 
@@ -387,7 +387,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
             raise self.get_error_class(
                 error_message=f"response does not match the Foundry Responses API schema: {e}",
                 status_code=raw_response.status_code,
-                headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
+                headers=dict(raw_response.headers),
             )
         if parsed.status == "failed":
             detail: Final = (
@@ -408,7 +408,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         return self.get_error_class(
             error_message=detail,
             status_code=_UPSTREAM_ERROR_STATUS,
-            headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
+            headers=dict(raw_response.headers),
         )
 
     def _priced(self, results: tuple[SearchResult, ...]) -> SearchResponse:
@@ -416,23 +416,19 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         inherit the connection-mode ``bing_grounding/search`` price; zero its per-query
         cost while leaving connection mode to the cost map."""
         response: Final = SearchResponse(
-            results=list(results),  # mutable-ok: SearchResponse.results is list[SearchResult]
+            results=list(results),
             object="search",
         )
         if get_secret_str(CONNECTION_ID_ENV):
             return response
-        response._hidden_params[
-            "additional_headers"
-        ] = {  # mutable-ok: response_cost_calculator writes into _hidden_params
-            _RESPONSE_COST_HEADER: 0.0
-        }
+        response._hidden_params["additional_headers"] = {_RESPONSE_COST_HEADER: 0.0}
         return response
 
     def get_error_class(
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.get_error_class signature
+        headers: dict[str, str],
     ) -> Exception:
         detail: Final = _unwrap_error_detail(error_message).rstrip(". ")
         return BaseLLMException(

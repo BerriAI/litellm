@@ -156,7 +156,7 @@ async def _emails_for_user_ids(
         return _EMPTY_EMAILS
     users: Final = await _db_or_empty(
         lambda: UserRepository(prisma_client).table.find_many(
-            where={"user_id": {"in": list(user_ids)}},  # mutable-ok: Prisma find_many where= is a dict
+            where={"user_id": {"in": list(user_ids)}},
         ),
         "Failed user_email recovery for %d user ids: %s",
         len(user_ids),

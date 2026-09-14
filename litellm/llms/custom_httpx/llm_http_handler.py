@@ -544,8 +544,8 @@ class BaseLLMHTTPHandler:
         )
 
         def sign_and_log(
-            transformed: dict[str, object],  # mutable-ok: async_completion takes dict
-        ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
+            transformed: dict[str, object],
+        ) -> tuple[dict[str, object], dict[str, object], bytes | None]:
             data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
             signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
                 "tuple[dict[str, object], bytes | None]",
@@ -577,8 +577,8 @@ class BaseLLMHTTPHandler:
             return data, signed[0], signed[1]
 
         def dispatch_async(
-            data: dict[str, object],  # mutable-ok: async_completion takes dict
-            signed_headers: dict[str, object],  # mutable-ok: async_completion takes dict
+            data: dict[str, object],
+            signed_headers: dict[str, object],
             signed_json_body: bytes | None,
         ) -> Coroutine[object, object, ModelResponse | CustomStreamWrapper]:
             async_client: Final = client if isinstance(client, AsyncHTTPHandler) else None
@@ -2817,7 +2817,7 @@ class BaseLLMHTTPHandler:
         )
 
         if self._has_agentic_completion_hook(logging_obj):
-            agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
+            agentic_kwargs: Final = dict(litellm_params)
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
                 response=initial_response,
@@ -3008,7 +3008,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
-        agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
+        agentic_kwargs: Final = dict(litellm_params)
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -4988,9 +4988,7 @@ class BaseLLMHTTPHandler:
         files_per_page: Final = self._files_per_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, sync_httpx_client, timeout
         )
-        return [  # mutable-ok: the files contract returns the listing as a list
-            listed_file for page_files in files_per_page for listed_file in page_files
-        ]
+        return [listed_file for page_files in files_per_page for listed_file in page_files]
 
     async def async_list_files(
         self,
@@ -5045,17 +5043,15 @@ class BaseLLMHTTPHandler:
         files_per_page: Final = self._files_per_async_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, async_httpx_client, timeout
         )
-        return [  # mutable-ok: the files contract returns the listing as a list
-            listed_file async for page_files in files_per_page for listed_file in page_files
-        ]
+        return [listed_file async for page_files in files_per_page for listed_file in page_files]
 
     def _files_per_listing_page(
         self,
         first_page: httpx.Response,
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        litellm_params: dict,
+        headers: dict,
         client: HTTPHandler,
         timeout: float | httpx.Timeout | None,
     ) -> Iterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
@@ -5082,8 +5078,8 @@ class BaseLLMHTTPHandler:
         first_page: httpx.Response,
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        litellm_params: dict,
+        headers: dict,
         client: AsyncHTTPHandler,
         timeout: float | httpx.Timeout | None,
     ) -> AsyncIterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
@@ -5108,9 +5104,9 @@ class BaseLLMHTTPHandler:
     def _next_listing_page_headers(
         self,
         provider_config: BaseFilesConfig,
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
-        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
-    ) -> dict:  # mutable-ok: validate_environment returns the header dict the files contract types
+        headers: dict,
+        litellm_params: dict,
+    ) -> dict:
         return provider_config.validate_environment(
             api_key=litellm_params.get("api_key"),
             headers=headers,
@@ -5124,9 +5120,9 @@ class BaseLLMHTTPHandler:
         self,
         latest_page: httpx.Response,
         provider_config: BaseFilesConfig,
-        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        litellm_params: dict,
         listed_count: int,
-    ) -> tuple[str, dict[str, str]] | None:  # mutable-ok: the base files contract returns the query as a dict
+    ) -> tuple[str, dict[str, str]] | None:
         if listed_count >= MAX_FILE_LIST_LIMIT:
             return None
         return provider_config.transform_list_files_next_request(
@@ -9863,7 +9859,7 @@ class BaseLLMHTTPHandler:
         logging_obj.pre_call(
             input="",
             api_key="",
-            additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+            additional_args={
                 "query": query,
                 "vector_store_id": vector_store_id,
                 "api_base": endpoint,
@@ -9899,7 +9895,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                litellm_params=dict(litellm_params),
                 embedding_executor=embedding_executor,
                 timeout=timeout,
             )
@@ -10039,7 +10035,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                litellm_params=dict(litellm_params),
                 embedding_executor=embedding_executor,
                 timeout=timeout,
             )

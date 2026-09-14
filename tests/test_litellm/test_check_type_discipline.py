@@ -102,23 +102,46 @@ def test_mypy_ignore_shape_is_lit004_not_lit009(tmp_path):
 
 
 def test_ok_suppression_without_reason_is_flagged(tmp_path):
-    codes = _codes(tmp_path, "y = []  # mutable-ok\n")
+    codes = _codes(tmp_path, "y: list[int] = []  # mutable-ok\n")
     assert "LIT005" in codes  # reasonless suppression
-    assert "LIT002" in codes  # and it does not suppress, so the construction still trips
+    assert "LIT001" in codes  # and it does not suppress, so the annotation still trips
 
 
 # --------------------------------------------------------------------------- #
-# Mutable annotations (LIT001) and construction (LIT002)
+# Mutable annotations (LIT001)
 # --------------------------------------------------------------------------- #
 
 
 def test_mutable_annotation_is_flagged(tmp_path):
-    assert "LIT001" in _codes(tmp_path, "x: dict[str, int]\n")
+    assert "LIT001" in _codes(tmp_path, "x: list[int]\n")
+    assert "LIT001" in _codes(tmp_path, "x: set[int]\n")
 
 
 def test_typing_alias_and_forward_ref_annotations_are_flagged(tmp_path):
     assert "LIT001" in _codes(tmp_path, "from typing import List\nx: List[int]\n")
-    assert "LIT001" in _codes(tmp_path, 'x: "dict[str, int]"\n')
+    assert "LIT001" in _codes(tmp_path, 'x: "list[int]"\n')
+    assert "LIT001" in _codes(tmp_path, "import collections\nx: collections.deque[int]\n")
+    assert "LIT001" in _codes(tmp_path, "from collections.abc import MutableSequence\nx: MutableSequence[int]\n")
+
+
+def test_mapping_annotations_are_allowed(tmp_path):
+    for ann in (
+        "dict[str, int]",
+        "Dict[str, int]",
+        "DefaultDict[str, int]",
+        "MutableMapping[str, int]",
+        "defaultdict[str, int]",
+        "OrderedDict[str, int]",
+    ):
+        source = (
+            "from collections import OrderedDict, defaultdict\n"
+            "from collections.abc import MutableMapping\n"
+            "from typing import DefaultDict, Dict\n"
+            f"x: {ann}\n"
+        )
+        assert "LIT001" not in _codes(tmp_path, source), ann
+    assert "LIT001" not in _codes(tmp_path, 'x: "dict[str, int]"\n')
+    assert "LIT001" in _codes(tmp_path, "x: dict[str, list[int]]\n")
 
 
 def test_literal_string_args_are_values_not_forward_refs(tmp_path):
@@ -127,8 +150,8 @@ def test_literal_string_args_are_values_not_forward_refs(tmp_path):
         tmp_path,
         'from typing import Literal\ndef f(op: Literal["create", "list"] = "create") -> None:\n    return None\n',
     )
-    assert "LIT001" not in _codes(tmp_path, 'import typing\nx: typing.Literal["dict"] = "dict"\n')
-    assert "LIT001" in _codes(tmp_path, 'from typing import Literal\nx: dict[str, Literal["a"]]\n')
+    assert "LIT001" not in _codes(tmp_path, 'import typing\nx: typing.Literal["set"] = "set"\n')
+    assert "LIT001" in _codes(tmp_path, 'from typing import Literal\nx: list[Literal["a"]]\n')
     assert "LIT001" in _codes(tmp_path, "x: \"Literal['x'] | list[int]\"\n")
 
 
@@ -137,119 +160,19 @@ def test_readonly_annotations_are_clean(tmp_path):
         assert "LIT001" not in _codes(tmp_path, f"from typing import Mapping, Sequence\nx: {ann}\n")
 
 
-def test_mutable_construction_is_flagged(tmp_path):
-    assert "LIT002" in _codes(tmp_path, "y = []\n")
-    assert "LIT002" in _codes(tmp_path, "z = dict(a=1)\n")
+def test_construction_is_not_flagged(tmp_path):
+    for source in (
+        "y = []\n",
+        "z = dict(a=1)\n",
+        "s = {1, 2}\n",
+        "c = [i for i in range(3)]\n",
+        "import collections\nq = collections.deque()\n",
+    ):
+        assert not [c for c in _codes(tmp_path, source) if c.startswith("LIT00")], source
 
 
-def test_construction_inside_annotation_is_exempt(tmp_path):
-    # `Callable[[int], str]` carries a list display that is type syntax, not construction.
-    assert "LIT002" not in _codes(
-        tmp_path, "from typing import Callable\ndef f(cb: Callable[[int], str]) -> None:\n    return None\n"
-    )
-
-
-def test_generator_and_tuple_are_not_construction(tmp_path):
-    assert "LIT002" not in _codes(tmp_path, "g = tuple(i for i in range(3))\n")
-    assert "LIT002" not in _codes(tmp_path, "t = (1, 2, 3)\n")
-
-
-def test_dict_list_set_method_calls_are_not_construction(tmp_path):
-    # `.dict()` / `.list()` / `.set()` are common method names (e.g. pydantic model.dict()),
-    # not collection construction; only the unqualified builtins count.
-    assert "LIT002" not in _codes(tmp_path, "d = model.dict()\n")
-    assert "LIT002" not in _codes(tmp_path, "s = obj.set()\n")
-    assert "LIT002" in _codes(tmp_path, "d = dict(a=1)\n")  # unqualified still counts
-
-
-def test_qualified_collections_constructors_still_count(tmp_path):
-    # collections concretes are rarely method names, so a qualified call still flags.
-    assert "LIT002" in _codes(tmp_path, "import collections\nq = collections.deque()\n")
-    assert "LIT002" in _codes(tmp_path, "import collections\nm = collections.defaultdict(list)\n")
-
-
-def test_value_frozen_by_wrapper_is_exempt(tmp_path):
-    assert "LIT002" not in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType({'a': 1})\n")
-    assert "LIT002" not in _codes(tmp_path, "import types\nm = types.MappingProxyType({'a': 1})\n")
-    assert "LIT002" not in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType(dict(a=1))\n")
-    assert "LIT002" not in _codes(tmp_path, "f = frozenset({1, 2})\n")
-    assert "LIT002" not in _codes(tmp_path, "t = tuple([1, 2])\n")
-
-
-def test_same_named_method_does_not_exempt_its_argument(tmp_path):
-    assert "LIT002" in _codes(tmp_path, "t = obj.tuple([1, 2])\n")
-    assert "LIT002" in _codes(tmp_path, "f = obj.frozenset({1, 2})\n")
-    assert "LIT002" in _codes(tmp_path, "m = obj.MappingProxyType({'a': 1})\n")
-
-
-def test_mutable_nested_inside_frozen_wrapper_still_counts(tmp_path):
-    assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nm = MappingProxyType({'a': []})\n")
-
-
-def test_unfrozen_literal_still_counts(tmp_path):
-    assert "LIT002" in _codes(tmp_path, "from types import MappingProxyType\nd = {'a': 1}\nm = MappingProxyType(d)\n")
-
-
-def test_lit002_fix_message_names_mappingproxytype(tmp_path):
-    f = tmp_path / "snippet.py"
-    f.write_text("x = {'a': 1}\n", encoding="utf-8")
-    messages = [v.message for v in checker.check_file(f) if v.code == "LIT002"]
-    assert "MappingProxyType" in messages[0]
-
-
-def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
-    codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
-    assert "LIT001" not in codes
-    assert "LIT002" not in codes
-
-
-def test_typeddict_annotated_dict_literal_is_exempt(tmp_path):
-    assert "LIT002" not in _codes(
-        tmp_path, "from typing import Final\nfrom foo import MyTD\nx: Final[MyTD] = {'a': 1}\n"
-    )
-    assert "LIT002" not in _codes(tmp_path, "from foo import MyTD\nx: MyTD = {'a': 1}\n")
-    assert "LIT002" not in _codes(tmp_path, "from typing import Final\nx: Final['MyTD'] = {'a': 1}\n")
-    assert "LIT002" not in _codes(tmp_path, "import foo\nfrom typing import Final\nx: Final[foo.MyTD] = {'a': 1}\n")
-
-
-def test_wrapped_typeddict_annotations_share_the_exemption(tmp_path):
-    assert "LIT002" not in _codes(
-        tmp_path, "from typing import Final, Optional\nx: Final[Optional[MyTD]] = {'a': 1}\n"
-    )
-    assert "LIT002" not in _codes(
-        tmp_path, "from typing import Annotated, Final\nx: Final[Annotated[MyTD, 'meta']] = {'a': 1}\n"
-    )
-    assert "LIT002" not in _codes(
-        tmp_path, "from typing import ClassVar\nclass C:\n    x: ClassVar[MyTD] = {'a': 1}\n"
-    )
-    assert "LIT002" not in _codes(tmp_path, "from typing import Final\nx: Final[MyTD | None] = {'a': 1}\n")
-    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[dict[str, int] | None] = {'a': 1}\n")
-
-
-def test_bare_final_dict_literal_still_counts(tmp_path):
-    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final = {'a': 1}\n")
-    assert "LIT002" in _codes(tmp_path, "from typing import ClassVar\nclass C:\n    x: ClassVar = {'a': 1}\n")
-
-
-def test_non_typeddict_annotations_do_not_exempt(tmp_path):
-    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[dict[str, int]] = {'a': 1}\n")
-    assert "LIT002" in _codes(
-        tmp_path, "from collections.abc import Mapping\nfrom typing import Final\nx: Final[Mapping[str, int]] = {'a': 1}\n"
-    )
-    assert "LIT002" in _codes(tmp_path, "from typing import Any, Final\nx: Final[Any] = {'a': 1}\n")
-    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[object] = {'a': 1}\n")
-
-
-def test_typeddict_exemption_covers_only_dict_literals(tmp_path):
-    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[MyTD] = dict(a=1)\n")
-    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[MyTD] = {k: 1 for k in ('a',)}\n")
-
-
-def test_nested_dict_literals_share_the_typeddict_exemption(tmp_path):
-    assert "LIT002" not in _codes(
-        tmp_path, "from typing import Final\nx: Final[Outer] = {'inner': {'a': 1}, 'steps': ({'b': 2},)}\n"
-    )
-    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[Outer] = {'tags': ['a']}\n")
+def test_mutable_ok_with_reason_suppresses_annotation(tmp_path):
+    assert "LIT001" not in _codes(tmp_path, "x: list[int] = []  # mutable-ok: in-place buffer mutated hot path\n")
 
 
 # --------------------------------------------------------------------------- #

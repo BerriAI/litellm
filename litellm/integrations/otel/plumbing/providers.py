@@ -516,9 +516,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._lock: Final = threading.Condition()
         self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
         self._build: Final = processor_factory if processor_factory is not None else _destination_processor
-        self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
-        self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
-        self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
+        self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()
+        self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()
+        self._exporting: dict[int, int] = {}
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
@@ -576,9 +576,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             live: Final = tuple((id(p), p) for p in (*self._processors.values(), *self._retired.values()))
             closing: Final = tuple(p for ident, p in live if ident not in self._exporting)
             self._processors.clear()
-            self._retired = OrderedDict(  # mutable-ok: the same bounded map, keeping only what is still exporting
-                (ident, p) for ident, p in live if ident in self._exporting
-            )
+            self._retired = OrderedDict((ident, p) for ident, p in live if ident in self._exporting)
         for processor in closing:
             self._drain.submit(processor)
         self._drain.close(timeout=max(0.0, deadline - time.monotonic()))

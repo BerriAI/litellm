@@ -609,7 +609,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict[str, object] | None,  # mutable-ok: same request-payload shape the hooks take
+        request_data: dict[str, object] | None,
         deliver_ended_stream_rewrites: bool,
     ) -> None:
         """Ended-stream path: rebuild the full response, run the non-streaming
@@ -1051,8 +1051,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         target_choice_index: Final = next(iter(stream_choice_indices))
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=list(changed),  # mutable-ok: callee takes lists
-            task_mappings=[(target_choice_index, None) for _ in changed],  # mutable-ok: callee takes lists
+            guardrailed_texts=list(changed),
+            task_mappings=[(target_choice_index, None) for _ in changed],
         )
 
     @staticmethod

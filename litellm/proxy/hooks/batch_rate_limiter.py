@@ -110,9 +110,7 @@ class BatchFileUsage(BaseModel):
     # each target a different model, so the project's per-model ITPM/OTPM
     # quota for a row's actual model must be charged with that row's own
     # tokens -- see `_create_project_io_descriptors_for_models`.
-    per_model_usage: dict[str, dict[str, int]] = Field(
-        default_factory=dict
-    )  # mutable-ok: accumulated incrementally per row while parsing the batch file
+    per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):
@@ -287,7 +285,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for descriptor in model_descriptors:
                 extra_descriptors.append(descriptor)
                 extra_increments.append(
-                    {  # mutable-ok: atomic limiter API requires mutable increment records
+                    {
                         "requests": 0,
                         "tokens": usage.get("output_tokens", 0)
                         if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
@@ -424,7 +422,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         body: Final[Mapping[str, object]] = (
             MappingProxyType(_BATCH_BODY_ADAPTER.validate_python(raw_body))
             if isinstance(raw_body, Mapping)
-            else MappingProxyType({})  # mutable-ok: immediately frozen empty fallback
+            else MappingProxyType({})
         )
         # `max_tokens`/`max_completion_tokens` cap chat completions; `/v1/responses`
         # rows cap output with `max_output_tokens` instead -- omitting it here
@@ -692,7 +690,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
 
         increments: list[IncrementAmounts] = [  # mutable-ok: reassigned below to append project IO increments
-            {  # mutable-ok: atomic limiter API requires mutable increment records
+            {
                 "requests": batch_usage.request_count,
                 "tokens": batch_usage.total_tokens,
             }

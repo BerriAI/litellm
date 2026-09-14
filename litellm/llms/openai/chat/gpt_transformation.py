@@ -458,7 +458,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
             else drop_non_python_regex_patterns
         )
-        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+        sanitized: Final = [
             tool_with_sanitized_parameters(tool, sanitize) if isinstance(tool, dict) else tool for tool in tools
         ]
         return MappingProxyType({"tools": sanitized})
@@ -582,9 +582,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
             tool_calls = choice["message"].get("tool_calls", None)
-            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = (
-                None  # mutable-ok: holds _handle_invalid_parallel_tool_calls' list; Message.__init__ expects list
-            )
+            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = None
             message_content = choice["message"].get("content", None)
             if tool_calls is not None:
                 _openai_tool_calls = []
@@ -819,7 +817,7 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
     forward reasoning_effort and let the server decide whether it is supported."""
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
-        return super().get_supported_openai_params(model) + ["reasoning_effort"]  # mutable-ok: inherited contract
+        return super().get_supported_openai_params(model) + ["reasoning_effort"]
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):

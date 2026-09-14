@@ -112,7 +112,7 @@ def ocr(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         optional_params=optional_params,
-        input_sources=dict(input_sources or {}),  # mutable-ok: native boundary requires a concrete dict
+        input_sources=dict(input_sources or {}),
         timeout_seconds=_timeout_to_seconds(timeout),
     )
 
@@ -140,6 +140,6 @@ async def aocr(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         optional_params=optional_params,
-        input_sources=dict(input_sources or {}),  # mutable-ok: native boundary requires a concrete dict
+        input_sources=dict(input_sources or {}),
         timeout_seconds=_timeout_to_seconds(timeout),
     )

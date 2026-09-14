@@ -142,9 +142,7 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
                 self._litellm_reinit_requests = 0
                 self._litellm_tolerated_timeouts = 0
                 super().__init__(*args, **kwargs)
-                self._litellm_consecutive_timeouts: dict[  # mutable-ok: per-node counter updated on the command hot path
-                    str, int
-                ] = {}
+                self._litellm_consecutive_timeouts: dict[str, int] = {}
 
             @property
             def _initialize(self) -> bool:

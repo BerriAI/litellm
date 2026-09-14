@@ -653,7 +653,7 @@ class MCPClient:
                 follow_redirects=True,
                 event_hooks=MappingProxyType(
                     {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
-                ),  # mutable-ok: httpx types require lists of hooks
+                ),
             )
 
         return factory

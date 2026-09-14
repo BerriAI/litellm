@@ -579,7 +579,6 @@ async def _users_named_by_member_value(
     subject: Final = value.strip()
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     rows: Final = await _table(UserRepository(prisma_client)).find_many(
-        # mutable-ok: the Prisma serializer requires concrete dicts and a concrete list
         where={"OR": [{"sso_user_id": subject}, {"user_email": email}]},
         take=take,
     )
@@ -601,11 +600,11 @@ async def _accounts_named_by_member_value(value: str, prisma_client: PrismaClien
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     users: Final = _table(UserRepository(prisma_client))
     rows: Final = await users.find_many(
-        where={  # mutable-ok: Prisma filter
-            "OR": [  # mutable-ok: Prisma filter
-                {"user_id": value},  # mutable-ok: Prisma filter
-                {"sso_user_id": subject},  # mutable-ok: Prisma filter
-                {"user_email": email},  # mutable-ok: Prisma filter
+        where={
+            "OR": [
+                {"user_id": value},
+                {"sso_user_id": subject},
+                {"user_email": email},
             ],
         },
         take=2,
@@ -2918,7 +2917,7 @@ async def patch_group(
         if updated_team is None:
             raise HTTPException(
                 status_code=404,
-                detail={"error": f"Group not found with ID: {group_id}"},  # mutable-ok: FastAPI detail contract
+                detail={"error": f"Group not found with ID: {group_id}"},
             )
 
         # Convert to SCIM format and return

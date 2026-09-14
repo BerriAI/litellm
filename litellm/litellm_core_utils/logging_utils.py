@@ -308,7 +308,7 @@ def _set_duration_in_model_call_details(
 def speech_request_body(model: str, voice: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
     """Speech request body for telemetry, without the caller headers the provider SDKs
     take as request kwargs rather than body fields."""
-    return {  # mutable-ok: loggers isinstance-check the request body as a dict
+    return {
         "model": model,
         "voice": voice,
         **{key: value for key, value in optional_params.items() if key != "extra_headers"},

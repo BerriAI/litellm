@@ -619,7 +619,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.caching_details: CachingDetails | None = None
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
-        self.response_timing_metrics: Mapping[str, float] = {}  # mutable-ok: kept deep-copyable
+        self.response_timing_metrics: Mapping[str, float] = {}
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, Any] | None = None
@@ -642,7 +642,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
-        self.response_timing_metrics = dict(timing_metrics)  # mutable-ok: kept deep-copyable
+        self.response_timing_metrics = dict(timing_metrics)
 
     def process_dynamic_callbacks(self):
         """
@@ -969,7 +969,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_management_logger: CustomLogger | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
-        request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        request_kwargs: dict[str, object] | None = None,
         injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -1020,7 +1020,7 @@ class Logging(LiteLLMLoggingBaseClass):
         tools: list[dict] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
-        request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        request_kwargs: dict[str, object] | None = None,
         injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -3881,7 +3881,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if result.status == "completed":
             return InteractionsAPIResponse(
                 **result.model_dump(
-                    exclude={  # mutable-ok: pydantic types exclude as set[str], which a frozenset does not satisfy
+                    exclude={
                         "event_type",
                         "delta",
                         "index",
@@ -4944,9 +4944,7 @@ def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
 
 
 def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
-    return config.model_copy(
-        update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]}  # mutable-ok: model_copy update
-    )
+    return config.model_copy(update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]})
 
 
 def _is_gated(spec: "ExporterSpec") -> bool:
@@ -5398,7 +5396,7 @@ class StandardLoggingPayloadSetup:
                 if key not in user_metadata
             }
         )
-        return {**user_metadata, **model_metadata}  # mutable-ok: function contract returns a plain dict
+        return {**user_metadata, **model_metadata}
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -6237,9 +6235,7 @@ def get_standard_logging_object_payload(
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
-            timing_metrics: Final = (
-                getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
-            )
+            timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(

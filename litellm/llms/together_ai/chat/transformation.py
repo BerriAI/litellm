@@ -178,9 +178,7 @@ def _without_litellm_internal_fields(message: AllMessageValues) -> AllMessageVal
         return message
     return cast(  # cast-ok: rebuilding the same TypedDict minus internal keys loses the narrowed type
         "AllMessageValues",
-        {  # mutable-ok: TypedDict rebuild minus internal keys
-            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_ASSISTANT_FIELDS
-        },
+        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_ASSISTANT_FIELDS},
     )
 
 
@@ -210,9 +208,7 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
         """Together consumes replayed assistant `reasoning_content` (preserved thinking via
         `chat_template_kwargs: {"clear_thinking": false}`), so it must stay in the payload;
         only litellm-internal fields are stripped before sending."""
-        stripped: Final = [  # mutable-ok: super() requires a list
-            _without_litellm_internal_fields(message) for message in messages
-        ]
+        stripped: Final = [_without_litellm_internal_fields(message) for message in messages]
         if is_async:
             return super()._transform_messages(stripped, model, is_async=True)
         return super()._transform_messages(stripped, model, is_async=False)
@@ -221,7 +217,7 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
         supported_params: Final = super().get_supported_openai_params(model)
         if not _supports_together_reasoning(model):
             return supported_params
-        return [  # mutable-ok: the inherited contract returns a plain list; building fresh avoids mutating the base class's value
+        return [
             *supported_params,
             "reasoning_effort",
         ]

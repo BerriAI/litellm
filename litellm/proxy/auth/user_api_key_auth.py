@@ -1215,7 +1215,7 @@ async def _read_request_body_deferring_parse_failure(
     try:
         parsed_body: Final = await _read_request_body(request=request)
     except ProxyException as parse_exception:
-        return {}, parse_exception  # mutable-ok: request_data is a plain dict across the whole auth path
+        return {}, parse_exception
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
@@ -1234,7 +1234,7 @@ async def _record_unparsable_body_failure(
 
     try:
         await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
-            request_data={},  # mutable-ok: the failure hook seeds the call id and metadata onto this dict
+            request_data={},
             original_exception=body_parse_exception,
             user_api_key_dict=user_api_key_dict,
             error_type=ProxyErrorTypes.bad_request_error,
@@ -1511,7 +1511,7 @@ async def _user_api_key_auth_builder(
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
                         if valid_token.user_id is not None and valid_token.user_email is None:
-                            mapped_claims = jwt_claims or {}  # mutable-ok: empty-dict fallback for the None-claims case
+                            mapped_claims = jwt_claims or {}
                             mapped_user_email = jwt_handler.get_user_email(token=mapped_claims, default_value=None)
                             mapped_jwt_user_id: Final = jwt_handler.get_user_id(token=mapped_claims, default_value=None)
                             if mapped_user_email is not None and mapped_jwt_user_id == valid_token.user_id:

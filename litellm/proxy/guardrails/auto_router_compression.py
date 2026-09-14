@@ -139,7 +139,7 @@ def _active_compression_guardrails() -> tuple["CustomGuardrail", ...]:
 
 
 async def arm_pre_call(
-    data: dict[str, object],  # mutable-ok: arms the live request dict in place
+    data: dict[str, object],
     llm_router: "Router | None",
 ) -> None:
     """Apply an auto router's compression policy, if any, before guardrails run.
@@ -194,14 +194,14 @@ async def arm_pre_call(
         existing: Final = tuple(requested) if isinstance(requested, (list, tuple)) else ()
         if policy.model not in existing:
             # A list: litellm_pre_call_utils isinstance-checks this key and drops a tuple.
-            metadata["guardrails"] = [*existing, policy.model]  # mutable-ok: this key's contract is a list
+            metadata["guardrails"] = [*existing, policy.model]
 
 
 def _as_routing_messages(
     messages: Iterable[Mapping[str, object]],
 ) -> list[dict[str, object]]:  # mutable-ok: shape fixed by the pre-routing hook protocol
     """A fresh, independently mutable copy, the shape the pre-routing hook takes."""
-    return [dict(message) for message in messages]  # mutable-ok: shape fixed by the pre-routing hook protocol
+    return [dict(message) for message in messages]
 
 
 async def messages_for_routing(
@@ -248,7 +248,7 @@ async def messages_for_routing(
     model: Final = request_kwargs.get("model")
     # Throwaway: apply_guardrail writes stats here, so routing never double-counts into
     # extract_compression_saved_tokens.
-    stats_sink: Final = {"messages": messages, "model": model}  # mutable-ok: apply_guardrail writes its stats here
+    stats_sink: Final = {"messages": messages, "model": model}
     result: Final = await guardrail.apply_guardrail(
         inputs=inputs,
         request_data=stats_sink,

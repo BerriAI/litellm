@@ -62,7 +62,7 @@ def encode_spans_json(spans: Sequence[ReadableSpan]) -> bytes:
 
 
 class OTLPJsonSpanExporter(OTLPSpanExporter):
-    def __init__(self, endpoint: str | None, headers: dict[str, str]) -> None:  # mutable-ok: SDK __init__ takes Dict
+    def __init__(self, endpoint: str | None, headers: dict[str, str]) -> None:
         super().__init__(endpoint=endpoint, headers=headers)
         self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
 

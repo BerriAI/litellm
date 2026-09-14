@@ -96,7 +96,7 @@ def _part_texts(text_parts: Sequence[object]) -> tuple[str, ...]:
 def _texts_payload(
     texts: Sequence[str],
 ) -> list[str]:  # mutable-ok: GenericGuardrailAPIInputs.texts is declared list[str]
-    return list(texts)  # mutable-ok: GenericGuardrailAPIInputs.texts is declared list[str]
+    return list(texts)
 
 
 def _write_back_texts(text_parts: Sequence[object], guardrailed_texts: Sequence[str] | None) -> None:
@@ -157,7 +157,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,  # mutable-ok: base handler contract passes the proxy's request dict through to apply_guardrail
+        data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> object:
@@ -245,11 +245,11 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         context_key: str,
         context_value: object,
-    ) -> dict:  # mutable-ok: CustomGuardrail.apply_guardrail requires a plain dict request payload
+    ) -> dict:
         base: Final = request_data if request_data is not None else _EMPTY_REQUEST_DATA
         user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         context_pairs: Final = ((context_key, context_value),) if context_key not in base else ()
         metadata_pairs: Final = (
             (("litellm_metadata", user_metadata),) if user_metadata and "litellm_metadata" not in base else ()
         )
-        return dict((*base.items(), *context_pairs, *metadata_pairs))  # mutable-ok: apply_guardrail takes a plain dict
+        return dict((*base.items(), *context_pairs, *metadata_pairs))

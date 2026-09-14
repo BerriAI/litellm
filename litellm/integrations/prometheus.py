@@ -1232,7 +1232,7 @@ class PrometheusLogger(CustomLogger):
                 return metric_class(*args, **kwargs)
 
             kept: Final = tuple(name for name in original_labelnames if name not in self.exclude_labels)
-            kept_kwargs: Final = {**kwargs, "labelnames": kept}  # mutable-ok: ** needs a mapping to override labelnames
+            kept_kwargs: Final = {**kwargs, "labelnames": kept}
             real_metric: Final = metric_class(*args, **kept_kwargs)
             return _ExcludedLabelMetric(real_metric, original_labelnames, self.exclude_labels)
 

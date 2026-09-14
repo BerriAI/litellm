@@ -250,7 +250,7 @@ class _RawTeamRow(_TeamIdRow, _ModelDumpRow, _ObjectPermissionRow, _TeamBudgetRo
     @property
     def members_with_roles(
         self,
-    ) -> Sequence[dict[str, object]] | None: ...  # mutable-ok: prisma deserializes this JSON column into plain dicts
+    ) -> Sequence[dict[str, object]] | None: ...
 
     @property
     def organization_id(self) -> str | None: ...
@@ -2195,7 +2195,7 @@ async def update_team(
 
         if "metadata" in updated_kv:
             stored_metadata: Final[Mapping[str, JsonValue] | None] = (
-                {  # mutable-ok: the validator payload's isinstance guard requires a plain dict
+                {
                     key: value
                     for key, value in existing_team_row.metadata.items()
                     if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
@@ -2760,7 +2760,7 @@ def _resolve_member_identity(member: Member, updated_users: Sequence[LiteLLM_Use
         None,
     )
     return member.model_copy(
-        update={  # mutable-ok: pydantic update payload
+        update={
             "user_id": resolved_user_id,
             "user_email": resolved_user_email,
         }
@@ -2879,11 +2879,7 @@ async def _resolve_existing_member_user_ids(
         return frozenset()
 
     found: Final = await _user_id_rows_db(UserRepository(prisma_client)).find_many(
-        where={  # mutable-ok: Prisma query filters are dict-shaped
-            "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
-                "in": sorted(requested_user_ids)
-            }
-        }
+        where={"user_id": {"in": sorted(requested_user_ids)}}
     )
     return frozenset(user.user_id for user in found or () if user.user_id is not None)
 
@@ -2937,7 +2933,7 @@ def _validate_member_user_id_provisioning(
     remaining: Final = len(unknown_user_ids) - _MAX_REPORTED_UNKNOWN_USER_IDS
     raise HTTPException(
         status_code=403,
-        detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+        detail={
             "error": (
                 "Only proxy admins can add a user_id that does not exist yet: {}{}. "
                 "Add the member by user_email to invite a new user, or ask a proxy admin "
@@ -2953,11 +2949,7 @@ def _members_audit_value(members: Sequence[Member]) -> str:
     The audit-log columns hold a JSON object, so the member list is nested
     under a key rather than serialized as a top-level array.
     """
-    return safe_dumps(
-        {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
-            "members_with_roles": tuple(member.model_dump() for member in members)
-        }
-    )
+    return safe_dumps({"members_with_roles": tuple(member.model_dump() for member in members)})
 
 
 async def _create_team_member_add_audit_logs(
@@ -3644,7 +3636,7 @@ def _check_not_resetting_own_spend(user_id: str, user_api_key_dict: UserAPIKeyAu
 
 
 def _raise_reset_spend_error(status_code: int, message: str) -> NoReturn:
-    detail: Final = {"error": message}  # mutable-ok: HTTPException.detail takes a dict
+    detail: Final = {"error": message}
     raise HTTPException(status_code=status_code, detail=detail)
 
 
@@ -3678,7 +3670,7 @@ def _validate_team_member_reset_spend_value(
 
 @router.post(
     "/team/{team_id}/member/{user_id}/reset_spend",
-    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth),),
 )
 @management_endpoint_wrapper
@@ -3714,12 +3706,10 @@ async def reset_team_member_spend_fn(
     await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
     _check_not_resetting_own_spend(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
-    membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
-        "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
-    }
+    membership_where: Final = {"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
     _membership_row: Final = await _team_membership_db(prisma_client).find_unique(
         where=membership_where,
-        include={"litellm_budget_table": True},  # mutable-ok: prisma client requires a plain dict include= argument
+        include={"litellm_budget_table": True},
     )
     if _membership_row is None:
         _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
@@ -3730,7 +3720,7 @@ async def reset_team_member_spend_fn(
 
     await _team_membership_db(prisma_client).update(
         where=membership_where,
-        data={"spend": reset_to},  # mutable-ok: prisma client requires a plain dict data= argument
+        data={"spend": reset_to},
     )
 
     await invalidate_team_member_spend_state(
@@ -3740,7 +3730,7 @@ async def reset_team_member_spend_fn(
         new_spend=reset_to,
     )
 
-    return {  # mutable-ok: matches this router's established untyped-response-dict convention
+    return {
         "team_id": team_id,
         "user_id": user_id,
         "spend": reset_to,
@@ -4344,15 +4334,7 @@ async def _hydrate_member_user_details(
     """Attach ``user_alias`` and fill in a missing ``user_email`` from ``LiteLLM_UserTable`` in one query."""
     user_ids: Final = frozenset(m.user_id for m in members if m.user_id is not None)
     user_rows: Final[Sequence[prisma_models.LiteLLM_UserTable]] = (
-        await _user_db(prisma_client).find_many(
-            where={  # mutable-ok: Prisma query filters are dict-shaped
-                "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
-                    "in": sorted(user_ids)
-                }
-            }
-        )
-        if user_ids
-        else ()
+        await _user_db(prisma_client).find_many(where={"user_id": {"in": sorted(user_ids)}}) if user_ids else ()
     )
     user_by_id: Final = MappingProxyType({u.user_id: u for u in user_rows})
 
@@ -4509,9 +4491,7 @@ async def team_info(
             prisma_client=prisma_client,
             members=resolved_team_info.members_with_roles,
         )
-        hydrated_team_info: Final = resolved_team_info.model_copy(
-            update={"members_with_roles": hydrated_members}  # mutable-ok: pydantic update payload
-        )
+        hydrated_team_info: Final = resolved_team_info.model_copy(update={"members_with_roles": hydrated_members})
 
         response_object: Final = TeamInfoResponseObject(
             team_id=team_id,
@@ -4764,7 +4744,7 @@ async def unblock_team(
 
 @router.get(
     "/team/metadata_schema",
-    tags=["team management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=TeamMetadataSchemaResponse,
 )
@@ -6014,13 +5994,13 @@ async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissi
 def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:
     """Single construction site for the `{"error": ...}` detail shape the
     /team/daily/activity endpoints have always returned."""
-    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
+    return HTTPException(status_code=status_code, detail={"error": message})
 
 
 class _TeamDailyActivityScope(NamedTuple):
     team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
     exclude_team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
-    team_alias_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field shape
+    team_alias_metadata: dict[str, dict[str, object]]
     api_key_filter: str | list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
 
 
@@ -6323,7 +6303,7 @@ class _TeamUserSpendDbRow(TypedDict):
 @router.get(
     "/team/spend/by_user",
     response_model=TeamUserSpendResponse,
-    tags=["team management"],  # mutable-ok: fastapi route tags must be a list
+    tags=["team management"],
 )
 async def get_team_spend_by_user(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],

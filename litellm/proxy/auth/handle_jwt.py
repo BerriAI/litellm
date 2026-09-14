@@ -197,7 +197,7 @@ class JWTHandler:
         self.http_handler = HTTPHandler()
         self.leeway = 0
         # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
-        self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
+        self._refresh_locks: dict[str, asyncio.Lock] = {}
 
     def update_environment(
         self,

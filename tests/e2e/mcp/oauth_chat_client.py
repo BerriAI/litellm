@@ -80,7 +80,7 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
     code/state are read off the query string."""
     from playwright.async_api import async_playwright
 
-    captured: dict[str, str] = {}  # mutable-ok: hand-off from the request listener
+    captured: dict[str, str] = {}
     trail: list[str] = []  # mutable-ok: navigation diagnostics for a failed dance
 
     def _note_request(request: object) -> None:
@@ -132,7 +132,7 @@ def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path:
     """The SDK's real OAuth machinery (RFC 9728/8414 discovery, RFC 7591 DCR,
     PKCE, token exchange) with the browser leg driven by Playwright against the
     upstream's consent screen."""
-    code_holder: dict[str, str | None] = {}  # mutable-ok: hand-off between the two SDK callbacks
+    code_holder: dict[str, str | None] = {}
 
     async def redirect_handler(authorize_url: str) -> None:
         code, state = await _browser_follow_authorize(authorize_url, storage_state_path)

@@ -84,7 +84,7 @@ def _with_requester_ip_address(request_data: dict[str, object], requester_ip: st
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
     if base.get("requester_ip_address"):
         return request_data
-    return {**request_data, key: {**base, "requester_ip_address": requester_ip}}  # mutable-ok: logging needs dicts
+    return {**request_data, key: {**base, "requester_ip_address": requester_ip}}
 
 
 class UserAPIKeyAuthExceptionHandler:

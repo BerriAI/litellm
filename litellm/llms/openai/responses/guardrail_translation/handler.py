@@ -229,10 +229,10 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
         return None
     rewritten_content: Final = rewritten.get("content")
     if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
-        return {**item, field: rewritten_content}  # mutable-ok: request input items must stay JSON-plain dicts
+        return {**item, field: rewritten_content}
     rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
-        [rewritten_row]  # mutable-ok: converter signature takes a list
+        [rewritten_row]
     )
     if len(converted_items) != 1 or not isinstance(converted_items[0], Mapping):
         return None
@@ -240,7 +240,7 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     converted_value: Final = first_converted.get(field)
     if converted_value is None:
         return None
-    return {**item, field: converted_value}  # mutable-ok: request input items must stay JSON-plain dicts
+    return {**item, field: converted_value}
 
 
 def _is_tool_call_item(item: object) -> bool:
@@ -488,7 +488,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
         if written_back is not None:
-            data["input"] = list(written_back.input)  # mutable-ok: JSON body
+            data["input"] = list(written_back.input)
             if written_back.instructions is None:
                 data.pop("instructions", None)
             else:
@@ -587,7 +587,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> None:
         if guardrailed_tools is None:
             return
-        data["tools"] = list(  # mutable-ok: downstream wants a list  # rebind-ok: in-place request rewrite
+        data["tools"] = list(  # rebind-ok: in-place request rewrite
             merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools)
         )
 

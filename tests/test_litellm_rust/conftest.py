@@ -42,7 +42,7 @@ def _list_attribute(container: ModuleType, attribute: str) -> list[object]:
 def _isolated_list(container: ModuleType, attribute: str) -> Iterator[None]:
     source: Final = _list_attribute(container, attribute)
     original: Final = list(source)
-    source.clear()  # mutable-ok: test isolation mutates global registries by design
+    source.clear()
     try:
         yield
     finally:

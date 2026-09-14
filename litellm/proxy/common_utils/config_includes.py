@@ -52,7 +52,7 @@ class ConfigReader(Protocol):
 
 def _merged_value(base_value: object, included_value: object) -> object:
     if isinstance(included_value, list) and isinstance(base_value, list):
-        return [*base_value, *included_value]  # mutable-ok: a merged config value stays the plain list the proxy loads
+        return [*base_value, *included_value]
     return included_value
 
 
@@ -129,4 +129,4 @@ async def resolve_includes(
     applies to configs on disk and to configs hosted in a bucket.
     """
     merged: Final = await _resolve(config, _pending_from(config, location), frozenset((location,)), resolve, read)
-    return dict(merged)  # mutable-ok: the proxy mutates the config it loads
+    return dict(merged)

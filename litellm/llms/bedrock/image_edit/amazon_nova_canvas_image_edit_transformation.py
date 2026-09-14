@@ -233,7 +233,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+        headers: dict[str, object] | httpx.Headers,
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 

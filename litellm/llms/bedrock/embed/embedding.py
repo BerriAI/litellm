@@ -59,14 +59,14 @@ class BedrockEmbedding(BaseAWSLLM):
     @overload
     def _load_credentials(
         self,
-        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        optional_params: dict,
         bearer_token: None = None,
     ) -> tuple[Credentials, str]: ...
 
     @overload
     def _load_credentials(
         self,
-        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        optional_params: dict,
         bearer_token: str,
     ) -> tuple[None, str]: ...
 

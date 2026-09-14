@@ -622,7 +622,7 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
     """
     error: Final = logging_metadata_config_error(metadata)
     if error is not None:
-        raise HTTPException(status_code=400, detail={"error": error})  # mutable-ok: FastAPI detail contract
+        raise HTTPException(status_code=400, detail={"error": error})
 
 
 def common_key_access_checks(
@@ -5609,7 +5609,7 @@ def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str,
     if not isinstance(duration, str) or not duration:
         return window
     new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
-    return {  # mutable-ok: this is the JSON payload persisted to budget_limits' Json column, which requires a plain dict
+    return {
         **window,
         "reset_at": new_reset_at.isoformat(),
     }
@@ -5643,9 +5643,9 @@ async def _reset_key_budget_windows(
 
     # prisma-client-py's typed update() takes plain dict literals for `where`/`data`; there is no
     # frozen-mapping equivalent to pass instead.
-    reset_payload: Final = {"budget_limits": json.dumps(reset_windows, default=str)}  # mutable-ok: prisma data kwarg
+    reset_payload: Final = {"budget_limits": json.dumps(reset_windows, default=str)}
     await VerificationTokenRepository(prisma_client).table.update(
-        where={"token": hashed_api_key},  # mutable-ok: prisma where kwarg
+        where={"token": hashed_api_key},
         data=reset_payload,
     )
 

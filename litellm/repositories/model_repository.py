@@ -107,9 +107,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     async def find_all_except(self, model_id: str) -> Sequence[LiteLLM_ProxyModelTable]:
         """Find every model except the row currently being updated."""
-        records: Final = await self.table.find_many(
-            where={"model_id": {"not": model_id}}  # mutable-ok: Prisma requires plain dicts for query serialization
-        )
+        records: Final = await self.table.find_many(where={"model_id": {"not": model_id}})
         return tuple(self._to_model_list(records))
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:

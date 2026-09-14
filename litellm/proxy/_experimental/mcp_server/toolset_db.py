@@ -136,7 +136,7 @@ async def update_mcp_toolset(
     tool list, so a null ``toolset_name`` or ``tools`` is a no-op rather than a clear;
     emptying the tool selection is an explicit ``[]``, which cannot be mistaken for a
     caller that left the field out."""
-    data_dict: Final = dict(  # mutable-ok: Prisma requires a plain dict for JSON query serialization
+    data_dict: Final = dict(
         (
             (field, json.dumps(value) if field == "tools" else value)
             for field, value in data.model_dump(exclude_unset=True).items()

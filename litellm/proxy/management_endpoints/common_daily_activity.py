@@ -260,7 +260,7 @@ def _entity_metadata(
 ) -> dict[str, object]:
     """The metadata payload for one entity breakdown bucket, empty when the caller passed none."""
     stored: Final = entity_metadata_field.get(entity_id) if entity_metadata_field else None
-    return stored if stored is not None else {}  # mutable-ok: payload pydantic validates into its own dict
+    return stored if stored is not None else {}
 
 
 def update_breakdown_metrics(
@@ -1076,7 +1076,7 @@ def _aggregate_grouping_sets_records_sync(
             # bucket itself is still assigned unconditionally: a legacy row predating the
             # api_requests column backfills to all zeroes, and skipping those would drop a
             # provider the base build reported.
-            provider_metrics = metrics.model_copy(update={"flat_cost": 0.0})  # mutable-ok: pydantic update payload
+            provider_metrics = metrics.model_copy(update={"flat_cost": 0.0})
             provider = record.custom_llm_provider or "unknown"
             assign_metric_with_metadata(breakdown.providers, provider, provider_metrics)
         elif level == _GROUP_DATE_PROVIDER_API_KEY:
@@ -1265,10 +1265,10 @@ def _fold_entity_rollups_sync(
     results: Sequence[DailySpendData],
     entity_rows: Sequence[_EntityRollupRow],
     api_key_metadata: Mapping[str, _KeyMetadataDict],
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,  # mutable-ok: shared field shape
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
 ) -> None:
     """Write breakdown.entities onto the already-built per-day results."""
-    by_date: Final = {day.date.strftime("%Y-%m-%d"): day for day in results}  # mutable-ok: local fold index
+    by_date: Final = {day.date.strftime("%Y-%m-%d"): day for day in results}
 
     for row in entity_rows:
         day = by_date.get(row.date)
@@ -1393,7 +1393,7 @@ async def get_daily_activity_aggregated(
                     prisma_client, entity_api_keys, _spend_logs_window(frozenset(r.date for r in entity_records))
                 )
                 if entity_api_keys
-                else {}  # mutable-ok: matches the helper's dict return
+                else {}
             )
             await asyncio.to_thread(
                 _fold_entity_rollups_sync,

@@ -54,7 +54,7 @@ class _EmbeddingRequest(BaseModel):
 
     model: str
     input: tuple[str, ...]
-    metadata: dict[str, object]  # mutable-ok: the router mutates the metadata dict it is handed
+    metadata: dict[str, object]
 
 
 def cosine_similarity(left: Vector, right: Vector) -> float:
@@ -63,10 +63,10 @@ def cosine_similarity(left: Vector, right: Vector) -> float:
     return dot / norms if norms else 0.0
 
 
-def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:  # mutable-ok: router mutates it
+def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    return {  # mutable-ok: the router mutates the metadata dict it is handed
+    return {
         **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
         "user_api_key": user_api_key_dict.api_key,
     }
@@ -78,9 +78,9 @@ def router_embedder(
     """Embeds through the router after the same key rate-limit, budget and guardrail pre-call hooks /embeddings runs."""
 
     async def embed(texts: Sequence[str]) -> Sequence[Vector]:
-        request: Final = {  # mutable-ok: pre_call_hook mutates the request dict in place
+        request: Final = {
             "model": embedding_model,
-            "input": list(texts),  # mutable-ok: Router.aembedding accepts only str | list input
+            "input": list(texts),
             "metadata": embedding_spend_metadata(user_api_key_dict),
         }
         processed: Final = _EmbeddingRequest.model_validate(
@@ -90,7 +90,7 @@ def router_embedder(
         )
         response: Final = await router.aembedding(
             model=processed.model,
-            input=list(processed.input),  # mutable-ok: Router.aembedding accepts only str | list input
+            input=list(processed.input),
             metadata=processed.metadata,
         )
         return tuple(item.embedding for item in _EmbeddingData.model_validate(response.model_dump()).data)

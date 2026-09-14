@@ -337,10 +337,10 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _handle_audio_predict_response(
-        json_response: dict,  # mutable-ok: passthrough logging receives the decoded provider response dictionary
+        json_response: dict,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict,  # mutable-ok: passthrough logging enriches the shared callback metadata dictionary
+        kwargs: dict,
     ) -> PassThroughEndpointLoggingTypedDict:
         prediction_count: Final = VertexPassthroughLoggingHandler._get_audio_prediction_count(
             json_response=json_response
@@ -367,12 +367,10 @@ class VertexPassthroughLoggingHandler:
         kwargs["model"] = model  # rebind-ok: callback metadata records the resolved model
         kwargs["custom_llm_provider"] = "vertex_ai"  # rebind-ok: callback metadata records the resolved provider
 
-        standard_pass_through_response_object: Final[
-            StandardPassThroughResponseObject
-        ] = {  # mutable-ok: callback contract requires a concrete response dictionary
+        standard_pass_through_response_object: Final[StandardPassThroughResponseObject] = {
             "response": json_response,
         }
-        return {  # mutable-ok: passthrough logging contract requires a concrete result dictionary
+        return {
             "result": standard_pass_through_response_object,
             "kwargs": kwargs,
         }
@@ -380,7 +378,7 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _is_audio_predict_response(
         model: str,
-        json_response: dict,  # mutable-ok: predicate inspects the decoded provider response dictionary without mutation
+        json_response: dict,
     ) -> bool:
         return (
             VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response) > 0
@@ -389,7 +387,7 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _get_audio_prediction_count(
-        json_response: dict,  # mutable-ok: counter inspects the decoded provider response dictionary without mutation
+        json_response: dict,
     ) -> int:
         predictions: Final = json_response.get("predictions")
         if not isinstance(predictions, list):

@@ -505,11 +505,7 @@ def _finalize_strategy_router_endpoints(
     return (
         tuple(e for e in kept_healthy if verdict_for(e) is None),
         tuple(e for e in unhealthy_endpoints if keep(e))
-        + tuple(
-            dict(e, error=error)  # mutable-ok: the /health payload must stay a plain JSON-serializable dict
-            for e in kept_healthy
-            if (error := verdict_for(e)) is not None
-        ),
+        + tuple(dict(e, error=error) for e in kept_healthy if (error := verdict_for(e)) is not None),
     )
 
 
@@ -917,7 +913,7 @@ async def perform_health_check(
         if router is not None
         else ()
     )
-    checked: Final = requested + list(dependency_probes)  # mutable-ok: _perform_health_check takes a list
+    checked: Final = requested + list(dependency_probes)
 
     if instrumentation_enabled:
         logger.debug(
