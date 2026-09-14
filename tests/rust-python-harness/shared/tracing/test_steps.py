@@ -146,9 +146,7 @@ def test_trace_diff_allows_reordered_concurrent_children() -> None:
 def test_trace_diff_prunes_declared_engine_only_nodes_but_requires_them() -> None:
     mappings: Final = (MAPPINGS[0], mapping(rust_span="rust_prepare"))
     python: Final = pipeline_projection("python", (event(0, "module.py:1 entry"),), mappings).steps
-    rust: Final = pipeline_projection(
-        "rust", (event(0, "route"), event(1, "rust_prepare", 0)), mappings
-    ).steps
+    rust: Final = pipeline_projection("rust", (event(0, "route"), event(1, "rust_prepare", 0)), mappings).steps
     assert trace_diff(python, rust, mappings).matches
     assert trace_diff(python, rust[:1], mappings).missing_mappings == ("rust_prepare",)
 
