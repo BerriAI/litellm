@@ -165,7 +165,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         VertexBase.__init__(self)
 
         # Then set our attributes (this ensures project_id is not overwritten)
-        self.async_handler = async_handler or get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.access_token_provider = access_token_provider
         self.template_id = template_id
         self.project_id = project_id
