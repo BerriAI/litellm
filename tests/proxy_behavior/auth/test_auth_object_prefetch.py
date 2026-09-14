@@ -66,6 +66,7 @@ async def test_join_binds_the_membership_to_the_requested_team(prisma):
         cache = _frozen_cache()
         refs = AuthObjectRefs(user_id=user_id, team_id=team_a, membership_user_id=user_id, organization_id=org_id)
         await prefetch_auth_objects(refs=refs, user_api_key_cache=cache, prisma_client=prisma)
+        assert cache.in_memory_cache.get_cache(f"org_id:{org_id}") is not None
 
         dead_db = _dead_db()
         membership = await get_team_membership(
