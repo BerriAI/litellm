@@ -307,7 +307,16 @@ def test_transform_request_strips_thinking_blocks_and_reasoning_content():
         headers={},
     )["messages"]
 
-    assert result[1] == {"role": "assistant", "content": "Hello! How can I help?"}
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "greet briefly", "signature": "sig_abc"}],
+            },
+            {"type": "text", "text": "Hello! How can I help?"},
+        ],
+    }
     assert not any(
         key in message
         for message in result
