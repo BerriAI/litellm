@@ -2,12 +2,9 @@
 Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
-import inspect
 import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
-
-from packaging.version import Version
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -20,12 +17,19 @@ from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
 from ..prompt_management_base import PromptManagementBase
-from .langfuse import LangFuseLogger, resolve_langfuse_credentials
+from .langfuse import (
+    LangFuseLogger,
+    installed_langfuse_version,
+    parse_langfuse_debug,
+    raise_if_unsupported_langfuse_version,
+    resolve_langfuse_credentials,
+)
 from .langfuse_handler import LangFuseHandler
+from .langfuse_mock_client import create_mock_langfuse_client, should_use_langfuse_mock
 
 if TYPE_CHECKING:
     from langfuse import Langfuse
-    from langfuse.client import ChatPromptClient, TextPromptClient
+    from langfuse.model import ChatPromptClient, TextPromptClient
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -64,8 +68,9 @@ def langfuse_client_init(
         Exception: If langfuse package is not installed
     """
     try:
-        import langfuse
-        from langfuse import Langfuse
+        from langfuse import (
+            Langfuse,  # noqa: F401  # the import is the install probe; construction moved to acquire_langfuse_client
+        )
     except Exception as e:
         raise Exception(
             f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n\033[0m"
@@ -84,36 +89,45 @@ def langfuse_client_init(
         langfuse_host = "http://" + langfuse_host
 
     langfuse_release: Final = os.getenv("LANGFUSE_RELEASE")
-    langfuse_debug: Final = os.getenv("LANGFUSE_DEBUG")
+    langfuse_debug: Final = parse_langfuse_debug(os.getenv("LANGFUSE_DEBUG"))
 
     parameters: Final = {
         "public_key": public_key,
         "secret_key": secret_key,
-        "host": langfuse_host,
+        "base_url": langfuse_host,
         "release": langfuse_release,
         "debug": langfuse_debug,
-        "flush_interval": LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # flush interval in seconds
+        "flush_interval": LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # pyright: ignore[reportPrivateUsage]  # shared env-fallback helper, not part of the logger's API
     }
 
-    if Version(langfuse.version.__version__) >= Version("2.6.0"):
-        parameters["sdk_integration"] = "litellm"
+    raise_if_unsupported_langfuse_version(installed_langfuse_version())
 
-    if Version(langfuse.version.__version__) >= Version("2.7.3"):
-        import httpx
+    import httpx
 
-        import litellm
+    import litellm
 
-        from ...llms.custom_httpx.http_handler import get_ssl_configuration
+    from ...llms.custom_httpx.http_handler import get_ssl_configuration
 
-        parameters["httpx_client"] = httpx.Client(
+    is_mock_mode: Final = should_use_langfuse_mock()
+    parameters["httpx_client"] = (
+        create_mock_langfuse_client()
+        if is_mock_mode
+        else httpx.Client(
             verify=get_ssl_configuration(),
             cert=os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate),
         )
+    )
 
-    if "environment" in inspect.signature(Langfuse.__init__).parameters:
-        parameters["environment"] = LangFuseLogger.resolve_deployment_environment()
+    parameters["environment"] = LangFuseLogger.resolve_deployment_environment()
 
-    client: Final = Langfuse(**parameters)
+    from .langfuse_sdk import acquire_langfuse_client
+
+    client: Final = acquire_langfuse_client(
+        parameters=parameters,
+        environment=parameters["environment"],
+        release=langfuse_release,
+        mock_mode=is_mock_mode,
+    )
 
     return client
 
@@ -126,9 +140,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_host=None,
         flush_interval=1,
     ):
-        import langfuse
 
-        self.langfuse_sdk_version = langfuse.version.__version__
+        self.langfuse_sdk_version = installed_langfuse_version()
         self.Langfuse = langfuse_client_init(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,

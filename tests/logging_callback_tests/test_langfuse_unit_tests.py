@@ -306,35 +306,58 @@ def test_get_langfuse_flush_interval():
 
 
 def test_langfuse_e2e_sync(monkeypatch):
-    from litellm import completion
-    import litellm
-    import respx
-    import httpx
+    """A sync completion must reach langfuse over the wire, not just build a span.
+
+    v4 exports OTLP over ``requests`` rather than the v2 ingestion endpoint over
+    httpx, so this stands up a real receiver and asserts langfuse posted to it.
+    """
+    import threading
     import time
+    from http.server import BaseHTTPRequestHandler, HTTPServer
 
-    litellm.disable_aiohttp_transport = (
-        True  # since this uses respx, we need to set use_aiohttp_transport to False
-    )
+    import litellm
+    from litellm import completion
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-    litellm._turn_on_debug()
+    received_paths = []
+
+    class _Receiver(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received_paths.append(self.path)
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Receiver)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("LANGFUSE_HOST", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-e2e-sync")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-e2e-sync")
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(litellm, "_langfuse_logger_cache", {}, raising=False)
 
-    with respx.mock:
-        # Mock Langfuse
-        # Mock any Langfuse endpoint
-        langfuse_mock = respx.post(
-            "https://*.cloud.langfuse.com/api/public/ingestion"
-        ).mock(return_value=httpx.Response(200))
+    try:
         completion(
             model="openai/my-fake-endpoint",
             messages=[{"role": "user", "content": "hello from litellm"}],
             stream=False,
             mock_response="Hello from litellm 2",
         )
+        for logger in litellm.logging_callback_manager._get_all_callbacks():
+            if isinstance(logger, LangFuseLogger):
+                logger.Langfuse.flush()
+        deadline = time.time() + 10
+        while not received_paths and time.time() < deadline:
+            time.sleep(0.1)
+    finally:
+        server.shutdown()
 
-        time.sleep(3)
-
-        assert langfuse_mock.called
+    assert received_paths, "langfuse exported nothing"
+    assert all(path.endswith("/api/public/otel/v1/traces") for path in received_paths)
 
 
 def test_get_chat_content_for_langfuse():
