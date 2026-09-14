@@ -212,7 +212,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         elif not images_to_check and not guardrail_to_apply.records_own_guardrail_information:
             guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response="no scannable content after message scoping",
+                guardrail_json_response=(
+                    "no scannable content after message scoping"
+                    if skip_system or skip_tool or scan_only_tool_results
+                    else "no scannable content"
+                ),
                 request_data=data,
                 guardrail_status="not_run",
             )
