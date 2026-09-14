@@ -13,6 +13,7 @@ import {
   buildModelAvailability,
   deploymentRefsFromModelInfo,
   normalizeModelName,
+  resolveAvailableModels,
 } from "./autorouter_presets";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
@@ -378,6 +379,18 @@ describe("autorouter_presets", () => {
         [{ modelGroup: "orphan-group", underlyingModels: ["anthropic/claude-opus-5"] }],
       );
       expect(availability.underlyingIndex.size).toBe(0);
+    });
+
+    it("returns every configured group serving the same underlying model", () => {
+      const availability = buildModelAvailability(
+        ["z-group", "a-group"],
+        [
+          { modelGroup: "z-group", underlyingModels: ["anthropic/claude-sonnet-5"] },
+          { modelGroup: "a-group", underlyingModels: ["bedrock/us.anthropic.claude-sonnet-5-v1:0"] },
+        ],
+      );
+
+      expect(resolveAvailableModels("anthropic/claude-sonnet-5", availability)).toEqual(["a-group", "z-group"]);
     });
 
     it("breaks ties between groups serving the same model deterministically, alphabetically", () => {

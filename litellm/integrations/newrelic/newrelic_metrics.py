@@ -5,8 +5,9 @@ NR Reference API: https://docs.newrelic.com/docs/data-apis/ingest-apis/metric-ap
 
 `async_log_success_event` / `async_log_failure_event` queue one record per request;
 at flush the queue is aggregated by (team, model group, model, provider, status)
-into count/summary metrics. `interval.ms` is the real window between flushes,
-computed at flush time.
+into count/summary metrics, plus one max/remaining budget gauge pair per team
+taken from the team's latest record. `interval.ms` is the real window between
+flushes, computed at flush time.
 
 Team-scoped by construction: the ingest key is injected explicitly and there is
 deliberately no environment-variable fallback, so a team's metrics are never sent
@@ -47,11 +48,14 @@ from litellm.types.integrations.newrelic import (
     NEWRELIC_METRIC_PROMPT_TOKENS,
     NEWRELIC_METRIC_REQUEST_DURATION_MS,
     NEWRELIC_METRIC_REQUESTS,
+    NEWRELIC_METRIC_TEAM_MAX_BUDGET,
+    NEWRELIC_METRIC_TEAM_REMAINING_BUDGET,
     NEWRELIC_METRIC_TOTAL_TOKENS,
     NEWRELIC_METRICS_MAX_BATCH_SIZE,
     NEWRELIC_METRICS_MAX_DRAIN_PASSES,
     NEWRELIC_METRICS_MAX_RETRY_QUEUE_SIZE,
     NewRelicCountMetric,
+    NewRelicGaugeMetric,
     NewRelicMetric,
     NewRelicMetricCommon,
     NewRelicMetricEnvelope,
@@ -98,6 +102,8 @@ def _metric_record_from_payload(standard_logging_object: StandardLoggingPayload)
         completion_tokens=int(standard_logging_object.get("completion_tokens") or 0),
         total_tokens=int(standard_logging_object.get("total_tokens") or 0),
         duration_ms=float(standard_logging_object.get("response_time") or 0.0) * 1000.0,
+        team_max_budget=metadata.get("user_api_key_team_max_budget") if metadata else None,
+        team_spend=metadata.get("user_api_key_team_spend") if metadata else None,
     )
 
 
@@ -140,6 +146,33 @@ def _bucket_metrics(bucket_records: tuple[NewRelicMetricRecord, ...]) -> tuple[N
     return (*count_metrics, summary_metric)
 
 
+def _team_budget_gauges(record: NewRelicMetricRecord) -> tuple[NewRelicMetric, ...]:
+    team_max_budget: Final = record.team_max_budget
+    if team_max_budget is None:
+        return ()
+    attributes: Final[Mapping[str, str]] = {  # mutable-ok: JSON leaf; safe_dumps stringifies MappingProxyType
+        key: value[:NEWRELIC_METRIC_ATTRIBUTE_MAX_LEN]
+        for key, value in (("team_id", record.team_id), ("team_alias", record.team_alias))
+        if value
+    }
+    remaining_budget: Final = team_max_budget - (record.team_spend or 0.0) - record.response_cost
+    return (
+        NewRelicGaugeMetric(
+            name=NEWRELIC_METRIC_TEAM_MAX_BUDGET, type="gauge", value=team_max_budget, attributes=attributes
+        ),
+        NewRelicGaugeMetric(
+            name=NEWRELIC_METRIC_TEAM_REMAINING_BUDGET, type="gauge", value=remaining_budget, attributes=attributes
+        ),
+    )
+
+
+def _team_budget_metrics(records: tuple[NewRelicMetricRecord, ...]) -> tuple[NewRelicMetric, ...]:
+    latest_by_team: Final[Mapping[str, NewRelicMetricRecord]] = MappingProxyType(
+        {record.team_id: record for record in records if record.team_id}
+    )
+    return tuple(gauge for record in latest_by_team.values() for gauge in _team_budget_gauges(record))
+
+
 def build_metric_payload(
     records: tuple[NewRelicMetricRecord, ...],
     *,
@@ -158,7 +191,7 @@ def build_metric_payload(
         "timestamp": int(window_start * 1000),
         "interval.ms": interval_ms,
     }
-    return (NewRelicMetricEnvelope(common=common, metrics=metrics),)
+    return (NewRelicMetricEnvelope(common=common, metrics=(*metrics, *_team_budget_metrics(records))),)
 
 
 class NewRelicMetricsLogger(CustomBatchLogger):

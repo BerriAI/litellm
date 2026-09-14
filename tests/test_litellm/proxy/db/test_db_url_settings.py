@@ -11,18 +11,35 @@ clobber a pre-existing ``DATABASE_URL_READ_REPLICA``. A pre-existing
 ``DATABASE_URL`` (password auth) is likewise left untouched.
 """
 
+import datetime
+import hashlib
 import os
+import socket
+import ssl
+import tempfile
+import threading
 import urllib.parse
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import ValidationError
 
 from litellm.proxy.db.db_url_settings import (
+    PG_SSL_REQUEST,
     DatabaseURLSettings,
+    token_refresh_params_from_url,
+    translate_libpq_ssl_params,
     unsupported_db_scheme,
     unsupported_db_scheme_message,
 )
+from litellm.proxy.db.pgbouncer import PgBouncerPlan, PgBouncerSettings, plan_pgbouncer
 from litellm.proxy.db.token_auth import AzureEntraTokenAuth, RdsIamTokenAuth
 
 
@@ -36,6 +53,8 @@ _MANAGED_DB_ENV_VARS = (
     "AZURE_POSTGRESQL_AUTH",
     "DATABASE_DISABLE_PREPARED_STATEMENTS",
     "DATABASE_MAX_IDLE_CONNECTION_LIFETIME",
+    "DATABASE_SSLMODE",
+    "DATABASE_SSLROOTCERT",
     "DATABASE_URL",
     "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
@@ -381,9 +400,7 @@ def test_writer_password_is_percent_encoded(monkeypatch):
 def test_writer_url_not_clobbered_when_already_set(monkeypatch):
     """An operator-pinned DATABASE_URL (e.g. helm's $(VAR) assembly) always
     wins over the discrete fields."""
-    monkeypatch.setenv(
-        "DATABASE_URL", "postgresql://pinned:url@db.example.com:5432/litellm_db"
-    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://pinned:url@db.example.com:5432/litellm_db")
     monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
     monkeypatch.setenv("DATABASE_USER", "litellm")
     monkeypatch.setenv("DATABASE_NAME", "litellm_db")
@@ -515,9 +532,7 @@ def test_apply_to_env_rejects_pinned_sqlite_direct_url(monkeypatch):
 
 def test_apply_to_env_rejects_pinned_non_postgres_reader(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
-    monkeypatch.setenv(
-        "DATABASE_URL_READ_REPLICA", "mysql://u:p@reader.example.com:3306/db"
-    )
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "mysql://u:p@reader.example.com:3306/db")
 
     with pytest.raises(RuntimeError, match=r"DATABASE_URL_READ_REPLICA.*mysql"):
         _apply()
@@ -542,15 +557,11 @@ def test_reader_inherits_writer_connection_params(monkeypatch):
         "DATABASE_URL",
         "postgresql://u:p@writer.example.com:5432/db?connection_limit=3&pool_timeout=20&pgbouncer=true",
     )
-    monkeypatch.setenv(
-        "DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db"
-    )
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db")
 
     _apply()
 
-    query = urllib.parse.parse_qs(
-        urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query
-    )
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)
     assert query["connection_limit"] == ["3"]
     assert query["pool_timeout"] == ["20"]
     assert query["pgbouncer"] == ["true"]
@@ -568,9 +579,7 @@ def test_reader_keeps_its_own_pinned_connection_params(monkeypatch):
 
     _apply()
 
-    query = urllib.parse.parse_qs(
-        urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query
-    )
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)
     assert query["connection_limit"] == ["50"]
     assert query["pool_timeout"] == ["20"]
 
@@ -774,6 +783,273 @@ def test_libpq_verify_full_and_sslrootcert_become_prisma_strict_sslcert(monkeypa
         "sslaccept": ["strict"],
         "max_idle_connection_lifetime": ["60"],
     }
+
+
+def _tls_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.setenv("DATABASE_SSLMODE", "verify-full")
+    monkeypatch.setenv("DATABASE_SSLROOTCERT", "/certs/rds-bundle.pem")
+
+
+def test_tls_env_vars_make_the_minted_iam_writer_url_verify_the_server(monkeypatch: pytest.MonkeyPatch):
+    """The supervisor starts PgBouncer from the URL assembled here, before any
+    config.yaml is read, so an IAM URL with no TLS params leaves PgBouncer on
+    ``prefer`` (no SNI, no verification) and the RDS handshake fails."""
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    _tls_env(monkeypatch)
+
+    with _stub_iam_token("WRITER_TOKEN"):
+        assert _apply() is True
+
+    url: Final = os.environ["DATABASE_URL"]
+    assert url.startswith("postgresql://litellm:WRITER_TOKEN@writer.example.com:5432/litellm_db?")
+    assert _query(url) == {
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
+
+
+def test_tls_env_vars_apply_to_the_password_writer_and_the_assembled_reader(monkeypatch: pytest.MonkeyPatch):
+    _tls_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+    monkeypatch.setenv("DATABASE_SCHEMA", "public")
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.example.com")
+
+    assert _apply() is True
+
+    expected: Final = {
+        "schema": ["public"],
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
+    assert os.environ["DATABASE_URL"].startswith("postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?")
+    assert _query(os.environ["DATABASE_URL"]) == expected
+    assert os.environ["DATABASE_URL_READ_REPLICA"].startswith(
+        "postgresql://litellm:s3cr3t@reader.example.com:5432/litellm_db?"
+    )
+    assert _query(os.environ["DATABASE_URL_READ_REPLICA"]) == expected
+
+
+def test_sslrootcert_env_var_alone_means_verify_full_for_prisma_and_pgbouncer(monkeypatch: pytest.MonkeyPatch):
+    """Under libpq's default ``prefer`` a root cert is never consulted, so a URL
+    carrying only ``sslrootcert`` would leave PgBouncer on ``prefer`` with the CA
+    loaded but unused. Supplying a CA and nothing else must verify."""
+    _tls_env(monkeypatch)
+    monkeypatch.delenv("DATABASE_SSLMODE")
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+
+    assert _apply() is True
+
+    url: Final = os.environ["DATABASE_URL"]
+    assert _query(url) == {
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
+    plan: Final = plan_pgbouncer(url, PgBouncerSettings(enabled=True), Path("/run/pgb"), None)
+    assert isinstance(plan, PgBouncerPlan), plan
+    assert "server_tls_sslmode = verify-full" in plan.ini
+    assert "server_tls_ca_file = /run/pgb/server-ca.pem" in plan.ini
+
+
+def test_tls_env_vars_never_override_a_pinned_database_url(monkeypatch: pytest.MonkeyPatch):
+    writer: Final = (
+        "postgresql://pinned:url@db.example.com:5432/litellm_db?sslmode=disable&max_idle_connection_lifetime=60"
+    )
+    reader: Final = "postgresql://pinned:url@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
+    monkeypatch.setenv("DATABASE_URL", writer)
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", reader)
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.example.com")
+    _tls_env(monkeypatch)
+
+    assert _apply() is False
+
+    assert os.environ["DATABASE_URL"] == writer
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == reader
+
+
+def test_token_refresh_params_keep_the_prisma_tls_dialect_but_not_the_schema():
+    kept: Final = token_refresh_params_from_url(
+        "postgresql://u:TOKEN@db.example.com:5432/litellm_db"
+        "?schema=tenant&connection_limit=5&sslmode=require&sslcert=/certs/root.pem&sslaccept=strict"
+    )
+    assert dict(kept) == {
+        "connection_limit": "5",
+        "sslmode": "require",
+        "sslcert": "/certs/root.pem",
+        "sslaccept": "strict",
+    }
+
+
+def _issue_cert(
+    subject: str, issuer: x509.Certificate | None, issuer_key: ec.EllipticCurvePrivateKey | None, ca: bool
+) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    key: Final = ec.generate_private_key(ec.SECP256R1())
+    name: Final = x509.Name((x509.NameAttribute(x509.NameOID.COMMON_NAME, subject),))
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    builder: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(issuer.subject if issuer else name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName((x509.DNSName("localhost"),)), critical=False)
+    )
+    return builder.sign(issuer_key or key, hashes.SHA256()), key
+
+
+def _pem(cert: x509.Certificate) -> bytes:
+    return cert.public_bytes(serialization.Encoding.PEM)
+
+
+class _TlsPostgresStub:
+    """Answers one libpq ``SSLRequest`` with ``S`` and serves ``leaf + intermediate``."""
+
+    def __init__(self, chain_pem: Path, key_pem: Path) -> None:
+        self.context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.context.load_cert_chain(str(chain_pem), str(key_pem))
+        self.listener: Final = socket.create_server(("127.0.0.1", 0))
+        self.port: Final[int] = self.listener.getsockname()[1]
+        self.thread: Final = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self) -> None:
+        with self.listener:
+            while True:
+                try:
+                    conn: socket.socket = self.listener.accept()[0]
+                except OSError:
+                    return
+                with conn:
+                    try:
+                        if conn.recv(8) == PG_SSL_REQUEST:
+                            conn.sendall(b"S")
+                            with self.context.wrap_socket(conn, server_side=True) as tls:
+                                tls.recv(1)
+                    except OSError:
+                        continue
+
+
+@dataclass(frozen=True, slots=True)
+class _RdsLikePki:
+    bundle: Path
+    wrong_bundle: Path
+    root: Path
+    port: int
+
+
+@pytest.fixture
+def rds_like_pki(tmp_path: Path) -> Iterator[_RdsLikePki]:
+    """An RDS-shaped trust setup: the server sends leaf + intermediate, the
+    bundle holds only self-signed roots, and the right root is not first."""
+    root, root_key = _issue_cert("Real Root CA", None, None, ca=True)
+    decoys: Final = tuple(_issue_cert(f"Decoy Root CA {i}", None, None, ca=True)[0] for i in range(3))
+    intermediate, intermediate_key = _issue_cert("Intermediate CA", root, root_key, ca=True)
+    leaf, leaf_key = _issue_cert("localhost", intermediate, intermediate_key, ca=False)
+    chain_pem: Final = tmp_path / "server-chain.pem"
+    chain_pem.write_bytes(_pem(leaf) + _pem(intermediate))
+    key_pem: Final = tmp_path / "server.key"
+    key_pem.write_bytes(
+        leaf_key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    bundle: Final = tmp_path / "global-bundle.pem"
+    bundle.write_bytes(b"".join(_pem(decoy) for decoy in decoys) + _pem(root))
+    wrong_bundle: Final = tmp_path / "wrong-bundle.pem"
+    wrong_bundle.write_bytes(b"".join(_pem(decoy) for decoy in decoys))
+    root_pem: Final = tmp_path / "root.pem"
+    root_pem.write_bytes(_pem(root))
+    stub: Final = _TlsPostgresStub(chain_pem, key_pem)
+    yield _RdsLikePki(bundle=bundle, wrong_bundle=wrong_bundle, root=root_pem, port=stub.port)
+    stub.listener.close()
+
+
+def _params(url: str) -> tuple[tuple[str, str], ...]:
+    return tuple(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query, keep_blank_values=True))
+
+
+def test_multi_root_bundle_is_pinned_to_the_root_the_server_chains_to(
+    monkeypatch: pytest.MonkeyPatch, rds_like_pki: _RdsLikePki
+):
+    """Prisma's ``sslcert`` loads only the first certificate of the file, so
+    handing it the whole RDS bundle trusts one region's root and fails with
+    "unable to get local issuer certificate" everywhere else. The URL Prisma
+    receives must point at a single-certificate file holding the server's root."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        f"postgresql://u:p@localhost:{rds_like_pki.port}/litellm_db?sslmode=verify-full&sslrootcert={rds_like_pki.bundle}",
+    )
+
+    _apply()
+
+    (sslmode, sslcert, sslaccept, _) = _params(os.environ["DATABASE_URL"])
+    assert (sslmode, sslaccept) == (("sslmode", "require"), ("sslaccept", "strict"))
+    assert sslcert[0] == "sslcert" and sslcert[1] != str(rds_like_pki.bundle)
+    assert Path(sslcert[1]).read_bytes() == rds_like_pki.root.read_bytes()
+
+
+def test_pinned_root_replaces_a_planted_symlink_instead_of_writing_through_it(
+    monkeypatch: pytest.MonkeyPatch, rds_like_pki: _RdsLikePki, tmp_path: Path
+):
+    """The pinned file has a predictable name in a shared temp dir, so a symlink
+    planted there must not redirect the write onto its target."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    root_der: Final = x509.load_pem_x509_certificate(rds_like_pki.root.read_bytes()).public_bytes(
+        serialization.Encoding.DER
+    )
+    pinned: Final = tmp_path / f"litellm-sslcert-{hashlib.sha256(root_der).hexdigest()[:16]}.pem"
+    victim: Final = tmp_path / "victim.txt"
+    victim.write_text("untouched")
+    pinned.symlink_to(victim)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        f"postgresql://u:p@localhost:{rds_like_pki.port}/litellm_db?sslmode=verify-full&sslrootcert={rds_like_pki.bundle}",
+    )
+
+    _apply()
+
+    assert ("sslcert", str(pinned)) in _params(os.environ["DATABASE_URL"])
+    assert victim.read_text() == "untouched"
+    assert not pinned.is_symlink() and pinned.read_bytes() == rds_like_pki.root.read_bytes()
+
+
+def test_bundle_without_the_servers_root_is_passed_through_unchanged(
+    monkeypatch: pytest.MonkeyPatch, rds_like_pki: _RdsLikePki
+):
+    """Nothing in the bundle verifies the server, so no root is pinned and
+    Prisma keeps rejecting the connection instead of trusting a root the
+    operator never shipped."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        f"postgresql://u:p@localhost:{rds_like_pki.port}/litellm_db"
+        f"?sslmode=verify-full&sslrootcert={rds_like_pki.wrong_bundle}",
+    )
+
+    _apply()
+
+    assert ("sslcert", str(rds_like_pki.wrong_bundle)) in _params(os.environ["DATABASE_URL"])
+
+
+def test_root_cert_resolver_receives_the_urls_host_and_default_port():
+    def resolver(cert_path: str, host: str, port: int) -> str:
+        return f"/pinned/{host}/{port}{cert_path}"
+
+    url: Final = translate_libpq_ssl_params(
+        "postgresql://u:p@db.example.com/litellm_db?sslmode=verify-full&sslrootcert=/certs/bundle.pem", resolver
+    )
+
+    assert ("sslcert", "/pinned/db.example.com/5432/certs/bundle.pem") in _params(url)
 
 
 def test_libpq_verify_ca_becomes_prisma_strict(monkeypatch):
