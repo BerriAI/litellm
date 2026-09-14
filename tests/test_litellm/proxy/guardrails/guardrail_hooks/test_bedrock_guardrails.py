@@ -2481,9 +2481,7 @@ def test_grounding_output_keeps_legacy_payload_without_tags():
 
 
 def test_grounding_output_derives_source_and_query_from_plain_messages():
-    """With contextual_grounding_from_messages on, untagged string system + user
-    messages become grounding_source + query, so a guardrail with a grounding
-    threshold grades the response."""
+    """Flag on: untagged system + user text is sent as grounding_source + query."""
     messages = [
         {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
         {"role": "user", "content": _GROUNDING_QUERY_TEXT},
@@ -2512,9 +2510,7 @@ def test_grounding_output_plain_messages_stay_legacy_when_flag_is_off():
 
 
 def test_grounding_output_derived_query_is_latest_user_turn_only():
-    """In a multi-turn chat only the latest user message is the query; earlier user
-    turns and assistant turns are not sent as query or source. Developer messages
-    count as source alongside system."""
+    """Only the latest user turn is the query; system and developer turns are the source."""
     developer_text = "Answer in one sentence."
     messages = [
         {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
@@ -2566,8 +2562,7 @@ def test_grounding_output_derived_query_is_latest_user_turn_only():
     ],
 )
 def test_grounding_output_stays_legacy_when_plain_source_or_query_is_missing(messages):
-    """Bedrock rejects a grounding_source without a query (and vice versa), so a
-    request that cannot supply both from trusted roles keeps the untagged payload."""
+    """Bedrock rejects a source without a query and vice versa, so send neither."""
     expected_request = {"source": "OUTPUT", "content": [{"text": {"text": _GROUNDING_RESPONSE_TEXT}}]}
 
     actual_request = _output_request(messages, _model_response(_GROUNDING_RESPONSE_TEXT), from_messages=True)
@@ -2576,8 +2571,7 @@ def test_grounding_output_stays_legacy_when_plain_source_or_query_is_missing(mes
 
 
 def test_grounding_output_explicit_tags_take_precedence_over_plain_messages():
-    """A caller that tags blocks keeps full control: untagged system text is not
-    added as a second source and the untagged user text is not a second query."""
+    """Tagged blocks win: untagged text around them is not added as source or query."""
     messages = [
         {"role": "system", "content": "You are a helpful assistant."},
         *_grounding_messages(),
@@ -2594,8 +2588,7 @@ def test_grounding_output_explicit_tags_take_precedence_over_plain_messages():
 
 
 def test_grounding_input_ignores_plain_message_derivation():
-    """Derivation is OUTPUT-only: an INPUT scan of plain system + user text stays an
-    untagged payload, so input policies keep scanning every block."""
+    """INPUT scans never derive grounding qualifiers from plain messages."""
     messages = [
         {"role": "system", "content": _GROUNDING_SOURCE_TEXT},
         {"role": "user", "content": _GROUNDING_QUERY_TEXT},
