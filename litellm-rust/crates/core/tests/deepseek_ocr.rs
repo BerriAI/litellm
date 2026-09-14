@@ -35,6 +35,28 @@ fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
 }
 
 #[rstest]
+#[case(json!({"type":"image_url","image_url":"data:image/png;base64,AA=="}))]
+#[case(json!({"type":"document_url","document_url":"data:application/pdf;base64,AA=="}))]
+fn request_maps_both_document_types_to_image_content(#[case] document: Value) {
+    let source = document
+        .get("image_url")
+        .or_else(|| document.get("document_url"))
+        .unwrap()
+        .clone();
+    let request = transform_ocr_request(
+        "deepseek-ai/deepseek-ocr-maas",
+        serde_json::from_value(document).unwrap(),
+        &DeepSeekOcrParams::default(),
+    )
+    .unwrap();
+    let result = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        result["messages"][0]["content"][0],
+        json!({"type":"image_url","image_url":source})
+    );
+}
+
+#[rstest]
 #[case(json!("# hello"), "# hello")]
 #[case(json!("{broken"), "{broken")]
 #[case(json!(" {\"pages\":[]} "), " {\"pages\":[]} ")]

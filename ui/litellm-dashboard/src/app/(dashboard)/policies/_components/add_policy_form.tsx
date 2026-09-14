@@ -44,10 +44,10 @@ const policyShape = {
     .min(1, "Please enter a policy name")
     .regex(/^[a-zA-Z0-9_-]+$/, "Policy name can only contain letters, numbers, hyphens, and underscores"),
   description: z.string(),
-  inherit: z.string(),
+  inherit: z.string().nullable(),
   guardrails_add: z.array(z.string()),
   guardrails_remove: z.array(z.string()),
-  model_condition: z.string(),
+  model_condition: z.string().nullable(),
 };
 
 const policySchema = z.object(policyShape);
@@ -57,19 +57,19 @@ type PolicyFormValues = z.infer<typeof policySchema>;
 const EMPTY_VALUES: PolicyFormValues = {
   policy_name: "",
   description: "",
-  inherit: "",
+  inherit: null,
   guardrails_add: [],
   guardrails_remove: [],
-  model_condition: "",
+  model_condition: null,
 };
 
 const toFormValues = (policy: Policy): PolicyFormValues => ({
   policy_name: policy.policy_name,
   description: policy.description ?? "",
-  inherit: policy.inherit ?? "",
+  inherit: policy.inherit ?? null,
   guardrails_add: policy.guardrails_add || [],
   guardrails_remove: policy.guardrails_remove || [],
-  model_condition: policy.condition?.model ?? "",
+  model_condition: policy.condition?.model ?? null,
 });
 
 const buildPolicyRequest = (values: PolicyFormValues): PolicyCreateRequest | PolicyUpdateRequest => ({
@@ -529,7 +529,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
                       {...control}
                       id={id}
                       ref={ref}
-                      value={value}
+                      value={value ?? ""}
                       onChange={onChange}
                       placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)"
                     />

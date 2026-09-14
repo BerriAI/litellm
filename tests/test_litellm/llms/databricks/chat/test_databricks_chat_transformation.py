@@ -5,11 +5,23 @@ from fastapi.testclient import TestClient
 
 from unittest.mock import MagicMock, patch
 
+import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
     _sanitize_empty_content,
 )
+
+
+@pytest.fixture()
+def _use_local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
 
 def test_transform_choices():
@@ -530,6 +542,115 @@ def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
     )
     assert mapped["thinking"] == expected_thinking
     assert mapped.get("output_config") == expected_output_config
+
+
+def _map_reasoning_effort(model: str, reasoning_effort: str):
+    return DatabricksConfig().map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+def test_claude_translates_reasoning_effort_to_thinking(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-claude-3-7-sonnet", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_adaptive_claude_translates_reasoning_effort_to_output_config(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-claude-opus-4-7", "high")
+    assert params.get("thinking") == {"type": "adaptive", "display": "summarized"}
+    assert params.get("output_config") == {"effort": "high"}
+    assert "reasoning_effort" not in params
+
+
+def test_unmapped_claude_endpoint_still_translates(_use_local_model_cost_map):
+    params = _map_reasoning_effort("my-claude-serving-endpoint", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_low_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_medium_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "medium")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_high_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_pro_translates_to_thinking_budget(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-pro", "high")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_5_with_dot_notation_translates(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2.5-flash", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_2_0_does_not_match(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-0-flash", "low")
+    assert "thinking" not in params
+    assert params.get("reasoning_effort") == "low"
+
+
+def test_gemini_2_5_none_drops_thinking_and_reasoning_effort(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-2-5-flash", "none")
+    assert "thinking" not in params
+    assert "reasoning_effort" not in params
+
+
+def test_gemini_3_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gemini-3-1-pro", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_5_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gpt-5-1", "low")
+    assert params.get("reasoning_effort") == "low"
+    assert "thinking" not in params
+
+
+def test_gpt_oss_passes_reasoning_effort_through(_use_local_model_cost_map):
+    params = _map_reasoning_effort("databricks-gpt-oss-120b", "high")
+    assert params.get("reasoning_effort") == "high"
+    assert "thinking" not in params
 
 
 def _streaming_chunk(usage=None, choices=None):

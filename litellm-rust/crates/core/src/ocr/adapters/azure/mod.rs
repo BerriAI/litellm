@@ -1,3 +1,4 @@
+mod cohere;
 mod document_intelligence;
 mod mistral;
 
@@ -10,8 +11,10 @@ use crate::ocr::error::OcrError;
 use crate::ocr::types::OcrConnection;
 use crate::providers::azure_ai::auth::{AzureAuthInputs, AzureAuthService};
 
+pub(crate) use cohere::AzureCohereAdapter;
 pub(crate) use document_intelligence::AzureDocumentIntelligenceAdapter;
 pub(crate) use mistral::AzureMistralAdapter;
+pub(super) use mistral::validate_environment as validate_ai_environment;
 
 async fn resolve_entra(
     config: &AzureAuthInputs,
@@ -22,6 +25,10 @@ async fn resolve_entra(
         .get_or_init(AzureAuthService::default)
         .get_azure_ad_token(config, env_lookup)
         .await
+        .or_else(|error| match error {
+            crate::AuthError::EmptyAzureToken => Ok(None),
+            other => Err(other),
+        })
         .map(|credential| {
             credential.map(|credential| {
                 let source = credential.source();

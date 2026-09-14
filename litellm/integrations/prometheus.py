@@ -52,6 +52,12 @@ from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
+from litellm.types.proxy.carried_budget_state import (
+    KeyBudgetSnapshot,
+    OrgBudgetSnapshot,
+    TeamBudgetSnapshot,
+    UserBudgetSnapshot,
+)
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
@@ -1941,6 +1947,8 @@ class PrometheusLogger(CustomLogger):
 
         _user_spend: Final = _metadata.get("user_api_key_user_spend", None)
         _user_max_budget: Final = _metadata.get("user_api_key_user_max_budget", None)
+        _user_email: Final = _metadata.get("user_api_key_user_email", None)
+        _org_alias: Final = _metadata.get("user_api_key_org_alias", None)
 
         # Bound the per-request budget-metric emission so that slow Redis/DB
         # lookups under load cannot consume the whole LoggingWorker watchdog
@@ -1957,6 +1965,7 @@ class PrometheusLogger(CustomLogger):
                 response_cost=response_cost,
                 key_max_budget=_api_key_max_budget,
                 key_spend=_api_key_spend,
+                carried=KeyBudgetSnapshot.from_metadata(_metadata),
             ),
             self._set_team_budget_metrics_after_api_request(
                 user_api_team=user_api_team,
@@ -1964,16 +1973,21 @@ class PrometheusLogger(CustomLogger):
                 team_spend=_team_spend,
                 team_max_budget=_team_max_budget,
                 response_cost=response_cost,
+                carried=TeamBudgetSnapshot.from_metadata(_metadata),
             ),
             self._set_user_budget_metrics_after_api_request(
                 user_id=user_id,
                 user_spend=_user_spend,
                 user_max_budget=_user_max_budget,
                 response_cost=response_cost,
+                carried=UserBudgetSnapshot.from_metadata(_metadata),
+                user_email=_user_email if isinstance(_user_email, str) else None,
             ),
             self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,
                 response_cost=response_cost,
+                carried=OrgBudgetSnapshot.from_metadata(_metadata),
+                org_alias=_org_alias if isinstance(_org_alias, str) else None,
             ),
             return_exceptions=True,
         )
@@ -3821,6 +3835,7 @@ class PrometheusLogger(CustomLogger):
         team_spend: float | None,
         team_max_budget: float | None,
         response_cost: float,
+        carried: TeamBudgetSnapshot | None = None,
     ):
         """
         Set team budget metrics after an LLM API request
@@ -3839,6 +3854,7 @@ class PrometheusLogger(CustomLogger):
                 spend=team_spend,
                 max_budget=team_max_budget,
                 response_cost=response_cost,
+                carried=carried,
             )
 
             self._set_team_budget_metrics(team_object)
@@ -3850,18 +3866,26 @@ class PrometheusLogger(CustomLogger):
         spend: float | None,
         max_budget: float | None,
         response_cost: float,
+        carried: TeamBudgetSnapshot | None = None,
     ) -> LiteLLM_TeamTable:
         """
         Assemble a LiteLLM_TeamTable object
 
-        for fields not available in metadata, we fetch from db
-        Fields not available in metadata:
-        - `budget_reset_at`
+        ``budget_reset_at`` comes from the auth-carried snapshot when the request has one,
+        otherwise from the team lookup
         """
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_team_spend: Final = (spend or 0) + response_cost
+        if carried is not None:
+            return LiteLLM_TeamTable(
+                team_id=team_id,
+                team_alias=team_alias,
+                spend=_total_team_spend,
+                max_budget=max_budget if max_budget is not None else carried.max_budget,
+                budget_reset_at=carried.budget_reset_at,
+            )
         team_object: Final = LiteLLM_TeamTable(
             team_id=team_id,
             team_alias=team_alias,
@@ -3946,17 +3970,29 @@ class PrometheusLogger(CustomLogger):
         self,
         org_id: str | None,
         response_cost: float,
+        carried: OrgBudgetSnapshot | None = None,
+        org_alias: str | None = None,
     ):
         """
         Set org budget metrics after an LLM API request
 
-        - Fetches org info via cache (get_org_object)
+        - Uses the auth-carried org budget when the request has one, else fetches via get_org_object
         - Sets org budget metrics
         """
         if isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric):
             return
 
         if not org_id:
+            return
+
+        if carried is not None:
+            self._set_org_budget_metrics(
+                org_id=org_id,
+                org_alias=org_alias or "",
+                spend=carried.spend + response_cost,
+                max_budget=carried.max_budget,
+                budget_reset_at=None,
+            )
             return
 
         from litellm.proxy.auth.auth_checks import get_org_object
@@ -3979,7 +4015,6 @@ class PrometheusLogger(CustomLogger):
         if org_info is None:
             return
 
-        org_alias: Final = org_info.organization_alias or ""
         _total_org_spend: Final = (org_info.spend or 0.0) + response_cost
         budget_table: Final = org_info.litellm_budget_table
         max_budget: Final = budget_table.max_budget if budget_table else None
@@ -3987,7 +4022,7 @@ class PrometheusLogger(CustomLogger):
 
         self._set_org_budget_metrics(
             org_id=org_id,
-            org_alias=org_alias,
+            org_alias=org_info.organization_alias or "",
             spend=_total_org_spend,
             max_budget=max_budget,
             budget_reset_at=budget_reset_at,
@@ -4084,6 +4119,7 @@ class PrometheusLogger(CustomLogger):
         response_cost: float,
         key_max_budget: float | None,
         key_spend: float | None,
+        carried: KeyBudgetSnapshot | None = None,
     ):
         if isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric):
             return
@@ -4095,6 +4131,7 @@ class PrometheusLogger(CustomLogger):
                 key_max_budget=key_max_budget,
                 key_spend=key_spend,
                 response_cost=response_cost,
+                carried=carried,
             )
             self._set_key_budget_metrics(user_api_key_dict)
 
@@ -4105,6 +4142,7 @@ class PrometheusLogger(CustomLogger):
         key_max_budget: float | None,
         key_spend: float | None,
         response_cost: float,
+        carried: KeyBudgetSnapshot | None = None,
     ) -> UserAPIKeyAuth:
         """
         Assemble a UserAPIKeyAuth object
@@ -4113,6 +4151,14 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_key_spend: Final = (key_spend or 0) + response_cost
+        if carried is not None:
+            return UserAPIKeyAuth(
+                token=user_api_key,
+                key_alias=user_api_key_alias,
+                max_budget=key_max_budget,
+                spend=_total_key_spend,
+                budget_reset_at=carried.budget_reset_at,
+            )
         user_api_key_dict: Final = UserAPIKeyAuth(
             token=user_api_key,
             key_alias=user_api_key_alias,
@@ -4140,6 +4186,8 @@ class PrometheusLogger(CustomLogger):
         user_spend: float | None,
         user_max_budget: float | None,
         response_cost: float,
+        carried: UserBudgetSnapshot | None = None,
+        user_email: str | None = None,
     ):
         """
         Set user budget metrics after an LLM API request
@@ -4157,6 +4205,8 @@ class PrometheusLogger(CustomLogger):
                 spend=user_spend,
                 max_budget=user_max_budget,
                 response_cost=response_cost,
+                carried=carried,
+                user_email=user_email,
             )
 
             self._set_user_budget_metrics(user_object)
@@ -4167,18 +4217,28 @@ class PrometheusLogger(CustomLogger):
         spend: float | None,
         max_budget: float | None,
         response_cost: float,
+        carried: UserBudgetSnapshot | None = None,
+        user_email: str | None = None,
     ) -> LiteLLM_UserTable:
         """
         Assemble a LiteLLM_UserTable object
 
-        for fields not available in metadata, we fetch from db
-        Fields not available in metadata:
-        - `budget_reset_at`
+        ``budget_reset_at`` and ``user_alias`` come from the auth-carried snapshot when the
+        request has one, otherwise from the user lookup
         """
         from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_user_spend: Final = (spend or 0) + response_cost
+        if carried is not None:
+            return LiteLLM_UserTable(
+                user_id=user_id,
+                spend=_total_user_spend,
+                max_budget=max_budget if max_budget is not None else carried.max_budget,
+                budget_reset_at=carried.budget_reset_at,
+                user_alias=carried.user_alias,
+                user_email=user_email,
+            )
         user_object: Final = LiteLLM_UserTable(
             user_id=user_id,
             spend=_total_user_spend,

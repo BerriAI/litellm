@@ -1151,10 +1151,10 @@ async def test_prepare_window_spend_counter_increment_missing_window_start_inval
 # ---------------------------------------------------------------------------
 
 
-def _two_pending_increments() -> tuple[ps._PendingSpendIncrement, ...]:
+def _two_pending_increments() -> tuple[ps.PendingSpendIncrement, ...]:
     return (
-        ps._PendingSpendIncrement(counter_key="spend:key:k", increment=1.5),
-        ps._PendingSpendIncrement(counter_key="spend:team:t", increment=1.5),
+        ps.PendingSpendIncrement(counter_key="spend:key:k", increment=1.5),
+        ps.PendingSpendIncrement(counter_key="spend:team:t", increment=1.5),
     )
 
 
