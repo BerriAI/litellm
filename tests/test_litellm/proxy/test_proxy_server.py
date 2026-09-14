@@ -10069,6 +10069,46 @@ async def test_successful_realtime_session_leaves_the_reservation_for_the_cost_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase_one_exit", [None, "pre_call"])
+async def test_realtime_session_ending_without_llm_callbacks_releases_the_max_parallel_slot(
+    phase_one_exit: str | None,
+):
+    """The rate limiter acquires the key's max_parallel_requests slot in pre-call and
+    only frees it from the LLM success/failure callbacks. A realtime session that ends
+    without either callback (Bedrock closes without usage events, or a later pre-call
+    hook rejects the session) has to be released by the route itself, or the slot stays
+    occupied until its TTL and the key's next session is refused with a 429."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        RequestRateLimiterStash,
+        _PROXY_MaxParallelRequestsHandler_v3,
+        _request_stash,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    counter_key: Final = "{api_key:hashed-token}:max_parallel_requests"
+    dual_cache: Final = DualCache()
+    await dual_cache.async_set_cache(key=counter_key, value={"slot-1": 1.0, "slot-2": 2.0}, local_only=True)
+    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache))
+    stash: Final = RequestRateLimiterStash(parallel_slot={"slot_id": "slot-1", "counter_keys": [counter_key]})
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    stash_token: Final = _request_stash.set(stash)
+    try:
+        hooks: Final = patch.dict(ps.proxy_logging_obj.proxy_hook_mapping, {"parallel_request_limiter": limiter})  # test-quality-ok: registers a real limiter on the module-global hook map the route reads; assertion observes its counter
+        with hooks:
+            await _lit6973_drive_realtime_session(
+                reservation, backend_logged_success=False, phase_one_exit=phase_one_exit
+            )
+    finally:
+        _request_stash.reset(stash_token)
+
+    assert await dual_cache.async_get_cache(key=counter_key, local_only=True) == {"slot-2": 2.0}
+    assert stash.parallel_slot is None
+
+
+@pytest.mark.asyncio
 async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
     """If releasing the reservation itself fails (e.g. the counter store is down),
     the reserved counters must be invalidated directly so the estimate does not
