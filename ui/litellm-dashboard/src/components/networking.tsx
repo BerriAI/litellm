@@ -2971,6 +2971,7 @@ export interface Member {
   role: string;
   user_id: string | null;
   user_email?: string | null;
+  user_alias?: string | null;
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;

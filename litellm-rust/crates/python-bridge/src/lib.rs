@@ -1,14 +1,16 @@
+mod auth;
 mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
+mod lifecycle;
 mod marshal;
 mod routes;
 mod token_counter;
 
-use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use serde_json::Value;
@@ -64,7 +66,7 @@ impl ResponsesWebSocketConnection {
     }
 }
 
-#[pymodule(gil_used = false)]
+#[pymodule(gil_used = true)]
 mod _native {
     use pyo3::prelude::*;
 
@@ -152,7 +154,6 @@ mod tests {
                         "amessages",
                         "chat_completions",
                         "achat_completions",
-                        "gateway_messages",
                     ]
                 );
             }

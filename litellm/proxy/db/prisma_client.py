@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.db.db_url_settings import add_missing_query_params, connection_params_from_url
+from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
 from litellm.proxy.db.token_auth import (
     DEFAULT_POSTGRES_PORT,
     DatabaseTokenAuth,
@@ -441,7 +441,7 @@ class PrismaWrapper:
         endpoint: Final = self._iam_endpoint if self._iam_endpoint is not None else self._endpoint_from_env()
         db_url: Final = add_missing_query_params(
             endpoint.build_url(mint_database_token(auth, endpoint)),
-            connection_params_from_url(os.environ.get(self._db_url_env_var, "")),
+            token_refresh_params_from_url(os.environ.get(self._db_url_env_var, "")),
         )
         os.environ[self._db_url_env_var] = db_url
         return db_url

@@ -63,6 +63,7 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListParams,
+    MemorySummaryResponse,
     ModelsListResponse,
     ModelUpdateBody,
     OcrBody,
@@ -72,6 +73,11 @@ from models import (
     SpendLogsPage,
     SpendLogsPageParams,
     SpendLogsParams,
+    TeamDeleteBody,
+    TeamNewBody,
+    TeamNewResponse,
+    UserDeleteBody,
+    UserDeleteResponse,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
@@ -467,6 +473,17 @@ class ProxyClient:
             )
         ).info
 
+    def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
+        return {
+            url: transport.get(
+                "/debug/memory/summary",
+                headers=transport.master,
+                params=NoBody(),
+                response_type=MemorySummaryResponse,
+            )
+            for url, transport in self.replicas.items()
+        }
+
     def read_back_everywhere[R: BaseModel](
         self,
         path: str,
@@ -793,6 +810,41 @@ class ProxyClient:
         )
         if not is_ok(result):
             warnings.warn(f"delete_credential({credential_name!r}) failed: {result}", stacklevel=2)
+
+    def create_team(self, body: TeamNewBody) -> str:
+        return unwrap(
+            self.transport.post(
+                "/team/new",
+                headers=self.transport.master,
+                json=body,
+                response_type=TeamNewResponse,
+            )
+        ).team_id
+
+    def delete_team(self, team_id: str) -> None:
+        result = self.transport.post(
+            "/team/delete",
+            headers=self.transport.master,
+            json=TeamDeleteBody(team_ids=[team_id]),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_team({team_id!r}) failed: {result}", stacklevel=2)
+
+    def delete_user(self, user_id: str) -> None:
+        """Best-effort teardown; a 404 is not a leak, since JWT tests defer this for
+        a user the proxy only upserts after a successful auth."""
+        result = self.transport.post(
+            "/user/delete",
+            headers=self.transport.master,
+            json=UserDeleteBody(user_ids=[user_id]),
+            response_type=UserDeleteResponse,
+        )
+        match result:
+            case Success() | UnknownApiError(status_code=404):
+                return
+            case _:
+                warnings.warn(f"delete_user({user_id!r}) failed: {result}", stacklevel=2)
 
     # ---- LLM calls ------------------------------------------------------
 

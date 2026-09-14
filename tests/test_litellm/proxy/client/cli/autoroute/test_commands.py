@@ -6,6 +6,7 @@ from typing import Optional
 import yaml
 from click.testing import CliRunner
 
+from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.autoroute import commands as commands_module
 from litellm.proxy.client.cli.commands.autoroute import process as process_module
 from litellm.proxy.client.cli.commands.autoroute.commands import down, up
@@ -163,6 +164,7 @@ class TestUpCommand:
         # `lite configure claude --model` or a user pin would 400 on the first message.
         assert captured["settings"]["model"] == "autorouter"
         assert captured["settings"]["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "autorouter"
+        assert captured["settings"]["statusLine"]["command"].endswith("statusline.py")
         assert captured["settings_mode"] == 0o600
 
         assert terminate_calls == [99999]
@@ -252,6 +254,33 @@ class TestUpCommand:
         assert terminate_calls == [777]
         assert not pid_record_path.exists()
         assert not backup_path.exists()
+
+    def test_a_status_line_install_failure_leaves_no_backup_behind(self, monkeypatch, tmp_path):
+        # The install runs before the backup is written, so a failure cannot strand a backup that
+        # would make every later `lite configure` / `lite autoroute up` think a session still owns settings.json
+        config_path, _log_path, claude_settings_path, backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+
+        def boom():
+            raise ClaudeSettingsError("disk full")
+
+        fake_process = FakeProcess(pid=778)
+        terminate_calls = []
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: fake_process)
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: terminate_calls.append(pid))
+        monkeypatch.setattr(commands_module, "install_statusline_script", boom)
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code != 0 and "disk full" in result.output
+        assert terminate_calls == [778]
+        assert not pid_record_path.exists()
+        assert not backup_path.exists()
+        assert json.loads(claude_settings_path.read_text()) == {"theme": "dark"}
 
     def test_up_uses_the_same_port_and_master_key_across_runs(self, monkeypatch, tmp_path):
         """The LIT-4607/LIT-4608 regression: a client configured against one session must keep
