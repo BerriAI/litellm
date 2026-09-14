@@ -176,8 +176,9 @@ def execute_gateway_trace(
     scenario: TraceScenario,
     engine: TraceEngine = "both",
 ) -> TraceArtifact:
-    python_trace: Final = _collect(route, scenario, "python") if engine != "rust" else ()
-    rust_trace: Final = _collect(route, scenario, "rust") if engine != "python" else ()
+    effective_engine: Final[TraceEngine] = "python" if engine == "both" and not route.rust_supported else engine
+    python_trace: Final = _collect(route, scenario, "python") if effective_engine != "rust" else ()
+    rust_trace: Final = _collect(route, scenario, "rust") if effective_engine != "python" else ()
     collection_python_error: Final = None if isinstance(python_trace, tuple) else f"python: {python_trace.message}"
     rust_error: Final = None if isinstance(rust_trace, tuple) else f"rust: {rust_trace.message}"
     python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
@@ -185,7 +186,7 @@ def execute_gateway_trace(
     python, rust, projection_error = _projections(python_events, rust_events)
     python_error: Final = projection_error or collection_python_error
     return TraceArtifact.from_traces(
-        engine=engine,
+        engine=effective_engine,
         surface="gateway",
         sdk_function=route.route,
         scenario=scenario.name,

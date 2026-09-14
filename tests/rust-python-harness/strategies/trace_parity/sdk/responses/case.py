@@ -161,7 +161,7 @@ def _anthropic_bridge_stream_fixture(engine: Engine, _base_url: str) -> RouteFix
     )
 
 
-SPEC: Final = RouteSpec("responses", ("responses", "aresponses"), ("responses", "aresponses"), _openai_fixture)
+SPEC: Final = RouteSpec("responses", ("responses", "aresponses"), None, _openai_fixture)
 TRACE_SUITE: Final = TraceSuite(
     route=SPEC,
     scenarios=(
