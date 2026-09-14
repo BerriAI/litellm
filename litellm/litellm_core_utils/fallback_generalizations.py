@@ -183,7 +183,7 @@ class _FallbackGeneralizations:
         self.rules: list = []
         self.routing_rules: tuple = ()
         self.capability_rules: tuple = ()
-        self.fill_missing_rules: tuple = ()
+        self.fill_missing_rules: tuple[_CapabilityRule, ...] = ()
 
     def set_rules(self, rules: list | None) -> None:
         installed: Final = rules if isinstance(rules, list) else []
@@ -209,7 +209,7 @@ class _FallbackGeneralizations:
             return None
         return {key: value for model_info in matched for key, value in model_info.items()}
 
-    def match_fill_missing(self, model: str, provider: str) -> dict | None:
+    def match_fill_missing(self, model: str, provider: str) -> dict[str, object] | None:
         if not model or not provider:
             return None
         matched = tuple(
@@ -219,7 +219,7 @@ class _FallbackGeneralizations:
         )
         if not matched:
             return None
-        fill_missing: Final = {
+        fill_missing: Final[dict[str, object]] = {
             key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY
         }
         return fill_missing or None
@@ -261,7 +261,7 @@ def match_capability_generalizations(model: str) -> dict | None:
     return _registry.match_capabilities(model)
 
 
-def match_fill_missing_generalizations(model: str, provider: str) -> dict | None:
+def match_fill_missing_generalizations(model: str, provider: str) -> dict[str, object] | None:
     """Return flagged capability rules matching ``model`` for ``provider``.
 
     Later rules override earlier ones on key conflicts. Only rules listing
