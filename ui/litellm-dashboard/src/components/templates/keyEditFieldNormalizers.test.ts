@@ -19,6 +19,14 @@ describe("moveTagsOutOfMetadataJson", () => {
     });
   });
 
+  it("trims whitespace and drops blank entries the same way the Tags control does", () => {
+    expect(moveTagsOutOfMetadataJson('{"tags": [" a ", "a", "   ", "", " ui-tag"]}', ["ui-tag"])).toEqual({
+      metadata: "{}",
+      tags: ["ui-tag", "a"],
+      movedTags: ["a"],
+    });
+  });
+
   it("strips an empty tags array while moving nothing", () => {
     expect(moveTagsOutOfMetadataJson('{"tags": []}', undefined)).toEqual({
       metadata: "{}",
