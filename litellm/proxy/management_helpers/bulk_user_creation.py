@@ -124,6 +124,13 @@ class _UserRow(BaseModel):
     prompts: tuple[str, ...] | None = None
     duration: str | None = None
     key_alias: str | None = None
+    aliases: Mapping[str, object] | None = None
+    config: Mapping[str, object] | None = None
+    permissions: Mapping[str, object] | None = None
+    blocked: bool | None = None
+    agent_id: str | None = None
+    budget_fallbacks: Mapping[str, tuple[str, ...]] | None = None
+    budget_limits: tuple[Mapping[str, object], ...] | None = None
     organizations: tuple[str, ...] | None = None
 
 
@@ -428,16 +435,26 @@ async def _insert_users(
         return tuple(prepared), ()
     except Exception as exc:  # noqa: BLE001  # fall back to per-row inserts so the failing row can be identified
         verbose_proxy_logger.warning("/user/bulk_new: create_many failed, retrying rows individually - %s", exc)
+    landed_rows: Final = await table.find_many(
+        where={"user_id": {"in": [payload["user_id"] for payload in payloads]}}  # mutable-ok: Prisma filter
+    )
+    landed: Final = frozenset(row.user_id for row in landed_rows)
+    retried: Final = tuple(user for user in prepared if user.row.user_id not in landed)
     outcomes: Final = await _bounded(
-        BULK_NEW_USER_CONCURRENCY, tuple(table.create(data=payload) for payload in payloads)
+        BULK_NEW_USER_CONCURRENCY, tuple(table.create(data=_user_create_payload(user)) for user in retried)
+    )
+    failed: Final = MappingProxyType(
+        {
+            user.row.user_id: _RowFailure(
+                user.pending.index, user.pending.user_id, user.row.user_email, _error_message(outcome)
+            )
+            for user, outcome in zip(retried, outcomes, strict=True)
+            if isinstance(outcome, BaseException)
+        }
     )
     return (
-        tuple(user for user, outcome in zip(prepared, outcomes, strict=True) if not isinstance(outcome, BaseException)),
-        tuple(
-            _RowFailure(user.pending.index, user.pending.user_id, user.row.user_email, _error_message(outcome))
-            for user, outcome in zip(prepared, outcomes, strict=True)
-            if isinstance(outcome, BaseException)
-        ),
+        tuple(user for user in prepared if user.row.user_id not in failed),
+        tuple(failed.values()),
     )
 
 
@@ -606,9 +623,17 @@ _KEY_FIELDS: Final = MappingProxyType(
         for name in (
             "user_id",
             "team_id",
+            "agent_id",
             "duration",
             "key_alias",
             "models",
+            "aliases",
+            "config",
+            "permissions",
+            "blocked",
+            "spend",
+            "budget_fallbacks",
+            "budget_limits",
             "metadata",
             "max_parallel_requests",
             "tpm_limit",

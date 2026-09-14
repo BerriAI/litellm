@@ -16478,6 +16478,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/bulk_new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk New User
+         * @description Create up to 500 internal users in one request, optionally adding each one to teams.
+         *
+         *     Every entry in `users` takes the same fields as `/user/new`, with two differences: `auto_create_key`
+         *     defaults to `false` (opt in per user to also get a virtual key back) and `send_invite_email` is not
+         *     supported. Rows are validated together (duplicate ids or emails, unknown teams, roles the caller may not
+         *     grant), inserted in one statement, and each referenced team is written once for all of its new members.
+         *
+         *     Rows fail independently: a bad row is reported in `results` with `success: false` and an `error`, and the
+         *     other rows still get created. A user that was created but could not be added to one of its teams is
+         *     reported with `success: true`, `teams` listing where they did land, and `error` naming the failed team.
+         *     The whole request is rejected with 403 only if creating the valid rows would exceed the license seat limit.
+         *
+         *     Usage Example
+         *
+         *     ```shell
+         *     curl -X POST "http://localhost:4000/user/bulk_new" \
+         *     -H "Content-Type: application/json" \
+         *     -H "Authorization: Bearer sk-1234" \
+         *     -d '{
+         *         "users": [
+         *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
+         *             {"user_email": "b@example.com", "user_role": "internal_user", "auto_create_key": true}
+         *         ]
+         *     }'
+         *     ```
+         *
+         *     Returns `results` (one entry per input row, in order, with `user_id`, `user_email`, `success`, `teams`,
+         *     `key`, `error`), `total_requested`, `successful_creations` and `failed_creations`.
+         */
+        post: operations["bulk_new_user_user_bulk_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/bulk_update": {
         parameters: {
             query?: never;
@@ -16781,7 +16828,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16887,7 +16933,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -24504,6 +24549,148 @@ export interface components {
         BudgetRequest: {
             /** Budgets */
             budgets: string[];
+        };
+        /**
+         * BulkNewUserItem
+         * @description One row of `/user/bulk_new`: the `/user/new` body, with keys opt-in and invite emails unsupported.
+         */
+        BulkNewUserItem: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Aliases
+             * @default {}
+             */
+            aliases: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: unknown[] | null;
+            /**
+             * Auto Create Key
+             * @default false
+             */
+            auto_create_key: boolean;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
+             * Config
+             * @default {}
+             */
+            config: {
+                [key: string]: unknown;
+            } | null;
+            /** Duration */
+            duration?: string | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Metadata
+             * @default {}
+             */
+            metadata: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organizations */
+            organizations?: string[] | null;
+            /**
+             * Permissions
+             * @default {}
+             */
+            permissions: {
+                [key: string]: unknown;
+            } | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Send Invite Email */
+            send_invite_email?: boolean | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Sso User Id */
+            sso_user_id?: string | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Teams */
+            teams?: string[] | components["schemas"]["NewUserRequestTeam"][] | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+            /** User Role */
+            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** BulkNewUserRequest */
+        BulkNewUserRequest: {
+            /** Users */
+            users: components["schemas"]["BulkNewUserItem"][];
+        };
+        /** BulkNewUserResponse */
+        BulkNewUserResponse: {
+            /** Failed Creations */
+            failed_creations: number;
+            /** Results */
+            results: components["schemas"]["UserCreateResult"][];
+            /** Successful Creations */
+            successful_creations: number;
+            /** Total Requested */
+            total_requested: number;
         };
         /**
          * BulkTeamMemberAddRequest
@@ -39344,6 +39531,24 @@ export interface components {
              * @enum {string}
              */
             severity: "info" | "warning" | "error";
+        };
+        /**
+         * UserCreateResult
+         * @description Outcome for one row of `/user/bulk_new`. `teams` lists the teams the user was actually added to.
+         */
+        UserCreateResult: {
+            /** Error */
+            error?: string | null;
+            /** Key */
+            key?: string | null;
+            /** Success */
+            success: boolean;
+            /** Teams */
+            teams?: string[] | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * UserHeaderMapping
@@ -60627,6 +60832,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    bulk_new_user_user_bulk_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNewUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkNewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

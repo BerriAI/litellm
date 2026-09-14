@@ -31,9 +31,10 @@ class _UserRow(BaseModel):
 class _UserTable:
     """Enough of the Prisma user table for the bulk path: set lookups, one create_many and per-row fallbacks."""
 
-    def __init__(self, fail_ids: frozenset[str] = frozenset()) -> None:
+    def __init__(self, fail_ids: frozenset[str] = frozenset(), commit_then_drop: bool = False) -> None:
         self.rows: dict[str, _UserRow] = {}
         self.fail_ids = fail_ids
+        self.commit_then_drop = commit_then_drop
         self.create_many_calls = 0
 
     async def count(self, where: object = None) -> int:
@@ -60,6 +61,8 @@ class _UserTable:
             raise RuntimeError("batch insert failed")
         for row in rows:
             self.rows[row.user_id] = row
+        if self.commit_then_drop:
+            raise ConnectionError("connection reset after commit")
         return len(rows)
 
     async def update(self, where: dict[str, str], data: dict[str, object]) -> _UserRow:
@@ -110,15 +113,22 @@ class _Tx:
 
 
 class _Db:
-    def __init__(self, teams: list[LiteLLM_TeamTable], fail_ids: frozenset[str] = frozenset()) -> None:
-        self.litellm_usertable = _UserTable(fail_ids)
+    def __init__(
+        self, teams: list[LiteLLM_TeamTable], fail_ids: frozenset[str] = frozenset(), commit_then_drop: bool = False
+    ) -> None:
+        self.litellm_usertable = _UserTable(fail_ids, commit_then_drop)
         self.litellm_teamtable = _TeamTable(teams)
         self.litellm_teammembership = _MembershipTable()
 
 
 class _FakePrisma:
-    def __init__(self, teams: list[LiteLLM_TeamTable] | None = None, fail_ids: frozenset[str] = frozenset()) -> None:
-        self.db = _Db(teams or [], fail_ids)
+    def __init__(
+        self,
+        teams: list[LiteLLM_TeamTable] | None = None,
+        fail_ids: frozenset[str] = frozenset(),
+        commit_then_drop: bool = False,
+    ) -> None:
+        self.db = _Db(teams or [], fail_ids, commit_then_drop)
         self.tx_count = 0
         self.locks: list[str] = []
 
@@ -256,6 +266,17 @@ async def test_insert_failure_falls_back_to_per_row_and_reports_only_that_row():
 
 
 @pytest.mark.asyncio
+async def test_insert_that_committed_but_lost_its_response_still_counts_as_created():
+    prisma = _FakePrisma(teams=[_team("t1")], commit_then_drop=True)
+    response = await _run(prisma, [{"user_id": "u1", "teams": ["t1"]}, {"user_id": "u2"}])
+
+    assert [r.success for r in response.results] == [True, True]
+    assert [r.error for r in response.results] == [None, None]
+    assert set(prisma.db.litellm_usertable.rows) == {"u1", "u2"}
+    assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u1"]
+
+
+@pytest.mark.asyncio
 async def test_team_write_failure_keeps_user_and_reports_it_on_the_row():
     prisma = _FakePrisma(teams=[_team("t1"), _team("t2")])
 
@@ -286,7 +307,17 @@ async def test_keys_are_opt_in_per_row():
         prisma,
         [
             {"user_id": "u1"},
-            {"user_id": "u2", "auto_create_key": True, "models": ["gpt-4o"], "key_alias": "u2-key"},
+            {
+                "user_id": "u2",
+                "auto_create_key": True,
+                "models": ["gpt-4o"],
+                "key_alias": "u2-key",
+                "blocked": True,
+                "permissions": {"get_spend_routes": True},
+                "aliases": {"fast": "gpt-4o"},
+                "config": {"tier": "gold"},
+                "budget_fallbacks": {"gpt-4o": ["gpt-4o-mini"]},
+            },
             {"user_id": "u3", "auto_create_key": False},
         ],
         generate_key=generate_key,
@@ -296,6 +327,11 @@ async def test_keys_are_opt_in_per_row():
     assert len(calls) == 1
     assert calls[0]["user_id"] == "u2" and calls[0]["table_name"] == "key"
     assert calls[0]["models"] == ("gpt-4o",) and calls[0]["key_alias"] == "u2-key"
+    assert calls[0]["blocked"] is True
+    assert calls[0]["permissions"] == {"get_spend_routes": True}
+    assert calls[0]["aliases"] == {"fast": "gpt-4o"}
+    assert calls[0]["config"] == {"tier": "gold"}
+    assert calls[0]["budget_fallbacks"] == {"gpt-4o": ("gpt-4o-mini",)}
     assert set(prisma.db.litellm_usertable.rows) == {"u1", "u2", "u3"}
 
 
