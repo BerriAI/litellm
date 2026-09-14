@@ -36,7 +36,6 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
@@ -686,8 +685,10 @@ def _applicable_guardrails(
     """Agent 365 guardrails whose sign-in the gateway advertises for ``server``: the ``default_on`` ones, minus
     those the caller's key or team opted out of once the caller is known. A guardrail only a key or policy
     selects still enforces at the tool call but never challenges, since the anonymous metadata fetch that
-    follows a challenge cannot see which key selected it and would advertise the wrong issuer."""
-    if server.auth_type == MCPAuth.oauth2 or not server.advertises_gateway_authorization_server:
+    follows a challenge cannot see which key selected it and would advertise the wrong issuer. Only servers
+    that leave the caller's top-level ``Authorization`` with the gateway qualify: a forwarded API-key header
+    travels upstream in its own slot and does not displace the Entra assertion."""
+    if not server.keeps_caller_authorization:
         return ()
     advertised: Final = tuple(
         callback

@@ -8926,7 +8926,7 @@ class TestAgent365ChallengeAtConnect:
             request=httpx.Request("POST", "https://login.microsoftonline.com/tenant-abc/oauth2/v2.0/token"),
         )
 
-    def _server(self, scopes: list[str] | None) -> MCPServer:
+    def _server(self, scopes: list[str] | None, extra_headers: list[str] | None = None) -> MCPServer:
         return MCPServer(
             server_id="id-tools",
             name="tools",
@@ -8936,6 +8936,7 @@ class TestAgent365ChallengeAtConnect:
             transport=MCPTransport.http,
             auth_type=MCPAuth.none,
             scopes=scopes,
+            extra_headers=extra_headers,
             mcp_info={"server_name": "tools"},
         )
 
@@ -9180,6 +9181,26 @@ class TestAgent365ChallengeAtConnect:
 
         assert challenge is not None and challenge.status_code == 401
         assert 'error="invalid_token"' in (challenge.headers or {}).get("WWW-Authenticate", "")
+
+    @pytest.mark.asyncio
+    async def test_server_forwarding_an_upstream_api_key_header_is_still_challenged(self, agent_365_guardrail):
+        """``x-api-key`` travels upstream in its own header and leaves the caller's ``Authorization`` free for
+        the Entra assertion, so a key-only connect must still be sent to sign in."""
+        challenge = await self._connect(self._server(None, extra_headers=["x-api-key"]), None)
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert 'error="invalid_token"' in www_authenticate
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/mcp/tools"'
+            in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    async def test_server_relaying_the_caller_authorization_is_not_challenged(self, agent_365_guardrail):
+        """Forwarding ``Authorization`` hands the caller's bearer to the upstream, so the gateway holds no Entra
+        assertion of its own to exchange and must not advertise a sign-in it cannot consume."""
+        assert await self._connect(self._server(None, extra_headers=["Authorization"]), None) is None
 
     @pytest.mark.asyncio
     async def test_no_registered_guardrail_means_no_challenge(self):

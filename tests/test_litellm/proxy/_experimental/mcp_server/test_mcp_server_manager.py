@@ -5092,6 +5092,36 @@ class TestMCPServerManager:
         )
         assert server2.requires_per_user_auth is False
 
+    @pytest.mark.parametrize(
+        "auth_type, extra_headers, keeps_authorization, advertises_gateway",
+        [
+            (MCPAuth.none, None, True, True),
+            (MCPAuth.api_key, None, True, True),
+            (MCPAuth.none, ["x-api-key"], True, False),
+            (MCPAuth.none, ["API-Key"], True, False),
+            (MCPAuth.none, ["Authorization"], False, False),
+            (MCPAuth.none, ["x-api-key", "authorization"], False, False),
+            (MCPAuth.oauth_delegate, None, False, False),
+            (MCPAuth.true_passthrough, None, False, False),
+            (MCPAuth.oauth2_token_exchange, None, False, False),
+        ],
+    )
+    def test_forwarded_api_key_header_keeps_caller_authorization_but_not_gateway_discovery(
+        self, auth_type, extra_headers, keeps_authorization, advertises_gateway
+    ):
+        """A forwarded API-key header is the upstream's own credential and leaves the caller's top-level
+        ``Authorization`` with the gateway, while still ruling out the gateway's aggregate OAuth discovery."""
+        server = MCPServer(
+            server_id="s",
+            name="s",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            url="http://s.example",
+            extra_headers=extra_headers,
+        )
+        assert server.keeps_caller_authorization is keeps_authorization
+        assert server.advertises_gateway_authorization_server is advertises_gateway
+
     @pytest.mark.asyncio
     async def test_register_openapi_tools_includes_static_headers(self, tmp_path):
         """Ensure OpenAPI-to-MCP tool calls include server.static_headers (Issue #19341)."""
