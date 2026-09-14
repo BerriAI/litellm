@@ -11894,7 +11894,10 @@ async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth
 
 
 async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth) -> None:
-    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)  # pyright: ignore[reportPrivateUsage]  # same release idiom the HTTP disconnect path uses
+    release_like_http_disconnect: Final = (
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect  # pyright: ignore[reportPrivateUsage]  # shared
+    )
+    await release_like_http_disconnect(user_api_key_dict)
 
 
 async def _reject_realtime_session(
@@ -12053,12 +12056,14 @@ async def realtime_websocket_endpoint(
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
     finally:
         from litellm.litellm_core_utils.realtime_streaming import (
+            REALTIME_SESSION_FAILURE_LOGGED_KEY,
             REALTIME_SESSION_SUCCESS_LOGGED_KEY,
         )
 
         if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
             await _release_realtime_budget_reservation(user_api_key_dict)
-            await _release_realtime_max_parallel_slot(user_api_key_dict)
+            if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):
+                await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 ######################################################################

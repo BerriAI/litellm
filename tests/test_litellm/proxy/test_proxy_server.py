@@ -9913,6 +9913,7 @@ async def _lit6973_drive_realtime_session(
     reservation: dict,
     *,
     backend_logged_success: bool,
+    backend_logged_failure: bool = False,
     phase_one_exit: str | None = None,
     websocket: MagicMock | None = None,
 ) -> MagicMock:
@@ -9932,7 +9933,10 @@ async def _lit6973_drive_realtime_session(
     logging object carries a real model_call_details dict so the stamp is
     observable, and the reservation has empty entries so the real release touches
     no counter store."""
-    from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+    from litellm.litellm_core_utils.realtime_streaming import (
+        REALTIME_SESSION_FAILURE_LOGGED_KEY,
+        REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    )
     from litellm.proxy import proxy_server as ps
 
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")
@@ -9944,6 +9948,8 @@ async def _lit6973_drive_realtime_session(
     async def fake_llm_call() -> None:
         if backend_logged_success:
             logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+        if backend_logged_failure:
+            logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
     from litellm.proxy._types import ProxyException
 
@@ -10082,6 +10088,7 @@ _LIT6463_COUNTER_KEY: Final = "{api_key:hashed-token}:max_parallel_requests"
 async def _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
     *,
     backend_logged_success: bool,
+    backend_logged_failure: bool = False,
     phase_one_exit: str | None = None,
 ) -> tuple[DualCache, RequestRateLimiterStash]:
     """Run the realtime endpoint with a real v3 limiter registered and the request's
@@ -10107,13 +10114,20 @@ async def _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
 
     stash_token: Final = _request_stash.set(stash)
     try:
-        hooks: Final = patch.dict(ps.proxy_logging_obj.proxy_hook_mapping, {"parallel_request_limiter": limiter})  # test-quality-ok: registers a real limiter on the module-global hook map the route reads; assertion observes its counter
+        hooks: Final = patch.dict(  # test-quality-ok: registers the real limiter the route's release reads
+            ps.proxy_logging_obj.proxy_hook_mapping, {"parallel_request_limiter": limiter}
+        )
         expected_exit: Final = (
-            pytest.raises(asyncio.CancelledError) if phase_one_exit == "pre_call_cancelled" else contextlib.nullcontext()
+            pytest.raises(asyncio.CancelledError)
+            if phase_one_exit == "pre_call_cancelled"
+            else contextlib.nullcontext()
         )
         with hooks, expected_exit:
             await _lit6973_drive_realtime_session(
-                reservation, backend_logged_success=backend_logged_success, phase_one_exit=phase_one_exit
+                reservation,
+                backend_logged_success=backend_logged_success,
+                backend_logged_failure=backend_logged_failure,
+                phase_one_exit=phase_one_exit,
             )
     finally:
         _request_stash.reset(stash_token)
@@ -10149,6 +10163,24 @@ async def test_successful_realtime_session_leaves_the_max_parallel_slot_for_the_
     present the route leaves the slot and the stash alone."""
     dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
         backend_logged_success=True
+    )
+
+    assert await dual_cache.async_get_cache(key=_LIT6463_COUNTER_KEY, local_only=True) == {
+        "slot-1": 1.0,
+        "slot-2": 2.0,
+    }
+    assert stash.parallel_slot == {"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]}
+
+
+@pytest.mark.asyncio
+async def test_refused_realtime_session_leaves_the_max_parallel_slot_for_the_limiter_failure_callback():
+    """An upstream refusal before any frame enqueues the failure callback instead, and
+    the limiter's failure handler releases the slot from the logging worker just like
+    the success handler does. The route sees no success stamp, so it still settles the
+    budget reservation, but it must leave the slot to that callback or the two releases
+    race on the same acquisition."""
+    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+        backend_logged_success=False, backend_logged_failure=True
     )
 
     assert await dual_cache.async_get_cache(key=_LIT6463_COUNTER_KEY, local_only=True) == {
