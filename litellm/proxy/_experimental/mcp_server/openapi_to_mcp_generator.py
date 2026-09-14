@@ -175,7 +175,7 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-<def _is_yaml_content(filepath: str, content_type: str | None = None) -> bool:
+def _is_yaml_content(filepath: str, content_type: str | None = None) -> bool:
     """Determine if the content should be parsed as YAML."""
     # Check file extension
     lower = filepath.lower()
