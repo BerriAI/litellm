@@ -13,6 +13,7 @@ test("project creation and explicit detachment preserve saved scope and restore 
   const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
   const headers = { Authorization: `Bearer ${master}` };
   const prefix = `integration-browser-${randomUUID()}`;
+  // rebind-ok: Register cleanup after each acquisition so partial setup always unwinds in reverse order.
   const resources: Array<() => Promise<void>> = [];
   const post = async (url: string, data: object) => {
     const response = await request.post(url, { headers, data });
@@ -216,14 +217,18 @@ test("project creation and explicit detachment preserve saved scope and restore 
     await post("/key/delete", { keys: [key] });
     expect(saved(key)).toEqual([]);
   } finally {
-    const failures = [];
-    for (const cleanup of resources.reverse()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
-      }
-    }
+    const failures = await resources.reduceRight<Promise<readonly unknown[]>>(
+      async (previous, cleanup) => {
+        const errors = await previous;
+        try {
+          await cleanup();
+          return errors;
+        } catch (error) {
+          return [...errors, error];
+        }
+      },
+      Promise.resolve([]),
+    );
     expect(failures).toEqual([]);
   }
 });

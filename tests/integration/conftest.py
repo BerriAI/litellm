@@ -33,6 +33,7 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     order_seed: Final = config.getoption("integration_order_seed")
     if order_seed:
+        # rebind-ok: pytest requires this hook to reorder its shared collection list in place.
         items.sort(key=lambda item: hashlib.sha256(f"{order_seed}:{item.nodeid}".encode()).digest())
     manifest: Final = contracts()
     root: Final = Path(__file__).parent

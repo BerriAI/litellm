@@ -51,13 +51,13 @@ def mcp_peer() -> Iterator[McpPeer]:
         assert len(body) <= 65536
         if body:
             observed.put({"body": json.loads(body), "headers": dict(scope["headers"])})
-        pending = True
+        message: Final[Message] = {"type": "http.request", "body": body, "more_body": False}
+        pending: Final = iter((message,))
 
         async def replay() -> Message:
-            nonlocal pending
-            if pending:
-                pending = False
-                return {"type": "http.request", "body": body, "more_body": False}
+            buffered: Final = next(pending, None)
+            if buffered is not None:
+                return buffered
             return await receive()
 
         await app(scope, replay, send)
