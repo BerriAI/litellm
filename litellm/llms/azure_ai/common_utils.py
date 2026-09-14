@@ -148,6 +148,10 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
     def get_api_version(api_version: str | None = None) -> str | None:
         return api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
+    @property
+    def api_version(self) -> str | None:
+        return AzureFoundryModelInfo.get_api_version()
+
     def get_token_counter(self) -> BaseTokenCounter | None:
         """
         Factory method to create a token counter for Azure AI.
