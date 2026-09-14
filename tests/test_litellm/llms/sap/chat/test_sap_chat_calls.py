@@ -1,3 +1,4 @@
+import json
 import httpx
 from unittest.mock import patch, PropertyMock
 
@@ -267,7 +268,7 @@ def test_validate_chunk_without_usage_keeps_none():
     assert chunk.usage is None
 
 
-def test_validated_usage_survives_nested_model_dump():
+def test_validated_usage_survives_nested_model_dump_json():
     from litellm.llms.sap.chat.handler import _StreamParser
     from litellm.types.utils import ModelResponseStream
 
@@ -276,7 +277,7 @@ def test_validated_usage_survives_nested_model_dump():
     model_response = ModelResponseStream()
     setattr(model_response, "usage", chunk.usage)
 
-    dumped = model_response.model_dump()
+    dumped = json.loads(model_response.model_dump_json())
     assert dumped["usage"]["total_tokens"] == 62528
 
 
