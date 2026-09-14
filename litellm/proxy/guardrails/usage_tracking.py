@@ -365,8 +365,17 @@ async def process_spend_logs_guardrail_usage(
             continue
         date_key = _date_str(start_time)
 
-        for entry in _parse_guardrail_info_from_payload(payload):
-            guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
+        entries = _parse_guardrail_info_from_payload(payload)
+        ids_by_name = MappingProxyType(
+            {
+                e["guardrail_name"]: e["guardrail_id"]
+                for e in entries
+                if e.get("guardrail_id") and e.get("guardrail_name")
+            }
+        )
+        for entry in entries:
+            guardrail_name = entry.get("guardrail_name") or ""
+            guardrail_id = entry.get("guardrail_id") or ids_by_name.get(guardrail_name) or guardrail_name
             if not guardrail_id:
                 continue
             action = guardrail_status_to_action(entry.get("guardrail_status"))
