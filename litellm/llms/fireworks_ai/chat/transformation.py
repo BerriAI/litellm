@@ -272,11 +272,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             )
 
         # Only add tool_choice for models that explicitly support it
-        if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
+        if self._get_model_cost_capability_exact(
+            model=model, capability="supports_tool_choice"
+        ) or supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
 
         # Only add reasoning params for models that support it
-        if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
+        if self._get_model_cost_capability_exact(model=model, capability="supports_reasoning") or supports_reasoning(
+            model=model, custom_llm_provider="fireworks_ai"
+        ):
             supported_params.append("reasoning_effort")
             supported_params.append("reasoning_history")
             supported_params.append("thinking")
@@ -507,7 +511,6 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 m = cast(dict, message)
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
-                m.pop("reasoning_content", None)
 
         return messages
 
@@ -598,6 +601,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if not matches:
             return None
         return max(matches, key=lambda match: len(match[0]))[1]
+
+    def get_model_cost_key(self, model: str) -> str:
+        return f"fireworks_ai/{resolve_fireworks_resource_name(model)}"
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
         supports_function_calling_value: Final = self._get_model_cost_capability(

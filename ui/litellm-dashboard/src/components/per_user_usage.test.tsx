@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import PerUserUsage from "./per_user_usage";
 import * as networking from "./networking";
@@ -92,6 +93,157 @@ describe("PerUserUsage", () => {
 
     // And the details panel survives the switch rather than unmounting.
     expect(screen.getByText("u1")).toBeInTheDocument();
+  });
+
+  describe("server pagination", () => {
+    const TOTAL_USERS = 120;
+
+    const pageOfUsers = (page: number, pageSize: number, total: number): UserRow[] => {
+      const start = (page - 1) * pageSize;
+      const count = Math.max(0, Math.min(pageSize, total - start));
+      return Array.from({ length: count }, (_, index) => userRow(`user-${start + index + 1}`, "curl/8.0", 5));
+    };
+
+    const serveUsers = (total: number) => {
+      mockPerUserAnalyticsCall.mockImplementation(async (_token, page = 1, pageSize = 50) => ({
+        results: pageOfUsers(page, pageSize, total),
+        total_count: total,
+        page,
+        page_size: pageSize,
+        total_pages: Math.ceil(total / pageSize),
+      }));
+    };
+
+    beforeEach(() => {
+      serveUsers(TOTAL_USERS);
+    });
+
+    const lastCall = () => mockPerUserAnalyticsCall.mock.calls[mockPerUserAnalyticsCall.mock.calls.length - 1];
+
+    it("renders every row the server returns and shows the range from total_count", async () => {
+      render(<PerUserUsage {...defaultProps} />);
+
+      expect(await screen.findByText("user-50")).toBeInTheDocument();
+      expect(screen.getByText("user-1")).toBeInTheDocument();
+      expect(screen.getAllByRole("row")).toHaveLength(51);
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 120");
+      expect(screen.getByTestId("pagination-prev")).toBeDisabled();
+      expect(screen.getByTestId("pagination-next")).toBeEnabled();
+    });
+
+    it("refetches the next page when Next is clicked", async () => {
+      const user = userEvent.setup();
+      render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+
+      await user.click(screen.getByTestId("pagination-next"));
+
+      expect(await screen.findByText("user-51")).toBeInTheDocument();
+      expect(lastCall()).toEqual(["test-token", 2, 50, undefined]);
+      expect(screen.queryByText("user-1")).not.toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-100 of 120");
+      expect(screen.getByTestId("pagination-prev")).toBeEnabled();
+    });
+
+    it("disables Next once the response says this is the last page", async () => {
+      const user = userEvent.setup();
+      render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+
+      await user.click(screen.getByTestId("pagination-last"));
+
+      expect(await screen.findByText("user-120")).toBeInTheDocument();
+      expect(lastCall()).toEqual(["test-token", 3, 50, undefined]);
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 101-120 of 120");
+      expect(screen.getByTestId("pagination-next")).toBeDisabled();
+    });
+
+    it("falls back to the last existing page when the data shrinks under the current page", async () => {
+      const user = userEvent.setup();
+      render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+      await user.click(screen.getByTestId("pagination-next"));
+      await screen.findByText("user-51");
+
+      serveUsers(60);
+      await user.click(screen.getByTestId("pagination-next"));
+
+      expect(await screen.findByText("user-60")).toBeInTheDocument();
+      expect(mockPerUserAnalyticsCall.mock.calls.slice(-2)).toEqual([
+        ["test-token", 3, 50, undefined],
+        ["test-token", 2, 50, undefined],
+      ]);
+      expect(screen.getAllByRole("row")).toHaveLength(11);
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-60 of 60");
+      expect(screen.getByTestId("pagination-next")).toBeDisabled();
+    });
+
+    it("goes back to the first page when the data disappears under the current page", async () => {
+      const user = userEvent.setup();
+      render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+      await user.click(screen.getByTestId("pagination-next"));
+      await screen.findByText("user-51");
+
+      serveUsers(0);
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => {
+        expect(lastCall()).toEqual(["test-token", 1, 50, undefined]);
+      });
+      expect(mockPerUserAnalyticsCall.mock.calls.slice(-2)).toEqual([
+        ["test-token", 3, 50, undefined],
+        ["test-token", 1, 50, undefined],
+      ]);
+      expect(screen.getByText("No per-user usage data")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("No results");
+      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-first")).toBeDisabled();
+      expect(screen.getByTestId("pagination-prev")).toBeDisabled();
+    });
+
+    it("refetches with the selected page size and goes back to the first page", async () => {
+      const user = userEvent.setup();
+      render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+      await user.click(screen.getByTestId("pagination-next"));
+      await screen.findByText("user-51");
+
+      await user.click(screen.getByTestId("pagination-page-size"));
+      await user.click(await screen.findByRole("option", { name: "100" }));
+
+      expect(await screen.findByText("user-100")).toBeInTheDocument();
+      expect(lastCall()).toEqual(["test-token", 1, 100, undefined]);
+      expect(screen.getAllByRole("row")).toHaveLength(101);
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-100 of 120");
+    });
+
+    it("goes back to the first page when the tag filter changes", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(<PerUserUsage {...defaultProps} />);
+      await screen.findByText("user-1");
+      await user.click(screen.getByTestId("pagination-next"));
+      await screen.findByText("user-51");
+      const callsBeforeTagChange = mockPerUserAnalyticsCall.mock.calls.length;
+
+      rerender(<PerUserUsage {...defaultProps} selectedTags={["curl/8.0"]} />);
+
+      await waitFor(() => {
+        expect(lastCall()).toEqual(["test-token", 1, 50, ["curl/8.0"]]);
+      });
+      expect(mockPerUserAnalyticsCall.mock.calls.slice(callsBeforeTagChange)).toEqual([
+        ["test-token", 1, 50, ["curl/8.0"]],
+      ]);
+      expect(await screen.findByText("user-1")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 120");
+    });
+
+    it("does not request anything without an access token", () => {
+      render(<PerUserUsage {...defaultProps} accessToken={null} />);
+
+      expect(mockPerUserAnalyticsCall).not.toHaveBeenCalled();
+      expect(screen.getByText("No per-user usage data")).toBeInTheDocument();
+    });
   });
 
   it("renders the usage distribution as a stacked bar chart with the explicit palette and users formatter", async () => {

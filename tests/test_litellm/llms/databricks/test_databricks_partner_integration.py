@@ -657,6 +657,77 @@ class TestEndpointURLConstruction:
 
         assert api_base.endswith("/chat/completions")
 
+    def test_chat_gateway_endpoint_for_unity_model_on_legacy_base(self, monkeypatch):
+        from litellm.llms.databricks.chat.transformation import DatabricksConfig
+
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+
+        url = DatabricksConfig().get_complete_url(
+            api_base="https://test.net/serving-endpoints",
+            api_key="test-key",
+            model="system.ai.kimi-k3",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://test.net/ai-gateway/mlflow/v1/chat/completions"
+
+    def test_chat_gateway_endpoint_preserves_explicit_gateway_base(self, monkeypatch):
+        from litellm.llms.databricks.chat.transformation import DatabricksConfig
+
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+
+        url = DatabricksConfig().get_complete_url(
+            api_base="https://test.net/ai-gateway/mlflow/v1/",
+            api_key="test-key",
+            model="system.ai.kimi-k3",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://test.net/ai-gateway/mlflow/v1/chat/completions"
+
+    def test_chat_gateway_preserves_unity_model_service_name_with_explicit_base(self, monkeypatch):
+        from litellm.llms.databricks.chat.transformation import DatabricksConfig
+
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+        config = DatabricksConfig()
+        request = config.transform_request(
+            model="catalog.schema.kimi-k3",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert config.get_complete_url(
+            api_base="https://test.net/ai-gateway/mlflow/v1",
+            api_key="test-key",
+            model="catalog.schema.kimi-k3",
+            optional_params={},
+            litellm_params={},
+        ) == "https://test.net/ai-gateway/mlflow/v1/chat/completions"
+        assert request["model"] == "catalog.schema.kimi-k3"
+
+    def test_chat_legacy_endpoint_remains_default(self, monkeypatch):
+        from litellm.llms.databricks.chat.transformation import DatabricksConfig
+
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+
+        url = DatabricksConfig().get_complete_url(
+            api_base="https://test.net/serving-endpoints",
+            api_key="test-key",
+            model="databricks-kimi-k3",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == "https://test.net/serving-endpoints/chat/completions"
+
     def test_embeddings_endpoint(self, monkeypatch):
         """Embeddings endpoint is correctly appended."""
         monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)

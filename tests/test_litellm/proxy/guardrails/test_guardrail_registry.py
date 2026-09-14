@@ -155,29 +155,103 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
         registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
 
 
-def test_update_in_memory_guardrail():
-    handler = InMemoryGuardrailHandler()
-    handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
-        guardrail_name="test-guardrail",
-        default_on=False,
-        event_hook=GuardrailEventHooks.pre_call,
-    )
+def _register_mode_following_initializer(guardrail_type: str):
+    """Registers like the shipped initializers do: construct, then add the instance to litellm's callbacks."""
+    import litellm
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
 
-    handler.update_in_memory_guardrail(
-        "123",
-        Guardrail(
-            guardrail_name="test-guardrail",
-            litellm_params=LitellmParams(guardrail="test-guardrail", mode="pre_call", default_on=True),
-        ),
-    )
-
-    assert (
-        handler.guardrail_id_to_custom_guardrail["123"].should_run_guardrail(
-            data={}, event_type=GuardrailEventHooks.pre_call
+    def _initializer(litellm_params, guardrail):
+        callback = CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+            event_hook=GuardrailEventHooks(litellm_params.mode),
+            default_on=True,
         )
-        is True
+        litellm.logging_callback_manager.add_litellm_callback(callback)
+        return callback
+
+    registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+    return registry_module
+
+
+def _mode_following_db_row(guardrail_id: str, mode: str, description: str = "") -> Guardrail:
+    """The raw row GuardrailRegistry.update_guardrail_in_db hands back: litellm_params is a plain dict."""
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name="mode-following",
+        litellm_params={"guardrail": "mode_following_test", "mode": mode, "default_on": True},
+        guardrail_info={"description": description},
     )
-    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
+
+
+def _live_instances_named(name: str) -> int:
+    return sum(1 for cb_list in _all_callback_lists() for cb in cb_list if getattr(cb, "guardrail_name", None) == name)
+
+
+def test_update_in_memory_guardrail_raw_db_row_mode_change_gates_at_the_new_stage():
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+
+        handler.update_in_memory_guardrail("123", _mode_following_db_row("123", "post_call"))
+
+        replacement = handler.guardrail_id_to_custom_guardrail["123"]
+        assert replacement is not original
+        assert replacement.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+        assert replacement.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+        assert all(original not in cb_list for cb_list in lists)
+        assert _live_instances_named("mode-following") == 1
+        assert handler.IN_MEMORY_GUARDRAILS["123"]["litellm_params"].mode == "post_call"
+        assert handler.get_source("123") == "db"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_update_in_memory_guardrail_unchanged_params_keep_the_live_instance():
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call", "old"), source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+
+        handler.update_in_memory_guardrail("123", _mode_following_db_row("123", "pre_call", "new"))
+
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert handler.IN_MEMORY_GUARDRAILS["123"]["guardrail_info"] == {"description": "new"}
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_update_in_memory_guardrail_invalid_row_keeps_the_previous_instance_enforcing():
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
+
+        with pytest.raises(ValueError, match="not in the supported event hooks"):
+            handler.update_in_memory_guardrail("123", _mode_following_db_row("123", "during_call"))
+
+        restored = handler.guardrail_id_to_custom_guardrail["123"]
+        assert restored.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+        assert handler.IN_MEMORY_GUARDRAILS["123"]["litellm_params"].mode == "pre_call"
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
 
 
 def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:
@@ -557,7 +631,7 @@ def test_presidio_siblings_are_tracked_and_deleted_together():
             cb_list[:] = snapshot
 
 
-def test_update_in_memory_guardrail_reaches_presidio_siblings_and_keeps_their_stage():
+def test_update_in_memory_guardrail_rebuilds_presidio_siblings_and_keeps_their_stage():
     import litellm
 
     handler = InMemoryGuardrailHandler()
@@ -591,11 +665,15 @@ def test_update_in_memory_guardrail_reaches_presidio_siblings_and_keeps_their_st
         )
         handler.update_in_memory_guardrail(guardrail_id=PRESIDIO_SIBLINGS_GID, guardrail=updated)
 
-        assert [callback.pii_entities_config for callback in tracked] == [{"EMAIL_ADDRESS": "MASK"}] * 3
+        rebuilt = _presidio_callbacks_in(litellm.callbacks)
+        assert len(rebuilt) == 3
+        assert [callback.pii_entities_config for callback in rebuilt] == [{"EMAIL_ADDRESS": "MASK"}] * 3
         assert [
-            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in tracked
+            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in rebuilt
         ] == roles_before
-        assert _presidio_callbacks_in(litellm.callbacks) == tracked
+        assert not any(previous in rebuilt for previous in tracked)
+        assert handler.guardrail_id_to_custom_guardrail[PRESIDIO_SIBLINGS_GID] is rebuilt[0]
+        assert handler.guardrail_id_to_sibling_callbacks[PRESIDIO_SIBLINGS_GID] == tuple(rebuilt[1:])
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot

@@ -11,6 +11,8 @@ body, so a single long-lived proxy serves every reliability behavior.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pydantic import ValidationError
 
 from proxy_client import ProxyClient
@@ -49,6 +51,13 @@ def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> str:
+    return proxy.create_model(
+        name,
+        LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, api_base="http://127.0.0.1:9/v1", cooldown_time=0),
+    )
+
+
 def create_timeout_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment with a 1ms deadline the real backend always exceeds."""
     return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001))
@@ -73,10 +82,25 @@ def create_always_timing_out_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str) -> str:
+    """The always-picked half of a retry pair on the smallest-context model OpenAI
+    still serves: it holds all of the model group's shuffle weight, so an oversized
+    prompt opens on it and earns a real context-window refusal, which never benches
+    a deployment, so only the retry itself can steer the request off it."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(model=SMALL_CONTEXT_MODEL, api_key=REAL_KEY, weight=1),
+            model_info=ModelInfoBody(),
+        )
+    )
+
+
 def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     """The other half of a retry pair: healthy, but weight 0, so the weighted shuffle
-    never opens on it. It is reachable only once its sibling is benched and the
-    weighted pick falls through to a uniform one over what is left."""
+    never opens on it. It is reachable only once its sibling is out of the running,
+    benched by a cooldown or skipped by the retry, and the weighted pick falls through
+    to a uniform one over what is left."""
     return proxy.register_model(
         ModelNewBody(
             model_name=name,
@@ -94,6 +118,7 @@ def chat_override(
     override: RouterSettingsOverride | None = None,
     stream: bool = False,
     cache: dict[str, bool] | None = {"no-cache": True},
+    history: Sequence[ChatMessage] = (),
 ) -> StreamingResponse:
     """POST /chat/completions with an optional per-request router_settings_override,
     returning the raw outcome so tests read status, body, and reliability headers."""
@@ -102,7 +127,7 @@ def chat_override(
         headers=proxy.transport.bearer(key),
         json=ReliabilityChatBody(
             model=model,
-            messages=[ChatMessage(role="user", content=content)],
+            messages=[*history, ChatMessage(role="user", content=content)],
             max_tokens=512,
             stream=stream,
             router_settings_override=override,
