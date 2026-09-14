@@ -8,10 +8,15 @@ from fastapi.testclient import TestClient
 
 
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import MagicMock
 
 import litellm
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    IndexCreateLiteLLMParams,
+    LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
+)
 from litellm.vector_stores.main import search
 from litellm.vector_stores.vector_store_registry import (
     VectorStoreIndexRegistry,
@@ -188,35 +193,38 @@ def test_search_uses_registry_credentials():
 
 
 class TestRegistriesDoNotShareDefaultState:
-    """#38874: a mutable default argument made every default-constructed registry share
-    one list, so upserting into one polluted every other instance and the class default."""
+    """#38874: default-constructed registries must not share one list."""
 
     def test_vector_store_registries_do_not_share_a_list(self):
-        first = VectorStoreRegistry()
-        second = VectorStoreRegistry()
+        first: Final = VectorStoreRegistry()
+        second: Final = VectorStoreRegistry()
         assert first.vector_stores is not second.vector_stores
 
     def test_index_registries_do_not_share_a_list(self):
-        first = VectorStoreIndexRegistry()
-        second = VectorStoreIndexRegistry()
+        first: Final = VectorStoreIndexRegistry()
+        second: Final = VectorStoreIndexRegistry()
         assert first.vector_store_indexes is not second.vector_store_indexes
 
-    def test_mutating_one_registry_leaves_the_next_one_empty(self):
-        first = VectorStoreRegistry()
-        first.vector_stores.append(
+    def test_adding_to_one_registry_leaves_the_next_one_empty(self):
+        VectorStoreRegistry().add_vector_store_to_registry(
             LiteLLM_ManagedVectorStore(vector_store_id="vs-leak", custom_llm_provider="bedrock")
         )
         assert VectorStoreRegistry().vector_stores == []
 
-    def test_mutating_one_index_registry_leaves_the_next_one_empty(self):
-        first = VectorStoreIndexRegistry()
-        first.vector_store_indexes.append({"index_name": "leak"})
+    def test_upserting_into_one_index_registry_leaves_the_next_one_empty(self):
+        VectorStoreIndexRegistry().upsert_vector_store_index(
+            LiteLLM_ManagedVectorStoreIndex(
+                id="idx-leak",
+                index_name="leak",
+                litellm_params=IndexCreateLiteLLMParams(vector_store_index="vs-leak", vector_store_name="leak"),
+            )
+        )
         assert VectorStoreIndexRegistry().get_vector_store_indexes() == []
 
     def test_a_supplied_list_is_still_used_as_given(self):
-        supplied = [LiteLLM_ManagedVectorStore(vector_store_id="vs-1", custom_llm_provider="bedrock")]
+        supplied: Final = [LiteLLM_ManagedVectorStore(vector_store_id="vs-1", custom_llm_provider="bedrock")]
         assert VectorStoreRegistry(vector_stores=supplied).vector_stores is supplied
 
     def test_a_supplied_empty_list_is_still_used_as_given(self):
-        supplied: list = []
+        supplied: Final[list[LiteLLM_ManagedVectorStore]] = []
         assert VectorStoreRegistry(vector_stores=supplied).vector_stores is supplied
