@@ -3194,27 +3194,17 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    callback_model_call_details: Final[dict] = (  # mutable-ok: logger hook payload
-                        self.model_call_details
-                    )
-                    ##################################
-                    # call redaction hook for custom logger
-                    standard_redacted_model_call_details: Final[dict] = (  # mutable-ok: callback payload API
-                        callback.redact_standard_logging_payload_from_model_call_details(
-                            model_call_details=callback_model_call_details
+                    redacted_model_call_details: Final[dict] = (  # pyright: ignore[reportGeneralTypeIssues]  # loop-local callback payload
+                        redact_model_call_details_for_custom_logger(
+                            model_call_details=redact_streaming_responses_for_custom_logger(
+                                model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                    model_call_details=self.model_call_details
+                                ),
+                                custom_logger=callback,
+                            ),
+                            custom_logger=callback,
                         )
                     )
-                    streaming_redacted_model_call_details: Final[dict] = (  # mutable-ok: logger hook payload
-                        redact_streaming_responses_for_custom_logger(  # mutable-ok: callback payload API
-                            model_call_details=standard_redacted_model_call_details, custom_logger=callback
-                        )
-                    )
-                    redacted_model_call_details: Final[dict] = (  # mutable-ok: logger hook payload
-                        redact_model_call_details_for_custom_logger(  # mutable-ok: callback payload API
-                            model_call_details=streaming_redacted_model_call_details, custom_logger=callback
-                        )
-                    )
-                    ##################################
                     if self.stream is True:
                         if "async_complete_streaming_response" in redacted_model_call_details:
                             await callback.async_log_success_event(
@@ -4392,10 +4382,10 @@ def _construct_custom_logger_compatible_class(
             return _prometheus_logger
         elif logging_integration == "datadog":
             # Check if team-scoped credentials are provided
-            _dd_api_key: Final = resolved_custom_logger_init_args.get("dd_api_key")
-            _dd_site: Final = resolved_custom_logger_init_args.get("dd_site")
-            _dd_agent_host: Final = resolved_custom_logger_init_args.get("dd_agent_host")
-            _dd_agent_port: Final = resolved_custom_logger_init_args.get("dd_agent_port")
+            _dd_api_key: Final = custom_logger_init_args.get("dd_api_key")
+            _dd_site: Final = custom_logger_init_args.get("dd_site")
+            _dd_agent_host: Final = custom_logger_init_args.get("dd_agent_host")
+            _dd_agent_port: Final = custom_logger_init_args.get("dd_agent_port")
 
             if _dd_api_key or _dd_site or _dd_agent_host:
                 # Team-scoped credentials: use DynamicLoggingCache for per-credential isolation
@@ -4404,7 +4394,7 @@ def _construct_custom_logger_compatible_class(
                 )
 
                 return DataDogHandler.get_datadog_logger_for_request(
-                    standard_callback_dynamic_params=resolved_custom_logger_init_args,
+                    standard_callback_dynamic_params=custom_logger_init_args,
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
 
@@ -4797,7 +4787,7 @@ def _construct_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
                     return callback
-            pagerduty_logger: Final = _PAGERDUTY_ALERTING_FACTORY(**resolved_custom_logger_init_args)
+            pagerduty_logger: Final = _PAGERDUTY_ALERTING_FACTORY(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger
         elif logging_integration == "anthropic_cache_control_hook":
@@ -4904,7 +4894,7 @@ def _construct_custom_logger_compatible_class(
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger
         elif logging_integration == "newrelic":
-            if resolved_custom_logger_init_args.get("newrelic_api_key"):
+            if custom_logger_init_args.get("newrelic_api_key"):
                 # Team-scoped credentials: per-team METRICS logger, isolated per
                 # credential set via DynamicLoggingCache. The trace logger for
                 # this name stays on the global path below.
@@ -4913,7 +4903,7 @@ def _construct_custom_logger_compatible_class(
                 )
 
                 return NewRelicHandler.get_newrelic_logger_for_request(
-                    standard_callback_dynamic_params=resolved_custom_logger_init_args,
+                    standard_callback_dynamic_params=custom_logger_init_args,
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
 
