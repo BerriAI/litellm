@@ -64,7 +64,7 @@ if TYPE_CHECKING:
     from litellm.repositories.prisma_protocols import TableActions
 
 _AUDIT_LOG_CONCURRENCY: Final = 10
-_USER_BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
+_BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
 
 
 class _ErrorDetail(TypedDict):
@@ -289,7 +289,7 @@ async def bulk_remove_team_members(
     duplicates: Final = _duplicate_member_indexes(data.members)
     kept_indexes: Final = tuple(i for i in range(len(data.members)) if i not in duplicates)
     members: Final = tuple(data.members[i] for i in kept_indexes)
-    async with prisma_client.tx() as tx:
+    async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
         removal: Final = await _remove_members_from_team(prisma_client, tx, data.team_id, members, user_api_key_dict)
     await delete_cache_key_objects(
         hashed_tokens=removal.deleted_key_tokens,
@@ -384,7 +384,7 @@ async def _delete_users_tx(
     """Rewrites every team the users belong to and deletes their rows in one transaction, so a
     failure anywhere rolls back the whole batch. Teams a user still names but which no longer exist
     are skipped; the user row goes away regardless."""
-    async with prisma_client.tx(timeout=_USER_BATCH_TX_TIMEOUT) as tx:
+    async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
         team_rows: Final = await _team_tx_db(tx).find_many(
             where=_in_filter("team_id", frozenset(t for teams in teams_of.values() for t in teams))
         )
@@ -395,11 +395,7 @@ async def _delete_users_tx(
                     prisma_client,
                     tx,
                     tid,
-                    tuple(
-                        MemberDeleteRequest(user_id=u.user_id, user_email=u.user_email)
-                        for u in users
-                        if tid in teams_of[u.user_id]
-                    ),
+                    tuple(MemberDeleteRequest(user_id=u.user_id) for u in users if tid in teams_of[u.user_id]),
                     user_api_key_dict,
                 )
                 for tid in team_ids
