@@ -273,6 +273,18 @@ class TestRenderModelDeprecationEmail:
         )
         assert subject == "[LiteLLM] 1 model(s) deprecating for team Data Team"
 
+    def test_should_collapse_newlines_in_the_team_id_fallback(self):
+        notification: Final = TeamNotification(
+            team_id="t\r\n1",
+            team_alias=None,
+            recipients=("a@example.com",),
+            models=(AffectedModel(info=_info("gpt-old", 5), display_name="gpt-old", milestone=7),),
+        )
+        subject, _ = render_model_deprecation_email(
+            notification, email_logo_url="https://logo", email_support_contact="h@x.io"
+        )
+        assert subject.endswith("for team t 1")
+
 
 def _prisma_with_users(rows: Sequence[Mapping[str, object]]) -> SimpleNamespace:
     async def find_many(where=None, take=None, skip=None, order=None):
@@ -490,7 +502,7 @@ class TestSendModelDeprecationEmails:
 
         assert await send_model_deprecation_emails(ctx) == 0
         assert deliverer.sent == []
-        assert len(lock.calls) == 1
+        assert lock.calls == []
         assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
 
     @pytest.mark.parametrize(
@@ -518,15 +530,10 @@ class TestSendModelDeprecationEmails:
         assert (stamped is not None) is (expected_sent == 1)
 
     @pytest.mark.asyncio
-    async def test_should_not_load_teams_or_stamp_when_the_lock_is_lost(self):
+    async def test_should_not_send_or_stamp_when_the_lock_is_lost(self):
         cache: Final = DualCache()
         deliverer: Final = _Deliverer()
-
-        async def explode(where=None, take=None, skip=None, order=None):
-            raise AssertionError("teams must not be loaded without the lock")
-
-        prisma: Final = _prisma((), ())
-        prisma.db.litellm_teamtable.find_many = explode
+        prisma: Final = _prisma(TWO_TEAMS[:1], TWO_ADMINS)
 
         assert (
             await send_model_deprecation_emails(
@@ -535,6 +542,23 @@ class TestSendModelDeprecationEmails:
             == 0
         )
         assert deliverer.sent == []
+        assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is None
+
+    @pytest.mark.asyncio
+    async def test_should_raise_before_claiming_the_lock_when_loading_teams_fails(self):
+        cache: Final = DualCache()
+        lock: Final = _Lock(True)
+
+        async def explode(where=None, take=None, skip=None, order=None):
+            raise RuntimeError("db down")
+
+        prisma: Final = _prisma((), ())
+        prisma.db.litellm_teamtable.find_many = explode
+
+        with pytest.raises(RuntimeError, match="db down"):
+            await send_model_deprecation_emails(_context(_router([DEAD_DEPLOYMENT]), prisma, _Deliverer(), cache, lock))
+
+        assert lock.calls == []
         assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is None
 
     @pytest.mark.asyncio
@@ -630,3 +654,30 @@ class TestMakeEmailDeliverer:
 
         with pytest.raises(ValueError, match="SMTP_SENDER_EMAIL"):
             await deliver(("a@x.io",), "subj", "<p>hi</p>")
+
+    @pytest.mark.asyncio
+    async def test_should_skip_the_no_op_enterprise_base_logger(self):
+        base_email: Final = pytest.importorskip("litellm_enterprise.enterprise_callbacks.send_emails.base_email")
+        calls: Final = []
+
+        async def smtp_send(*, receiver_email, subject, html):
+            calls.append(receiver_email)
+
+        deliver: Final = make_email_deliverer(base_email.BaseEmailLogger(), smtp_send=smtp_send)
+
+        await deliver(("a@x.io",), "subj", "<p>hi</p>")
+        assert calls == ["a@x.io"]
+
+    @pytest.mark.asyncio
+    async def test_should_use_a_configured_enterprise_logger_subclass(self):
+        base_email: Final = pytest.importorskip("litellm_enterprise.enterprise_callbacks.send_emails.base_email")
+        calls: Final = []
+
+        class ConfiguredLogger(base_email.BaseEmailLogger):
+            async def send_email(self, from_email, to_email, subject, html_body):
+                calls.append((from_email, tuple(to_email)))
+
+        deliver: Final = make_email_deliverer(ConfiguredLogger())
+
+        await deliver(("a@x.io",), "subj", "<p>hi</p>")
+        assert calls == [(base_email.BaseEmailLogger.DEFAULT_LITELLM_EMAIL, ("a@x.io",))]

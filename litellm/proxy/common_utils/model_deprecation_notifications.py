@@ -258,7 +258,7 @@ def render_model_deprecation_email(
 ) -> tuple[str, str]:
     """(subject, html) for one team's digest, every model-sourced string escaped"""
     alias: Final = " ".join((notification.team_alias or "").split())
-    team_name: Final = alias or notification.team_id
+    team_name: Final = alias or " ".join(notification.team_id.split())
     verb: Final = (
         "deprecated" if any(model.info.days_until_deprecation < 0 for model in notification.models) else "deprecating"
     )
@@ -272,11 +272,20 @@ def render_model_deprecation_email(
     return subject, body + EMAIL_FOOTER
 
 
+def _is_noop_email_logger(email_logger: object) -> bool:
+    """The proxy hands out the bare enterprise base logger when no email provider is configured"""
+    try:
+        from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
+    except ImportError:
+        return False
+    return type(email_logger) is BaseEmailLogger
+
+
 def make_email_deliverer(
     email_logger: EmailSender | None, smtp_send: SmtpSend | None = None
 ) -> Callable[[Sequence[str], str, str], Awaitable[None]]:
-    """The proxy's configured email provider when there is one, else the OSS SMTP helper per recipient"""
-    if email_logger is not None:
+    """A configured email provider when the proxy has one, else the OSS SMTP helper once per recipient"""
+    if email_logger is not None and not _is_noop_email_logger(email_logger):
 
         async def deliver_via_logger(recipients: Sequence[str], subject: str, html_body: str) -> None:
             await email_logger.send_email(
@@ -348,20 +357,26 @@ async def _send_team_notification(notification: TeamNotification, ctx: Deprecati
 
 
 async def send_model_deprecation_emails(ctx: DeprecationEmailContext) -> int:
-    """One pass: claim the day, resolve affected teams, deliver one digest per team, then stamp the pass
+    """One pass: resolve affected teams, claim the day only when there is something to send, deliver, then stamp
 
-    An empty snapshot returns before the lock or the DB is touched, so a model added later is not
-    silenced for a day, and the stamp is written last, so a lost lock claim costs one poll, not a day
+    An empty snapshot returns before the DB is touched. A lost lock claim (a sibling pod, or a redis blip)
+    returns without a stamp, so it costs one poll rather than a day, and a failing resolution raises
+    before the lock is held, so it cannot silence the other pods
     """
     snapshot: Final = collect_model_deprecations(llm_router=ctx.llm_router)
     infos: Final = (*snapshot.deprecated, *snapshot.imminent, *snapshot.upcoming)
-    if not infos or not await _claimed_email_window(ctx.pod_lock_manager):
+    if not infos:
         return 0
     teams: Final = await _load_teams(ctx.prisma_client)
     affected: Final = await resolve_affected_teams(
         infos, ctx.llm_router, teams, ctx.alerting_args.model_deprecation_email_thresholds
     )
     notifications: Final = await build_team_notifications(affected, teams, ctx.cache, ctx.prisma_client)
+    if not notifications:
+        await _stamp_pass(ctx.cache)
+        return 0
+    if not await _claimed_email_window(ctx.pod_lock_manager):
+        return 0
     results: Final = tuple([await _send_team_notification(notification, ctx) for notification in notifications])
     await _stamp_pass(ctx.cache)
     return sum(results)
