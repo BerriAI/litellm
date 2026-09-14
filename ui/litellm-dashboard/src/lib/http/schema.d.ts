@@ -8470,6 +8470,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/users/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Create Users Route
+         * @description Create up to 500 internal users in one request, optionally adding each one to teams.
+         *
+         *     Every entry in `users` takes the same fields as `/user/new`, with two differences: `auto_create_key`
+         *     defaults to `false` (opt in per user to also get a virtual key back) and `send_invite_email` is not
+         *     supported. Unknown fields are rejected with 422. Rows are validated together (duplicate ids or emails,
+         *     unknown teams, roles the caller may not grant), inserted in one statement, and each referenced team is
+         *     written once for all of its new members.
+         *
+         *     Rows fail independently: a bad row is reported in `data` with `success: false` and an `error`, and the
+         *     other rows still get created. A user that was created but could not be added to one of its teams is
+         *     reported with `success: true`, `teams` listing where they did land, and `error` naming the failed team.
+         *     The whole request is refused with a 403 problem document only if creating the valid rows would exceed
+         *     the license seat limit.
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X POST "http://localhost:4000/management/v1/users/bulk" \
+         *     -H "Content-Type: application/json" \
+         *     -H "Authorization: Bearer sk-1234" \
+         *     -d '{
+         *         "users": [
+         *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
+         *             {"user_email": "b@example.com", "user_role": "internal_user", "auto_create_key": true}
+         *         ]
+         *     }'
+         *     ```
+         *
+         *     Returns `data` (one entry per input row, in order, with `user_id`, `user_email`, `success`, `teams`,
+         *     `key`, `error`) and `meta` with `total_requested`, `created` and `failed`.
+         */
+        post: operations["bulk_create_users_route_management_v1_users_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -16472,53 +16520,6 @@ export interface paths {
         get: operations["available_enterprise_users_user_available_users_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/user/bulk_new": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Bulk New User
-         * @description Create up to 500 internal users in one request, optionally adding each one to teams.
-         *
-         *     Every entry in `users` takes the same fields as `/user/new`, with two differences: `auto_create_key`
-         *     defaults to `false` (opt in per user to also get a virtual key back) and `send_invite_email` is not
-         *     supported. Rows are validated together (duplicate ids or emails, unknown teams, roles the caller may not
-         *     grant), inserted in one statement, and each referenced team is written once for all of its new members.
-         *
-         *     Rows fail independently: a bad row is reported in `results` with `success: false` and an `error`, and the
-         *     other rows still get created. A user that was created but could not be added to one of its teams is
-         *     reported with `success: true`, `teams` listing where they did land, and `error` naming the failed team.
-         *     The whole request is rejected with 403 only if creating the valid rows would exceed the license seat limit.
-         *
-         *     Usage Example
-         *
-         *     ```shell
-         *     curl -X POST "http://localhost:4000/user/bulk_new" \
-         *     -H "Content-Type: application/json" \
-         *     -H "Authorization: Bearer sk-1234" \
-         *     -d '{
-         *         "users": [
-         *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
-         *             {"user_email": "b@example.com", "user_role": "internal_user", "auto_create_key": true}
-         *         ]
-         *     }'
-         *     ```
-         *
-         *     Returns `results` (one entry per input row, in order, with `user_id`, `user_email`, `success`, `teams`,
-         *     `key`, `error`), `total_requested`, `successful_creations` and `failed_creations`.
-         */
-        post: operations["bulk_new_user_user_bulk_new_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24552,7 +24553,8 @@ export interface components {
         };
         /**
          * BulkNewUserItem
-         * @description One row of `/user/bulk_new`: the `/user/new` body, with keys opt-in and invite emails unsupported.
+         * @description One row of `POST /management/v1/users/bulk`: the `/user/new` body, with keys opt-in and invite emails
+         *     unsupported. Unknown fields are rejected, as on every `/management/v1` request body.
          */
         BulkNewUserItem: {
             /** Agent Id */
@@ -24676,21 +24678,28 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** BulkNewUserMeta */
+        BulkNewUserMeta: {
+            /** Created */
+            created: number;
+            /** Failed */
+            failed: number;
+            /** Total Requested */
+            total_requested: number;
+        };
         /** BulkNewUserRequest */
         BulkNewUserRequest: {
             /** Users */
             users: components["schemas"]["BulkNewUserItem"][];
         };
-        /** BulkNewUserResponse */
+        /**
+         * BulkNewUserResponse
+         * @description `data` holds one result per input row, in input order.
+         */
         BulkNewUserResponse: {
-            /** Failed Creations */
-            failed_creations: number;
-            /** Results */
-            results: components["schemas"]["UserCreateResult"][];
-            /** Successful Creations */
-            successful_creations: number;
-            /** Total Requested */
-            total_requested: number;
+            /** Data */
+            data: components["schemas"]["UserCreateResult"][];
+            meta: components["schemas"]["BulkNewUserMeta"];
         };
         /**
          * BulkTeamMemberAddRequest
@@ -39534,7 +39543,8 @@ export interface components {
         };
         /**
          * UserCreateResult
-         * @description Outcome for one row of `/user/bulk_new`. `teams` lists the teams the user was actually added to.
+         * @description Outcome for one row of `POST /management/v1/users/bulk`. `teams` lists the teams the user was actually
+         *     added to.
          */
         UserCreateResult: {
             /** Error */
@@ -51322,6 +51332,39 @@ export interface operations {
             };
         };
     };
+    bulk_create_users_route_management_v1_users_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNewUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkNewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     aggregate_mcp_route_mcp_get: {
         parameters: {
             query?: never;
@@ -60832,39 +60875,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    bulk_new_user_user_bulk_new_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkNewUserRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkNewUserResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

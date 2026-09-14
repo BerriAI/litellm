@@ -1,4 +1,4 @@
-"""Batched internal user creation behind `/user/bulk_new`.
+"""Batched internal user creation behind `POST /management/v1/users/bulk`.
 
 The batch is validated with set queries, user rows land in one `create_many`, and every
 referenced team is written once under its advisory lock instead of once per user.
@@ -33,6 +33,7 @@ from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
+from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same team-admin check /user/new uses
     _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same team-admin check /user/new uses
@@ -61,9 +62,11 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkNewUserItem,
+    BulkNewUserMeta,
     BulkNewUserResponse,
     UserCreateResult,
 )
+from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -776,7 +779,8 @@ async def bulk_create_users(
 ) -> BulkNewUserResponse:
     """Create every valid row in `users`; rows that fail validation or a write are reported, not raised.
 
-    Raises `HTTPException(403)` only when the whole batch would push the deployment over its license seat limit.
+    Raises a 403 `ManagementProblem` only when the whole batch would push the deployment over its license seat
+    limit.
     """
     pending, request_failures = _partition_rows(users, user_api_key_dict)
     existing_ids, existing_emails = await _existing_user_conflicts(prisma_client, pending)
@@ -791,9 +795,13 @@ async def bulk_create_users(
 
     billable_users: Final = await UserRepository(prisma_client).count_billable_users()
     if creatable and license_check.is_over_limit(total_users=billable_users + len(creatable)):
-        raise HTTPException(
-            status_code=403,
-            detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+        raise ManagementProblem(
+            ProblemDetail(
+                type=f"{PROBLEM_TYPE_BASE}license-limit-exceeded",
+                title="License limit exceeded",
+                status=403,
+                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+            )
         )
 
     prepared_outcomes: Final = tuple([await _prepare_user(user, prisma_client) for user in creatable])
@@ -858,8 +866,6 @@ async def bulk_create_users(
     )
     successes: Final = sum(1 for result in results if result.success)
     return BulkNewUserResponse(
-        results=results,
-        total_requested=len(users),
-        successful_creations=successes,
-        failed_creations=len(users) - successes,
+        data=results,
+        meta=BulkNewUserMeta(total_requested=len(users), created=successes, failed=len(users) - successes),
     )

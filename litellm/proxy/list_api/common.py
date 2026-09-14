@@ -1,5 +1,6 @@
 """Contract machinery shared by every LiteLLM-defined list route, on any surface."""
 
+from collections.abc import Sequence
 from typing import Final
 from urllib.parse import urlencode
 
@@ -7,6 +8,7 @@ from fastapi import Request
 from fastapi.dependencies.utils import get_flat_params
 from fastapi.params import ParamTypes
 from fastapi.responses import JSONResponse
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListLinks,
@@ -54,6 +56,31 @@ def _declared_query_params(request: Request) -> frozenset[str]:
 def escape_like(value: str) -> str:
     """Escape LIKE/ILIKE metacharacters. Ids routinely contain `_`, which is a wildcard unescaped."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+class ValidationErrorDetail(TypedDict):
+    """The two keys of a pydantic/FastAPI validation error a problem document needs."""
+
+    loc: ReadOnly[tuple[int | str, ...]]
+    msg: ReadOnly[str]
+
+
+def request_validation_problem(errors: Sequence[ValidationErrorDetail]) -> ProblemDetail:
+    """A body that fails validation (an unknown field included) is 422; a bad query parameter is 400."""
+    detail: Final = "; ".join(f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in errors)
+    if any(error["loc"] and error["loc"][0] == "body" for error in errors):
+        return ProblemDetail(
+            type=f"{PROBLEM_TYPE_BASE}invalid-request-body",
+            title="Invalid request body",
+            status=422,
+            detail=detail or "The request body is invalid.",
+        )
+    return ProblemDetail(
+        type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
+        title="Invalid query parameter",
+        status=400,
+        detail=detail or "The request query parameters are invalid.",
+    )
 
 
 def unknown_query_param_problem(unknown: tuple[str, ...], allowed: tuple[str, ...]) -> ProblemDetail:
