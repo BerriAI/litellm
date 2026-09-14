@@ -8,10 +8,6 @@ class BytePlusChatConfig(OpenAILikeChatConfig):
     Reference: https://docs.byteplus.com/en/docs/ModelArk
     """
 
-    @classmethod
-    def get_config(cls) -> "BytePlusChatConfig":
-        return super().get_config()
-
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: matches BaseConfig interface
         return [  # mutable-ok: matches BaseConfig interface
             "frequency_penalty",

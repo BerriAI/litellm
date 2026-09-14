@@ -106,7 +106,7 @@ def _extract_voice(
         return voice.strip()
     if isinstance(voice, dict):
         for key in ("speaker", "voice", "id", "name"):
-            candidate: Final = voice.get(key)
+            candidate = voice.get(key)
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
     if kwargs:
@@ -311,29 +311,29 @@ class BytePlusTextToSpeechConfig(BaseTextToSpeechConfig):
 
         lines: Final = tuple(raw_response.text.strip().split("\n"))
         for line in lines:
-            line_str: Final = line.strip()
+            line_str = line.strip()
             if not line_str:
                 continue
             try:
-                data: Final = json.loads(line_str)
+                data = json.loads(line_str)
             except (json.JSONDecodeError, ValueError):  # noqa: BLE001  # skip invalid line
                 continue
 
             if not isinstance(data, dict):
                 continue
 
-            code: Final = data.get("code", 0)
+            code = data.get("code", 0)
 
             if code == 0 and data.get("data"):
                 try:
-                    chunk_audio: Final = base64.b64decode(data["data"])
+                    chunk_audio = base64.b64decode(data["data"])
                     audio_bytes.extend(chunk_audio)
                 except (TypeError, ValueError):  # noqa: BLE001  # skip invalid audio chunk
                     pass
             elif code == 20000000:
                 break
             elif code > 0:
-                msg: Final = data.get("message") or f"BytePlus TTS error code {code}"
+                msg = data.get("message") or f"BytePlus TTS error code {code}"
                 raise BytePlusError(
                     status_code=400,
                     message=f"BytePlus TTS API Error: {msg}",

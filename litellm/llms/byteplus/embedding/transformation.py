@@ -21,15 +21,26 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
+def _extract_embedding_data(data_raw: object) -> list[object]:  # mutable-ok: matches list output
+    if isinstance(data_raw, dict):
+        embedding_item: Final[dict[str, object]] = {  # mutable-ok: building embedding response dict
+            "object": data_raw.get("object", "embedding"),
+            "embedding": data_raw.get("embedding", ()),
+            "index": 0,
+        }
+        if "sparse_embedding" in data_raw:
+            embedding_item["sparse_embedding"] = data_raw["sparse_embedding"]
+        return [embedding_item]  # mutable-ok: single item data list
+    if isinstance(data_raw, list):
+        return data_raw  # mutable-ok: raw list
+    return []  # mutable-ok: default empty list
+
+
 class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
     """
     Configuration class for BytePlus embedding models (Text and Multimodal Vision embeddings).
     Reference: https://docs.byteplus.com/en/docs/ModelArk
     """
-
-    @classmethod
-    def get_config(cls) -> BytePlusEmbeddingConfig:
-        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: matches BaseEmbeddingConfig interface
         return [  # mutable-ok: matches BaseEmbeddingConfig interface
@@ -139,20 +150,7 @@ class BytePlusEmbeddingConfig(BaseEmbeddingConfig):
             raise ValueError(f"Failed to parse BytePlus response as JSON: {e}")
 
         data_raw: Final = response_json.get("data", ())
-
-        if isinstance(data_raw, dict):
-            embedding_item: Final[dict[str, object]] = {  # mutable-ok: building embedding response dict
-                "object": data_raw.get("object", "embedding"),
-                "embedding": data_raw.get("embedding", ()),
-                "index": 0,
-            }
-            if "sparse_embedding" in data_raw:
-                embedding_item["sparse_embedding"] = data_raw["sparse_embedding"]
-            data_list: Final = [embedding_item]  # mutable-ok: single item data list
-        elif isinstance(data_raw, list):
-            data_list = data_raw
-        else:
-            data_list = []  # mutable-ok: default empty data list
+        data_list: Final = _extract_embedding_data(data_raw)
 
         transformed_response: Final[dict[str, object]] = {  # mutable-ok: building response dict
             "object": "list",

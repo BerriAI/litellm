@@ -1825,6 +1825,9 @@ if TYPE_CHECKING:
     from .llms.volcengine.responses.transformation import (
         VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig,
     )
+    from .llms.byteplus.responses.transformation import (
+        BytePlusResponsesAPIConfig as BytePlusResponsesAPIConfig,
+    )
     from .llms.manus.responses.transformation import (
         ManusResponsesAPIConfig as ManusResponsesAPIConfig,
     )

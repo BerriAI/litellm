@@ -5,14 +5,14 @@ from typing import Final
 
 import httpx
 
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.volcengine.common_utils import VolcEngineError
 
 
-class BytePlusError(BaseLLMException):
+class BytePlusError(VolcEngineError):
     def __init__(self, status_code: int, message: str, headers: httpx.Headers | None = None) -> None:
-        self.status_code: Final = status_code
-        self.message: Final = message
-        self.headers: Final = headers or httpx.Headers()
+        self.status_code = status_code
+        self.message = message
+        self.headers = headers or httpx.Headers()
         super().__init__(status_code=status_code, message=message, headers=self.headers)
 
 
