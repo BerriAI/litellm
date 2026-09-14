@@ -151,8 +151,6 @@ test("project creation and explicit detachment preserve saved scope and restore 
     const blocked = await chat(prefix);
     expect(blocked.status(), await blocked.text()).toBe(401);
     expect((await blocked.json()).error.type).toBe("auth_error");
-    // The table keeps old rows while its debounced search is pending. Finish
-    // that initial load before opening an editor whose key data comes from it.
     const searched = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return (
