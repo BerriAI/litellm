@@ -446,6 +446,68 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
+async def _proxy_key_allows_fallback_model(
+    litellm_router: LitellmRouter,
+    kwargs: Mapping[str, object],
+    fallback_entry: str | Mapping[str, object],
+) -> bool:
+    """
+    Re-run the proxy's key/team model allowlist for a server-side fallback target.
+
+    Proxy requests carry the authenticated ``UserAPIKeyAuth`` on their metadata
+    (``user_api_key_auth``, set in ``add_user_api_key_auth_to_request_metadata``).
+    The allowlist is enforced at auth time for the request's primary model and
+    for client-supplied fallbacks in the request body, but a router-configured
+    fallback swaps the model after auth already ran -- without this check a key
+    restricted to one model group would be served by any shared deployment the
+    config lists as a fallback for it. Mirrors the budget_fallbacks re-check in
+    ``_check_key_model_budget_with_fallback``. Non-proxy (SDK) callers carry no
+    auth object and are unaffected.
+    """
+    metadata: Final = kwargs.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return True
+    auth: Final = metadata.get("user_api_key_auth")
+    if auth is None:
+        return True
+    model: Final = _get_fallback_target_model_group(fallback_entry)
+    if model is None:
+        return True
+
+    # Inline import: the proxy layer is only reachable when the proxy populated
+    # the metadata above, and a module-level import would be circular.
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import (  # pyright: ignore[reportPrivateUsage]  # auth_checks exposes no public pair; budget blocks adding one
+        _can_object_call_model,
+        can_key_call_model,
+    )
+
+    try:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=None,
+            valid_token=auth,
+            llm_router=litellm_router,
+        )
+        team_models: Final = getattr(auth, "team_models", None)
+        if team_models:
+            _can_object_call_model(
+                model=model,
+                llm_router=litellm_router,
+                models=team_models,
+                team_model_aliases=getattr(auth, "team_model_aliases", None),
+                team_id=getattr(auth, "team_id", None),
+                object_type="team",
+            )
+    except ProxyException:
+        verbose_router_logger.info(
+            "Skipping fallback to model_group = %s: not allowed for this key/team.",
+            mask_sensitive_structure(model),
+        )
+        return False
+    return True
+
+
 async def run_async_fallback(
     *args: object,
     litellm_router: LitellmRouter,
@@ -529,6 +591,12 @@ async def run_async_fallback(
                 continue
             attempted.record(attempt_key)
         try:
+            if not await _proxy_key_allows_fallback_model(
+                litellm_router=litellm_router,
+                kwargs=kwargs,
+                fallback_entry=mg,
+            ):
+                continue
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
