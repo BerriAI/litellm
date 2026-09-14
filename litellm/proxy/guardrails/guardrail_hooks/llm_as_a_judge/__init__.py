@@ -54,7 +54,7 @@ JUDGE_SYSTEM_PROMPTS: Final[MappingProxyType[JudgeInputType, str]] = MappingProx
 )
 
 _JUDGE_SUBJECT_LABELS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
-    {"request": "Request text to evaluate", "response": "Assistant response to evaluate"}
+    {"request": "Latest request turn to evaluate", "response": "Assistant response to evaluate"}
 )
 
 _VALID_ON_FAILURE: Final = frozenset({"block", "log"})
@@ -134,6 +134,12 @@ def _coerce_event_hook(mode: JudgeModeParam) -> JudgeEventHook:
     if isinstance(mode, list):
         return [GuardrailEventHooks(hook) for hook in mode]
     return GuardrailEventHooks(mode)
+
+
+def _text_under_review(texts: Sequence[str], input_type: JudgeInputType) -> str:
+    if input_type == "request":
+        return texts[-1] if texts else ""
+    return "\n".join(texts)
 
 
 def _build_judge_prompt(
@@ -226,8 +232,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        texts: Final = inputs.get("texts") or []
-        text_under_review: Final = "\n".join(texts)
+        text_under_review: Final = _text_under_review(inputs.get("texts") or [], input_type)
         if not text_under_review:
             return inputs
 
