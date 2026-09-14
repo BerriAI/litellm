@@ -1297,12 +1297,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=model,
                 additional_args=additional_args,
             )
+            logged_additional_args: Final[dict] = self.model_call_details["additional_args"]
 
             # User Logging -> if you pass in a custom logging function
             self._print_llm_call_debugging_log(
-                api_base=additional_args.get("api_base", ""),
-                headers=additional_args.get("headers", {}),
-                additional_args=additional_args,
+                api_base=logged_additional_args.get("api_base", ""),
+                headers=logged_additional_args.get("headers", {}),
+                additional_args=logged_additional_args,
             )
             # log raw request to provider (like LangFuse) -- if opted in.
             if self.log_raw_request_response is True or litellm.log_raw_request_response is True:
@@ -1315,22 +1316,26 @@ class Logging(LiteLLMLoggingBaseClass):
                             'litellm.turn_off_message_logging=True'"
                     else:
                         curl_command: Final = self._get_request_curl_command(
-                            api_base=additional_args.get("api_base", ""),
-                            headers=additional_args.get("headers", {}),
-                            additional_args=additional_args,
-                            data=additional_args.get("complete_input_dict", {}),
+                            api_base=logged_additional_args.get("api_base", ""),
+                            headers=logged_additional_args.get("headers", {}),
+                            additional_args=logged_additional_args,
+                            data=logged_additional_args.get("complete_input_dict", {}),
                         )
 
                         _metadata["raw_request"] = _redact_string(str(curl_command))
                         # split up, so it's easier to parse in the UI
                         self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
-                            raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),
-                            raw_request_body=self._get_raw_request_body(additional_args.get("complete_input_dict", {})),
+                            raw_request_api_base=self._get_masked_api_base(
+                                str(logged_additional_args.get("api_base") or "")
+                            ),
+                            raw_request_body=self._get_raw_request_body(
+                                logged_additional_args.get("complete_input_dict", {})
+                            ),
                             # NOTE: setting ignore_sensitive_headers to True will cause
                             # the Authorization header to be leaked when calls to the health
                             # endpoint are made and fail.
                             raw_request_headers=self._get_masked_headers(
-                                additional_args.get("headers", {}) or {},
+                                logged_additional_args.get("headers", {}) or {},
                             ),
                             error=None,
                         )

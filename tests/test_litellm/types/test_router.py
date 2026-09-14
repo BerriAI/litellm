@@ -91,7 +91,7 @@ def test_pricing_strings_are_coerced_to_float():
 
 
 def test_invalid_pricing_is_rejected():
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(id="x", input_cost_per_token="free")
 
 
@@ -118,7 +118,9 @@ def test_drop_params_ignores_non_flag_non_string_values_with_a_warning(value, ca
     assert f"drop_params={value!r} is not a flag value" in caplog.text
 
 
-@pytest.mark.parametrize("value", [True, "true", None, "os.environ/DROP_PARAMS", "v2:gcm:ciphertext-from-a-pre-fix-row"])
+@pytest.mark.parametrize(
+    "value", [True, "true", None, "os.environ/DROP_PARAMS", "v2:gcm:ciphertext-from-a-pre-fix-row"]
+)
 def test_drop_params_flags_and_strings_log_nothing(value, caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         GenericLiteLLMParams(drop_params=value)
@@ -167,6 +169,7 @@ def test_provider_affinity_header_is_normalized():
         "Set-Cookie",
         "Host",
         "Content-Length",
+        "Content-Type",
         "X-API-Key",
     ],
 )

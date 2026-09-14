@@ -13,6 +13,7 @@ _FORBIDDEN_AFFINITY_HEADERS: Final = frozenset(
         "authorization",
         "connection",
         "content-length",
+        "content-type",
         "cookie",
         "host",
         "keep-alive",
@@ -58,22 +59,28 @@ def get_stable_session_id(litellm_params: object | None) -> str | None:
     if litellm_params is None:
         return None
 
+    direct_session_id: Final = _get_value(litellm_params, "session_id")
+    if direct_session_id:
+        return str(direct_session_id)
+
     metadata_values: Final[tuple[object, ...]] = tuple(
         value for key in ("metadata", "litellm_metadata") if (value := _get_value(litellm_params, key)) is not None
     )
-    if any(
+    has_generated_session_id: Final = any(
         isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
         for metadata in metadata_values
-    ):
-        return None
+    )
 
-    for key in ("litellm_session_id", "session_id"):
-        value = _get_value(litellm_params, key)
-        if value:
-            return str(value)
+    litellm_session_id: Final = _get_value(litellm_params, "litellm_session_id")
+    if litellm_session_id and not has_generated_session_id:
+        return str(litellm_session_id)
 
     for metadata in metadata_values:
-        if isinstance(metadata, Mapping) and (value := metadata.get("session_id")):
+        if (
+            isinstance(metadata, Mapping)
+            and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
+            and (value := metadata.get("session_id"))
+        ):
             return str(value)
     return None
 

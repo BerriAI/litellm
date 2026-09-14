@@ -64,7 +64,9 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
-    EMPTY_MAPPING,
+)
+from litellm.constants import (
+    EMPTY_MAPPING as _EMPTY_MAPPING,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -5568,7 +5570,7 @@ def completion(
         )
         if litellm_params.get("provider_affinity_header") is not None:
             headers = add_provider_affinity_header(
-                headers=headers or litellm.headers or EMPTY_MAPPING,
+                headers=headers or litellm.headers or _EMPTY_MAPPING,
                 litellm_params={
                     "provider_affinity_header": litellm_params["provider_affinity_header"],
                     "litellm_session_id": kwargs.get("litellm_session_id"),

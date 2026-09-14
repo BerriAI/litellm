@@ -15,7 +15,8 @@ from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.constants import EMPTY_MAPPING, request_timeout
+from litellm.constants import EMPTY_MAPPING as _EMPTY_MAPPING
+from litellm.constants import request_timeout
 from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
@@ -1158,7 +1159,7 @@ def responses(
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
         effective_extra_headers: Final = (
             add_provider_affinity_header(
-                headers=extra_headers or EMPTY_MAPPING,
+                headers=extra_headers or _EMPTY_MAPPING,
                 litellm_params=litellm_params,
             )
             if litellm_params.provider_affinity_header is not None
@@ -1328,6 +1329,7 @@ def responses(
                 "model_info": kwargs.get("model_info"),
                 "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
                 "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
+                "provider_affinity_header": litellm_params.provider_affinity_header,
             },
             custom_llm_provider=custom_llm_provider,
         )

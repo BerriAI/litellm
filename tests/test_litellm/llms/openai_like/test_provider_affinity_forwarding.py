@@ -1,10 +1,11 @@
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like import dynamic_config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry, SimpleProviderConfig
 
@@ -52,17 +53,6 @@ def _responses_payload() -> dict[str, object]:
         "usage": {"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
         "error": None,
     }
-
-
-class _MockJSONResponse:
-    def __init__(self, payload: dict[str, object]):
-        self._payload = payload
-        self.status_code = 200
-        self.text = json.dumps(payload)
-        self.headers = httpx.Headers()
-
-    def json(self) -> dict[str, object]:
-        return self._payload
 
 
 @pytest.fixture(autouse=True)
@@ -227,36 +217,48 @@ def test_dynamic_provider_receives_affinity_header_for_streaming_chat():
 
 def test_dynamic_provider_receives_affinity_header_for_responses():
     JSONProviderRegistry._providers = {"db_only_provider": _provider(responses=True)}
+    logging_obj = MagicMock()
+    requests: list[httpx.Request] = []
 
-    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as post:
-        post.return_value = _MockJSONResponse(_responses_payload())
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_responses_payload())
+
+    http_client = httpx.Client(transport=httpx.MockTransport(respond))
+    try:
         litellm.responses(
             model="db_only_provider/test-model",
             input="hello",
             api_key="test-key",
             litellm_session_id="session-responses",
             provider_affinity_header="X-Conversation-Id",
+            litellm_logging_obj=logging_obj,
+            client=HTTPHandler(client=http_client),
         )
+    finally:
+        http_client.close()
 
-    assert post.call_args.kwargs["headers"]["X-Conversation-Id"] == "session-responses"
+    assert requests[0].headers["X-Conversation-Id"] == "session-responses"
+    assert (
+        logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]["provider_affinity_header"]
+        == "X-Conversation-Id"
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
 async def test_dynamic_provider_receives_affinity_header_for_async_responses(stream: bool):
     JSONProviderRegistry._providers = {"db_only_provider": _provider(responses=True)}
-    upstream_response = httpx.Response(
-        200,
-        json=_responses_payload(),
-        request=httpx.Request("POST", "https://db-only.example/v1/responses"),
-    )
-    async_http_client = MagicMock()
-    async_http_client.post = AsyncMock(return_value=upstream_response)
+    requests: list[httpx.Request] = []
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
-        return_value=async_http_client,
-    ):
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_responses_payload())
+
+    client = AsyncHTTPHandler()
+    await client.close()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
         response = await litellm.aresponses(
             model="db_only_provider/test-model",
             input="hello",
@@ -264,39 +266,42 @@ async def test_dynamic_provider_receives_affinity_header_for_async_responses(str
             stream=stream,
             litellm_session_id="session-async-responses",
             provider_affinity_header="X-Conversation-Id",
+            client=client,
         )
+    finally:
+        await client.client.aclose()
 
-    assert async_http_client.post.call_args.kwargs["headers"]["X-Conversation-Id"] == "session-async-responses"
+    assert requests[0].headers["X-Conversation-Id"] == "session-async-responses"
     if stream:
         assert hasattr(response, "__aiter__")
     else:
         assert getattr(response, "model", None) == "test-model"
 
 
-@pytest.mark.parametrize(
-    ("custom_llm_provider", "model"),
-    [
-        ("gemini", "gemini/gemini-1.5-pro"),
-        ("vertex_ai_beta", "gemini-1.5-pro"),
-        ("vertex_ai", "gemini-1.5-pro"),
-    ],
-)
-def test_builtin_provider_receives_affinity_header(custom_llm_provider: str, model: str):
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = "response"
+def test_builtin_provider_receives_affinity_header():
+    from openai import OpenAI
 
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM.completion",
-        return_value=response,
-    ) as provider_completion:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_chat_response_payload())
+
+    client = OpenAI(
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    try:
         litellm.completion(
-            model=model,
+            model="openai/test-model",
             messages=[{"role": "user", "content": "hello"}],
-            custom_llm_provider=custom_llm_provider,
             api_key="test-key",
+            client=client,
             litellm_session_id="session-builtin",
             provider_affinity_header="X-Conversation-Id",
         )
+    finally:
+        client.close()
 
-    assert provider_completion.call_args.kwargs["extra_headers"]["X-Conversation-Id"] == "session-builtin"
+    assert requests[0].headers["X-Conversation-Id"] == "session-builtin"

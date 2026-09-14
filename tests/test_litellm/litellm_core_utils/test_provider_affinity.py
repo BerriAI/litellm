@@ -1,4 +1,5 @@
 from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 
@@ -42,6 +43,22 @@ def test_get_stable_session_id_ignores_proxy_generated_session(metadata_key: str
             }
         )
         is None
+    )
+
+
+def test_get_stable_session_id_prefers_explicit_session_over_proxy_generated_session():
+    assert (
+        get_stable_session_id(
+            {
+                "session_id": "explicit-session",
+                "litellm_session_id": "generated-session",
+                "metadata": {
+                    "session_id": "generated-session",
+                    SESSION_ID_GENERATED_METADATA_KEY: True,
+                },
+            }
+        )
+        == "explicit-session"
     )
 
 
@@ -112,7 +129,7 @@ def test_redact_provider_affinity_header_returns_a_copy_without_raw_value():
     }
 
 
-def test_pre_call_redacts_provider_affinity_header_without_mutating_request():
+def test_pre_call_redacts_provider_affinity_header_from_all_logs_without_mutating_request():
     logging = Logging(
         model="gpt-5.5",
         messages=[{"role": "user", "content": "hello"}],
@@ -123,7 +140,10 @@ def test_pre_call_redacts_provider_affinity_header_without_mutating_request():
         function_id="function-123",
     )
     logging.model_call_details["litellm_params"]["provider_affinity_header"] = "X-Conversation-Id"
+    logging.model_call_details["litellm_params"]["metadata"] = {"request": "test"}
+    logging.log_raw_request_response = True
     additional_args = {
+        "api_base": "https://example.com/v1/chat/completions",
         "headers": {
             "X-Conversation-Id": "session-header",
             "X-Customer-Header": "customer-value",
@@ -136,7 +156,8 @@ def test_pre_call_redacts_provider_affinity_header_without_mutating_request():
         },
     }
 
-    logging._pre_call(input="hello", api_key="test-key", additional_args=additional_args)
+    with patch.object(logging, "_print_llm_call_debugging_log") as debug_log:
+        logging.pre_call(input="hello", api_key="test-key", additional_args=additional_args)
 
     logged_args = logging.model_call_details["additional_args"]
     assert logged_args["headers"] == {
@@ -147,5 +168,11 @@ def test_pre_call_redacts_provider_affinity_header_without_mutating_request():
         "x-conversation-id": PROVIDER_AFFINITY_REDACTED_VALUE,
         "X-Customer-Header": "customer-value",
     }
+    assert debug_log.call_args.kwargs["headers"]["X-Conversation-Id"] == PROVIDER_AFFINITY_REDACTED_VALUE
+    raw_request = logging.model_call_details["raw_request_typed_dict"]
+    assert raw_request["raw_request_headers"]["X-Conversation-Id"] == PROVIDER_AFFINITY_REDACTED_VALUE
+    assert raw_request["raw_request_body"]["extra_headers"]["x-conversation-id"] == PROVIDER_AFFINITY_REDACTED_VALUE
+    assert "session-header" not in logging.model_call_details["litellm_params"]["metadata"]["raw_request"]
+    assert "session-extra-header" not in logging.model_call_details["litellm_params"]["metadata"]["raw_request"]
     assert additional_args["headers"]["X-Conversation-Id"] == "session-header"
     assert additional_args["complete_input_dict"]["extra_headers"]["x-conversation-id"] == "session-extra-header"
