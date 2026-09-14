@@ -880,6 +880,67 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _deployment_attribution_for_model_group(model_group: str | None) -> Mapping[str, object]:
+    """Provider fields the router would have stamped had it reached a deployment:
+    ``custom_llm_provider`` when every deployment in the group resolves to the same
+    provider, plus ``model_info`` and ``deployment`` when the group has exactly one."""
+    if model_group is None:
+        return _EMPTY_LIFT
+
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return _EMPTY_LIFT
+    deployments: Final = llm_router.get_model_list(model_name=model_group)
+    if not deployments:
+        return _EMPTY_LIFT
+
+    def _provider_for_deployment(deployment: Mapping[str, object]) -> str | None:
+        litellm_params: Final = cast(  # cast-ok: router deployment parameters are mapping-shaped
+            Mapping[str, object], deployment["litellm_params"]
+        )
+        try:
+            provider: Final = litellm.get_llm_provider(
+                model=cast(str, litellm_params["model"]),  # cast-ok: router deployment model is a string
+                custom_llm_provider=cast(  # cast-ok: router deployment provider is optional
+                    str | None, litellm_params.get("custom_llm_provider")
+                ),
+            )[1]
+            return cast(str | None, provider)  # cast-ok: provider resolver returns an optional provider string
+        except Exception:  # noqa: BLE001  # get_llm_provider raises for unmapped models
+            return None
+
+    providers: Final = frozenset(
+        provider
+        for provider in (_provider_for_deployment(deployment) for deployment in deployments)
+        if provider is not None
+    )
+    single_deployment: Final = deployments[0] if len(deployments) == 1 else None
+    single_deployment_params: Final = (
+        cast(  # cast-ok: router deployment parameters are mapping-shaped
+            Mapping[str, object], single_deployment["litellm_params"]
+        )
+        if single_deployment is not None
+        else None
+    )
+    return MappingProxyType(
+        {
+            # mutable-ok: frozen immediately by the outer MappingProxyType
+            **({"custom_llm_provider": next(iter(providers))} if len(providers) == 1 else {}),
+            **(
+                {  # mutable-ok: frozen immediately by the outer MappingProxyType
+                    "model_info": dict(  # mutable-ok: preserve the router's mutable model-info payload
+                        single_deployment.get("model_info") or {}
+                    ),
+                    "deployment": single_deployment_params["model"],
+                }
+                if single_deployment is not None and single_deployment_params is not None
+                else {}  # mutable-ok: frozen immediately by the outer MappingProxyType
+            ),
+        }
+    )
+
+
 def _call_type_for_route(route: str | None) -> str | None:
     """The route's call type when it maps to a single operation (its async and sync variants);
     None for routes shared by several operations, since the method is not known here."""
@@ -3046,11 +3107,34 @@ class ProxyLogging:
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
+            attribution: Final = _deployment_attribution_for_model_group(request_data.get("model"))
+            if "custom_llm_provider" in attribution:
+                _litellm_params["custom_llm_provider"] = attribution["custom_llm_provider"]
+            if "model_info" in attribution:
+                _litellm_params["model_info"] = attribution["model_info"]
+                _litellm_params.setdefault(  # mutable-ok: legacy logging payload is populated in place
+                    "metadata", {}
+                )
+                if _litellm_params["metadata"] is None:
+                    _litellm_params["metadata"] = {}  # mutable-ok: legacy logging payload is populated in place
+                metadata: Final = cast(  # cast-ok: legacy metadata payload is a mutable mapping
+                    dict, _litellm_params["metadata"]
+                )
+                metadata.setdefault("model_info", attribution["model_info"])
+                metadata.setdefault("deployment", attribution["deployment"])
+
             litellm_logging_obj.update_environment_variables(
                 model=request_data.get("model", ""),
                 user=request_data.get("user", ""),
                 optional_params=_optional_params,
                 litellm_params=_litellm_params,
+                **(
+                    {  # mutable-ok: frozen immediately by keyword expansion
+                        "custom_llm_provider": attribution["custom_llm_provider"]
+                    }
+                    if "custom_llm_provider" in attribution
+                    else {}  # mutable-ok: frozen immediately by keyword expansion
+                ),
             )
 
             input: list | str | dict = ""
