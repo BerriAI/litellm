@@ -6455,6 +6455,133 @@ async def test_get_team_membership_reads_sentinel_as_no_membership_not_a_model()
 
 
 @pytest.mark.asyncio
+async def test_get_team_membership_coalesces_parallel_db_fetches():
+    """Concurrent misses for the same member must share one Prisma round-trip."""
+    from litellm.proxy.auth.auth_checks import get_team_membership
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    membership_row = MagicMock()
+    membership_row.dict = lambda: {"user_id": "u-parallel", "team_id": "t-parallel", "spend": 1.0}
+
+    async def _slow_find_unique(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return membership_row
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(side_effect=_slow_find_unique)
+    cache = UserApiKeyCache()
+
+    async def _load():
+        return await get_team_membership(
+            user_id="u-parallel",
+            team_id="t-parallel",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
+
+    first = asyncio.create_task(_load())
+    second = asyncio.create_task(_load())
+    await started.wait()
+    await asyncio.sleep(0)
+    release.set()
+    results = await asyncio.gather(first, second)
+
+    assert results[0] is not None and results[1] is not None
+    assert results[0].user_id == "u-parallel"
+    assert results[1].user_id == "u-parallel"
+    mock_prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_team_membership_returns_before_redis_set_completes():
+    """Auth must not wait on DualCache Redis SET; L1 is enough for the next lookup."""
+    from litellm.proxy.auth.auth_checks import get_team_membership
+
+    membership_row = MagicMock()
+    membership_row.dict = lambda: {"user_id": "u-redis", "team_id": "t-redis", "spend": 2.0}
+
+    hang_redis_set = asyncio.Event()
+
+    async def _hanging_redis_set(*args, **kwargs):
+        await hang_redis_set.wait()
+
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value=None)
+    redis_cache.async_set_cache = AsyncMock(side_effect=_hanging_redis_set)
+
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+
+    first = await asyncio.wait_for(
+        get_team_membership(
+            user_id="u-redis",
+            team_id="t-redis",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        ),
+        timeout=0.5,
+    )
+    second = await get_team_membership(
+        user_id="u-redis",
+        team_id="t-redis",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    hang_redis_set.set()
+    await asyncio.sleep(0)
+
+    assert first is not None and second is not None
+    assert first.spend == 2.0
+    assert second.spend == 2.0
+    mock_prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_common_checks_calls_get_team_membership_once_per_request():
+    """Model-access, attribution, and member-budget must reuse one membership load."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team = LiteLLM_TeamTable(team_id="t-once")
+    token = UserAPIKeyAuth(token="k-once", user_id="u-once", team_id="t-once", models=["gpt-4o-mini"])
+    membership = MagicMock()
+    membership.litellm_budget_table = None
+    membership.spend = 0.0
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=membership,
+        ) as load_membership,
+        patch("litellm.proxy.proxy_server.get_current_spend", new_callable=AsyncMock, return_value=0.0),
+    ):
+        result = await common_checks(
+            request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+            team_object=team,
+            user_object=LiteLLM_UserTable(user_id="u-once"),
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=token,
+            request=MagicMock(spec=Request),
+        )
+
+    assert result is True
+    assert load_membership.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_invalidate_team_member_spend_state_evicts_the_negative_cache_sentinel():
     """
     A member who later gains a per-member budget writes a membership row and calls
