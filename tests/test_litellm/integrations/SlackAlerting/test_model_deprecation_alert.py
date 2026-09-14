@@ -536,15 +536,13 @@ async def test_should_keep_polling_every_thirty_seconds_after_an_email_failure(m
             raise asyncio.CancelledError
 
     run: Final = _EmailRun(fail=True)
-    with (
-        patch("litellm.integrations.SlackAlerting.slack_alerting.asyncio.sleep", side_effect=stop_after_second_pass),
-        pytest.raises(asyncio.CancelledError),
-    ):
+    with pytest.raises(asyncio.CancelledError):
         await alerting.run_scheduled_deprecation_check(
             get_llm_router=lambda: _make_router([DEAD_ALIAS_DEPLOYMENT]),
             get_prisma_client=SimpleNamespace,
             get_email_logger=lambda: None,
             send_emails=run,
+            sleep=stop_after_second_pass,
         )
 
     assert slept == [DEPRECATION_IDLE_POLL_SECONDS] * 2

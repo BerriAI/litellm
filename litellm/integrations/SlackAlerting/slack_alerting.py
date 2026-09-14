@@ -1264,6 +1264,7 @@ Model Info:
         get_prisma_client: Callable[[], "PrismaClient | None"] = _proxy_prisma_client,
         get_email_logger: Callable[[], EmailSender | None] = _proxy_email_logger,
         send_emails: "Callable[..., Awaitable[int]] | None" = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         """Poll for a loaded router and run both passes every poll interval
 
@@ -1272,11 +1273,12 @@ Model Info:
         say) is skipped for a full day so a misconfiguration logs once, not every poll, without stalling
         the other pass
         """
+        sleep_fn: Final = sleep or asyncio.sleep
         while True:
             await self._run_deprecation_passes(
                 get_llm_router, pod_lock_manager, get_prisma_client, get_email_logger, send_emails
             )
-            await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
+            await sleep_fn(DEPRECATION_IDLE_POLL_SECONDS)
 
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
