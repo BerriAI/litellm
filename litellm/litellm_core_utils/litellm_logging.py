@@ -3194,7 +3194,9 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    callback_model_call_details: Final[dict] = self.model_call_details  # mutable-ok: callback payload API
+                    callback_model_call_details: Final[dict] = (
+                        self.model_call_details
+                    )  # mutable-ok: callback payload API
                     ##################################
                     # call redaction hook for custom logger
                     standard_redacted_model_call_details: Final[dict] = (  # mutable-ok: callback payload API
@@ -3202,11 +3204,15 @@ class Logging(LiteLLMLoggingBaseClass):
                             model_call_details=callback_model_call_details
                         )
                     )
-                    streaming_redacted_model_call_details: Final[dict] = redact_streaming_responses_for_custom_logger(  # mutable-ok: callback payload API
-                        model_call_details=standard_redacted_model_call_details, custom_logger=callback
+                    streaming_redacted_model_call_details: Final[dict] = (
+                        redact_streaming_responses_for_custom_logger(  # mutable-ok: callback payload API
+                            model_call_details=standard_redacted_model_call_details, custom_logger=callback
+                        )
                     )
-                    redacted_model_call_details: Final[dict] = redact_model_call_details_for_custom_logger(  # mutable-ok: callback payload API
-                        model_call_details=streaming_redacted_model_call_details, custom_logger=callback
+                    redacted_model_call_details: Final[dict] = (
+                        redact_model_call_details_for_custom_logger(  # mutable-ok: callback payload API
+                            model_call_details=streaming_redacted_model_call_details, custom_logger=callback
+                        )
                     )
                     ##################################
                     if self.stream is True:
