@@ -4837,6 +4837,14 @@ class JWTIssuerConfig(BaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    virtual_key_claim_field: str | None = Field(
+        default=None,
+        description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
+    )
+    unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior | None = Field(
+        default=None,
+        description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
+    )
 
     model_config = {
         "extra": "forbid",
@@ -5062,6 +5070,28 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             raise ValueError("scope_mappings must be set if enforce_scope_based_access is true.")
 
         super().__init__(**kwargs)
+
+    def get_issuer_config(self, issuer: str | None) -> JWTIssuerConfig | None:
+        if issuer is None or self.issuers is None:
+            return None
+        return next((config for config in self.issuers if config.issuer == issuer), None)
+
+    def is_virtual_key_mapping_configured(self) -> bool:
+        if self.virtual_key_claim_field is not None:
+            return True
+        return any(config.virtual_key_claim_field is not None for config in self.issuers or ())
+
+    def get_virtual_key_claim_field(self, issuer: str | None) -> str | None:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.virtual_key_claim_field is not None:
+            return issuer_config.virtual_key_claim_field
+        return self.virtual_key_claim_field
+
+    def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.unregistered_jwt_client_behavior is not None:
+            return issuer_config.unregistered_jwt_client_behavior
+        return self.unregistered_jwt_client_behavior
 
 
 class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
