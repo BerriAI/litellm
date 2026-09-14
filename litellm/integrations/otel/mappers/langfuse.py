@@ -22,12 +22,12 @@ from litellm.integrations.otel.mappers.utils import (
     output_messages,
     serialize_messages,
 )
-from litellm.integrations.otel.model.metadata import TraceControls
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
     LLMUsage,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls
 
 LANGFUSE_OBSERVATION_INPUT: Final = "langfuse.observation.input"
 LANGFUSE_OBSERVATION_OUTPUT: Final = "langfuse.observation.output"

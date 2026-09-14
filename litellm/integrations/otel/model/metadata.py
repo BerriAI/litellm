@@ -36,32 +36,18 @@ model. They coincide on the SDK path, which is correct.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.semconv import resolve_operation
-from litellm.integrations.otel.model.utils import as_str, to_seconds
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
-
-LANGFUSE_HEADER_PREFIX: Final = "langfuse_"
-
-
-@dataclass(frozen=True, slots=True)
-class TraceControls:
-    """The caller's trace-level Langfuse controls: ``metadata.trace_name`` / ``trace_user_id`` / ``session_id`` /
-    ``tags`` on the request (SDK or proxy body), with the proxy's ``langfuse_<control>`` headers winning over the
-    body for the scalar ones. Mutation controls (``trace_id``, ``existing_trace_id``, ``update_trace_keys``) are
-    deliberately not carried."""
-
-    name: str | None = None
-    user_id: str | None = None
-    session_id: str | None = None
-    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -251,38 +237,6 @@ class LLMCallEvent:
         )
 
 
-def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
-    request: Final = _as_str_mapping(kwargs.get("litellm_params"))
-    if request is None:
-        return TraceControls()
-    proxy_request: Final = _as_str_mapping(request.get("proxy_server_request"))
-    headers: Final = (_as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None) or {}
-    bodies: Final = tuple(
-        metadata
-        for key in ("metadata", "litellm_metadata")
-        if (metadata := _as_str_mapping(request.get(key))) is not None
-    )
-
-    def scalar(control: str) -> str | None:
-        from_header: Final = as_str(headers.get(f"{LANGFUSE_HEADER_PREFIX}{control}"))
-        if from_header:
-            return from_header
-        return next((value for body in bodies if (value := as_str(body.get(control)))), None)
-
-    return TraceControls(
-        name=scalar("trace_name"),
-        user_id=scalar("trace_user_id"),
-        session_id=scalar("session_id"),
-        tags=next((tags for body in bodies if (tags := _str_items(body.get("tags")))), ()),
-    )
-
-
-def _str_items(value: object) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)):
-        return ()
-    return tuple(item for item in cast("Sequence[object]", value) if isinstance(item, str) and item)
-
-
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     """Seconds from the upstream request being issued (``api_call_start_time``)
     to the first streamed chunk (``completion_start_time``); ``None`` for
@@ -317,15 +271,8 @@ def auth_metadata(payload: StandardLoggingPayload | None, kwargs: Mapping[str, o
     )
 
 
-def _as_str_mapping(value: object) -> Mapping[str, object] | None:
-    """A read-only view of ``value`` when it is a mapping, else ``None``."""
-    if not isinstance(value, Mapping):
-        return None
-    return cast("Mapping[str, object]", value)  # cast-ok: isinstance-guarded, JSON metadata has str keys
-
-
 def _string_entries(value: object) -> Mapping[str, str] | None:
-    entries: Final = _as_str_mapping(value)
+    entries: Final = as_str_mapping(value)
     if entries is None:
         return None
     typed: Final = MappingProxyType({key: item for key, item in entries.items() if isinstance(item, str)})
@@ -341,18 +288,18 @@ def _metadata_dicts(
     litellm copies it onto ``metadata``, but both are yielded so a route that
     populates only one is still covered.
     """
-    payload_view: Final = _as_str_mapping(payload)
+    payload_view: Final = as_str_mapping(payload)
     if payload_view is not None:
-        payload_metadata: Final = _as_str_mapping(payload_view.get("metadata"))
+        payload_metadata: Final = as_str_mapping(payload_view.get("metadata"))
         if payload_metadata is not None:
             yield payload_metadata
-    params: Final = _as_str_mapping(kwargs.get("litellm_params"))
+    params: Final = as_str_mapping(kwargs.get("litellm_params"))
     if params is None:
         return
     yield from (
         metadata
         for key in ("metadata", "litellm_metadata")
-        if (metadata := _as_str_mapping(params.get(key))) is not None
+        if (metadata := as_str_mapping(params.get(key))) is not None
     )
 
 
