@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Mapping
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.ocr import LiteLLMOcrRequest
+from litellm.rust_bridge.ocr import ROUTE, LiteLLMOcrRequest
+from litellm.rust_bridge.route import NativeLifecycle
 
-
-class NativeOcrLifecycle(Protocol):
-    def __call__(
-        self,
-        request: LiteLLMOcrRequest,
-        args: Sequence[object],
-        kwargs: Mapping[str, object],
-        asynchronous: bool,
-    ) -> OCRResponse | Awaitable[OCRResponse]: ...
+NativeOcrLifecycle = NativeLifecycle[LiteLLMOcrRequest, OCRResponse]
 
 
 class ExceptionMapper(Protocol):
@@ -37,13 +29,14 @@ def _binding(value: object) -> NativeOcrLifecycle | None:
     return cast("NativeOcrLifecycle", value)  # cast-ok: callable validated at the native binding boundary
 
 
-NATIVE_OCR_LIFECYCLE: Final = NativeBinding("_ocr_lifecycle", validate=_binding)
+LIFECYCLE: Final = ROUTE.bind("_ocr_lifecycle", validate=_binding)
+NATIVE_OCR_LIFECYCLE: Final = LIFECYCLE
 
 
 def select(request: LiteLLMOcrRequest) -> NativeOcrLifecycle | None:
     if request.kwargs.get("aocr"):
         return None
-    return NATIVE_OCR_LIFECYCLE.load()
+    return ROUTE.select(NATIVE_OCR_LIFECYCLE)
 
 
 def arguments(request: LiteLLMOcrRequest) -> Mapping[str, object]:

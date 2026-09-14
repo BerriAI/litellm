@@ -9,7 +9,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
-from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
+from litellm.rust_bridge.ocr.lifecycle import NATIVE_OCR_LIFECYCLE
 
 
 @pytest.fixture(autouse=True)

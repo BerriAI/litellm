@@ -58,7 +58,7 @@ PUBLIC_RUST_DISPATCH_MAPPINGS: Final = (
     mapping(span="public_request", python_frame=r"ocr/main\.py:\d+ _public_request$"),
     mapping(span="bind_request", python_frame=r"ocr/main\.py:\d+ _bind_request$"),
     mapping(span="rust_ocr_enabled", python_frame=r"rust_bridge/configuration\.py:\d+ rust_ocr_enabled$"),
-    mapping(span="select_native_ocr", python_frame=r"rust_bridge/ocr_lifecycle\.py:\d+ select$"),
+    mapping(span="select_native_ocr", python_frame=r"rust_bridge/ocr/lifecycle\.py:\d+ select$"),
     mapping(span="load_native_bridge", python_frame=r"rust_bridge/bindings\.py:\d+ NativeBinding\.load$"),
     mapping(span="native_call_setup", python_frame=r"rust_bridge/lifecycle\.py:\d+ setup$"),
     mapping(span="native_response", python_frame=r"rust_bridge/ocr\.py:\d+ _response$"),

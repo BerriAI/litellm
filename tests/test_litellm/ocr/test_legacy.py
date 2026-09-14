@@ -17,7 +17,7 @@ from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.ocr.legacy import _prepare_ocr_request
 from litellm.rust_bridge import bindings, configuration
-from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
+from litellm.rust_bridge.ocr.lifecycle import NATIVE_OCR_LIFECYCLE
 
 
 @pytest.fixture

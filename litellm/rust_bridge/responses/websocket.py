@@ -1,68 +1,54 @@
-"""Thin Python wrapper for the native Rust Responses WebSocket bridge."""
+"""Native Responses WebSocket bindings."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Final, Protocol
+from collections.abc import Awaitable
+from typing import Final, Protocol, cast  # noqa: TID251  # native class is validated at load time
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.bindings import BINDING_UNSET, BindingUnset
+from litellm.rust_bridge.responses import ROUTE
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
 class RustResponsesWebSocket(Protocol):
-    async def send_text(self, text: str) -> None: ...
+    def send_text(self, text: str) -> Awaitable[None]: ...
 
-    async def recv_text(self) -> str | None: ...
+    def recv_text(self) -> Awaitable[str | None]: ...
 
-    async def close(self) -> None: ...
+    def close(self) -> Awaitable[None]: ...
 
 
 class RustResponsesWebSocketConnection(Protocol):
     @classmethod
-    async def connect(
+    def connect(
         cls,
         url: str,
         headers: dict[str, str],
         timeout_seconds: float | None,
-    ) -> RustResponsesWebSocket: ...
+    ) -> Awaitable[RustResponsesWebSocket]: ...
 
 
-class _Unset:
-    pass
+def _as_connection(value: object) -> RustResponsesWebSocketConnection | None:
+    if not callable(getattr(value, "connect", None)):
+        return None
+    return cast(RustResponsesWebSocketConnection, value)  # cast-ok: native connection factory validated above
 
 
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass(slots=True)
-class _RustResponsesWebSocketState:
-    connection: RustResponsesWebSocketConnection | None = None
-
-
-_STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
+_CONNECTION: Final = ROUTE.bind("ResponsesWebSocketConnection", validate=_as_connection)
 
 
 def set_rust_responses_websocket(
     *,
-    connection: RustResponsesWebSocketConnection | None | _Unset = _UNSET,
+    connection: RustResponsesWebSocketConnection | None | BindingUnset = BINDING_UNSET,
 ) -> None:
-    if not isinstance(connection, _Unset):
-        _STATE.connection = connection
+    _CONNECTION.configure(connection)
 
 
 def load_rust_responses_websocket() -> RustResponsesWebSocketConnection | None:
-    if _STATE.connection is not None:
-        return _STATE.connection
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    connection_type: Final[RustResponsesWebSocketConnection | None] = getattr(
-        native_bridge, "ResponsesWebSocketConnection", None
-    )
-    return connection_type
+    return ROUTE.select(_CONNECTION)
 
 
 class _ConnectionAdapter:

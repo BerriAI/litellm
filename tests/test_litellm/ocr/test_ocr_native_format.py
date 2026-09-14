@@ -2,7 +2,7 @@
 Tests for the OCR `req_format` option in the SDK request path.
 """
 
-from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.ocr import value as rust_ocr_bridge
 
 
 def test_rust_ocr_response_retains_provider_native_response():

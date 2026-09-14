@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
-from litellm.rust_bridge import configuration, responses_websocket
+from litellm.rust_bridge import configuration
+from litellm.rust_bridge.responses import websocket as responses_websocket
 
 
 class _FakeNativeConnection:
@@ -65,8 +66,8 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 
 @pytest.mark.asyncio
 async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(responses_websocket, "_STATE", responses_websocket._RustResponsesWebSocketState())
-    monkeypatch.setattr(responses_websocket, "get_native_bridge", lambda: None)
+    configuration.rust(True)
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: None)
 
     assert (
         await responses_websocket.connect(
@@ -83,6 +84,7 @@ async def test_enabled_bridge_connects_and_adapts_socket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
+    configuration.rust(True)
 
     connection = await responses_websocket.connect(
         url="wss://example.test/responses",

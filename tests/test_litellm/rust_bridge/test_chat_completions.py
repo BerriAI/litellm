@@ -54,7 +54,7 @@ class _FakeNative:
 
 def _fake_native_bridge(monkeypatch):
     """Expose the bridge's exception classes without the compiled extension."""
-    monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _FakeNative())
 
 
 def _hide_native_bridge(monkeypatch):
@@ -63,7 +63,7 @@ def _hide_native_bridge(monkeypatch):
     There is no injection seam for "the .so is absent", so the loader itself is
     replaced; every other case here uses `set_rust_chat_completions`.
     """
-    monkeypatch.setattr(bridge, "get_native_bridge", lambda: None)
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: None)
 
 
 @pytest.fixture(autouse=True)

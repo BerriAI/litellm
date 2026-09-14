@@ -2,6 +2,39 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyCFunction;
 
+macro_rules! unimplemented_lifecycle_route {
+    ($route:ident, $entrypoint:ident) => {
+        #[pyo3::pyfunction]
+        #[pyo3(signature = (request, args, kwargs, asynchronous))]
+        fn $entrypoint(
+            request: pyo3::Bound<'_, pyo3::PyAny>,
+            args: pyo3::Bound<'_, pyo3::types::PyTuple>,
+            kwargs: pyo3::Bound<'_, pyo3::types::PyDict>,
+            asynchronous: bool,
+        ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+            use litellm_core::call_lifecycle::admission::{
+                UnimplementedRoute, admit_unimplemented,
+            };
+            let _ = (request, args, kwargs, asynchronous);
+            match admit_unimplemented(UnimplementedRoute::$route) {
+                Ok(never) => match never {},
+                Err(route) => Err($crate::errors::RustBridgeDeclined::new_err(format!(
+                    "{route} native lifecycle is not implemented"
+                ))),
+            }
+        }
+
+        pub(super) fn register(
+            module: &pyo3::Bound<'_, pyo3::types::PyModule>,
+        ) -> pyo3::PyResult<()> {
+            $crate::routes::definition::add_function(
+                module,
+                pyo3::wrap_pyfunction!($entrypoint, module)?,
+            )
+        }
+    };
+}
+
 macro_rules! bridge_route {
     (
         sync = $sync_name:ident,

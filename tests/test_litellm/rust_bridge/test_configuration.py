@@ -55,6 +55,22 @@ def test_release_default_remains_disabled() -> None:
     assert configuration.rust_ocr_enabled() is True
 
 
+@pytest.mark.parametrize("route", tuple(configuration.RouteName))
+def test_each_route_has_an_explicit_release_default(route: configuration.RouteName) -> None:
+    assert configuration.rust_enabled(route) is (
+        route in {configuration.RouteName.OCR, configuration.RouteName.TRANSCRIPTION}
+    )
+
+
+@pytest.mark.parametrize("enabled", (True, False))
+def test_required_transcription_ignores_optional_rollout(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(enabled)
+    assert configuration.rust_enabled(configuration.RouteName.TRANSCRIPTION) is True
+    assert configuration.rust_enabled(configuration.RouteName.MESSAGES) is enabled
+    assert configuration.rust_enabled(configuration.RouteName.OCR) is False
+
+
 @pytest.mark.parametrize("process", [None, False, True])
 @pytest.mark.parametrize("environment", [None, "0", "1", "off"])
 def test_ocr_configuration(monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None) -> None:

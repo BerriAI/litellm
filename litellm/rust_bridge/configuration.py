@@ -1,11 +1,57 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 DEFAULT_RUST_ENABLED: Final = False
 _TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
+
+
+class RouteName(str, Enum):
+    OCR = "ocr"
+    MESSAGES = "messages"
+    CHAT_COMPLETIONS = "chat_completions"
+    TRANSCRIPTION = "transcription"
+    EMBEDDINGS = "embeddings"
+    RERANK = "rerank"
+    IMAGE_GENERATION = "image_generation"
+    IMAGE_EDIT = "image_edit"
+    SPEECH = "speech"
+    MODERATION = "moderation"
+    RESPONSES = "responses"
+
+
+class RouteMode(str, Enum):
+    OPTIONAL = "optional"
+    REQUIRED = "required"
+
+
+@dataclass(frozen=True, slots=True)
+class RoutePolicy:
+    default_enabled: bool = False
+    mode: RouteMode = RouteMode.OPTIONAL
+    environment_opt_out: bool = False
+
+
+ROUTE_POLICIES: Final = MappingProxyType(
+    {
+        RouteName.OCR: RoutePolicy(default_enabled=True, environment_opt_out=True),
+        RouteName.MESSAGES: RoutePolicy(),
+        RouteName.CHAT_COMPLETIONS: RoutePolicy(),
+        RouteName.TRANSCRIPTION: RoutePolicy(mode=RouteMode.REQUIRED),
+        RouteName.EMBEDDINGS: RoutePolicy(),
+        RouteName.RERANK: RoutePolicy(),
+        RouteName.IMAGE_GENERATION: RoutePolicy(),
+        RouteName.IMAGE_EDIT: RoutePolicy(),
+        RouteName.SPEECH: RoutePolicy(),
+        RouteName.MODERATION: RoutePolicy(),
+        RouteName.RESPONSES: RoutePolicy(),
+    }
+)
 
 
 class _RustConfiguration:
@@ -35,22 +81,22 @@ def resolve_rust_enabled(
     return release_default
 
 
-def rust_enabled() -> bool:
-    return resolve_rust_enabled(
-        process_override=_CONFIGURATION.override,
-        environment_override=_parse_env_bool(os.getenv(_GLOBAL_ENV_NAME)),
-    )
-
-
-def rust_ocr_enabled() -> bool:
+def rust_enabled(route: RouteName | None = None) -> bool:
+    policy: Final = ROUTE_POLICIES[route] if route is not None else RoutePolicy()
+    if policy.mode is RouteMode.REQUIRED:
+        return True
     environment: Final = _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME))
-    if environment is False:
+    if policy.environment_opt_out and environment is False:
         return False
     return resolve_rust_enabled(
         process_override=_CONFIGURATION.override,
         environment_override=environment,
-        release_default=True,
+        release_default=policy.default_enabled,
     )
+
+
+def rust_ocr_enabled() -> bool:
+    return rust_enabled(RouteName.OCR)
 
 
 def reset_rust_configuration() -> None:

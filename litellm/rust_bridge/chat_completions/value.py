@@ -1,4 +1,4 @@
-"""Thin Python wrapper for the native Rust chat completions bridge.
+"""Native chat completions bindings.
 
 The Rust core owns the conversation translation, the provider call, and the
 response normalization for the subset of `/chat/completions` requests it
@@ -12,10 +12,8 @@ retrying it there would bill the customer for the same work twice.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import Final, cast  # noqa: TID251  # native callables are validated at load time
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -26,13 +24,17 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
-from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.bindings import BINDING_UNSET, BindingUnset, native_exception_types
+from litellm.rust_bridge.chat_completions.types import (
+    ResponseObserver,
+    RustAchatCompletions,
+    RustChatCompletions,
+    RustChatCompletionsDecline,
+)
+from litellm.rust_bridge.configuration import RouteName
+from litellm.rust_bridge.route import NativeRoute
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Providers whose `/chat/completions` deployments the Rust core can serve. A
 # provider outside this set never reaches the bridge.
@@ -45,148 +47,49 @@ _LITELLM_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 
 
-class RustChatCompletions(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: Mapping[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Mapping[str, object]:
-        raise NotImplementedError
+ROUTE: Final = NativeRoute(RouteName.CHAT_COMPLETIONS)
 
 
-class RustAchatCompletions(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: Mapping[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Awaitable[Mapping[str, object]]:
-        raise NotImplementedError
+def _as_chat(value: object) -> RustChatCompletions | None:
+    return cast(RustChatCompletions, value) if callable(value) else None
 
 
-class RustChatCompletionsDecline(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        custom_llm_provider: str | None,
-    ) -> str | None:
-        raise NotImplementedError
+def _as_achat(value: object) -> RustAchatCompletions | None:
+    return cast(RustAchatCompletions, value) if callable(value) else None
 
 
-class ResponseObserver(Protocol):
-    """Invoked with the payload the core returned, on success only.
-
-    Lets the caller emit its own `post_call` on whichever path served the
-    request. Both entry points call it, so the synchronous and asynchronous
-    paths cannot drift apart the way the pre_call suppression once did.
-    """
-
-    def __call__(self, rust_response: Mapping[str, object], /) -> None:
-        raise NotImplementedError
+def _as_decline(value: object) -> RustChatCompletionsDecline | None:
+    return cast(RustChatCompletionsDecline, value) if callable(value) else None
 
 
-def response_logger(
-    *,
-    logging_obj: LiteLLMLoggingObj,
-    messages: Sequence[object],
-    api_key: str,
-    additional_args: Mapping[str, object],
-) -> ResponseObserver:
-    """A `ResponseObserver` that emits the caller's `post_call` for a Rust-served
-    request.
-
-    The core owns the provider call, so the Python transform that normally
-    raises this event never runs; without it every `post_call` callback goes
-    silent on a Rust-served request and `original_response` stays unset. The
-    payload is the core's normalized response rather than the provider's wire
-    body, which is the closest thing that crosses the bridge.
-    """
-
-    def log(rust_response: Mapping[str, object], /) -> None:
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=json.dumps(rust_response),
-            additional_args=additional_args,
-        )
-
-    return log
-
-
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass(slots=True)
-class _RustChatCompletionsState:
-    chat_completions: RustChatCompletions | None = None
-    achat_completions: RustAchatCompletions | None = None
-    decline: RustChatCompletionsDecline | None = None
-
-
-_STATE: Final[_RustChatCompletionsState] = _RustChatCompletionsState()
+_CHAT: Final = ROUTE.bind("chat_completions", validate=_as_chat)
+_ACHAT: Final = ROUTE.bind("achat_completions", validate=_as_achat)
+_DECLINE: Final = ROUTE.bind("chat_completions_decline", validate=_as_decline)
 
 
 def set_rust_chat_completions(
     *,
-    chat_completions: RustChatCompletions | None | _Unset = _UNSET,
-    achat_completions: RustAchatCompletions | None | _Unset = _UNSET,
-    decline: RustChatCompletionsDecline | None | _Unset = _UNSET,
+    chat_completions: RustChatCompletions | None | BindingUnset = BINDING_UNSET,
+    achat_completions: RustAchatCompletions | None | BindingUnset = BINDING_UNSET,
+    decline: RustChatCompletionsDecline | None | BindingUnset = BINDING_UNSET,
 ) -> None:
     """Inject the native callables, so tests can supply a double instead of
     patching module attributes."""
-    if not isinstance(chat_completions, _Unset):
-        _STATE.chat_completions = chat_completions
-    if not isinstance(achat_completions, _Unset):
-        _STATE.achat_completions = achat_completions
-    if not isinstance(decline, _Unset):
-        _STATE.decline = decline
+    _CHAT.configure(chat_completions)
+    _ACHAT.configure(achat_completions)
+    _DECLINE.configure(decline)
 
 
 def load_rust_chat_completions() -> RustChatCompletions | None:
-    if _STATE.chat_completions is not None:
-        return _STATE.chat_completions
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    loaded: RustChatCompletions | None = getattr(native_bridge, "chat_completions", None)
-    return loaded
+    return ROUTE.select(_CHAT)
 
 
 def load_rust_achat_completions() -> RustAchatCompletions | None:
-    if _STATE.achat_completions is not None:
-        return _STATE.achat_completions
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    loaded: RustAchatCompletions | None = getattr(native_bridge, "achat_completions", None)
-    return loaded
+    return ROUTE.select(_ACHAT)
 
 
 def _load_rust_decline() -> RustChatCompletionsDecline | None:
-    if _STATE.decline is not None:
-        return _STATE.decline
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    loaded: RustChatCompletionsDecline | None = getattr(native_bridge, "chat_completions_decline", None)
-    return loaded
+    return ROUTE.select(_DECLINE)
 
 
 def _anthropic_user_id_reaches_the_body(litellm_params: Mapping[str, object] | None) -> bool:
@@ -247,7 +150,7 @@ def rust_chat_completions_accepts(
         return False
     if stream:
         return False
-    if not rust_enabled():
+    if not ROUTE.enabled():
         return False
     if _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params):
         verbose_logger.debug("Rust chat completions declined (litellm metadata user_id); using the Python path")
@@ -276,14 +179,7 @@ def rust_chat_completions_accepts(
 
 def _rust_bridge_exceptions() -> tuple[type[BaseException], type[BaseException]] | None:
     """`(declined, upstream_failed)` from the native module, or None when absent."""
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native_bridge, "RustUpstreamError", None)
-    if declined is None or upstream is None:
-        return None
-    return declined, upstream
+    return native_exception_types()
 
 
 def _reraise_or_decline(

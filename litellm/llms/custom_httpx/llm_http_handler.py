@@ -166,9 +166,9 @@ from litellm.utils import (
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
-    from litellm.rust_bridge.configuration import rust_enabled
+    from litellm.rust_bridge.configuration import RouteName, rust_enabled
 
-    return custom_llm_provider == "openai" and rust_enabled()
+    return custom_llm_provider == "openai" and rust_enabled(RouteName.RESPONSES)
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -2456,9 +2456,9 @@ class BaseLLMHTTPHandler:
     ) -> AnthropicMessagesResponse | None:
         if custom_llm_provider not in ("azure_ai", "anthropic"):
             return None
-        from litellm.rust_bridge.configuration import rust_enabled
+        from litellm.rust_bridge.configuration import RouteName, rust_enabled
 
-        if not rust_enabled():
+        if not rust_enabled(RouteName.MESSAGES):
             return None
         if has_agentic_hook:
             return None
@@ -6658,7 +6658,7 @@ class BaseLLMHTTPHandler:
             @asynccontextmanager
             async def _backend_connection():
                 if _rust_responses_websocket_enabled(custom_llm_provider):
-                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+                    from litellm.rust_bridge.responses import websocket as rust_responses_websocket
 
                     rust_backend: Final = await rust_responses_websocket.connect(
                         url=ws_url,
