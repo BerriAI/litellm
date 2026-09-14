@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import stat
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 import requests
 
+from litellm.proxy.client.cli.commands import pi
 from litellm.proxy.client.cli.commands.pi import (
     ListingFailure,
     ModelLimits,
@@ -18,6 +20,18 @@ from litellm.proxy.client.cli.commands.pi import (
     provider_block,
     sync_models_json,
 )
+
+
+def test_pi_module_has_no_strenum_import():
+    """enum.StrEnum is Python 3.11+; pyproject allows 3.10, so pi.py must not import it."""
+    assert "StrEnum" not in inspect.getsource(pi)
+
+
+def test_listing_failure_is_str_enum():
+    assert issubclass(ListingFailure, str)
+    assert ListingFailure.REJECTED.value == "rejected"
+    assert ListingFailure("rejected") is ListingFailure.REJECTED
+    assert str(ListingFailure.REJECTED.value) == "rejected"
 
 
 class _FakeResponse:
