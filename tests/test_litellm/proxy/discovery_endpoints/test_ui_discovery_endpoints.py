@@ -350,7 +350,6 @@ def test_ui_discovery_endpoints_hide_default_credentials_hint_default_false():
 
 
 def test_ui_discovery_endpoints_hide_default_credentials_hint_when_ui_password_set():
-    """A non-empty UI_PASSWORD hides the card: 'admin / MASTER_KEY' is no longer the login."""
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
@@ -372,7 +371,6 @@ def test_ui_discovery_endpoints_hide_default_credentials_hint_when_ui_password_s
     ],
 )
 def test_ui_discovery_endpoints_keeps_default_credentials_hint_without_real_ui_password(env_overrides):
-    """Only a non-empty UI_PASSWORD counts as custom credentials; the hint stays accurate otherwise."""
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
