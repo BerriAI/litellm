@@ -2635,9 +2635,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
+    allowed_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied",
+    )
     blocked_file_extensions: tuple[str, ...] | None = Field(
         None,
-        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set",
     )
     max_response_size_mb: int | None = Field(
         None,

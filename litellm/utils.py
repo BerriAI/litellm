@@ -1260,15 +1260,6 @@ async def _client_async_logging_helper(
             async_coroutine=logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
         )
 
-        ################################################
-        # Sync Logging Worker
-        ################################################
-        logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
 
 def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tuple[int | None, dict[str, Any]]:
     """
@@ -1500,6 +1491,8 @@ def post_call_processing(
 
 
 def client(original_function):
+    from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
+
     Rules: Final = litellm_utils.Rules
     rules_obj: Final = Rules()
 
@@ -1510,12 +1503,8 @@ def client(original_function):
         call_type = original_function.__name__
         if _is_async_request(kwargs):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
-            if litellm.num_retries_per_request is not None:
-                # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
-                if previous_models is not None:
-                    if litellm.num_retries_per_request <= len(previous_models):
-                        raise Exception("Max retries per request hit!")
+            if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
+                raise Exception("Max retries per request hit!")
 
             # MODEL CALL
             result = original_function(*args, **kwargs)
@@ -1574,12 +1563,8 @@ def client(original_function):
                     )
 
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
-            if litellm.num_retries_per_request is not None:
-                # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
-                if previous_models is not None:
-                    if litellm.num_retries_per_request <= len(previous_models):
-                        raise Exception("Max retries per request hit!")
+            if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
+                raise Exception("Max retries per request hit!")
 
             # [OPTIONAL] CHECK CACHE
             print_verbose(
