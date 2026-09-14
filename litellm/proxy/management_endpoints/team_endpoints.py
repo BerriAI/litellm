@@ -76,6 +76,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     OrganizationNotFoundError,
+    UserNotFoundError,
     _cache_team_object,
     allowed_route_check_inside_route,
     can_org_access_model,
@@ -4873,7 +4874,7 @@ async def _get_user_team_ids_from_db(
             proxy_logging_obj=proxy_logging_obj,
             check_db_only=True,
         )
-    except ValueError:
+    except UserNotFoundError:
         return ()
     return tuple(user.teams or ()) if user is not None else ()
 
