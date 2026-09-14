@@ -49,17 +49,55 @@ describe("GuardrailViewer", () => {
     expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
   });
 
-  it("renders not_run as NOT RUN (muted) and keeps it out of the evaluated and passed counts", () => {
-    const data = makeGuardrailInformation({ guardrail_status: "not_run", guardrail_mode: "pre_call" });
+  it("renders not_run as NOT RUN (muted) and keeps it out of the evaluated and passed counts", async () => {
+    const user = userEvent.setup();
+    const data = makeGuardrailInformation({
+      guardrail_status: "not_run",
+      guardrail_mode: "pre_call",
+      guardrail_response: "no scannable content after message scoping",
+      start_time: null,
+      end_time: null,
+      duration: null,
+    });
     renderWithProviders(<GuardrailViewer data={data} />);
 
     expect(screen.getByText(/0 guardrails evaluated/)).toBeInTheDocument();
     expect(screen.getByText(/0 Passed/)).toHaveClass("text-muted-foreground");
     expect(screen.getByText(/1 Not run/)).toBeInTheDocument();
-    const badges = screen.getAllByText("NOT RUN");
-    expect(badges).toHaveLength(2);
-    expect(badges[0]).toHaveClass("text-muted-foreground");
+    const badge = screen.getByText("NOT RUN");
+    expect(badge).toHaveClass("text-muted-foreground");
     expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^T\+/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("pii-rail"));
+    expect(screen.getByText("no scannable content after message scoping")).toBeInTheDocument();
+  });
+
+  it("anchors the lifecycle timeline on timed entries when an untimed not_run entry sorts first", () => {
+    const skipped = makeGuardrailInformation({
+      guardrail_name: "skipped-rail",
+      guardrail_status: "not_run",
+      guardrail_mode: "pre_call",
+      start_time: null,
+      end_time: null,
+      duration: null,
+    });
+    const ran = makeGuardrailInformation({
+      guardrail_name: "ran-rail",
+      guardrail_status: "success",
+      guardrail_mode: "post_call",
+      start_time: 1_700_000_000,
+      end_time: 1_700_000_000.25,
+      duration: 0.25,
+    });
+    renderWithProviders(<GuardrailViewer data={[skipped, ran]} />);
+
+    expect(screen.getByText(/1 guardrail evaluated/)).toBeInTheDocument();
+    expect(screen.getByText("Request received").parentElement).toHaveTextContent("T+0ms");
+    expect(screen.getByText(/Post-call guardrail: ran-rail/).parentElement).toHaveTextContent("T+250ms");
+    expect(screen.getByText("Response returned").parentElement).toHaveTextContent("T+251ms");
+    expect(screen.queryByText(/Pre-call guardrail: skipped-rail/)).not.toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
   });
 
   it("calculates and displays masked entity totals", async () => {
