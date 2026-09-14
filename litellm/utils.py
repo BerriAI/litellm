@@ -6264,7 +6264,7 @@ def function_to_dict(input_function) -> dict:
             "enum": param_enum,
         }
 
-        parameters[param_name] = dict([(k, v) for k, v in param_dict.items() if isinstance(v, str)])
+        parameters[param_name] = {k: v for k, v in param_dict.items() if isinstance(v, str)}
 
         # Check if the parameter has no default value (i.e., it's required)
         if param.default == param.empty:

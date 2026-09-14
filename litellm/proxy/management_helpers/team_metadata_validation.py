@@ -115,9 +115,10 @@ async def run_team_metadata_validation(
                 "error": f"custom_team_metadata_validate is an Enterprise feature. {CommonProxyErrors.not_premium_user.value}"
             },
         )
-    if not (
-        inspect.iscoroutinefunction(validator) or inspect.iscoroutinefunction(getattr(validator, "__call__", None))
-    ):
+    # Value unwrap so iscoroutinefunction can see through functors;
+    # B004's callable() advice does not apply here.
+    validator_call = getattr(validator, "__call__", None)  # noqa: B004
+    if not (inspect.iscoroutinefunction(validator) or inspect.iscoroutinefunction(validator_call)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={  # mutable-ok: HTTPException.detail has no immutable form
