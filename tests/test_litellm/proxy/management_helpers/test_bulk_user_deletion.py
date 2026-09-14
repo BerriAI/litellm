@@ -5,14 +5,14 @@ from contextlib import asynccontextmanager
 from typing import Final
 
 import pytest
-from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, MemberDeleteRequest, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.list_api.common import ManagementProblem
 from litellm.proxy.management_helpers.bulk_user_deletion import bulk_delete_users, bulk_remove_team_members
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkDeleteUserRequest
-from litellm.types.proxy.management_endpoints.team_endpoints import BulkTeamMemberDeleteRequest
+from litellm.types.proxy.management_endpoints.team_endpoints import BulkTeamMemberDeleteRequest, TeamMemberRef
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
 INTERNAL: Final = UserAPIKeyAuth(user_id="someone", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -237,7 +237,8 @@ async def _remove(
     cache: UserApiKeyCache | None = None,
 ):
     return await bulk_remove_team_members(
-        data=BulkTeamMemberDeleteRequest(team_id=team_id, members=tuple(MemberDeleteRequest(**m) for m in members)),
+        team_id=team_id,
+        data=BulkTeamMemberDeleteRequest(members=tuple(TeamMemberRef(**m) for m in members)),
         user_api_key_dict=caller,
         prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
         user_api_key_cache=cache or UserApiKeyCache(),
@@ -260,10 +261,10 @@ async def test_bulk_delete_removes_users_from_every_team_and_store():
         org_memberships=[{"user_id": "u1", "organization_id": "o1", "user_role": "internal_user"}],
     )
 
-    response = await _delete(prisma, ["u1", "u2"])
+    results = await _delete(prisma, ["u1", "u2"])
 
-    assert (response.total_requested, response.successful_deletions, response.failed_deletions) == (2, 2, 0)
-    assert [(r.user_id, r.user_email, r.success, r.teams_removed) for r in response.results] == [
+    assert len(results) == 2
+    assert [(r.user_id, r.user_email, r.success, r.teams_removed) for r in results] == [
         ("u1", "u1@example.com", True, ("t1", "t2")),
         ("u2", "u2@example.com", True, ("t1",)),
     ]
@@ -297,9 +298,9 @@ async def test_bulk_delete_leaves_teammates_who_share_the_deleted_users_email_al
         ],
     )
 
-    response = await _delete(prisma, ["u1"])
+    results = await _delete(prisma, ["u1"])
 
-    assert [(r.success, r.teams_removed) for r in response.results] == [(True, ("t1",))]
+    assert [(r.success, r.teams_removed) for r in results] == [(True, ("t1",))]
     assert _roster(prisma, "t1") == ["twin"]
     assert set(prisma.db.litellm_usertable.rows) == {"twin"} and prisma.db.litellm_usertable.rows["twin"].teams == [
         "t1"
@@ -319,9 +320,9 @@ async def test_bulk_delete_removes_the_deleted_users_email_only_roster_entry():
     )
     prisma = _FakePrisma(users=[_user("u1", "t1"), _user("keep", "t1")], teams=[team])
 
-    response = await _delete(prisma, ["u1"])
+    results = await _delete(prisma, ["u1"])
 
-    assert [(r.success, r.teams_removed) for r in response.results] == [(True, ("t1",))]
+    assert [(r.success, r.teams_removed) for r in results] == [(True, ("t1",))]
     assert _roster(prisma, "t1") == ["keep"]
     assert set(prisma.db.litellm_usertable.rows) == {"keep"}
 
@@ -334,9 +335,9 @@ async def test_bulk_delete_finds_teams_through_membership_rows_when_user_teams_a
         memberships=[("t1", "u1")],
     )
 
-    response = await _delete(prisma, ["u1"])
+    results = await _delete(prisma, ["u1"])
 
-    assert response.results[0].teams_removed == ("t1",)
+    assert results[0].teams_removed == ("t1",)
     assert _roster(prisma, "t1") == ["keep"]
     assert prisma.db.litellm_teammembership.rows == []
 
@@ -350,9 +351,9 @@ async def test_bulk_delete_reads_roster_under_lock_so_a_concurrent_add_survives(
 
     prisma = _FakePrisma(users=[_user("u1", "t1")], teams=[team], on_lock=concurrent_member_add)
 
-    response = await _delete(prisma, ["u1"])
+    results = await _delete(prisma, ["u1"])
 
-    assert response.results[0].success is True
+    assert results[0].success is True
     assert _roster(prisma, "t1") == ["late"]
 
 
@@ -360,10 +361,10 @@ async def test_bulk_delete_reads_roster_under_lock_so_a_concurrent_add_survives(
 async def test_bulk_delete_reports_missing_and_duplicate_ids_per_item_and_still_deletes_the_rest():
     prisma = _FakePrisma(users=[_user("u1")])
 
-    response = await _delete(prisma, ["u1", "ghost", "u1"])
+    results = await _delete(prisma, ["u1", "ghost", "u1"])
 
-    assert (response.successful_deletions, response.failed_deletions) == (1, 2)
-    assert [(r.user_id, r.success, r.error) for r in response.results] == [
+    assert [r.success for r in results].count(True) == 1
+    assert [(r.user_id, r.success, r.error) for r in results] == [
         ("u1", True, None),
         ("ghost", False, "User id=ghost not found"),
         ("u1", False, "Duplicate user_id in request: u1"),
@@ -381,9 +382,9 @@ async def test_bulk_delete_rolls_back_every_team_and_user_when_one_team_rewrite_
     )
     cache = _cache_with("k1")
 
-    response = await _delete(prisma, ["u1", "u2"], cache=cache)
+    results = await _delete(prisma, ["u1", "u2"], cache=cache)
 
-    assert [(r.user_id, r.success, r.teams_removed, r.error) for r in response.results] == [
+    assert [(r.user_id, r.success, r.teams_removed, r.error) for r in results] == [
         ("u1", False, (), "Failed to delete user: lock timeout"),
         ("u2", False, (), "Failed to delete user: lock timeout"),
     ]
@@ -397,9 +398,9 @@ async def test_bulk_delete_rolls_back_every_team_and_user_when_one_team_rewrite_
 async def test_bulk_delete_skips_teams_the_user_still_names_but_which_no_longer_exist():
     prisma = _FakePrisma(users=[_user("u1", "gone", "t1")], teams=[_team("t1", "u1", "keep")])
 
-    response = await _delete(prisma, ["u1"])
+    results = await _delete(prisma, ["u1"])
 
-    assert [(r.success, r.teams_removed) for r in response.results] == [(True, ("t1",))]
+    assert [(r.success, r.teams_removed) for r in results] == [(True, ("t1",))]
     assert prisma.db.litellm_usertable.rows == {} and _roster(prisma, "t1") == ["keep"]
     assert prisma.locks == ["t1"]
 
@@ -414,9 +415,9 @@ async def test_bulk_delete_rolls_back_every_user_row_and_reports_it_per_row_when
     )
     cache = _cache_with("k1")
 
-    response = await _delete(prisma, ["u1", "u2", "ghost"], cache=cache)
+    results = await _delete(prisma, ["u1", "u2", "ghost"], cache=cache)
 
-    assert [(r.user_id, r.success, r.error) for r in response.results] == [
+    assert [(r.user_id, r.success, r.error) for r in results] == [
         ("u1", False, "Failed to delete user: connection reset"),
         ("u2", False, "Failed to delete user: connection reset"),
         ("ghost", False, "User id=ghost not found"),
@@ -452,10 +453,10 @@ async def test_bulk_delete_evicts_deleted_keys_and_users_from_the_auth_cache():
 async def test_bulk_delete_rejects_non_admin_callers_before_touching_the_db():
     prisma = _FakePrisma(users=[_user("u1")])
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ManagementProblem) as exc:
         await _delete(prisma, ["u1"], caller=INTERNAL)
 
-    assert exc.value.status_code == 403
+    assert exc.value.problem.status == 403
     assert set(prisma.db.litellm_usertable.rows) == {"u1"}
 
 
@@ -471,10 +472,10 @@ async def test_org_admin_deletes_only_users_fully_inside_their_orgs():
         ],
     )
 
-    response = await _delete(prisma, ["inside", "straddles", "orgless"], caller=ORG_ADMIN)
+    results = await _delete(prisma, ["inside", "straddles", "orgless"], caller=ORG_ADMIN)
 
-    assert [r.success for r in response.results] == [True, False, False]
-    assert all("not within your admin scope" in (r.error or "") for r in response.results[1:])
+    assert [r.success for r in results] == [True, False, False]
+    assert all("not within your admin scope" in (r.error or "") for r in results[1:])
     assert set(prisma.db.litellm_usertable.rows) == {"straddles", "orgless"}
     assert {(m["user_id"], m["organization_id"]) for m in prisma.db.litellm_organizationmembership.rows} == {
         ("org-admin", "o1"),
@@ -496,10 +497,9 @@ async def test_bulk_member_delete_removes_by_id_and_email_and_keeps_the_rest():
         ],
     )
 
-    response = await _remove(prisma, "t1", [{"user_id": "u1"}, {"user_email": "u2@example.com"}])
+    results = await _remove(prisma, "t1", [{"user_id": "u1"}, {"user_email": "u2@example.com"}])
 
-    assert (response.team_id, response.successful_deletions, response.failed_deletions) == ("t1", 2, 0)
-    assert [(r.user_id, r.user_email, r.success) for r in response.results] == [
+    assert [(r.user_id, r.user_email, r.success) for r in results] == [
         ("u1", None, True),
         (None, "u2@example.com", True),
     ]
@@ -516,13 +516,12 @@ async def test_bulk_member_delete_removes_by_id_and_email_and_keeps_the_rest():
 async def test_bulk_member_delete_reports_members_not_on_the_team_without_rewriting_the_roster():
     prisma = _FakePrisma(users=[_user("u1", "t1"), _user("elsewhere")], teams=[_team("t1", "u1")])
 
-    response = await _remove(prisma, "t1", [{"user_id": "elsewhere"}, {"user_email": "nobody@example.com"}])
+    results = await _remove(prisma, "t1", [{"user_id": "elsewhere"}, {"user_email": "nobody@example.com"}])
 
-    assert [(r.success, r.error) for r in response.results] == [
+    assert [(r.success, r.error) for r in results] == [
         (False, "User not found in team"),
         (False, "User not found in team"),
     ]
-    assert (response.successful_deletions, response.failed_deletions) == (0, 2)
     assert prisma.db.litellm_teamtable.update_calls == 0
     assert _roster(prisma, "t1") == ["u1"]
 
@@ -536,9 +535,9 @@ async def test_bulk_member_delete_leaves_keys_and_memberships_of_unmatched_membe
         tokens=[{"token": "orphan-key", "user_id": "elsewhere", "team_id": "t1"}],
     )
 
-    response = await _remove(prisma, "t1", [{"user_id": "elsewhere"}])
+    results = await _remove(prisma, "t1", [{"user_id": "elsewhere"}])
 
-    assert response.results[0].success is False
+    assert results[0].success is False
     assert prisma.db.litellm_teammembership.rows == [{"team_id": "t1", "user_id": "elsewhere"}]
     assert [t["token"] for t in prisma.db.litellm_verificationtoken.rows] == ["orphan-key"]
 
@@ -547,17 +546,16 @@ async def test_bulk_member_delete_leaves_keys_and_memberships_of_unmatched_membe
 async def test_bulk_member_delete_reports_repeated_members_as_duplicates_and_removes_them_once():
     prisma = _FakePrisma(users=[_user("u1", "t1"), _user("u2", "t1")], teams=[_team("t1", "u1", "u2", "keep")])
 
-    response = await _remove(
+    results = await _remove(
         prisma, "t1", [{"user_id": "u1"}, {"user_id": "u1"}, {"user_email": "u1@example.com"}, {"user_id": "u2"}]
     )
 
-    assert [(r.success, r.error) for r in response.results] == [
+    assert [(r.success, r.error) for r in results] == [
         (True, None),
         (False, "Duplicate member in request"),
         (True, None),
         (True, None),
     ]
-    assert (response.successful_deletions, response.failed_deletions) == (3, 1)
     assert _roster(prisma, "t1") == ["keep"]
 
 
@@ -583,9 +581,9 @@ async def test_bulk_member_delete_evicts_the_removed_team_keys_from_the_auth_cac
 async def test_bulk_member_delete_cleans_a_user_whose_teams_array_still_names_the_team():
     prisma = _FakePrisma(users=[_user("stale", "t1")], teams=[_team("t1", "other")], memberships=[("t1", "stale")])
 
-    response = await _remove(prisma, "t1", [{"user_id": "stale"}])
+    results = await _remove(prisma, "t1", [{"user_id": "stale"}])
 
-    assert response.results[0].success is True
+    assert results[0].success is True
     assert prisma.db.litellm_usertable.rows["stale"].teams == []
     assert prisma.db.litellm_teammembership.rows == []
     assert _roster(prisma, "t1") == ["other"] and prisma.db.litellm_teamtable.update_calls == 0
@@ -595,13 +593,13 @@ async def test_bulk_member_delete_cleans_a_user_whose_teams_array_still_names_th
 async def test_bulk_member_delete_rejects_unknown_team_and_unauthorized_callers():
     prisma = _FakePrisma(users=[_user("u1", "t1")], teams=[_team("t1", "u1")])
 
-    with pytest.raises(HTTPException) as missing:
+    with pytest.raises(ManagementProblem) as missing:
         await _remove(prisma, "nope", [{"user_id": "u1"}])
-    with pytest.raises(HTTPException) as forbidden:
+    with pytest.raises(ManagementProblem) as forbidden:
         await _remove(prisma, "t1", [{"user_id": "u1"}], caller=INTERNAL)
 
-    assert missing.value.status_code == 400
-    assert forbidden.value.status_code == 403
+    assert missing.value.problem.status == 404
+    assert forbidden.value.problem.status == 403
     assert _roster(prisma, "t1") == ["u1"] and prisma.locks == []
 
 
@@ -611,9 +609,9 @@ async def test_team_admin_may_bulk_remove_members():
     team.members_with_roles[0].role = "admin"
     prisma = _FakePrisma(users=[_user("lead", "t1"), _user("u1", "t1")], teams=[team])
 
-    response = await _remove(prisma, "t1", [{"user_id": "u1"}], caller=UserAPIKeyAuth(user_id="lead"))
+    results = await _remove(prisma, "t1", [{"user_id": "u1"}], caller=UserAPIKeyAuth(user_id="lead"))
 
-    assert response.results[0].success is True
+    assert results[0].success is True
     assert _roster(prisma, "t1") == ["lead"]
 
 
@@ -623,22 +621,24 @@ def test_request_models_enforce_batch_bounds():
     with pytest.raises(ValidationError):
         BulkDeleteUserRequest(user_ids=tuple(f"u{i}" for i in range(501)))
     with pytest.raises(ValidationError):
-        BulkTeamMemberDeleteRequest(team_id="t1", members=())
+        BulkTeamMemberDeleteRequest(members=())
     with pytest.raises(ValidationError):
-        BulkTeamMemberDeleteRequest(
-            team_id="t1", members=tuple(MemberDeleteRequest(user_id=f"u{i}") for i in range(501))
-        )
+        BulkTeamMemberDeleteRequest(members=tuple(TeamMemberRef(user_id=f"u{i}") for i in range(501)))
     assert len(BulkDeleteUserRequest(user_ids=tuple(f"u{i}" for i in range(500))).user_ids) == 500
 
 
 def test_bulk_member_delete_request_requires_exactly_one_identifier_per_member():
     with pytest.raises(ValidationError, match="exactly one of user_id or user_email"):
-        BulkTeamMemberDeleteRequest(
-            team_id="t1", members=(MemberDeleteRequest(user_id="u1", user_email="other@example.com"),)
-        )
+        BulkTeamMemberDeleteRequest.model_validate({"members": [{"user_id": "u1", "user_email": "other@example.com"}]})
     with pytest.raises(ValidationError):
-        BulkTeamMemberDeleteRequest.model_validate({"team_id": "t1", "members": [{}]})
-    assert (
-        BulkTeamMemberDeleteRequest(team_id="t1", members=(MemberDeleteRequest(user_id="u1"),)).members[0].user_id
-        == "u1"
-    )
+        BulkTeamMemberDeleteRequest.model_validate({"members": [{}]})
+    assert BulkTeamMemberDeleteRequest(members=(TeamMemberRef(user_id="u1"),)).members[0].user_id == "u1"
+
+
+def test_request_models_reject_unknown_fields():
+    with pytest.raises(ValidationError, match="team_id"):
+        BulkTeamMemberDeleteRequest.model_validate({"team_id": "t1", "members": [{"user_id": "u1"}]})
+    with pytest.raises(ValidationError, match="role"):
+        BulkTeamMemberDeleteRequest.model_validate({"members": [{"user_id": "u1", "role": "admin"}]})
+    with pytest.raises(ValidationError, match="dry_run"):
+        BulkDeleteUserRequest.model_validate({"user_ids": ["u1"], "dry_run": True})

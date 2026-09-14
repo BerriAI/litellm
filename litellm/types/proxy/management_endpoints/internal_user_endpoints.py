@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import (
@@ -9,6 +9,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 MAX_BULK_DELETE_USERS: Final = 500
 
@@ -88,11 +89,15 @@ class BulkUpdateUserResponse(BaseModel):
 
 
 class BulkDeleteUserRequest(BaseModel):
+    """Body of `POST /management/v1/users/bulk_delete`."""
+
+    model_config = ConfigDict(extra="forbid")
+
     user_ids: tuple[str, ...] = Field(min_length=1, max_length=MAX_BULK_DELETE_USERS)
 
 
 class UserDeleteResult(BaseModel):
-    """Outcome for one row of `/user/bulk_delete`. `teams_removed` lists the teams the user was taken out of."""
+    """Outcome for one requested user, in request order. `teams_removed` lists the teams the user left."""
 
     user_id: str
     user_email: str | None = None
@@ -101,8 +106,5 @@ class UserDeleteResult(BaseModel):
     error: str | None = None
 
 
-class BulkDeleteUserResponse(BaseModel):
-    results: tuple[UserDeleteResult, ...]
-    total_requested: int
-    successful_deletions: int
-    failed_deletions: int
+class BulkDeleteUsersResponse(ResourceResponse[tuple[UserDeleteResult, ...]]):
+    """`{data: [...]}` with one `UserDeleteResult` per requested user, in request order."""

@@ -659,7 +659,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/update",
             "/user/bulk_update",
             "/user/delete",
-            "/user/bulk_delete",
+            "/management/v1/users/bulk_delete",
             "/user/info",
             "/user/list",
             "/user/daily/activity",
@@ -839,7 +839,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
-        "/team/bulk_member_delete",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -866,6 +866,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
+        "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",

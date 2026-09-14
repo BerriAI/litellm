@@ -8,7 +8,6 @@ These are members of a Team on LiteLLM
 /user/update
 /user/bulk_update
 /user/delete
-/user/bulk_delete
 /user/info
 /user/list
 """
@@ -56,7 +55,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
-from litellm.proxy.management_helpers.bulk_user_deletion import bulk_delete_users
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     handle_update_object_permission_common,
@@ -79,8 +77,6 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
-    BulkDeleteUserRequest,
-    BulkDeleteUserResponse,
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
     UserListResponse,
@@ -2498,46 +2494,6 @@ async def delete_user(
     deleted_users: Final = await _user_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
 
     return deleted_users
-
-
-@router.post(
-    "/user/bulk_delete",
-    tags=["Internal User management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
-    dependencies=(Depends(user_api_key_auth),),
-    response_model=BulkDeleteUserResponse,
-)
-@management_endpoint_wrapper
-async def bulk_delete_user(
-    data: BulkDeleteUserRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
-    litellm_changed_by: str | None = Header(
-        None,
-        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-    ),
-) -> BulkDeleteUserResponse:
-    """Delete up to 500 users, removing each from every team; same authorization as `/user/delete`."""
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_admin_name,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
-    try:
-        return await bulk_delete_users(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            litellm_changed_by=litellm_changed_by,
-        )
-    except Exception as e:  # noqa: BLE001  # normalize every failure to the proxy exception contract
-        verbose_proxy_logger.exception("/user/bulk_delete: Exception occured")
-        raise handle_exception_on_proxy(e)
 
 
 async def add_internal_user_to_organization(
