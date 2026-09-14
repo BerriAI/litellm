@@ -1529,10 +1529,10 @@ def _collect_key_team_limit_warnings(
 
 
 def _maybe_add_key_team_limit_warnings(
-    payload: dict[str, object],
+    payload: Mapping[str, object],
     data: GenerateKeyRequest | UpdateKeyRequest,
     team_table: LiteLLM_TeamTable | LiteLLM_TeamTableCachedObj | None,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """Attach team-limit warnings to a key update payload when caps are exceeded."""
     if team_table is None:
         return payload
@@ -3239,7 +3239,7 @@ async def update_key_fn(
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        updated_key_info: Final[dict[str, object]] = {"key": key, **response["data"]}
+        updated_key_info: Final[Mapping[str, object]] = {"key": key, **response["data"]}
         if team_limit_warnings:
             return {**updated_key_info, "warnings": list(team_limit_warnings)}
         return updated_key_info

@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
@@ -1278,7 +1278,7 @@ class GenerateKeyResponse(KeyRequestBase):
     updated_by: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
-    warnings: list[KeyTeamLimitWarning] | None = None
+    warnings: Sequence[KeyTeamLimitWarning] | None = None
 
     @model_validator(mode="before")
     @classmethod
