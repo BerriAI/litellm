@@ -1,6 +1,8 @@
 """Tests for unified guardrail."""
 
 import logging
+from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -19,14 +21,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_messages_without_system,
     openai_messages_without_tool,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
+from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
-from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
@@ -645,6 +647,64 @@ class TestUnifiedLLMGuardrails:
         """End-to-end tests: UnifiedLLMGuardrails -> OCRHandler."""
 
         @pytest.mark.asyncio
+        @pytest.mark.parametrize("call_type", [CallTypes.ocr, CallTypes.aocr, CallTypes.aresponses])
+        async def test_post_call_logging_fallback_is_limited_to_ocr(self, call_type: CallTypes) -> None:
+            guardrail: Final = RecordingGuardrail()
+            response: Final = (
+                TestUnifiedLLMGuardrails.TestResponsesRouteAliases._responses_api_response()
+                if call_type == CallTypes.aresponses
+                else OCRResponse(model="mistral-ocr-latest", pages=[OCRPage(index=0, markdown="Scan this page")])
+            )
+
+            result: Final = await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data={
+                    "guardrail_to_apply": guardrail,
+                    "litellm_logging_obj": SimpleNamespace(call_type=call_type.value),
+                },
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+            assert result is response
+            if call_type in (CallTypes.ocr, CallTypes.aocr):
+                assert len(guardrail.apply_calls) == 1
+                assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Scan this page"]
+            else:
+                assert guardrail.apply_calls == []
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize("request_route", [None, "/v1/chat/completions"])
+        async def test_ocr_logging_fallback_preserves_route_and_response_precedence(
+            self, request_route: str | None, monkeypatch: pytest.MonkeyPatch
+        ) -> None:
+            from litellm.types.utils import ModelResponse
+
+            _patch_translation_mappings(
+                monkeypatch,
+                {
+                    CallTypes.completion: OpenAIChatCompletionsHandler,
+                    CallTypes.acompletion: OpenAIChatCompletionsHandler,
+                    CallTypes.aocr: OCRHandler,
+                },
+            )
+            guardrail: Final = RecordingGuardrail()
+            response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Chat output"}}])
+
+            result: Final = await guardrail.async_post_call_success_deployment_hook(
+                request_data={
+                    "guardrails": [guardrail.guardrail_name],
+                    "user_api_key_request_route": request_route,
+                    "litellm_logging_obj": SimpleNamespace(call_type=CallTypes.aocr.value),
+                },
+                response=response,
+                call_type=CallTypes.aocr,
+            )
+
+            assert result is response
+            assert len(guardrail.apply_calls) == 1
+            assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Chat output"]
+
+        @pytest.mark.asyncio
         async def test_pre_call_hook_invokes_ocr_handler_for_input(self):
             """
             Verify that async_pre_call_hook with call_type=aocr routes through
@@ -1034,7 +1094,7 @@ class TestStreamingTransform:
         )
 
         emitted = []
-        async for item in handler._emit_streaming_http_error(
+        async for item in handler.emit_streaming_http_error(
             exc,
             call_type=CallTypes.asend_message.value,
             responses_so_far=[{"id": "req-1"}],

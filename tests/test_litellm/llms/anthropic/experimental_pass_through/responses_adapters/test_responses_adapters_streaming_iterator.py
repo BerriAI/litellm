@@ -10,6 +10,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    encrypted_reasoning_signature,
+)
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
 )
@@ -114,7 +117,7 @@ class TestReasoningItemWithoutSummaryText:
     """
 
     @staticmethod
-    def _gpt_turn(reasoning_summary_deltas: list) -> list:
+    def _gpt_turn(reasoning_summary_deltas: list, encrypted_content: str | None = None) -> list:
         return [
             {"type": "response.created"},
             {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
@@ -122,7 +125,10 @@ class TestReasoningItemWithoutSummaryText:
                 {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": delta}
                 for delta in reasoning_summary_deltas
             ),
-            {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1"}},
+            {
+                "type": "response.output_item.done",
+                "item": {"type": "reasoning", "id": "rs_1", "encrypted_content": encrypted_content},
+            },
             {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
             {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hello"},
             {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
@@ -169,6 +175,70 @@ class TestReasoningItemWithoutSummaryText:
         chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weighing options"]))
 
         assert not [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+
+
+_ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
+
+
+class TestEncryptedReasoningIsStreamedForReplay:
+    """Regression for https://github.com/BerriAI/litellm/issues/40288.
+
+    The client echoes a thinking block's signature (or a redacted block's data) back on the
+    next turn, so the item's ``encrypted_content`` has to reach it through one of those.
+    """
+
+    def test_encrypted_content_is_streamed_as_the_signature_before_the_block_closes(self):
+        chunks = _drain_async(
+            TestReasoningItemWithoutSummaryText._gpt_turn(
+                reasoning_summary_deltas=["Weighing options"], encrypted_content=_ENCRYPTED_REASONING
+            )
+        )
+
+        assert [(c["type"], c.get("index"), c.get("delta", {}).get("type")) for c in chunks[1:5]] == [
+            ("content_block_start", 0, None),
+            ("content_block_delta", 0, "thinking_delta"),
+            ("content_block_delta", 0, "signature_delta"),
+            ("content_block_stop", 0, None),
+        ]
+        assert chunks[3]["delta"]["signature"] == encrypted_reasoning_signature(_ENCRYPTED_REASONING)
+
+    def test_reasoning_without_summary_streams_a_redacted_thinking_block(self):
+        chunks = _drain_async(
+            TestReasoningItemWithoutSummaryText._gpt_turn(
+                reasoning_summary_deltas=[], encrypted_content=_ENCRYPTED_REASONING
+            )
+        )
+
+        assert [(c["type"], c.get("index")) for c in chunks[1:]] == [
+            ("content_block_start", 0),
+            ("content_block_stop", 0),
+            ("content_block_start", 1),
+            ("content_block_delta", 1),
+            ("content_block_stop", 1),
+        ]
+        assert chunks[1]["content_block"] == {
+            "type": "redacted_thinking",
+            "data": encrypted_reasoning_signature(_ENCRYPTED_REASONING),
+        }
+
+    def test_summary_parts_are_separated_inside_the_one_thinking_block(self):
+        """Two summary parts read as two paragraphs, not as one run-on sentence."""
+        events = [
+            {"type": "response.created"},
+            {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+            {"type": "response.reasoning_summary_part.added", "item_id": "rs_1", "summary_index": 0},
+            {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "First."},
+            {"type": "response.reasoning_summary_part.added", "item_id": "rs_1", "summary_index": 1},
+            {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "Second."},
+            {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1"}},
+        ]
+        chunks = _process_all(events)
+
+        thinking = "".join(
+            c["delta"]["thinking"] for c in chunks if c.get("delta", {}).get("type") == "thinking_delta"
+        )
+        assert thinking == "First.\n\nSecond."
+        assert [c["type"] for c in chunks].count("content_block_start") == 1
 
 
 class TestToolUseBlockClosedExactlyOnce:

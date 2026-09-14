@@ -183,6 +183,7 @@ class _RemoteSource:
 class RemoteMedia:
     url: str
     fields: Mapping[str, object]
+    part_type: str
 
 
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -190,6 +191,10 @@ _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 def inline_every_remote_url(_media: RemoteMedia) -> bool:
     return True
+
+
+def inline_remote_image_urls(media: RemoteMedia) -> bool:
+    return media.part_type == "image_url"
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
@@ -223,11 +228,11 @@ def _parse_remote_part(part: object) -> _RemoteImage | _RemoteFile | _RemoteSour
 def _remote_media(remote: _RemoteImage | _RemoteFile | _RemoteSource) -> RemoteMedia:
     match remote:
         case _RemoteImage(_, image_url, url):
-            return RemoteMedia(url, image_url if image_url is not None else _NO_FIELDS)
+            return RemoteMedia(url, image_url if image_url is not None else _NO_FIELDS, "image_url")
         case _RemoteFile(_, file, url):
-            return RemoteMedia(url, file)
-        case _RemoteSource(_, source, url):
-            return RemoteMedia(url, source)
+            return RemoteMedia(url, file, "file")
+        case _RemoteSource(part, source, url):
+            return RemoteMedia(url, source, str(part.get("type")))
 
 
 _PDF_FORMAT: Final = MappingProxyType({"format": "application/pdf"})
