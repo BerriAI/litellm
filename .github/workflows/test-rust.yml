@@ -21,6 +21,9 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -51,6 +54,9 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -88,8 +94,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            litellm-rust/target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'litellm-rust/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ github.job }}-
 
@@ -123,8 +129,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            litellm-rust/target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'litellm-rust/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ github.job }}-
 

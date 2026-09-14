@@ -8,10 +8,11 @@
 #
 # Strategy: ignore everything, then re-include only what the build needs:
 #   - litellm/            (pip install . needs the full package + proxy reader)
-#   - litellm-rust/       (the rust workspace; Cargo.lock + crate sources)
+#   - litellm-rust/       (the Rust crate sources)
 #   - enterprise/         (litellm/proxy/enterprise symlinks into it; maturin walks it)
 #   - litellm-proxy-extras/ (built into a wheel alongside enterprise/ for litellm[proxy])
 #   - pyproject.toml / README.md / LICENSE  (packaging metadata for the wheel build)
+#   - Cargo.toml / Cargo.lock (the Rust workspace and dependency lock)
 #   - rust-toolchain.toml (the pinned channel every cargo call in the build uses)
 *
 
@@ -21,6 +22,8 @@
 !enterprise/
 !litellm-proxy-extras/
 !pyproject.toml
+!Cargo.toml
+!Cargo.lock
 !rust-toolchain.toml
 !README.md
 !LICENSE
