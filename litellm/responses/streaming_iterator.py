@@ -364,10 +364,20 @@ class BaseResponsesAPIStreamingIterator:
                     _done_item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
                     if _done_item is not None:
                         _output_index: Final = getattr(openai_responses_api_chunk, "output_index", None)
-                        _index: Final = (
-                            _output_index if isinstance(_output_index, int) else len(self._streamed_output_items)
-                        )
-                        self._streamed_output_items.setdefault(_index, _done_item)
+                        if (
+                            isinstance(_output_index, int)
+                            and not isinstance(_output_index, bool)
+                            and _output_index not in self._streamed_output_items
+                        ):
+                            self._streamed_output_items[_output_index] = _done_item
+                        else:
+                            # missing/invalid/duplicate index: append after the highest known
+                            # index so the fallback can never collide with a real index and
+                            # silently discard a streamed item
+                            _fallback_index: Final = (
+                                max(self._streamed_output_items.keys(), default=-1) + 1
+                            )
+                            self._streamed_output_items[_fallback_index] = _done_item
                 elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
                     _annotation: Final[object] = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
