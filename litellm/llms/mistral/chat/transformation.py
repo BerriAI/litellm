@@ -99,11 +99,11 @@ class MistralConfig(OpenAIGPTConfig):
             "stop",
             "response_format",
             "parallel_tool_calls",
+            "reasoning_effort",
         ]
 
-        # Add reasoning support for magistral models
         if "magistral" in model.lower():
-            supported_params.extend(["thinking", "reasoning_effort"])
+            supported_params.append("thinking")
 
         return supported_params
 
@@ -171,9 +171,11 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
                 optional_params["response_format"] = value
-            if param == "reasoning_effort" and "magistral" in model.lower():
-                # Flag that we need to add reasoning system prompt
-                optional_params["_add_reasoning_prompt"] = True
+            if param == "reasoning_effort":
+                if "magistral" in model.lower():
+                    optional_params["_add_reasoning_prompt"] = True
+                else:
+                    optional_params["reasoning_effort"] = value
             if param == "thinking" and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
@@ -533,6 +535,8 @@ class MistralConfig(OpenAIGPTConfig):
         # Add reasoning system prompt if needed (for magistral models)
         if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
             messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
+
+        optional_params.pop("client_metadata", None)
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
