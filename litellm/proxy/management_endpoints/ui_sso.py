@@ -92,7 +92,6 @@ from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_obje
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
     has_user_setup_sso,
-    should_hide_default_credentials_hint,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -107,6 +106,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import should_hide_default_credentials_hint
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
