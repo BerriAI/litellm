@@ -625,7 +625,7 @@ class LangFuseLogger:
         level: str,
         litellm_call_id: str | None,
     ) -> tuple:
-        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
+        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse via sdk v%s", self.langfuse_sdk_version)
 
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = cast(
