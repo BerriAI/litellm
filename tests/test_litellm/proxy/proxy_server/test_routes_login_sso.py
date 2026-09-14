@@ -97,11 +97,23 @@ def test_fallback_login_returns_html_form_with_ui_username_set(client, monkeypat
 def test_fallback_login_shows_credentials_hint_by_default(client, monkeypatch):
     """Control: without the flag, /fallback/login still renders the hint."""
     monkeypatch.delenv("UI_USERNAME", raising=False)
+    monkeypatch.delenv("UI_PASSWORD", raising=False)
     monkeypatch.delenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", raising=False)
     response = client.get("/fallback/login")
     assert response.status_code == 200
     assert "Default Credentials" in response.text
     assert "MASTER_KEY" in response.text
+
+
+def test_fallback_login_hides_credentials_hint_when_ui_password_set(client, monkeypatch):
+    """Regression: a non-empty UI_PASSWORD means 'admin / MASTER_KEY' is wrong, so the hint must go."""
+    monkeypatch.setenv("UI_PASSWORD", "s3cret-pass")
+    monkeypatch.delenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", raising=False)
+    response = client.get("/fallback/login")
+    assert response.status_code == 200
+    assert "Default Credentials" not in response.text
+    assert "MASTER_KEY" not in response.text
+    assert 'name="username"' in response.text
 
 
 def test_fallback_login_hides_credentials_hint_via_env_flag(client, monkeypatch):

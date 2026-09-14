@@ -318,6 +318,7 @@ from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
     log_once_if_budget_reservation_disabled,
+    should_hide_default_credentials_hint,
     warn_once_if_custom_auth_skips_common_checks,
 )
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
@@ -15816,10 +15817,7 @@ async def fallback_login(request: Request):
 
     from fastapi.responses import HTMLResponse
 
-    hide_default_credentials_hint: Final = (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-    )
+    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     return HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=False,
