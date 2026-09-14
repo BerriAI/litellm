@@ -10,7 +10,9 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import Timeout as LitellmTimeout
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.proxy._types import UserAPIKeyAuth
@@ -24,6 +26,7 @@ from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import (
     agent_365_authorization_servers,
     agent_365_scopes_supported,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
@@ -346,32 +349,47 @@ class TestAllowFlow:
 
 
 class TestConversationId:
+    """One MCP session is one client conversation, so every tool call it carries must share the
+    conversationId Agent 365 sees; the per-call id is only for stateless calls without a session."""
+
     @pytest.mark.asyncio
-    async def test_request_call_id_beats_logging_obj_and_client_header(self):
+    async def test_two_calls_in_one_session_share_the_conversation_id(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        for call_id in ("call-1", "call-2"):
+            await _run(
+                guardrail,
+                _mcp_data(litellm_call_id=call_id, litellm_logging_obj=_logging_obj(call_id, mcp_session_id="sess-A")),
+            )
+        assert [call.json["conversationId"] for call in handler.calls[1:]] == ["sess-A", "sess-A"]
+
+    @pytest.mark.asyncio
+    async def test_server_recorded_session_beats_the_client_header(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        data: Final = _mcp_data(litellm_logging_obj=_logging_obj("call-id-1", mcp_session_id="sess-from-logging"))
+        await _run(guardrail, data)
+        assert handler.calls[1].json["conversationId"] == "sess-from-logging"
+
+    @pytest.mark.asyncio
+    async def test_sessionless_call_falls_back_to_the_request_call_id(self):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data(
+            metadata={"headers": {}},
             litellm_call_id="call-id-from-data",
-            litellm_logging_obj=_logging_obj("call-id-from-logging", mcp_session_id="sess-from-logging"),
+            litellm_logging_obj=_logging_obj("call-id-from-logging"),
         )
         await _run(guardrail, data)
         assert handler.calls[1].json["conversationId"] == "call-id-from-data"
 
     @pytest.mark.asyncio
-    async def test_logging_obj_call_id_beats_session_metadata_and_client_header(self):
+    async def test_sessionless_call_without_request_call_id_uses_the_logging_call_id(self):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
-        data: Final = _mcp_data(litellm_logging_obj=_logging_obj("call-id-1", mcp_session_id="sess-from-logging"))
+        data: Final = _mcp_data(metadata={"headers": {}}, litellm_logging_obj=_logging_obj("call-id-from-logging"))
         await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "call-id-1"
-
-    @pytest.mark.asyncio
-    async def test_logging_obj_session_id_beats_client_header(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler)
-        data: Final = _mcp_data(litellm_logging_obj=_logging_obj("", mcp_session_id="sess-from-logging"))
-        await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "sess-from-logging"
+        assert handler.calls[1].json["conversationId"] == "call-id-from-logging"
 
     @pytest.mark.asyncio
     async def test_session_id_header_case_insensitive(self):
@@ -949,6 +967,56 @@ class TestVeriaHardening:
         assert records[0]["guardrail_status"] == "guardrail_failed_to_respond"
 
 
+class _ArgumentMasker(CustomGuardrail):
+    """Sequential pre_mcp_call guardrail that redacts a marker in the tool arguments the way a content
+    filter configured with a MASK action does."""
+
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=[GuardrailEventHooks.pre_mcp_call],
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            default_on=True,
+        )
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        masked: Final = {
+            key: value.replace("REWRITE_ME", "[REWRITE_ME_REDACTED]") if isinstance(value, str) else value
+            for key, value in data["mcp_arguments"].items()
+        }
+        data["mcp_arguments"] = masked
+        data["modified_arguments"] = masked
+        return data
+
+
+class TestFinalArgumentsEvaluated:
+    """Agent 365 must judge the arguments that reach the upstream tool. A sibling guardrail that rewrites
+    them must not be able to slip a different argument state past the verdict, whichever way the two
+    are ordered in the guardrails list."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("agent_365_first", [True, False], ids=["agent_365_then_masker", "masker_then_agent_365"])
+    async def test_agent_365_receives_the_arguments_sent_upstream(self, agent_365_first: bool):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        masker: Final = _ArgumentMasker("arg-rewrite")
+        registered: Final = (guardrail, masker) if agent_365_first else (masker, guardrail)
+        for callback in registered:
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+        data: Final = _mcp_data(mcp_arguments={"turn": "please REWRITE_ME now"})
+        try:
+            result: Final = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+                user_api_key_dict=_user(), data=data, call_type="call_mcp_tool"
+            )
+        finally:
+            for callback in registered:
+                litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                    litellm.callbacks, callback, require_self=False
+                )
+        assert result["modified_arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
+        assert handler.calls[1].json["arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
+
+
 ENTRA_ISSUER: Final = "https://login.microsoftonline.com/tenant-abc/v2.0"
 GATEWAY_SCOPE: Final = "api://gateway-app/access_as_user"
 
@@ -1041,7 +1109,8 @@ class TestAgent365AuthorizationServers:
             ):
                 assert agent_365_authorization_servers(server, plain_key) == ()
                 assert agent_365_authorization_servers(server, guarded_key) == (ENTRA_ISSUER,)
-                assert agent_365_authorization_servers(server, None) == (ENTRA_ISSUER,)
+                assert agent_365_authorization_servers(server, None) == ()
+                assert agent_365_scopes_supported(_mcp_server(scopes=None), None) == ()
         finally:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(
                 litellm.callbacks, guardrail, require_self=False

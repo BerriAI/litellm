@@ -34,6 +34,7 @@ from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    ListedToolsCaller,
     MCPServerManager,
     _deserialize_json_dict,
     _flow_endpoints_missing,
@@ -6736,24 +6737,152 @@ class TestMCPServerManager:
         alice_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
         bob_schema = {"type": "object", "properties": {"path": {"type": "string"}, "site": {"type": "string"}}}
         manager._create_prefixed_tools(
-            [MCPTool(name="read", description="alice view", inputSchema=alice_schema)], server, user_api_key_auth=alice
+            [MCPTool(name="read", description="alice view", inputSchema=alice_schema)],
+            server,
+            caller=ListedToolsCaller(user_api_key_auth=alice),
         )
         manager._create_prefixed_tools(
-            [MCPTool(name="read", description="bob view", inputSchema=bob_schema)], server, user_api_key_auth=bob
+            [MCPTool(name="read", description="bob view", inputSchema=bob_schema)],
+            server,
+            caller=ListedToolsCaller(user_api_key_auth=bob),
         )
 
-        alice_tool = manager.get_listed_tool(server, "srv-read", alice)
-        bob_tool = manager.get_listed_tool(server, "srv-read", bob)
-        assert alice_tool is not None and (alice_tool.description, alice_tool.inputSchema) == ("alice view", alice_schema)
+        alice_tool = manager.get_listed_tool(server, "srv-read", ListedToolsCaller(user_api_key_auth=alice))
+        bob_tool = manager.get_listed_tool(server, "srv-read", ListedToolsCaller(user_api_key_auth=bob))
+        assert alice_tool is not None and (alice_tool.description, alice_tool.inputSchema) == (
+            "alice view",
+            alice_schema,
+        )
         assert bob_tool is not None and (bob_tool.description, bob_tool.inputSchema) == ("bob view", bob_schema)
-        assert manager.get_listed_tool(server, "srv-read", UserAPIKeyAuth(user_id="carol", api_key="k")) is None
+        carol = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="carol", api_key="k"))
+        assert manager.get_listed_tool(server, "srv-read", carol) is None
 
         shared = MCPServer(server_id="shared", name="shared", transport=MCPTransport.http, url="http://shared")
         manager._create_prefixed_tools(
-            [MCPTool(name="echo", description="everyone", inputSchema={})], shared, user_api_key_auth=alice
+            [MCPTool(name="echo", description="everyone", inputSchema={})],
+            shared,
+            caller=ListedToolsCaller(user_api_key_auth=alice),
         )
-        for_bob = manager.get_listed_tool(shared, "echo", bob)
+        for_bob = manager.get_listed_tool(shared, "echo", ListedToolsCaller(user_api_key_auth=bob))
         assert for_bob is not None and for_bob.description == "everyone"
+
+    @pytest.mark.parametrize(
+        ("server_kwargs", "caller_a", "caller_b"),
+        [
+            pytest.param(
+                {"extra_headers": ["X-Workspace"]},
+                ListedToolsCaller(raw_headers={"x-workspace": "A"}),
+                ListedToolsCaller(raw_headers={"X-Workspace": "B"}),
+                id="forwarded-header",
+            ),
+            pytest.param(
+                {"auth_type": MCPAuth.true_passthrough},
+                ListedToolsCaller(raw_headers={"authorization": "Bearer upstream-a"}),
+                ListedToolsCaller(raw_headers={"authorization": "Bearer upstream-b"}),
+                id="anonymous-passthrough-bearer",
+            ),
+            pytest.param(
+                {"auth_type": MCPAuth.bearer_token},
+                ListedToolsCaller(mcp_auth_header="byok-a"),
+                ListedToolsCaller(mcp_auth_header="byok-b"),
+                id="per-server-auth-header",
+            ),
+            pytest.param(
+                {"transport": MCPTransport.stdio, "command": "srv", "env": {"WS": "${X-WS}"}},
+                ListedToolsCaller(raw_headers={"X-WS": "A"}),
+                ListedToolsCaller(raw_headers={"X-WS": "B"}),
+                id="header-driven-stdio-env",
+            ),
+        ],
+    )
+    def test_upstream_identity_inputs_keep_listed_tools_apart(self, server_kwargs, caller_a, caller_b):
+        """Whatever reaches upstream and can change its catalog must also split the listed-tool cache."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            **{"server_id": "srv", "name": "srv", "transport": MCPTransport.http, "url": "http://srv", **server_kwargs}
+        )
+        manager._create_prefixed_tools(
+            [MCPTool(name="turn", description="Catalog A", inputSchema={})], server, caller=caller_a
+        )
+        manager._create_prefixed_tools(
+            [MCPTool(name="turn", description="Catalog B", inputSchema={})], server, caller=caller_b
+        )
+
+        for_a = manager.get_listed_tool(server, "srv-turn", caller_a)
+        for_b = manager.get_listed_tool(server, "srv-turn", caller_b)
+        assert for_a is not None and for_a.description == "Catalog A"
+        assert for_b is not None and for_b.description == "Catalog B"
+        assert manager.get_listed_tool(server, "srv-turn", ListedToolsCaller()) is None
+
+    def test_shared_server_ignores_headers_it_never_forwards(self):
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        manager._create_prefixed_tools(
+            [MCPTool(name="turn", description="everyone", inputSchema={})],
+            server,
+            caller=ListedToolsCaller(raw_headers={"authorization": "Bearer sk-litellm", "x-workspace": "A"}),
+        )
+
+        other = ListedToolsCaller(raw_headers={"authorization": "Bearer sk-other", "x-workspace": "B"})
+        listed = manager.get_listed_tool(server, "turn", other)
+        assert listed is not None and listed.description == "everyone"
+
+    @pytest.mark.asyncio
+    async def test_call_tool_hands_hooks_the_catalog_the_same_forwarded_headers_listed(self):
+        """Interleaved callers on a forwarded-header server: the hook must see the caller's own catalog."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="catalog",
+            name="catalog",
+            transport=MCPTransport.http,
+            url="http://catalog",
+            extra_headers=["X-Workspace"],
+        )
+        manager.registry = {"catalog": server}
+        catalogs = {
+            "A": [
+                MCPTool(
+                    name="turn", description="Catalog A", inputSchema={"properties": {"turn": {"description": "A"}}}
+                )
+            ],
+            "B": [
+                MCPTool(
+                    name="turn", description="Catalog B", inputSchema={"properties": {"turn": {"description": "B"}}}
+                )
+            ],
+        }
+        mock_client = AsyncMock()
+        mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager._fetch_tools_with_timeout = AsyncMock(side_effect=lambda client, name: catalogs[client.workspace])
+        for workspace in ("A", "B"):
+            manager._create_mcp_client.return_value.workspace = workspace
+            await manager._get_tools_from_server(
+                server=server,
+                extra_headers={"X-Workspace": workspace},
+                raw_headers={"x-workspace": workspace, "authorization": "Bearer sk-litellm"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm", user_id="shared-key"),
+            )
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        await manager.call_tool(
+            server_name="catalog",
+            name="catalog-turn",
+            arguments={"turn": "A-1"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm", user_id="shared-key"),
+            proxy_logging_obj=proxy_logging_obj,
+            raw_headers={"x-workspace": "A", "authorization": "Bearer sk-litellm"},
+        )
+
+        hook_kwargs = proxy_logging_obj._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == (
+            "Catalog A",
+            {"properties": {"turn": {"description": "A"}}},
+        )
 
     def test_per_caller_listed_tools_evict_oldest_caller_and_keep_shared(self):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import _LISTED_TOOLS_CALLERS_PER_SERVER
@@ -6767,20 +6896,25 @@ class TestMCPServerManager:
             auth_type=MCPAuth.oauth2_token_exchange,
         )
         manager._create_prefixed_tools([MCPTool(name="read", description="shared", inputSchema={})], server)
-        callers = [UserAPIKeyAuth(user_id=f"u{i}", api_key=f"k{i}") for i in range(_LISTED_TOOLS_CALLERS_PER_SERVER + 1)]
+        callers = [
+            ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id=f"u{i}", api_key=f"k{i}"))
+            for i in range(_LISTED_TOOLS_CALLERS_PER_SERVER + 1)
+        ]
         for caller in callers:
             manager._create_prefixed_tools(
-                [MCPTool(name="read", description=caller.user_id, inputSchema={})], server, user_api_key_auth=caller
+                [MCPTool(name="read", description=caller.user_api_key_auth.user_id, inputSchema={})],
+                server,
+                caller=caller,
             )
         manager._create_prefixed_tools(
-            [MCPTool(name="read", description="u1 again", inputSchema={})], server, user_api_key_auth=callers[1]
+            [MCPTool(name="read", description="u1 again", inputSchema={})], server, caller=callers[1]
         )
 
         assert manager.get_listed_tool(server, "srv-read", callers[0]) is None
         second = manager.get_listed_tool(server, "srv-read", callers[1])
         assert second is not None and second.description == "u1 again"
         newest = manager.get_listed_tool(server, "srv-read", callers[-1])
-        assert newest is not None and newest.description == callers[-1].user_id
+        assert newest is not None and newest.description == callers[-1].user_api_key_auth.user_id
         assert len(manager._listed_tools_by_server_id[server.server_id]) == _LISTED_TOOLS_CALLERS_PER_SERVER + 1
         shared = manager.get_listed_tool(server, "srv-read")
         assert shared is not None and shared.description == "shared"

@@ -7200,6 +7200,19 @@ async def test_agent_365_prm_defaults_scopeless_server_to_the_gateway_app_scope(
     }
 
 
+@pytest.mark.asyncio
+async def test_key_selected_agent_365_guardrail_leaves_anonymous_prm_on_the_gateway_issuer(agent_365_guardrail):
+    """A default-off guardrail gates only the keys that select it, so the anonymous discovery fetch must keep
+    pointing every other client at the gateway's own authorization server and scopes."""
+    agent_365_guardrail.default_on = False
+    response = await _agent_365_gated_prm(scopes=["mcp:read"])
+    assert jsonable_encoder(response) == {
+        "authorization_servers": ["https://litellm.example.com/mcp"],
+        "resource": "https://litellm.example.com/mcp/tools",
+        "scopes_supported": ["mcp:read"],
+    }
+
+
 def _token_request(headers):
     """A real Starlette request with case-insensitive headers (matches production)."""
     from starlette.requests import Request
