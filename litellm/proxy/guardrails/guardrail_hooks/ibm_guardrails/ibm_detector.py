@@ -6,8 +6,9 @@
 # +-------------------------------------------------------------+
 
 import os
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, Final
 
 import httpx
 
@@ -28,20 +29,20 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
 
-GUARDRAIL_NAME = "ibm_guardrails"
+GUARDRAIL_NAME: Final = "ibm_guardrails"
 
 
 class IBMGuardrailDetector(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str = "ibm_detector",
-        auth_token: Optional[str] = None,
-        base_url: Optional[str] = None,
-        detector_id: Optional[str] = None,
+        auth_token: str | None = None,
+        base_url: str | None = None,
+        detector_id: str | None = None,
         is_detector_server: bool = True,
-        detector_params: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        score_threshold: Optional[float] = None,
+        detector_params: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        score_threshold: float | None = None,
         block_on_detection: bool = True,
         verify_ssl: bool = True,
         **kwargs,
@@ -99,10 +100,10 @@ class IBMGuardrailDetector(CustomGuardrail):
 
     async def _call_detector_server(
         self,
-        contents: List[str],
+        contents: list[str],
         event_type: GuardrailEventHooks,
-        request_data: Optional[dict] = None,
-    ) -> List[List[IBMDetectorDetection]]:
+        request_data: dict | None = None,
+    ) -> list[list[IBMDetectorDetection]]:
         """
         Call IBM Detector Server directly.
 
@@ -114,11 +115,11 @@ class IBMGuardrailDetector(CustomGuardrail):
             List of lists where top-level list is per message in contents,
             sublists are individual detections on that message
         """
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
 
-        payload = {"contents": contents, "detector_params": self.detector_params}
+        payload: Final = {"contents": contents, "detector_params": self.detector_params}
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {self.auth_token}",
             "content-type": "application/json",
             "detector-id": self.detector_id,
@@ -135,20 +136,20 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
                 headers=headers,
             )
             response.raise_for_status()
-            response_json: List[List[IBMDetectorDetection]] = response.json()
+            response_json: Final[list[list[IBMDetectorDetection]]] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
 
             # Add guardrail information to request trace
             if request_data:
-                guardrail_status = self._determine_guardrail_status_detector_server(response_json)
+                guardrail_status: Final = self._determine_guardrail_status_detector_server(response_json)
                 self.add_standard_logging_guardrail_information_to_request_data(
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response={
@@ -191,8 +192,8 @@ class IBMGuardrailDetector(CustomGuardrail):
         self,
         content: str,
         event_type: GuardrailEventHooks,
-        request_data: Optional[dict] = None,
-    ) -> List[IBMDetectorDetection]:
+        request_data: dict | None = None,
+    ) -> list[IBMDetectorDetection]:
         """
         Call IBM FMS Guardrails Orchestrator.
 
@@ -203,14 +204,14 @@ class IBMGuardrailDetector(CustomGuardrail):
         Returns:
             List of detections
         """
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
 
-        payload = {
+        payload: Final = {
             "content": content,
             "detectors": {self.detector_id: self.detector_params},
         }
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {self.auth_token}",
             "content-type": "application/json",
         }
@@ -226,20 +227,20 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
                 headers=headers,
             )
             response.raise_for_status()
-            response_json: IBMDetectorResponseOrchestrator = response.json()
+            response_json: Final[IBMDetectorResponseOrchestrator] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
 
             # Add guardrail information to request trace
             if request_data:
-                guardrail_status = self._determine_guardrail_status_orchestrator(response_json)
+                guardrail_status: Final = self._determine_guardrail_status_orchestrator(response_json)
                 self.add_standard_logging_guardrail_information_to_request_data(
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response=dict(response_json),
@@ -274,7 +275,7 @@ class IBMGuardrailDetector(CustomGuardrail):
 
             raise
 
-    def _filter_detections_by_threshold(self, detections: List[IBMDetectorDetection]) -> List[IBMDetectorDetection]:
+    def _filter_detections_by_threshold(self, detections: list[IBMDetectorDetection]) -> list[IBMDetectorDetection]:
         """
         Filter detections based on score threshold.
 
@@ -290,7 +291,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         return [detection for detection in detections if detection.get("score", 0.0) >= self.score_threshold]
 
     def _determine_guardrail_status_detector_server(
-        self, response_json: List[List[IBMDetectorDetection]]
+        self, response_json: list[list[IBMDetectorDetection]]
     ) -> GuardrailStatus:
         """
         Determine the guardrail status based on IBM Detector Server response.
@@ -338,9 +339,9 @@ class IBMGuardrailDetector(CustomGuardrail):
             if not isinstance(response_json, dict):
                 return "guardrail_failed_to_respond"
 
-            detections = response_json.get("detections", [])
+            detections: Final = response_json.get("detections", [])
             # Apply threshold filtering
-            filtered = self._filter_detections_by_threshold(detections)
+            filtered: Final = self._filter_detections_by_threshold(detections)
 
             if filtered:
                 return "guardrail_intervened"
@@ -351,7 +352,7 @@ class IBMGuardrailDetector(CustomGuardrail):
             verbose_proxy_logger.error("Error determining IBM Orchestrator guardrail status: %s", str(e))
             return "guardrail_failed_to_respond"
 
-    def _create_error_message_detector_server(self, detections_list: List[List[IBMDetectorDetection]]) -> str:
+    def _create_error_message_detector_server(self, detections_list: list[list[IBMDetectorDetection]]) -> str:
         """
         Create a detailed error message from detector server response.
 
@@ -382,7 +383,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         error_message = f"IBM Guardrail Detector failed: {total_detections} violation(s) detected\n\n" + error_message
         return error_message.strip()
 
-    def _create_error_message_orchestrator(self, detections: List[IBMDetectorDetection]) -> str:
+    def _create_error_message_orchestrator(self, detections: list[IBMDetectorDetection]) -> str:
         """
         Create a detailed error message from orchestrator response.
 
@@ -392,7 +393,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         Returns:
             Formatted error message string
         """
-        filtered_detections = self._filter_detections_by_threshold(detections)
+        filtered_detections: Final = self._filter_detections_by_threshold(detections)
 
         error_message = f"IBM Guardrail Detector failed: {len(filtered_detections)} violation(s) detected\n\n"
 
@@ -413,7 +414,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Union[Exception, str, dict, None]:
+    ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -425,16 +426,16 @@ class IBMGuardrailDetector(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
         # Covers multimodal list content + Responses-API input.
-        contents_to_check: List[str] = list(iter_message_text(data))
+        contents_to_check: Final[list[str]] = list(iter_message_text(data))
         if contents_to_check:
             if self.is_detector_server:
                 # Call detector server with all contents at once
-                result = await self._call_detector_server(
+                result: Final = await self._call_detector_server(
                     contents=contents_to_check,
                     request_data=data,
                     event_type=GuardrailEventHooks.pre_call,
@@ -494,16 +495,16 @@ class IBMGuardrailDetector(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
         # Covers multimodal list content + Responses-API input.
-        contents_to_check: List[str] = list(iter_message_text(data))
+        contents_to_check: Final[list[str]] = list(iter_message_text(data))
         if contents_to_check:
             if self.is_detector_server:
                 # Call detector server with all contents at once
-                result = await self._call_detector_server(
+                result: Final = await self._call_detector_server(
                     contents=contents_to_check,
                     request_data=data,
                     event_type=GuardrailEventHooks.during_call,
@@ -586,7 +587,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                 )
                 return
 
-            contents_to_check: List[str] = []
+            contents_to_check: Final[list[str]] = []
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
                     verbose_proxy_logger.debug("async_post_call_success_hook choice: %s", choice)
@@ -596,7 +597,7 @@ class IBMGuardrailDetector(CustomGuardrail):
             if contents_to_check:
                 if self.is_detector_server:
                     # Call detector server with all contents at once
-                    result = await self._call_detector_server(
+                    result: Final = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
                         event_type=GuardrailEventHooks.post_call,
@@ -666,7 +667,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         return IBMDetectorGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,

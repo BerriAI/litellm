@@ -6,7 +6,7 @@ import UserDropdown from "./UserDropdown";
 let mockUseAuthorizedImpl = () => ({
   userId: "test-user-id",
   userEmail: "test@example.com",
-  userRole: "Admin",
+  userRoleLabel: "Admin",
   premiumUser: false,
 });
 
@@ -44,7 +44,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
     mockUseDisableShowPromptsImpl = () => false;
@@ -115,7 +115,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: true,
     });
 
@@ -238,7 +238,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "default_user_id",
       userEmail: null as any,
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
@@ -250,7 +250,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: null as any,
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
 
@@ -268,7 +268,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: null as any,
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
 

@@ -1,14 +1,9 @@
 import asyncio
 import json
-import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.constants import MAX_SIZE_IN_MEMORY_QUEUE
 from litellm.proxy._types import (
@@ -16,6 +11,9 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     SpendUpdateQueueItem,
 )
+from typing import get_args
+
+from litellm.proxy._types import BaseDailySpendTransaction
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
@@ -209,6 +207,8 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0,
         "prompt_caching_savings_spend": 0,
+        "gateway_injected_caching_savings_spend": 0,
+        "autorouter_savings_spend": 0,
     }
 
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
@@ -259,6 +259,8 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0,
         "prompt_caching_savings_spend": 0,
+        "gateway_injected_caching_savings_spend": 0,
+        "autorouter_savings_spend": 0,
     }
 
     # Add updates to queue
@@ -527,3 +529,58 @@ async def test_compression_saved_tokens_aggregation(daily_spend_update_queue):
     assert agg["cache_creation_input_tokens"] == 7
     assert agg["compression_savings_spend"] == pytest.approx(0.0076)
     assert agg["prompt_caching_savings_spend"] == pytest.approx(0.0108)
+
+
+@pytest.mark.asyncio
+async def test_every_optional_daily_metric_aggregates(daily_spend_update_queue):
+    """Every additive metric must survive the merge, not just the ones wired by hand.
+
+    Two requests landing on one rollup key before a flush is the common case under
+    load, and this same merge runs again on every cross-pod Redis drain. A metric
+    persisted by the database write but skipped here is silently dropped on both
+    paths, so the driver reads as zero on the dashboard however much it saved.
+    """
+    test_key = "user1_2023-01-01_key123_claude-haiku-4-5_anthropic"
+    def _numeric(annotation):
+        # additive metrics may be declared NotRequired[float] for rows queued by a pod
+        # running the previous release, so unwrap before matching
+        args = get_args(annotation)
+        return (args[0] if args else annotation) in (int, float)
+
+    numeric_fields = [
+        name for name, annotation in BaseDailySpendTransaction.__annotations__.items() if _numeric(annotation)
+    ]
+    assert "autorouter_savings_spend" in numeric_fields
+    increments = {field: index + 1 for index, field in enumerate(numeric_fields)}
+
+    await daily_spend_update_queue.add_update({test_key: dict(increments)})
+    await daily_spend_update_queue.add_update({test_key: dict(increments)})
+    await daily_spend_update_queue.aggregate_queue_updates()
+    updates = await daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
+
+    agg = updates[0][test_key]
+    for field, value in increments.items():
+        assert agg[field] == pytest.approx(value * 2), f"{field} did not accumulate"
+
+
+@pytest.mark.asyncio
+async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
+    daily_spend_update_queue,
+):
+    """A queued row written before a metric existed must not zero it out."""
+    test_key = "user1_2023-01-01_key123_claude-haiku-4-5_anthropic"
+    base = {
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+
+    await daily_spend_update_queue.add_update({test_key: dict(base)})
+    await daily_spend_update_queue.add_update({test_key: {**base, "autorouter_savings_spend": 0.25}})
+    await daily_spend_update_queue.aggregate_queue_updates()
+    updates = await daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
+
+    assert updates[0][test_key]["autorouter_savings_spend"] == pytest.approx(0.25)

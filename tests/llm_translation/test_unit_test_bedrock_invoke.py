@@ -1,5 +1,3 @@
-import os
-import sys
 import traceback
 from dotenv import load_dotenv
 import litellm.types
@@ -9,9 +7,7 @@ import json
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import AsyncMock, Mock, patch
 
 
@@ -59,7 +55,7 @@ def test_transform_request_invalid_provider(bedrock_transformer):
     """Test request transformation with invalid provider"""
     messages = [{"role": "user", "content": "Hello"}]
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Bedrock Invoke HTTPX: Unknown provider=None') as exc_info:
         bedrock_transformer.transform_request(
             model="invalid.model",
             messages=messages,

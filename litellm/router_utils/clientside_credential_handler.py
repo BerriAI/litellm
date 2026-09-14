@@ -11,12 +11,12 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from typing import List
+from typing import Final
 
-clientside_credential_keys = ["api_key", "api_base", "base_url"]
+clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
 
 
-def _admin_config_fields_to_clear_on_base_override() -> List[str]:
+def _admin_config_fields_to_clear_on_base_override() -> list[str]:
     """
     Provider-specific credential / endpoint-targeting fields that must NOT
     flow through to a client-redirected upstream.
@@ -28,8 +28,8 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
     """
     from litellm.types.router import CredentialLiteLLMParams
 
-    typed_fields = [f for f in CredentialLiteLLMParams.model_fields if f not in clientside_credential_keys]
-    kwargs_only_fields = [
+    typed_fields: Final = [f for f in CredentialLiteLLMParams.model_fields if f not in clientside_credential_keys]
+    kwargs_only_fields: Final = [
         # Caller-supplied via **kwargs, not declared on CredentialLiteLLMParams.
         "organization",
         "extra_body",
@@ -38,6 +38,10 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
         "api_type",
         "azure_ad_token",
         "azure_ad_token_provider",
+        "aws_session_token",
+        "aws_sts_endpoint",
+        "aws_web_identity_token",
+        "aws_role_name",
         # OCI provider — consumed by litellm/llms/oci/* via optional_params
         # and not declared on CredentialLiteLLMParams. Without these here,
         # an admin's OCI signing key / tenancy / fingerprint would flow
@@ -59,7 +63,7 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
     return typed_fields + kwargs_only_fields
 
 
-_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = _admin_config_fields_to_clear_on_base_override()
+_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

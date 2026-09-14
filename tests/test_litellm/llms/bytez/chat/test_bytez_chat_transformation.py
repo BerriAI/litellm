@@ -1,10 +1,7 @@
-import os
-import sys
 import pytest
 import json
 
 # Adds the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bytez.chat.transformation import BytezChatConfig, API_BASE, version
 
@@ -35,11 +32,10 @@ class TestBytezChatConfig:
         assert result["user-agent"] == f"litellm/{version}"
 
     def test_missing_api_key(self):
-        with pytest.raises(Exception) as excinfo:
-            config = BytezChatConfig()
+        config = BytezChatConfig()
+        headers = {}
 
-            headers = {}
-
+        with pytest.raises(Exception, match='Missing api_key, make sure you pass in your api key') as excinfo:
             config.validate_environment(
                 headers=headers,
                 model=TEST_MODEL,

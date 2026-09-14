@@ -3,8 +3,6 @@
 import ApiKeysDashboard from "@/app/(dashboard)/api-keys/ApiKeysDashboard";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { proxyBaseUrl } from "@/components/networking";
-import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { internalUserRoles } from "@/utils/roles";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   buildLoginUrlWithReturn,
@@ -14,21 +12,18 @@ import {
   normalizeUrlForCompare,
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
-import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
+import { legacyPageRedirectHref } from "@/app/(dashboard)/legacyPageRoutes";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
 
 function CreateKeyPageContent() {
-  const { authLoading, token, userRole, userID } = useAuth();
+  const { authLoading, token } = useAuth();
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
 
-  const explicitPage = searchParams.get("page");
-
   // Track if we've already attempted a return URL redirect to prevent race conditions
   const hasAttemptedReturnRedirectRef = useRef(false);
-  const didReturnRedirectRef = useRef(false);
 
   const redirectToLogin = authLoading === false && token === null;
 
@@ -44,13 +39,12 @@ function CreateKeyPageContent() {
     }
   }, [redirectToLogin]);
 
-  // Redirect legacy ?page= deep links (old bookmarks) to their path-based routes.
-  const isLegacyRedirect = explicitPage !== null && explicitPage in MIGRATED_PAGES;
+  const legacyRedirectHref = legacyPageRedirectHref(searchParams);
   useEffect(() => {
-    if (!authLoading && isLegacyRedirect) {
-      router.replace(migratedHref(MIGRATED_PAGES[explicitPage]));
+    if (!authLoading && legacyRedirectHref !== null) {
+      router.replace(legacyRedirectHref);
     }
-  }, [authLoading, isLegacyRedirect, explicitPage, router]);
+  }, [authLoading, legacyRedirectHref, router]);
 
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
@@ -78,7 +72,6 @@ function CreateKeyPageContent() {
       // Only redirect if the return URL is different from the current URL
       // This prevents infinite redirect loops
       if (normalizedReturnUrl !== normalizedCurrentUrl) {
-        didReturnRedirectRef.current = true;
         window.location.replace(safeUrl.href);
       }
     }
@@ -87,26 +80,10 @@ function CreateKeyPageContent() {
   useEffect(() => {
     if (!token) {
       hasAttemptedReturnRedirectRef.current = false;
-      didReturnRedirectRef.current = false;
     }
   }, [token]);
 
-  const isPostLoginLanding = searchParams.get("login") === "success";
-  const isSignedIn = !authLoading && Boolean(token);
-  const isAwaitingRole = isPostLoginLanding && isSignedIn && userRole === "";
-  const shouldCheckForKeys = isPostLoginLanding && isSignedIn && internalUserRoles.includes(userRole);
-  const { data: keysData, isLoading: keysLoading } = useKeys(1, 1, { userID }, shouldCheckForKeys);
-  const isKeylessLanding = shouldCheckForKeys && !keysLoading && keysData?.keys?.length === 0;
-  const isResolvingKeylessLanding = (shouldCheckForKeys && keysLoading) || isKeylessLanding;
-  const isResolvingLanding = isAwaitingRole || isResolvingKeylessLanding;
-
-  useEffect(() => {
-    if (isKeylessLanding && !didReturnRedirectRef.current) {
-      router.replace(migratedHref("connect"));
-    }
-  }, [isKeylessLanding, router]);
-
-  const isRedirecting = redirectToLogin || isLegacyRedirect || isResolvingLanding;
+  const isRedirecting = redirectToLogin || legacyRedirectHref !== null;
 
   if (authLoading || isRedirecting) {
     return <LoadingScreen />;

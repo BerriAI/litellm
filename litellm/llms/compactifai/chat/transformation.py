@@ -2,23 +2,40 @@
 CompactifAI chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ModelResponse
-from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class CompactifAIResponseFields(TypedDict, total=False):
+    """The chat completion fields of a CompactifAI response body."""
+
+    id: ReadOnly[str]
+    choices: ReadOnly[Sequence[Mapping[str, object]]]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    system_fingerprint: ReadOnly[str | None]
+    usage: ReadOnly[Mapping[str, object]]
+    object: ReadOnly[str]
 
 
 class CompactifAIChatConfig(OpenAIGPTConfig):
@@ -29,14 +46,14 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
         """
         Get API base and key for CompactifAI provider.
         """
         api_base = api_base or "https://api.compactif.ai/v1"
-        dynamic_api_key = api_key or get_secret_str("COMPACTIFAI_API_KEY") or ""
+        dynamic_api_key: Final = api_key or get_secret_str("COMPACTIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
     def transform_response(
@@ -45,13 +62,13 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: List,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform CompactifAI response to LiteLLM format.
@@ -66,7 +83,7 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         )
 
         ## RESPONSE OBJECT
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Handle JSON mode if needed
         if json_mode:
@@ -79,7 +96,9 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
                         message["content"] = tool_calls[0]["function"].get("arguments", "")
                         message["tool_calls"] = None
 
-        returned_response = ModelResponse(**response_json)
+        response_fields: Final[CompactifAIResponseFields] = response_json
+
+        returned_response: Final = ModelResponse(**response_fields)
 
         # Set model name with provider prefix
         returned_response.model = f"compactifai/{model}"
@@ -87,7 +106,7 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         return returned_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
     ) -> BaseLLMException:
         """
         Get the appropriate error class for CompactifAI errors.
