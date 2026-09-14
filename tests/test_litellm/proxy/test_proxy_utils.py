@@ -9,7 +9,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, send_email
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -2110,9 +2110,7 @@ def test_create_model_info_response_resolves_alias_to_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="bedrock-claude-opus-5", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="bedrock-claude-opus-5", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2141,9 +2139,7 @@ def test_create_model_info_response_keeps_exact_alias_over_generalized_deploymen
             ]
         )
 
-        response = create_model_info_response(
-            model_id="claude-opus-5", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="claude-opus-5", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2167,9 +2163,7 @@ def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_na
             ]
         )
 
-        response = create_model_info_response(
-            model_id="gpt-4o", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="gpt-4o", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2194,9 +2188,7 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="my-embeddings", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="my-embeddings", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -2274,7 +2266,9 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
         await proxy_logging_obj.post_call_failure_hook(
             request_data={"metadata": {}},
-            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            original_exception=HTTPException(
+                status_code=400, detail="Upstream passthrough request failed with status 400"
+            ),
             user_api_key_dict=UserAPIKeyAuth(),
             traceback_str=upstream_traceback,
         )
@@ -2328,3 +2322,18 @@ class TestPrismaClientTokenAuthBehindThePool:
         assert isinstance(client.db, RoutingPrismaWrapper)
         assert client.db.writer.iam_token_db_auth is True
         assert client.db.reader.iam_token_db_auth is True
+
+
+@pytest.mark.asyncio
+async def test_send_email_raises_transport_errors_only_when_asked(monkeypatch):
+    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SMTP_PORT", "9")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "proxy@example.com")
+    monkeypatch.setenv("SMTP_TIMEOUT", "5")
+    monkeypatch.delenv("SMTP_USERNAME", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+
+    with pytest.raises(ConnectionRefusedError):
+        await send_email(receiver_email="a@x.io", subject="s", html="<p>x</p>", raise_on_error=True)
+
+    assert await send_email(receiver_email="a@x.io", subject="s", html="<p>x</p>") is None

@@ -99,7 +99,7 @@ def _max_age_days(alerting_args: SlackAlertingArgs) -> int:
 def _reached(
     info: ModelDeprecationInfo, thresholds: Sequence[int], max_age_days: int
 ) -> tuple[ModelDeprecationInfo, int] | None:
-    if info.days_until_deprecation < -max_age_days:
+    if info.days_until_deprecation <= -max_age_days:
         return None
     milestone: Final = select_milestone(info.days_until_deprecation, thresholds)
     return None if milestone is None else (info, milestone)

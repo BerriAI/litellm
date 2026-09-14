@@ -6621,9 +6621,10 @@ async def send_email(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
         if raise_on_error:
+            verbose_proxy_logger.debug("An error occurred while sending the email: %s", e)
             raise
+        verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
 
 
 def hash_token(token: str):

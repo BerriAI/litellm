@@ -177,6 +177,13 @@ class TestResolveAffectedTeams:
         assert [model.info.model_name for model in affected["t1"]] == ["gpt-old"]
 
     @pytest.mark.asyncio
+    async def test_should_exclude_a_model_exactly_at_the_marker_lifetime_boundary(self):
+        affected: Final = await resolve_affected_teams(
+            (_info("edge-out", -90), _info("edge-in", -89)), _router([]), (_team("t1"),), THRESHOLDS, 90
+        )
+        assert [model.info.model_name for model in affected["t1"]] == ["edge-in"]
+
+    @pytest.mark.asyncio
     async def test_should_deny_a_team_whose_allowlist_is_malformed_and_keep_going(self):
         affected: Final = await resolve_affected_teams(
             (_info("openai/gpt-old", 5),),
