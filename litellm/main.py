@@ -5137,8 +5137,8 @@ def completion(
             instead of raising an error. Defaults to None.
         additional_drop_params (list[str] | None, optional): List of additional parameter names to drop if unsupported.
             Defaults to None.
-        mock_response (str | None, optional): If provided, return a mock completion response for testing or debugging.
-            Defaults to None.
+        mock_response (MOCK_RESPONSE_TYPE | None, optional): If provided, return a mock completion response for testing
+            or debugging. Defaults to None.
         custom_llm_provider (str | None, optional): Explicit provider override for non-OpenAI LLMs (e.g., "bedrock",
             "vertex_ai"). Defaults to None.
         max_retries (int | None, optional): Number of retries to attempt on failure. Defaults to None.
