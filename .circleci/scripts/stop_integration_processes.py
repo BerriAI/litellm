@@ -4,17 +4,17 @@ from typing import Final
 import psutil
 
 
+def is_owned(process: psutil.Process, identity: str, owner_uid: int) -> bool:
+    try:
+        return process.uids().real == owner_uid and process.environ().get("INTEGRATION_RUN_ID") == identity
+    except psutil.NoSuchProcess:
+        return False
+
+
 def owned_processes(identity: str, owner_uid: int) -> tuple[psutil.Process, ...]:
-    owned: Final[list[psutil.Process]] = []
-    for process in psutil.process_iter():
-        try:
-            if process.uids().real != owner_uid:
-                continue
-            if process.environ().get("INTEGRATION_RUN_ID") == identity:
-                owned.append(process)
-        except psutil.NoSuchProcess:
-            continue
-    return tuple(owned)
+    # The runner invokes this helper with sudo. Unreadable ownership remains a hard
+    # failure: skipping it would make a successful cleanup unverifiable.
+    return tuple(process for process in psutil.process_iter() if is_owned(process, identity, owner_uid))
 
 
 def main(identity: str, owner_uid: int, root_pids: tuple[int, ...]) -> int:
