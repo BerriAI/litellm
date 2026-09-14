@@ -98,7 +98,7 @@ def _run_cost(run: TinyfishRun | None) -> float | None:
 
 class TinyFishPassthroughLoggingHandler:
     @staticmethod
-    def _should_log_request(request_method: str, url_route: str) -> bool:
+    def should_log_request(request_method: str, url_route: str) -> bool:
         """Only run submissions are billed; GET /v1/runs* polling and cancels never write spend rows."""
         return request_method == "POST" and "/v1/automation/" in urlparse(url_route).path
 
@@ -258,7 +258,7 @@ class TinyFishPassthroughLoggingHandler:
             return None
 
     @staticmethod
-    async def _handle_logging_tinyfish_collected_chunks(
+    async def handle_logging_tinyfish_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         url_route: str,
         start_time: datetime,

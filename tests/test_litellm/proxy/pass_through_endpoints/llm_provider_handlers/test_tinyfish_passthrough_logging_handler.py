@@ -77,7 +77,7 @@ class TestBillingGate:
         ],
     )
     def test_only_run_submissions_are_billed(self, method, url, expected):
-        assert TinyFishPassthroughLoggingHandler._should_log_request(method, url) is expected
+        assert TinyFishPassthroughLoggingHandler.should_log_request(method, url) is expected
 
     def test_polling_writes_no_spend_row(self, tinyfish_env):
         logging_obj = _make_logging_obj()
@@ -208,7 +208,7 @@ class TestSseBilling:
         )
 
         payload = asyncio.run(
-            TinyFishPassthroughLoggingHandler._handle_logging_tinyfish_collected_chunks(
+            TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(
                 litellm_logging_obj=logging_obj,
                 url_route="https://agent.tinyfish.ai/v1/automation/run-sse",
                 start_time=datetime.now(),
@@ -226,7 +226,7 @@ class TestSseBilling:
         fake_client = _FakeClient(payloads=[{}])
 
         payload = asyncio.run(
-            TinyFishPassthroughLoggingHandler._handle_logging_tinyfish_collected_chunks(
+            TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(
                 litellm_logging_obj=_make_logging_obj(),
                 url_route="https://agent.tinyfish.ai/v1/automation/run-sse",
                 start_time=datetime.now(),

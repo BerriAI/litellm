@@ -278,7 +278,7 @@ class PassThroughStreamingHandler:
             # num_of_steps, so pricing needs an async GET /v1/runs/{id} after the stream.
             if endpoint_type == EndpointType.TINYFISH:
                 tinyfish_payload: Final = (
-                    await TinyFishPassthroughLoggingHandler._handle_logging_tinyfish_collected_chunks(
+                    await TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(
                         litellm_logging_obj=litellm_logging_obj,
                         url_route=url_route,
                         start_time=start_time,

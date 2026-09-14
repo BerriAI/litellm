@@ -322,7 +322,7 @@ class PassThroughEndpointLogging:
         if self.is_tinyfish_route(url_route, custom_llm_provider):
             # GET /v1/runs* polling and cancels never write spend rows; run-async bills once,
             # from a background poller that re-enters _handle_logging at run completion.
-            if not TinyFishPassthroughLoggingHandler._should_log_request(httpx_response.request.method, url_route):
+            if not TinyFishPassthroughLoggingHandler.should_log_request(httpx_response.request.method, url_route):
                 return
             if TinyFishPassthroughLoggingHandler.is_run_async_route(url_route):
                 TinyFishPassthroughLoggingHandler.start_async_run_billing(
