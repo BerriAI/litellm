@@ -3451,6 +3451,44 @@ def test_custom_pass_through_endpoint_prefix_wins_over_native_provider_routes():
         ]
 
 
+def test_wildcard_pass_through_does_not_shadow_unrelated_built_in_routes():
+    """
+    A pass_through_endpoints entry with a wildcard subpath (e.g. "/key/{subpath:path}")
+    must not be promoted ahead of unrelated, authenticated built-in routes like
+    "/key/generate" just because it lands after the first "/{provider}/..." route in
+    app.routes once appended. Its own path never structurally matches a
+    "/{provider}/..." template, so it must be left exactly where it was appended.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+    from litellm.proxy.proxy_server import app
+
+    key_generate_route_name_before = _resolve_route_name("POST", "/key/generate")
+    assert key_generate_route_name_before is not None
+
+    added_paths = {"/key/{subpath:path}"}
+    try:
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path="/key/{subpath:path}",
+            target="https://example.com/",
+            custom_headers=None,
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="test-key-wildcard",
+        )
+
+        assert _resolve_route_name("POST", "/key/generate") == key_generate_route_name_before
+    finally:
+        app.router.routes = [
+            route for route in app.router.routes
+            if getattr(route, "path", None) not in added_paths
+        ]
+
+
 def test_move_before_generic_provider_routes_is_a_no_op_without_a_generic_route():
     """
     If no generic "/{provider}/..." route is registered on the app (e.g. a minimal
