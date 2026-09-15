@@ -1084,6 +1084,22 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
+    # OpenCode's entries only reach the published cost map once released, so an
+    # install whose map predates this provider resolves neither pricing nor the
+    # wire format: spend records as zero and every Responses model falls through
+    # to chat completions. Both are answered from what ships with the package.
+    from litellm.llms.opencode.common_utils import (
+        ensure_opencode_pricing,
+        is_responses_model,
+        opencode_surface,
+    )
+
+    opencode_surface_name: Final = opencode_surface(custom_llm_provider)
+    if opencode_surface_name is not None:
+        ensure_opencode_pricing(custom_llm_provider, model)
+        if model_info.get("mode") != "responses" and is_responses_model(opencode_surface_name, model):
+            model_info["mode"] = "responses"
+
     # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
     # those keys.
@@ -3465,6 +3481,34 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _complete_opencode(
+    ctx: _CompletionDispatchContext,
+) -> _CompletionDispatchResult:
+    from litellm.llms.opencode.chat.handler import complete_opencode
+
+    return complete_opencode(
+        custom_llm_provider=ctx.custom_llm_provider,
+        model=ctx.model,
+        messages=ctx.messages,
+        api_key=ctx.api_key,
+        api_base=ctx.api_base,
+        headers=ctx.headers,
+        litellm_params=ctx.litellm_params,
+        optional_params=ctx.optional_params,
+        model_response=ctx.model_response,
+        logging_obj=ctx.logging,
+        acompletion=ctx.acompletion,
+        stream=ctx.stream,
+        timeout=ctx.timeout,
+        client=ctx.client,
+        shared_session=ctx.shared_session,
+        anthropic_chat_handler=anthropic_chat_completions,
+        chat_handler=base_llm_http_handler,
+        encoding=_get_encoding(),
+        print_verbose=print_verbose,
+    )
+
+
 def _complete_vercel_ai_gateway(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5746,6 +5790,8 @@ def completion(
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
+        elif custom_llm_provider in ("opencode_zen", "opencode_go"):
+            response = _complete_opencode(_dispatch_ctx)  # rebind-ok: dispatch chain rebinds response
         elif (
             # A known OpenAI model name only decides the route when nothing else
             # resolved a provider. get_llm_provider() already maps these names to
