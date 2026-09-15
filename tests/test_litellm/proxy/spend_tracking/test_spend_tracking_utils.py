@@ -440,6 +440,7 @@ def _make_standard_logging_payload_with_usage_object(usage_object: dict) -> Stan
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
+            user_api_key_user_email=None,
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
@@ -1390,6 +1391,7 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
+            user_api_key_user_email=None,
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
@@ -1523,6 +1525,7 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
+            user_api_key_user_email=None,
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
@@ -2110,6 +2113,7 @@ def test_get_logging_payload_includes_retry_info_in_spend_logs_metadata():
                 user_api_key_team_id=None,
                 user_api_key_org_id=None,
                 user_api_key_user_id=None,
+                user_api_key_user_email=None,
                 user_api_key_team_alias=None,
                 spend_logs_metadata=None,
                 requester_ip_address=None,
@@ -2205,6 +2209,7 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
                 user_api_key_team_id=None,
                 user_api_key_org_id=None,
                 user_api_key_user_id=None,
+                user_api_key_user_email=None,
                 user_api_key_team_alias=None,
                 spend_logs_metadata=None,
                 requester_ip_address=None,
@@ -4077,6 +4082,28 @@ def test_get_spend_logs_metadata_sibling_fields_preserved():
     assert meta["user_api_key_team_id"] == "team-123"
 
 
+def test_get_logging_payload_preserves_user_email_in_spend_log_metadata():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_user_email": "sso-user@example.com",
+                    "user_api_key_user_id": "okta|abc123",
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-user-email", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    metadata = json.loads(payload["metadata"])
+
+    assert metadata["user_api_key_user_email"] == "sso-user@example.com"
+    assert metadata["user_api_key_user_id"] == "okta|abc123"
+
+
 def test_redact_logged_api_key_partial_sha256_is_hashed():
     partial_hex = "a" * 63
     result = _redact_logged_api_key(partial_hex)
@@ -4176,6 +4203,7 @@ def test_get_logging_payload_includes_fallback_info_in_spend_logs_metadata():
                 user_api_key_team_id=None,
                 user_api_key_org_id=None,
                 user_api_key_user_id=None,
+                user_api_key_user_email=None,
                 user_api_key_team_alias=None,
                 spend_logs_metadata=None,
                 requester_ip_address=None,
@@ -4271,6 +4299,7 @@ def test_get_logging_payload_handles_missing_fallback_info_gracefully():
                 user_api_key_team_id=None,
                 user_api_key_org_id=None,
                 user_api_key_user_id=None,
+                user_api_key_user_email=None,
                 user_api_key_team_alias=None,
                 spend_logs_metadata=None,
                 requester_ip_address=None,
