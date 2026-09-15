@@ -984,7 +984,8 @@ class TestTriggerCooldownForFailedDeployment:
             mock_set_cooldown.assert_not_called()
             mock_increment.assert_not_called()
 
-    def test_still_cools_down_provider_408_before_caller_deadline(self):
+    @pytest.mark.asyncio
+    async def test_still_cools_down_provider_408_before_caller_deadline(self):
         """client_side_timeout only records that the caller configured a timeout. A 408
         that comes back before that deadline was raised by the provider itself, so it is
         a real health signal and must still cool the deployment down."""
