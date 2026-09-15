@@ -26,6 +26,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.tinyfish import (
     TINYFISH_AGENT_DEFAULT_API_BASE,
     TINYFISH_DEFAULT_COST_PER_STEP,
+    TINYFISH_MAX_CONSECUTIVE_POLL_FAILURES,
     TINYFISH_MAX_POLLING_SECONDS,
     TINYFISH_MODEL_NAME,
     TINYFISH_POLLING_INTERVAL_SECONDS,
@@ -206,21 +207,39 @@ class TinyFishPassthroughLoggingHandler:
             verbose_proxy_logger.exception("[Non blocking logging error] TinyFish run-async billing failed: %s", e)
 
     @staticmethod
-    async def _poll_until_terminal(run_id: str, client: AsyncHTTPHandler | None = None) -> TinyfishRun | None:
+    async def _poll_until_terminal(
+        run_id: str,
+        client: AsyncHTTPHandler | None = None,
+        poll_interval_seconds: float = TINYFISH_POLLING_INTERVAL_SECONDS,
+    ) -> TinyfishRun | None:
         deadline: Final = time.monotonic() + TINYFISH_MAX_POLLING_SECONDS
+        last_run: TinyfishRun | None = None  # rebind-ok: poll-loop state
+        consecutive_failures = 0  # rebind-ok: poll-loop state
         while time.monotonic() < deadline:
             run = await TinyFishPassthroughLoggingHandler._fetch_run(run_id, client)
             if run is None:
-                return None
-            if (run.get("status") or "") in TINYFISH_TERMINAL_RUN_STATUSES:
-                return run
-            await asyncio.sleep(TINYFISH_POLLING_INTERVAL_SECONDS)
+                # a single transient poll failure must not drop the run's charge
+                consecutive_failures += 1
+                if consecutive_failures >= TINYFISH_MAX_CONSECUTIVE_POLL_FAILURES:
+                    verbose_proxy_logger.warning(
+                        "TinyFish passthrough: giving up on run %s after %s consecutive poll failures; "
+                        "logging the request without cost",
+                        run_id,
+                        consecutive_failures,
+                    )
+                    return last_run
+            else:
+                consecutive_failures = 0
+                last_run = run
+                if (run.get("status") or "") in TINYFISH_TERMINAL_RUN_STATUSES:
+                    return run
+            await asyncio.sleep(poll_interval_seconds)
         verbose_proxy_logger.warning(
             "TinyFish passthrough: run %s not terminal after %ss; logging the request without cost",
             run_id,
             TINYFISH_MAX_POLLING_SECONDS,
         )
-        return None
+        return last_run
 
     @staticmethod
     async def _fetch_run(run_id: str, client: AsyncHTTPHandler | None = None) -> TinyfishRun | None:

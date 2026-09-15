@@ -33,15 +33,18 @@ def _make_response(method: str, url: str, body: dict) -> httpx.Response:
 
 
 class _FakeClient:
-    def __init__(self, payloads: list[dict], status_code: int = 200):
+    """Payload items are dicts served with status_code, or (status, dict) tuples for scripted failures."""
+
+    def __init__(self, payloads: list, status_code: int = 200):
         self.payloads = payloads
         self.status_code = status_code
         self.requested_urls: list[str] = []
 
     async def get(self, url: str, headers: dict) -> httpx.Response:
         self.requested_urls.append(url)
-        payload = self.payloads[min(len(self.requested_urls) - 1, len(self.payloads) - 1)]
-        return httpx.Response(self.status_code, text=json.dumps(payload), request=httpx.Request("GET", url))
+        item = self.payloads[min(len(self.requested_urls) - 1, len(self.payloads) - 1)]
+        status, payload = item if isinstance(item, tuple) else (self.status_code, item)
+        return httpx.Response(status, text=json.dumps(payload), request=httpx.Request("GET", url))
 
 
 @pytest.fixture
@@ -178,6 +181,29 @@ class TestRunAsyncBilling:
         assert awaited_kwargs["model"] == "tinyfish/automation-run"
         assert fake_client.requested_urls == ["https://agent.tinyfish.ai/v1/runs/run-9?screenshots=none"]
         assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.064)
+
+    def test_transient_poll_failure_keeps_polling(self, tinyfish_env):
+        fake_client = _FakeClient(
+            payloads=[(500, {}), {"run_id": "run-9", "status": "COMPLETED", "num_of_steps": 3}]
+        )
+
+        run = asyncio.run(
+            TinyFishPassthroughLoggingHandler._poll_until_terminal("run-9", fake_client, poll_interval_seconds=0.0)
+        )
+
+        assert run is not None
+        assert run["num_of_steps"] == 3
+        assert len(fake_client.requested_urls) == 2
+
+    def test_gives_up_after_consecutive_poll_failures(self, tinyfish_env):
+        fake_client = _FakeClient(payloads=[(500, {})])
+
+        run = asyncio.run(
+            TinyFishPassthroughLoggingHandler._poll_until_terminal("run-9", fake_client, poll_interval_seconds=0.0)
+        )
+
+        assert run is None
+        assert len(fake_client.requested_urls) == 3
 
     def test_traversal_run_id_is_rejected(self, tinyfish_env):
         fake_client = _FakeClient(payloads=[{}])
