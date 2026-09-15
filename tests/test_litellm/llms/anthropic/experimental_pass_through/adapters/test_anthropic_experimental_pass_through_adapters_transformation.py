@@ -57,6 +57,28 @@ def test_translate_openai_response_to_anthropic_empty_choices() -> None:
     assert result["usage"]["input_tokens"] == 10
 
 
+@pytest.mark.parametrize(("finish_reason", "stop_reason"), [("content_filter", "refusal"), ("stop", "end_turn")])
+def test_translate_chat_content_filter_without_refusal_text(finish_reason: str, stop_reason: str) -> None:
+    response: Final = ModelResponse(
+        id="chatcmpl-filtered",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason=finish_reason,
+                message=Message(content=None, role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=12, completion_tokens=0, total_tokens=12),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == stop_reason
+    assert result["content"] == []
+    assert result["usage"]["input_tokens"] == 12
+
+
 def test_translate_chat_refusal_to_anthropic_response():
     response = ModelResponse(
         id="chatcmpl-refusal",

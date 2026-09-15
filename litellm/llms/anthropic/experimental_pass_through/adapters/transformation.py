@@ -1367,6 +1367,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return "max_tokens"
         elif openai_finish_reason == "tool_calls":
             return "tool_use"
+        elif openai_finish_reason == "content_filter":
+            return "refusal"
         return "end_turn"
 
     @staticmethod
