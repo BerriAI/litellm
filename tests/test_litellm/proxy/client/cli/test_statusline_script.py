@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -297,16 +298,31 @@ class TestRender:
 
 
 class TestClaudeCodeMode:
-    def test_the_transcript_names_the_routed_model_and_the_proxy_adds_the_savings(self, tmp_path, transcript, config_dir):
-        seen = []
+    @pytest.mark.parametrize("transcript_model", ("claude-auto", "anthropic/claude-opus-5"))
+    def test_the_session_names_the_routed_model_even_when_the_transcript_differs(
+        self, tmp_path: Path, config_dir: Path, transcript_model: str
+    ) -> None:
+        transcript: Final = tmp_path / "session.jsonl"
+        transcript.write_text(_assistant_line(transcript_model) + "\n")
 
-        def fetch(credentials, session_id):
-            seen.append((credentials, session_id))
+        def fetch(credentials: Credentials, session_id: str) -> Fetched:
+            assert credentials == Credentials("http://127.0.0.1:4000", "sk-virtual")
+            assert session_id == SESSION_ID
             return Fetched(RECORDED, definitive=True)
 
-        text = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        text: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
         assert text.startswith("claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5\n")
-        assert seen == [(Credentials("http://127.0.0.1:4000", "sk-virtual"), SESSION_ID)]
+
+    def test_a_discovered_display_name_labels_the_sessions_model(
+        self, tmp_path: Path, transcript: Path, config_dir: Path
+    ) -> None:
+        session: Final = RECORDED._replace(last_model="anthropic/claude-opus-5")
+
+        def fetch(credentials: Credentials, session_id: str) -> Fetched:
+            return Fetched(session, definitive=True)
+
+        text: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        assert text.startswith("claude-auto · Routed to: Claude Opus 5  -63% vs Claude Opus 5\n")
 
     def test_an_unrecorded_session_degrades_to_the_routed_line(self, tmp_path, transcript, config_dir):
         assert _run(_payload(transcript), _env(tmp_path, config_dir), lambda c, s: Fetched(None, True)) == (

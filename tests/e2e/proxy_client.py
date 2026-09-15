@@ -11,14 +11,23 @@ from __future__ import annotations
 import time
 import warnings
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from functools import reduce
+from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import reduce
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
-from pydantic import BaseModel
-
+from e2e_config import (
+    CONTROL_PLANE_BASE_URL,
+    MASTER_KEY,
+    POLL_INTERVAL,
+    POLL_TIMEOUT,
+    PROXY_BASE_URL,
+    PROXY_REPLICA_URLS,
+    REQUEST_TIMEOUT,
+    SLOW_PROVIDER_TIMEOUT_SECONDS,
+    settle_propagation,
+)
 from e2e_http import (
     AnthropicHeaders,
     AuthHeaders,
@@ -55,6 +64,7 @@ from models import (
     KeyInfoParams,
     KeyInfoResponse,
     LiteLLMParamsBody,
+    MemorySummaryResponse,
     ModelDeleteBody,
     ModelInfoBody,
     ModelInfoEntry,
@@ -63,7 +73,6 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListParams,
-    MemorySummaryResponse,
     ModelsListResponse,
     ModelUpdateBody,
     OcrBody,
@@ -76,23 +85,13 @@ from models import (
     TeamDeleteBody,
     TeamNewBody,
     TeamNewResponse,
-    UserDeleteBody,
-    UserDeleteResponse,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
+    UserDeleteBody,
+    UserDeleteResponse,
 )
-from e2e_config import (
-    CONTROL_PLANE_BASE_URL,
-    MASTER_KEY,
-    POLL_INTERVAL,
-    POLL_TIMEOUT,
-    PROXY_BASE_URL,
-    PROXY_REPLICA_URLS,
-    REQUEST_TIMEOUT,
-    SLOW_PROVIDER_TIMEOUT_SECONDS,
-    settle_propagation,
-)
+from pydantic import BaseModel
 from transport import HttpTransport, SplitTransport, Transport, is_control_plane_path
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
@@ -421,11 +420,23 @@ def converge_timeout_message(*, what: str, replica: str, timeout: float, last_re
     )
 
 
+CredentialKind = Literal["master", "direct_jwt", "virtual_key", "dashboard_session"]
+
+
+@dataclass(frozen=True, slots=True)
+class Caller:
+    credential: str = field(repr=False)
+    kind: CredentialKind
+    role: str
+    tenant: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class ProxyClient:
     transport: Transport
     replicas: Mapping[str, Transport]
     control_replicas: Mapping[str, Transport]
+    caller: Caller | None = None
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
     model_servable_timeout: float = MODEL_SERVABLE_TIMEOUT
@@ -433,13 +444,24 @@ class ProxyClient:
     model_servable_interval: float = MODEL_SERVABLE_INTERVAL
     model_servable_request_timeout: float = MODEL_SERVABLE_REQUEST_TIMEOUT
 
+    def with_caller(self, caller: Caller) -> ProxyClient:
+        return replace(self, caller=caller)
+
+    def management_headers(self, caller_key: str | None = None, *, transport: Transport | None = None) -> AuthHeaders:
+        selected: Final = self.transport if transport is None else transport
+        if caller_key is not None:
+            return selected.bearer(caller_key)
+        if self.caller is not None:
+            return selected.bearer(self.caller.credential)
+        return selected.master
+
     # ---- keys / customers (satisfies lifecycle.ResourceClient) ----------
 
     def generate_key(self, body: KeyGenerateBody) -> str:
         return unwrap(
             self.transport.post(
                 "/key/generate",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=KeyGenerateResponse,
             )
@@ -448,7 +470,7 @@ class ProxyClient:
     def delete_key(self, key: str) -> None:
         _ = self.transport.post(
             "/key/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=KeyDeleteBody(keys=[key]),
             response_type=NoBody,
         )
@@ -458,7 +480,7 @@ class ProxyClient:
             return
         _ = self.transport.post(
             "/customer/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=CustomerDeleteBody(user_ids=user_ids),
             response_type=NoBody,
         )
@@ -467,7 +489,7 @@ class ProxyClient:
         return unwrap(
             self.transport.get(
                 "/key/info",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 params=KeyInfoParams(key=key),
                 response_type=KeyInfoResponse,
             )
@@ -477,7 +499,7 @@ class ProxyClient:
         return {
             url: transport.get(
                 "/debug/memory/summary",
-                headers=transport.master,
+                headers=self.management_headers(transport=transport),
                 params=NoBody(),
                 response_type=MemorySummaryResponse,
             )
@@ -524,11 +546,12 @@ class ProxyClient:
             {replica: outcome.result for replica, outcome in outcomes.items() if isinstance(outcome, Converged)}
         )
 
-    @staticmethod
     def _body_poller[R: BaseModel](
-        transport: Transport, path: str, params: BaseModel, response_type: type[R]
+        self, transport: Transport, path: str, params: BaseModel, response_type: type[R]
     ) -> Poller[Result[R]]:
-        return lambda: transport.get(path, headers=transport.master, params=params, response_type=response_type)
+        return lambda: transport.get(
+            path, headers=self.management_headers(transport=transport), params=params, response_type=response_type
+        )
 
     def model_info(self) -> list[ModelInfoEntry]:
         """Every configured deployment with the price the proxy resolved for it
@@ -536,7 +559,7 @@ class ProxyClient:
         return unwrap(
             self.transport.get(
                 "/model/info",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 params=NoBody(),
                 response_type=ModelInfoResponse,
             )
@@ -546,7 +569,7 @@ class ProxyClient:
         return unwrap(
             self.transport.get(
                 "/public/litellm_model_cost_map",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 params=NoBody(),
                 response_type=CostMap,
             )
@@ -607,7 +630,7 @@ class ProxyClient:
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=ModelNewResponse,
             )
@@ -623,7 +646,7 @@ class ProxyClient:
 
     def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
         """Block until every replica lists `model_name`, or fail at model_servable_timeout."""
-        headers: Final = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
+        headers: Final = self.management_headers(listed_for)
         outcome: Final = await_servable_everywhere(
             {url: self._models_poller(transport, headers) for url, transport in self.replicas.items()},
             model_name=model_name,
@@ -666,7 +689,7 @@ class ProxyClient:
         unwrap(
             self.transport.post(
                 "/model/update",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=ModelUpdateBody(
                     litellm_params=litellm_params,
                     model_info=ModelInfoBody(id=model_id),
@@ -678,7 +701,7 @@ class ProxyClient:
     def delete_model(self, model_id: str) -> None:
         result = self.transport.post(
             "/model/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=ModelDeleteBody(id=model_id),
             response_type=NoBody,
         )
@@ -747,11 +770,10 @@ class ProxyClient:
                     f"GET {path} on {replica} still answers {self.poll_timeout}s after the delete; last read: {last}"
                 )
 
-    @staticmethod
-    def _reader[R: BaseModel](transport: Transport, path: str, response_type: type[R]) -> ReplicaRead[Result[R]]:
+    def _reader[R: BaseModel](self, transport: Transport, path: str, response_type: type[R]) -> ReplicaRead[Result[R]]:
         return lambda request_timeout: transport.get(
             path,
-            headers=transport.master,
+            headers=self.management_headers(transport=transport),
             params=NoBody(),
             response_type=response_type,
             timeout=request_timeout,
@@ -763,7 +785,7 @@ class ProxyClient:
         return unwrap(
             self.transport.post(
                 "/v1/mcp/toolset",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=ToolsetRow,
             )
@@ -775,7 +797,7 @@ class ProxyClient:
         return unwrap(
             self.transport.put(
                 "/v1/mcp/toolset",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=ToolsetRow,
             )
@@ -786,7 +808,7 @@ class ProxyClient:
         can unwrap it while a deferred teardown can ignore an already-deleted row."""
         return self.transport.delete(
             f"/v1/mcp/toolset/{toolset_id}",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=NoBody(),
             response_type=NoBody,
         )
@@ -795,7 +817,7 @@ class ProxyClient:
         unwrap(
             self.transport.post(
                 "/credentials",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=CredentialCreateResponse,
             )
@@ -804,7 +826,7 @@ class ProxyClient:
     def delete_credential(self, credential_name: str) -> None:
         result = self.transport.delete(
             f"/credentials/{credential_name}",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=NoBody(),
             response_type=NoBody,
         )
@@ -815,7 +837,7 @@ class ProxyClient:
         return unwrap(
             self.transport.post(
                 "/team/new",
-                headers=self.transport.master,
+                headers=self.management_headers(),
                 json=body,
                 response_type=TeamNewResponse,
             )
@@ -824,7 +846,7 @@ class ProxyClient:
     def delete_team(self, team_id: str) -> None:
         result = self.transport.post(
             "/team/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=TeamDeleteBody(team_ids=[team_id]),
             response_type=NoBody,
         )
@@ -836,7 +858,7 @@ class ProxyClient:
         a user the proxy only upserts after a successful auth."""
         result = self.transport.post(
             "/user/delete",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             json=UserDeleteBody(user_ids=[user_id]),
             response_type=UserDeleteResponse,
         )
@@ -909,7 +931,7 @@ class ProxyClient:
     def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
         result = self.transport.get(
             "/spend/logs",
-            headers=self.transport.master,
+            headers=self.management_headers(),
             params=params,
             response_type=SpendLogs,
         )
@@ -924,7 +946,7 @@ class ProxyClient:
             return unwrap(
                 self.transport.get(
                     "/spend/logs/v2",
-                    headers=self.transport.master,
+                    headers=self.management_headers(),
                     params=SpendLogsPageParams(
                         start_date=start.strftime("%Y-%m-%d %H:%M:%S"),
                         end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
@@ -977,7 +999,7 @@ class ProxyClient:
     # ---- route probe ----------------------------------------------------
 
     def probe(self, path: str, *, params: NoBody) -> ProbeResult:
-        return self.transport.probe(path, params=params)
+        return self.transport.probe(path, params=params, headers=self.management_headers())
 
 
 def build_proxy_client(
