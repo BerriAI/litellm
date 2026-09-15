@@ -22839,6 +22839,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": {
         "cache_read_input_token_cost": 6e-07,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 1.2e-06,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -23226,6 +23227,7 @@
     "fireworks_ai/accounts/fireworks/models/minimax-m2p7": {
         "cache_read_input_token_cost": 6e-08,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -23332,6 +23334,7 @@
     "fireworks_ai/deepseek-v4-pro": {
         "cache_read_input_token_cost": 6e-07,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 1.2e-06,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -23550,6 +23553,7 @@
     "fireworks_ai/minimax-m2p7": {
         "cache_read_input_token_cost": 6e-08,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -48772,49 +48776,56 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/imagegeneration@006": {
+        "deprecation_date": "2025-09-24",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.02,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "vertex_ai/imagen-3.0-fast-generate-001": {
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.02,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "vertex_ai/imagen-3.0-generate-001": {
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "vertex_ai/imagen-3.0-generate-002": {
-        "deprecation_date": "2025-11-10",
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "vertex_ai/imagen-3.0-capability-001": {
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/image/edit-insert-objects"
     },
     "vertex_ai/imagen-4.0-fast-generate-001": {
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.02,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "vertex_ai/imagen-4.0-generate-001": {
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "vertex_ai/imagen-4.0-ultra-generate-001": {
+        "deprecation_date": "2026-06-30",
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "output_cost_per_image": 0.06,
@@ -66280,6 +66291,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/deepseek-ai/deepseek-coder-33b-instruct": {
+        "deprecation_date": "2024-08-22",
         "input_cost_per_token": 8e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66287,6 +66299,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+        "deprecation_date": "2025-12-23",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66294,6 +66307,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66301,6 +66315,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
+        "deprecation_date": "2025-11-13",
         "input_cost_per_token": 1.6e-06,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66394,6 +66409,7 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "together_ai/google/gemma-2-27b-it": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 8e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66418,6 +66434,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "together_ai/meta-llama/Llama-3-8b-chat-hf": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66446,6 +66463,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo": {
+        "deprecation_date": "2025-12-23",
         "input_cost_per_token": 8.8e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66453,6 +66471,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/meta-llama/Meta-Llama-3-8B-Instruct": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66460,6 +66479,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66467,6 +66487,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 8.8e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66481,6 +66502,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen2-72B-Instruct": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 9e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66488,6 +66510,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen2-VL-72B-Instruct": {
+        "deprecation_date": "2025-08-28",
         "input_cost_per_token": 1.2e-06,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66509,6 +66532,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen2.5-Coder-32B-Instruct": {
+        "deprecation_date": "2025-11-13",
         "input_cost_per_token": 8e-07,
         "litellm_provider": "together_ai",
         "mode": "chat",
@@ -66516,6 +66540,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen2.5-VL-72B-Instruct": {
+        "deprecation_date": "2026-01-05",
         "input_cost_per_token": 1.95e-06,
         "litellm_provider": "together_ai",
         "mode": "chat",
