@@ -41,6 +41,8 @@ class _DeploymentMarker(TypedDict, total=False):
 
 _DEPLOYMENT_MARKERS: Final = TypeAdapter(list[_DeploymentMarker])
 
+_VIRTUAL_KEY_MINTING_ROUTES: Final = ("/user/new",)
+
 _ACCESS_CREDENTIAL_ROUTES: Final = (
     "/credentials",
     "/credentials/by_name/{credential_name:path}",
@@ -121,7 +123,7 @@ def request_http_method(request: Request) -> str:
         method: Final = request.method
     except (KeyError, AttributeError):
         return ""
-    return method if isinstance(method, str) else ""
+    return method if isinstance(method, str) else ""  # pyright: ignore[reportUnnecessaryIsInstance]  # spec'd request mocks return a Mock, not a str
 
 
 def master_key_lockout_action(
@@ -140,7 +142,9 @@ def master_key_lockout_action(
         return "access_credentials"
     if method.upper() != "GET" and RouteChecks.is_llm_api_route(route=route):
         return "use_credentials"
-    if method.upper() != "GET" and _route_matches_any(route, tuple(LiteLLMRoutes.key_management_routes.value)):
+    if method.upper() != "GET" and _route_matches_any(
+        route, tuple(LiteLLMRoutes.key_management_routes.value) + _VIRTUAL_KEY_MINTING_ROUTES
+    ):
         return "manage_virtual_keys"
     return None
 

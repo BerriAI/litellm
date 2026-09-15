@@ -102,7 +102,9 @@ def test_insecure_master_key_warning_survives_redaction():
         ("/key/abc-def/regenerate", "POST", "manage_virtual_keys"),
         ("/key/service-account/generate", "POST", "manage_virtual_keys"),
         ("/key/block", "POST", "manage_virtual_keys"),
+        ("/user/new", "POST", "manage_virtual_keys"),
         ("/key/info", "GET", None),
+        ("/user/info", "GET", None),
         ("/key/list", "GET", None),
         ("/login", "POST", None),
         ("/health/readiness", "GET", None),
@@ -140,6 +142,7 @@ def test_master_key_lockout_action_none_when_key_secure(route, method):
         ("/chat/completions", "POST"),
         ("/key/generate", "POST"),
         ("/key/abc/regenerate", "POST"),
+        ("/user/new", "POST"),
     ],
 )
 @pytest.mark.parametrize("reason", ["example_key", "missing"])
