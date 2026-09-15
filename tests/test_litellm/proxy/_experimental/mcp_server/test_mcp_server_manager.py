@@ -6712,8 +6712,6 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_user_oauth_refresh_keeps_listed_tools(self):
-        """Tool definitions are server-wide, so one user's re-auth must not blank the metadata other
-        callers' tool calls hand to pre-call guardrails."""
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
         manager._create_prefixed_tools([MCPTool(name="echo", description="shared", inputSchema={})], server)
@@ -6796,7 +6794,6 @@ class TestMCPServerManager:
         ],
     )
     def test_upstream_identity_inputs_keep_listed_tools_apart(self, server_kwargs, caller_a, caller_b):
-        """Whatever reaches upstream and can change its catalog must also split the listed-tool cache."""
         manager = MCPServerManager()
         server = MCPServer(
             **{"server_id": "srv", "name": "srv", "transport": MCPTransport.http, "url": "http://srv", **server_kwargs}
@@ -6836,8 +6833,6 @@ class TestMCPServerManager:
         ],
     )
     def test_jwt_signer_makes_a_shared_server_list_per_caller(self, signer, static_headers, shared):
-        """MCPJWTSigner hands upstream a JWT naming the caller on an otherwise shared ``auth_type: none``
-        server, so the upstream may tailor the catalog and the cache must not hand one caller another's."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", static_headers=static_headers
@@ -6861,7 +6856,6 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_call_tool_hands_hooks_the_catalog_the_same_forwarded_headers_listed(self):
-        """Interleaved callers on a forwarded-header server: the hook must see the caller's own catalog."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="catalog",

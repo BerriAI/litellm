@@ -243,7 +243,6 @@ _USER_ENV_VARS_CACHE_TTL: Final = 60  # seconds
 _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
-_NO_LISTED_TOOLS: Final[_ListedToolsByCaller] = MappingProxyType({})
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
 
 
@@ -4574,7 +4573,7 @@ class MCPServerManager:
     ) -> None:
         identity: Final = self._listed_tools_identity(server, caller)
         listing: Final = MappingProxyType({tool.name: tool for tool in tools})
-        existing: Final = self._listed_tools_by_server_id.get(server.server_id, _NO_LISTED_TOOLS)
+        existing: Final[_ListedToolsByCaller] = self._listed_tools_by_server_id.get(server.server_id, {})
         shared: Final = existing.get(None)
         callers: Final = tuple((key, value) for key, value in existing.items() if key not in (None, identity))
         evicted: Final = 0 if identity is None else max(len(callers) + 1 - _LISTED_TOOLS_CALLERS_PER_SERVER, 0)
@@ -5452,7 +5451,7 @@ class MCPServerManager:
 
     def get_listed_tool(self, server: MCPServer, name: str, caller: ListedToolsCaller | None = None) -> MCPTool | None:
         identity: Final = self._listed_tools_identity(server, caller)
-        listed: Final = self._listed_tools_by_server_id.get(server.server_id, _NO_LISTED_TOOLS).get(identity)
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id, {}).get(identity)
         if not listed:
             return None
         tool: Final = listed.get(name) or listed.get(strip_known_server_prefix(name, server))

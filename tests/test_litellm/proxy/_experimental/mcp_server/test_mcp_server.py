@@ -7111,8 +7111,6 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_call_hooks():
-    """OpenAPI-generated tools dispatch through the local registry, so the pre-call hooks must get the
-    registered description and input schema on that path too, even when no tools/list ran first."""
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     petstore = MCPServer(
@@ -7156,8 +7154,6 @@ async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_ca
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_hands_openapi_hooks_the_admin_description_clients_saw():
-    """tools/list shows the admin's tool_name_to_description wording, so the local-registry call path
-    must hand the pre-call hooks that same wording rather than the generated one."""
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     petstore = MCPServer(
@@ -7198,8 +7194,6 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_admin_description_client
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_hands_hooks_the_metadata_of_the_operation_it_runs_when_names_collide():
-    """An OpenAPI operation whose name starts with its own server prefix must not be reported to the
-    pre-call hooks with the metadata of the shorter operation, since that is not the one that runs."""
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     petstore = MCPServer(
