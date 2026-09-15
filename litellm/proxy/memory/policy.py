@@ -70,7 +70,6 @@ class MemoryIdentity:
     key_id: str | None
     user_id: str | None
     team_id: str | None
-    project_id: str | None
     organization_id: str | None
     read_only: bool
     role: str | None = None
@@ -89,7 +88,6 @@ class MemoryIdentity:
             key_id=key_id,
             user_id=auth.user_id,
             team_id=None if dashboard else auth.team_id,
-            project_id=auth.project_id,
             organization_id=auth.org_id,
             read_only=auth.user_role
             in (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),

@@ -71,7 +71,6 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/workflows/",
     "/project/",
     "/memory/",
-    "/memory/v2/",
     "/mcp/",
     # Control plane (see the List Endpoints + Tables standard). Every resource
     # eventually moves under this prefix, so allowlist it once rather than

@@ -70,10 +70,10 @@ def _before(cursor: tuple[datetime, str] | None) -> Mapping[str, object]:
 
 
 class MemoryStore:
-    def __init__(self, prisma_client: object, access: MemoryAccess, *, actor: str | None = None) -> None:
+    def __init__(self, prisma_client: object, access: MemoryAccess) -> None:
         self.prisma_client = memory_primary_client(prisma_client)
         self.access = access
-        self.actor = actor or access.identity.user_id or access.identity.key_id
+        self.actor = access.identity.user_id or access.identity.key_id
         self.table = MemoryRepository(self.prisma_client).table
 
     async def authorize(self, *, write: bool = False, require_active: bool = True) -> MemoryAccess:

@@ -98,7 +98,7 @@ class LinkedSpendResetWrites:
     table: BatchTable
 
     def queue_spend_zero(self, where: Mapping[str, object]) -> None:
-        self.table.update_many(where=where, data={"spend": 0})  # mutable-ok: Callable type parameter syntax.
+        self.table.update_many(where=where, data={"spend": 0})
 
     def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None:
         """``decrement`` rather than a read-then-set, so spend written between the
@@ -116,9 +116,7 @@ class BudgetWindowWrites:
     def queue_window_advance(self, budget_id: str, budget_reset_at: datetime) -> None:
         """``update_many`` so a tier deleted between the read and the commit is a
         no-op row count instead of a P2025 that aborts the whole chunk."""
-        self.table.update_many(
-            where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at}
-        )  # mutable-ok: Callable type parameter syntax.
+        self.table.update_many(where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at})
 
 
 @dataclass(frozen=True, slots=True)

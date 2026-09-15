@@ -1451,26 +1451,6 @@ model LiteLLM_MemoryTable {
   @@index([owner_key_id])
 }
 
-model LiteLLM_MemoryPolicy {
-  policy_id   String   @id
-  target_type String
-  target_id   String
-  activation  String
-  scope       String
-  paused      Boolean  @default(false)
-  created_at  DateTime @default(now())
-  updated_at  DateTime @default(now()) @updatedAt
-  updated_by  String
-
-  @@unique([target_type, target_id])
-}
-
-model LiteLLM_MemoryPreference {
-  subject    String   @id
-  enabled    Boolean  @default(false)
-  updated_at DateTime @default(now()) @updatedAt
-}
-
 model LiteLLM_MemoryContinuation {
   id         String   @id
   namespace  String

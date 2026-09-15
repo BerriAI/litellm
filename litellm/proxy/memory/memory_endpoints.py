@@ -203,7 +203,7 @@ async def _assert_write_access(
     )
 
 
-async def is_memory_team_admin(prisma_client: "PrismaClient", user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
+async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
     """
     True if the caller is a team admin of `team_id`, or an org admin for the
     team's organization. Mirrors the auth pattern used by team-management
@@ -591,4 +591,3 @@ async def delete_memory(
 
 
 _require_prisma = require_memory_prisma
-_is_team_admin_for = is_memory_team_admin

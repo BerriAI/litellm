@@ -4298,7 +4298,7 @@ class TestDisconnectGatherCleanup:
             await processing_obj.base_process_llm_request(
                 request=self._disconnect_request(),
                 fastapi_response=MagicMock(),
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
                 proxy_logging_obj=mock_proxy_logging,
                 general_settings={"cancel_on_disconnect": True},
                 proxy_config=MagicMock(spec=ProxyConfig),

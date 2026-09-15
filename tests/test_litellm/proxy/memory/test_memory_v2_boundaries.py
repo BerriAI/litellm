@@ -27,7 +27,7 @@ from litellm.proxy.memory.store import MemoryStore
 from litellm.types.memory_v2 import MemoryCapture, MemorySearch, MemorySettings
 
 _NOW: Final = datetime(2026, 9, 12, tzinfo=timezone.utc)
-_IDENTITY: Final = MemoryIdentity("a" * 64, "owner", "team", "project", "org", False)
+_IDENTITY: Final = MemoryIdentity("a" * 64, "owner", "team", "org", False)
 _SETTINGS: Final = MemorySettings(enabled=True)
 _CAPTURE: Final = MemoryCapture(key="demo", title="Demo", content="Use port 8347", evidence="User selected this port")
 
@@ -162,7 +162,7 @@ async def test_response_deletion_preserves_auth_paths_and_retry_state(prisma_edg
             "query_string": b"api-version=test",
         }
     )
-    identity = MemoryIdentity("a" * 64, "owner", "team", "project", "org", outcome == "readonly")
+    identity = MemoryIdentity("a" * 64, "owner", "team", "org", outcome == "readonly")
     if outcome in ("upstream_error", "readonly"):
         with pytest.raises(HTTPException) as exc:
             await serve_memory_response(
@@ -194,7 +194,7 @@ async def test_flat_enrollment_follows_the_user_across_keys(prisma_edge: MagicMo
         param_value=MemorySettings(enabled=True, everyone=False, user_ids=("owner",)).model_dump()
     )
     assert (await resolve_memory_access(prisma_edge, _IDENTITY)).active
-    sibling = MemoryIdentity("b" * 64, "owner", "team", "project", "org", False)
+    sibling = MemoryIdentity("b" * 64, "owner", "team", "org", False)
     assert (await resolve_memory_access(prisma_edge, sibling)).active
     config.return_value = SimpleNamespace(
         param_value=MemorySettings(enabled=True, everyone=False, user_ids=("other",)).model_dump()
@@ -209,7 +209,7 @@ async def test_store_rechecks_access_before_writing(prisma_edge: MagicMock, chan
     if change == "missing":
         prisma_edge.db.litellm_config.find_unique.return_value = None
     elif change == "readonly":
-        identity = MemoryIdentity("a" * 64, "owner", "team", "project", "org", True)
+        identity = MemoryIdentity("a" * 64, "owner", "team", "org", True)
     else:
         config = MemorySettings(enabled=change != "disabled", everyone=False, user_ids=("other",))
         prisma_edge.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=config.model_dump())
@@ -377,7 +377,7 @@ def request() -> Request:
 
 @pytest.mark.asyncio
 async def test_read_only_injection_and_forced_no_tools_do_not_request_reflection(prisma_edge: MagicMock) -> None:
-    read_only: Final = MemoryIdentity("a" * 64, "owner", "team", "project", "org", True)
+    read_only: Final = MemoryIdentity("a" * 64, "owner", "team", "org", True)
     loop: Final = GatewayMemoryLoop(
         FastAPI(),
         request(),
@@ -468,7 +468,7 @@ async def test_restore_preserves_hidden_memory_tool_results_and_client_cache_mar
         *object_items(replacement[1]["content"]),
         *object_items(items[2]["content"]),
     )
-    sibling: Final = MemoryIdentity("b" * 64, "owner", "team", "project", "org", False)
+    sibling: Final = MemoryIdentity("b" * 64, "owner", "team", "org", False)
     assert MemoryContinuations(store(prisma_edge, sibling), "anthropic_messages").identifier(
         anchor
     ) != continuations.identifier(anchor)
@@ -1085,7 +1085,7 @@ async def test_continuation_quota_shares_namespace_lock_across_keys_and_allows_r
     prisma_edge: MagicMock,
 ) -> None:
     prisma_edge.db.query_raw.return_value = [{"key_count": 255, "bytes": 32 * 1024 * 1024}]
-    other_key = MemoryIdentity("b" * 64, "owner", "team", "project", "org", False)
+    other_key = MemoryIdentity("b" * 64, "owner", "team", "org", False)
     for identity in (_IDENTITY, other_key):
         continuations = MemoryContinuations(MemoryStore(prisma_edge, access_for(identity)), "aresponses")
         await continuations.save_many((("response", MemoryContinuation(replaces=1, response={"text": "é漢字"})),))
