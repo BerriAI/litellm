@@ -523,7 +523,7 @@ async def test_can_team_access_model_error_lists_direct_and_access_group_models(
         access_group_ids=["ag-1"],
     )
 
-    with patch(
+    with patch(  # test-quality-ok: access-group lookup has no dependency-injection seam
         "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
         new=AsyncMock(return_value=["group-model"]),
     ):
