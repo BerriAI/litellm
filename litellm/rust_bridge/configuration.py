@@ -143,6 +143,8 @@ def rust_enabled() -> bool:
 
 
 def rust_ocr_enabled() -> bool:
+    if _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME)) is False:
+        return False
     return capability_decision(_OCR, context=CapabilityContext()) is ExecutionDecision.RUST_WITH_FALLBACK
 
 

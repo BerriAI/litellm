@@ -170,8 +170,7 @@ def test_ocr_configuration(monkeypatch: pytest.MonkeyPatch, process: bool | None
     if process is not None:
         configuration.rust(process)
 
-    expected: Final = process if process is not None else environment not in {"0", "off"}
-    assert configuration.rust_ocr_enabled() is expected
+    assert configuration.rust_ocr_enabled() is (environment not in {"0", "off"} and process is not False)
 
 
 def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:
