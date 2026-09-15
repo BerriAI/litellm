@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-09T21:39:49.468411Z"
+exclude-newer = "2026-09-12T12:26:39.445785Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4558,6 +4558,7 @@ dev = [
     { name = "vcrpy" },
 ]
 e2e-dev = [
+    { name = "anthropic" },
     { name = "locust" },
     { name = "mcp" },
     { name = "playwright" },
@@ -4749,6 +4750,7 @@ dev = [
     { name = "vcrpy", specifier = "==8.2.1" },
 ]
 e2e-dev = [
+    { name = "anthropic", specifier = "==0.84.0" },
     { name = "locust", specifier = "==2.45.0" },
     { name = "mcp", specifier = ">=1.28.1,<2.0" },
     { name = "playwright", specifier = "==1.61.0" },

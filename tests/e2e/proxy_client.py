@@ -77,6 +77,8 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RerankBody,
+    RerankResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -899,6 +901,16 @@ class ProxyClient:
             json=body,
             response_type=OcrResponse,
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    def rerank(self, key: str, body: RerankBody) -> Result[RerankResponse]:
+        """POST /v1/rerank (Cohere-format). No official OpenAI/Anthropic SDK
+        covers this route, so it stays on the shared typed transport."""
+        return self.transport.post(
+            "/v1/rerank",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=RerankResponse,
         )
 
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:

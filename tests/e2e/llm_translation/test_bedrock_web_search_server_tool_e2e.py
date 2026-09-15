@@ -34,27 +34,22 @@ block alone does not activate it.
 from __future__ import annotations
 
 import pytest
-
+from anthropic.types import WebSearchTool20250305Param
 from e2e_config import unique_marker
-from e2e_http import unwrap
-from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
-from models import (
-    AnthropicMessagesBody,
-    AnthropicWebSearchTool,
-    ChatMessage,
-    LiteLLMParamsBody,
-)
+from models import LiteLLMParamsBody
+from proxy_client import ProxyClient
+from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
 BEDROCK_INVOKE_BACKEND = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
-WEB_SEARCH_TOOL = AnthropicWebSearchTool(
-    type="web_search_20250305",
-    name="web_search",
-    max_uses=3,
-)
+WEB_SEARCH_TOOL: WebSearchTool20250305Param = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 3,
+}
 
 SEARCH_PROMPT = "Use web search to tell me one recent news headline about Anthropic."
 
@@ -68,34 +63,29 @@ class TestBedrockWebSearchServerTool:
     )
     @pytest.mark.covers("llm.messages.bedrock_invoke.web_search_server_tool.nonstream.works")
     def test_web_search_server_tool_is_served(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         """A bedrock deployment must answer a web_search server-tool request
         instead of handing the tool to AWS and returning its 400."""
         model = f"e2e-bedrock-websearch-{unique_marker()}"
-        model_id = endpoints_client.create_model(
+        model_id = proxy.create_model(
             model,
             LiteLLMParamsBody(
                 model=BEDROCK_INVOKE_BACKEND,
                 aws_region_name="us-east-1",
             ),
         )
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
-        key = resources.key()
+        resources.defer(lambda: proxy.delete_model(model_id))
+        client = sdk.anthropic(resources.key())
 
-        response = unwrap(
-            endpoints_client.proxy.messages(
-                key,
-                AnthropicMessagesBody(
-                    model=model,
-                    max_tokens=512,
-                    tools=[WEB_SEARCH_TOOL],
-                    messages=[ChatMessage(role="user", content=SEARCH_PROMPT)],
-                ),
-            )
+        response = client.messages.create(
+            model=model,
+            max_tokens=512,
+            tools=[WEB_SEARCH_TOOL],
+            messages=[{"role": "user", "content": SEARCH_PROMPT}],
         )
 
-        assert response.content, f"no content blocks in response: {response}"
+        assert response.content, f"no content blocks in response: {response!r}"
         block_types = [block.type for block in response.content]
         assert "web_search_tool_result" in block_types, (
             "the answer carries no web_search_tool_result block, so the search "
