@@ -6,7 +6,7 @@ import {
   type EditAutoRouterFormValues,
 } from "./editAutoRouterFormSchema";
 import { toast } from "@/lib/toast";
-import { CircleHelp } from "lucide-react";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "../add_model/AccessGroupTagsCombobox";
 import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceCombobox";
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
-import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { fetchAutoRouterModels, fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder, { type RouterConfig, serializeRouterConfig } from "../add_model/RouterConfigBuilder";
 import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
@@ -66,6 +66,7 @@ import ComplexityRouterConfig, {
   AdaptiveRouterWeights,
   ClassifierLLMConfig,
   ClassifierType,
+  effectiveClassifierType,
   ComplexityRouterConfigValue,
   ComplexityTiers,
   heuristicScoringRole,
@@ -90,6 +91,7 @@ interface EditAutoRouterModalProps {
   modelData: any;
   accessToken: string;
   userRole: string;
+  isMemberManaged?: boolean;
 }
 
 // Keys this modal rewrites from its own form state on save. Anything absent from this set is
@@ -337,6 +339,7 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
+    if (key === "llm_v2_config" && effectiveClassifierType(value) !== "llm_v2") return true;
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
@@ -405,16 +408,6 @@ export const buildUpdatedComplexityRouterConfig = (
   };
 };
 
-const labelWithHint = (label: string, hint: string): React.ReactNode => (
-  <>
-    {label}
-    <Tooltip>
-      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  </>
-);
-
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   isVisible,
   onCancel,
@@ -422,6 +415,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   modelData,
   accessToken,
   userRole,
+  isMemberManaged = false,
 }) => {
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
@@ -475,6 +469,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   }, [isVisible, modelData]);
 
   useEffect(() => {
+    let active = true;
     const fetchModelAccessGroups = async () => {
       if (!accessToken) return;
       try {
@@ -487,9 +482,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
     const loadModels = async () => {
       if (!accessToken) return;
+      setModelInfo([]);
       try {
-        const uniqueModels = await fetchAvailableModels(accessToken);
-        setModelInfo(uniqueModels);
+        const uniqueModels = isMemberManaged
+          ? await fetchAutoRouterModels(accessToken, modelData?.model_info?.team_id)
+          : await fetchAvailableModels(accessToken);
+        if (active) setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info:", error);
       }
@@ -499,7 +497,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       fetchModelAccessGroups();
       loadModels();
     }
-  }, [isVisible, accessToken]);
+    return () => {
+      active = false;
+    };
+  }, [isVisible, accessToken, isMemberManaged, modelData?.model_info?.team_id]);
 
   const initializeForm = () => {
     setEditingTiers(false);
@@ -655,7 +656,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.litellm_params,
         complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
-        ...buildAutoRouterCompressionPatch(autoRouterCompression, modelData.litellm_params ?? {}),
+        ...(isMemberManaged
+          ? {}
+          : buildAutoRouterCompressionPatch(autoRouterCompression, modelData.litellm_params ?? {})),
       };
       const updatedModelInfo = {
         ...modelData.model_info,
@@ -664,7 +667,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
       await modelPatchUpdateCall(
         accessToken,
-        { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
+        isMemberManaged
+          ? {
+              litellm_params: {
+                complexity_router_config: updatedConfig,
+                complexity_router_default_model: defaultModel,
+              },
+            }
+          : { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
         modelData.model_info.id,
       );
 
@@ -746,7 +756,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           <form onSubmit={(event) => event.preventDefault()} noValidate>
             <FieldGroup>
               <FormField control={form.control} name="auto_router_name" label="Auto Router Name">
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., auto_router_1, smart_routing" />}
+                {({ ref, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    readOnly={isMemberManaged}
+                    placeholder="e.g., auto_router_1, smart_routing"
+                  />
+                )}
               </FormField>
 
               {isComplexityRouterModel ? (
@@ -778,7 +795,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                     escalationKeywords={escalationKeywords}
                     onEscalationKeywordsChange={setEscalationKeywords}
                     autoRouterCompression={autoRouterCompression}
-                    onAutoRouterCompressionChange={setAutoRouterCompression}
+                    onAutoRouterCompressionChange={isMemberManaged ? undefined : setAutoRouterCompression}
                   />
                 </div>
               ) : (
@@ -824,7 +841,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 </>
               )}
 
-              {userRole === "Admin" && (
+              {userRole === "Admin" && !isMemberManaged && (
                 <FormField
                   control={form.control}
                   name="model_access_group"

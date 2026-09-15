@@ -1566,6 +1566,8 @@ BASE_MCP_ROUTE: Final = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = int(os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600))  # 1 hour
 BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = int(os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24))  # for 24 hours
+BATCH_TPD_WINDOW_SECONDS: Final = 86400
+BATCH_TPD_DESCRIPTOR_SUFFIX: Final = "_tpd"
 
 HEALTH_CHECK_TIMEOUT_SECONDS: Final = int(os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60))  # 60 seconds
 _background_health_check_max_tokens_env: Final = os.getenv("BACKGROUND_HEALTH_CHECK_MAX_TOKENS")
@@ -1975,6 +1977,8 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 )
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+
+STRINGIFIED_NONE: Final[str] = "None"
 
 # A retrieved response replays the usage of the call that created it, so pricing these
 # read/management routes like inference bills the same tokens twice.

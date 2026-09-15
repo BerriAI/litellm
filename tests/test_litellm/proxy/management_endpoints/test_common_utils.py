@@ -8,6 +8,10 @@ users can intentionally clear previously-set fields.
 """
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from fastapi import HTTPException
+from litellm import Router
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1120,3 +1124,41 @@ class TestUpdateMetadataFieldsPremiumCheck:
         }
         _update_metadata_fields(updated_kv)
         mock_check.assert_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_model,stored_name,owner,public_name,error", [
+    (False, None, None, None, None),
+    (True, "group", None, None, None),
+    (True, None, None, None, "Unknown deployment ID in router weights: id"),
+    (False, "renamed", None, None, "Deployment id does not belong to model group group"),
+    (False, None, "other-team", None, "Unknown deployment ID in router weights: id"),
+    (True, "internal", "team", "group", None),
+    (True, "group", "team", "public", "Deployment id does not belong to model group group"),
+    (True, "group", None, "unrelated-public-name", None),
+])
+async def test_router_weights_validate_current_deployment_scope(
+    db_model: bool, stored_name: str | None, owner: str | None,
+    public_name: str | None, error: str | None,
+) -> None:
+    from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
+
+    info = {"team_id": owner, "team_public_model_name": public_name}
+    router = Router(model_list=[{
+        "model_name": "group",
+        "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "test"},
+        "model_info": {"id": "id", "db_model": db_model, **info},
+    }])
+    rows = [SimpleNamespace(model_id="id", model_name=stored_name, model_info=info)] if stored_name else []
+    table = SimpleNamespace(find_many=AsyncMock(return_value=rows))
+    db = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table))
+    validation = validate_router_settings_weights(
+        {"weights": {"group": {"id": 1}}}, team_id="team", prisma_client=db, llm_router=router,
+    )
+    if error:
+        with pytest.raises(HTTPException, match=error) as exc:
+            await validation
+        assert exc.value.status_code == 400
+        assert exc.value.detail == error
+    else:
+        await validation

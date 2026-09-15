@@ -15,6 +15,7 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -146,6 +147,7 @@ class UpdateRouterConfig(BaseModel):
     context_window_fallbacks: list[dict] | None = None
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
+    weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
 
@@ -180,6 +182,7 @@ class ModelInfo(MirroredPricingParams):
 
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: str | None = None
+    member_auto_router: bool = False
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
