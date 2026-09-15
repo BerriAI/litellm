@@ -187,14 +187,13 @@ class MemoryStore:
             {"user_id": user_id} if user_id else {},  # mutable-ok: Prisma requires native JSON.
             _before(before),
         )
-        result: Final[tuple[MemoryEntry, ...]]
         if not search.query.strip():
-            result = await self._page(where, limit=search.limit, offset=search.offset)
-        else:
-            ranked, _ = await self._ranked(search.query, where, search.offset + search.limit, recent_first=recent_first)
-            result = tuple(entry for entry, _, _ in ranked[search.offset :])
+            page: Final = await self._page(where, limit=search.limit, offset=search.offset)
+            await self.authorize(require_active=require_active)
+            return page
+        ranked, _ = await self._ranked(search.query, where, search.offset + search.limit, recent_first=recent_first)
         await self.authorize(require_active=require_active)
-        return result
+        return tuple(entry for entry, _, _ in ranked[search.offset :])
 
     async def read(self, memory_id: str, *, require_active: bool = True) -> MemoryEntry:
         access: Final = await self.authorize(require_active=require_active)

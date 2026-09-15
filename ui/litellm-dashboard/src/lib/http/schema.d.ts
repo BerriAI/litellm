@@ -32271,6 +32271,28 @@ export interface components {
              */
             user_ids: string[];
         };
+        /** MemorySettingsView */
+        MemorySettingsView: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Everyone
+             * @default true
+             */
+            everyone: boolean;
+            /**
+             * User Ids
+             * @default []
+             */
+            user_ids: string[];
+            /** User Names */
+            user_names: {
+                [key: string]: string;
+            };
+        };
         /** MemoryStatus */
         MemoryStatus: {
             /** Active */
@@ -67774,7 +67796,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MemorySettings"];
+                    "application/json": components["schemas"]["MemorySettingsView"];
                 };
             };
         };
@@ -67798,7 +67820,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MemorySettings"];
+                    "application/json": components["schemas"]["MemorySettingsView"];
                 };
             };
             /** @description Validation Error */

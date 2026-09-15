@@ -64,7 +64,7 @@ beforeEach(async () => {
     const response = () => {
       if (path === "/v2/memory/settings") {
         if (request.method === "PUT") settings = JSON.parse(text);
-        return settings;
+        return { ...settings, user_names: { u1: "Alex Rivera" } };
       }
       if (path === "/v2/memory/status")
         return {
@@ -144,6 +144,18 @@ describe("Memory dashboard", () => {
     expect(screen.getByRole("button", { name: "Remove alex@example.test" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(settings).toEqual({ enabled: true, everyone: false, user_ids: ["u1"] }));
+  });
+
+  it("shows saved user names after loading and sends only editable settings", async () => {
+    session("proxy_admin");
+    settings = { enabled: true, everyone: false, user_ids: ["u1"] };
+    const user = userEvent.setup();
+    renderWithProviders(<Memory />);
+    await user.click(screen.getByRole("tab", { name: "Administration" }));
+    expect(await screen.findByRole("button", { name: "Remove Alex Rivera" })).toBeVisible();
+    await user.click(screen.getByRole("switch", { name: "Gateway memory" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(settings).toEqual({ enabled: false, everyone: false, user_ids: ["u1"] }));
   });
 
   it("keeps an unsuccessful activation unsaved and shows the error", async () => {

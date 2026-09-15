@@ -276,9 +276,10 @@ class TestMemoryV2:
 
     @pytest.mark.covers("mgmt.memory_v2.entries.team_permissions")
     def test_delegated_team_reads_allow_recall_but_not_edit_and_can_be_revoked(
-        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects
+        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects, memory_models: MemoryModels
     ) -> None:
-        saved = unwrap(memory.capture(subjects.owner, _fact(unique_marker())))
+        marker = f"team-{unique_marker()}"
+        saved = unwrap(memory.capture(subjects.owner, _fact(marker)))
         assert memory.entries(subjects.outsider) == []
         for permissions, visible in ((["/spend/logs"], False), (["/v2/memory/entries"], True), ([], False)):
             unwrap(
@@ -296,6 +297,22 @@ class TestMemoryV2:
                 assert unwrap(memory.read(subjects.outsider, saved.memory_id)).content == saved.content
                 _assert_denied(memory.update(subjects.outsider, saved.memory_id, _fact(unique_marker())))
                 _assert_denied(memory.delete_entry(subjects.outsider, saved.memory_id))
+                recalled = unwrap(
+                    client.proxy.chat(
+                        subjects.outsider,
+                        ChatBody(
+                            model=memory_models.chat,
+                            max_tokens=1200,
+                            messages=[
+                                ChatMessage(
+                                    role="user",
+                                    content="Search the team's memories for the demo project codename and return it exactly.",
+                                )
+                            ],
+                        ),
+                    )
+                )
+                assert marker in recalled.model_dump_json()
             else:
                 _assert_denied(memory.read(subjects.outsider, saved.memory_id))
 

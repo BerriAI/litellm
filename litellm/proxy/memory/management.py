@@ -19,7 +19,15 @@ from litellm.proxy.memory.store import MemoryStore
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.types.memory_v2 import MemoryCapture, MemoryEntry, MemoryQuery, MemorySearch, MemorySettings, MemoryStatus
+from litellm.types.memory_v2 import (
+    MemoryCapture,
+    MemoryEntry,
+    MemoryQuery,
+    MemorySearch,
+    MemorySettings,
+    MemorySettingsView,
+    MemoryStatus,
+)
 
 _AUTH: Final = Depends(user_api_key_auth)
 router: Final = APIRouter(prefix="/v2/memory", tags=["memory management"])  # mutable-ok: FastAPI requires native tags.
@@ -30,14 +38,31 @@ def require_memory_admin(auth: UserAPIKeyAuth, *, write: bool = False) -> None:
         raise HTTPException(status_code=403, detail="Only proxy administrators can configure gateway memory")
 
 
-@router.get("/settings", response_model=MemorySettings)
-async def get_settings(auth: UserAPIKeyAuth = _AUTH) -> MemorySettings:
+async def settings_view(settings: MemorySettings) -> MemorySettingsView:
+    users: Final = (
+        await UserRepository(memory_primary_client(require_memory_prisma())).table.find_many(
+            where={"user_id": {"in": list(settings.user_ids)}},  # mutable-ok: Prisma requires native JSON.
+            take=len(settings.user_ids),
+        )
+        if settings.user_ids
+        else ()
+    )
+    return MemorySettingsView(
+        **settings.model_dump(),
+        user_names=MappingProxyType(
+            {user.user_id: user.user_alias or user.user_email or user.user_id for user in users}
+        ),
+    )
+
+
+@router.get("/settings", response_model=MemorySettingsView)
+async def get_settings(auth: UserAPIKeyAuth = _AUTH) -> MemorySettingsView:
     require_memory_admin(auth)
-    return await memory_settings(require_memory_prisma())
+    return await settings_view(await memory_settings(require_memory_prisma()))
 
 
-@router.put("/settings", response_model=MemorySettings)
-async def set_settings(settings: MemorySettings, auth: UserAPIKeyAuth = _AUTH) -> MemorySettings:
+@router.put("/settings", response_model=MemorySettingsView)
+async def set_settings(settings: MemorySettings, auth: UserAPIKeyAuth = _AUTH) -> MemorySettingsView:
     require_memory_admin(auth, write=True)
     prisma: Final = memory_primary_client(require_memory_prisma())
     selected: Final = tuple(sorted(frozenset(settings.user_ids))) if not settings.everyone else ()
@@ -53,7 +78,7 @@ async def set_settings(settings: MemorySettings, auth: UserAPIKeyAuth = _AUTH) -
     saved: Final = settings.model_copy(update=MappingProxyType({"user_ids": selected}))
     await ConfigRepository(prisma).set_param(MEMORY_CONFIG_PARAM, saved.model_dump(mode="json"))
     await invalidate_memory_configuration()
-    return saved
+    return await settings_view(saved)
 
 
 async def memory_store(auth: UserAPIKeyAuth) -> MemoryStore:

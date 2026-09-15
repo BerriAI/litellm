@@ -28,7 +28,8 @@ export function MemoryAdministration({
   });
   const current = draft ?? settings.data;
   const save = useMutation({
-    mutationFn: (body: Settings) => fetchClient.PUT("/v2/memory/settings", { body }),
+    mutationFn: ({ enabled, everyone, user_ids }: Settings) =>
+      fetchClient.PUT("/v2/memory/settings", { body: { enabled, everyone, user_ids } }),
     onSuccess: async ({ data }) => {
       cache.setQueryData(["memorySettings", userId], data);
       setDraft(null);
@@ -98,12 +99,12 @@ export function MemoryAdministration({
               <ul className="divide-y">
                 {(current.user_ids ?? []).map((id) => (
                   <li key={id} className="flex items-center justify-between gap-3 py-2">
-                    <span className="break-all text-sm">{names[id] ?? id}</span>
+                    <span className="break-all text-sm">{names[id] ?? settings.data?.user_names?.[id] ?? id}</span>
                     <Button
                       variant="ghost"
                       size="sm"
                       disabled={busy}
-                      aria-label={`Remove ${names[id] ?? id}`}
+                      aria-label={`Remove ${names[id] ?? settings.data?.user_names?.[id] ?? id}`}
                       onClick={() =>
                         setDraft({ ...current, user_ids: current.user_ids?.filter((value) => value !== id) })
                       }

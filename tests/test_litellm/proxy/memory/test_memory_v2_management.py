@@ -108,13 +108,16 @@ def row(**changes: object) -> LiteLLM_MemoryTable:
 @pytest.mark.asyncio
 async def test_default_off_and_proxy_admin_can_enable_selected_users(database: MagicMock) -> None:
     admin = auth("admin", LitellmUserRoles.PROXY_ADMIN)
-    assert (await management.get_settings(admin)) == MemorySettings()
+    assert not (await management.get_settings(admin)).enabled
     assert not (await management.get_status(auth())).active
-    database.db.litellm_usertable.find_many.return_value = [SimpleNamespace(user_id="owner")]
+    database.db.litellm_usertable.find_many.return_value = [
+        SimpleNamespace(user_id="owner", user_alias="Alex", user_email="alex@example.test")
+    ]
     saved = await management.set_settings(
         MemorySettings(enabled=True, everyone=False, user_ids=("owner", "owner")), admin
     )
     assert saved.user_ids == ("owner",)
+    assert saved.user_names == {"owner": "Alex"}
     written = database.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"]
     database.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=written)
     assert (await management.get_status(auth())).active

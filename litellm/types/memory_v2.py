@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
@@ -25,6 +26,10 @@ class MemorySettings(BaseModel):
     enabled: bool = False
     everyone: bool = True
     user_ids: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=10000)
+
+
+class MemorySettingsView(MemorySettings):
+    user_names: Mapping[str, str]
 
 
 class MemoryStatus(BaseModel):
