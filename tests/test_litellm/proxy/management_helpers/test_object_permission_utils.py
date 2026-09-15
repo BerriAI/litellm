@@ -214,6 +214,7 @@ def test_extract_requested_mcp_access_groups_none():
 
 def _make_team_obj(
     team_id="team-1",
+    team_alias=None,
     mcp_servers=None,
     mcp_access_groups=None,
     mcp_tool_permissions=None,
@@ -221,6 +222,7 @@ def _make_team_obj(
     """Create a mock team object with the given MCP permissions."""
     mock_team = MagicMock()
     mock_team.team_id = team_id
+    mock_team.team_alias = team_alias
 
     if (
         mcp_servers is not None
@@ -334,6 +336,62 @@ async def test_validate_key_servers_outside_team_scope_raises(
         )
     assert exc_info.value.status_code == 403
     assert "server-outside" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(  # test-quality-ok: registry mock is this suite's seam for injecting MCP servers; no HTTP boundary exists
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(
+        servers=[
+            _make_mock_mcp_server("server-1", alias="github_mcp"),
+            _make_mock_mcp_server("server-outside", alias="jira_mcp"),
+        ]
+    ),
+)
+async def test_validate_key_servers_outside_team_scope_error_uses_names():
+    """The 403 detail should show server aliases and the team alias, not raw IDs."""
+    team_obj = _make_team_obj(
+        team_id="team-uuid",
+        team_alias="mcp-test-team",
+        mcp_servers=["server-1"],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["server-1", "server-outside"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    detail = str(exc_info.value.detail)
+    assert "mcp-test-team" in detail
+    assert "jira_mcp" in detail
+    assert "github_mcp" in detail
+    assert "team-uuid" not in detail
+    assert "server-outside" not in detail
+    assert "server-1" not in detail
+
+
+@pytest.mark.asyncio
+@patch(  # test-quality-ok: registry mock is this suite's seam for injecting MCP servers; no HTTP boundary exists
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(
+        servers=[
+            _make_mock_mcp_server("server-1", alias="github_mcp"),
+            _make_mock_mcp_server("server-outside", alias="jira_mcp"),
+        ]
+    ),
+)
+async def test_validate_key_servers_no_team_error_uses_names():
+    """The teamless 403 detail should show server aliases, not raw IDs."""
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["server-outside"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc_info.value.status_code == 403
+    detail = str(exc_info.value.detail)
+    assert "jira_mcp" in detail
+    assert "server-outside" not in detail
 
 
 @pytest.mark.asyncio
@@ -690,7 +748,7 @@ async def test_validate_mcp_server_alias_outside_team_scope_raises(
             team_obj=team_obj,
         )
     assert exc_info.value.status_code == 403
-    assert "private-server-id" in str(exc_info.value.detail)
+    assert "private-alias" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -788,7 +846,7 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
         )
 
     assert exc_info.value.status_code == 403
-    assert "private-server-id" in str(exc_info.value.detail)
+    assert "private-alias" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

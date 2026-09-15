@@ -300,6 +300,40 @@ async def _resolve_mcp_server_identifiers_to_ids(
     return resolved
 
 
+async def _mcp_server_display_name_map(
+    server_ids: AbstractSet[str],
+    prisma_client: PrismaClient | None,
+) -> Mapping[str, str]:
+    """
+    Map MCP server IDs to human-readable names for error messages.
+
+    For each id, prefer alias, then server_name, then name, falling back to the
+    raw id when the server is unknown or has no name. DB rows win over the
+    in-memory registry when both know the server.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    registry_names: Final = MappingProxyType(
+        {
+            server_id: server.alias or server.server_name or server.name or server_id
+            for registry_key, server in global_mcp_server_manager.get_registry().items()
+            if (server_id := server.server_id or registry_key)
+        }
+    )
+    db_names: Final = MappingProxyType(
+        {
+            server.server_id: server.alias or server.server_name or server.server_id
+            for server in await _get_db_mcp_servers_by_identifiers(
+                identifiers=server_ids,
+                prisma_client=prisma_client,
+            )
+        }
+    )
+    return MappingProxyType({**registry_names, **db_names})
+
+
 _MCP_TOOL_PERMISSIONS_ADAPTER: Final = TypeAdapter(dict[str, list[str] | None])
 
 
@@ -694,19 +728,32 @@ async def validate_key_mcp_servers_against_team(
         )
         disallowed_servers: Final = active_requested_servers - allowed_servers - grandfathered_servers
         if disallowed_servers:
+            display_names: Final = await _mcp_server_display_name_map(
+                server_ids=disallowed_servers | team_allowed_servers | allow_all_keys_servers,
+                prisma_client=prisma_client,
+            )
+            disallowed_names: Final = sorted(
+                display_names.get(server_id, server_id) for server_id in disallowed_servers
+            )
+            allow_all_names: Final = sorted(
+                display_names.get(server_id, server_id) for server_id in allow_all_keys_servers
+            )
             if team_obj is not None:
-                team_id = team_obj.team_id
+                team_allowed_names: Final = sorted(
+                    display_names.get(server_id, server_id) for server_id in team_allowed_servers
+                )
+                team_display: Final = team_obj.team_alias or team_obj.team_id
                 detail = (
-                    f"Key requests MCP servers not allowed by team '{team_id}': "
-                    f"{sorted(disallowed_servers)}. "
-                    f"Team allows: {sorted(team_allowed_servers)}. "
-                    f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
+                    f"Key requests MCP servers not allowed by team '{team_display}': "
+                    f"{disallowed_names}. "
+                    f"Team allows: {team_allowed_names}. "
+                    f"Global (allow_all_keys) servers: {allow_all_names}."
                 )
             else:
                 detail = (
                     f"Key is not in a team. Only globally available (allow_all_keys) MCP servers "
-                    f"can be assigned: {sorted(allow_all_keys_servers)}. "
-                    f"Disallowed servers: {sorted(disallowed_servers)}."
+                    f"can be assigned: {allow_all_names}. "
+                    f"Disallowed servers: {disallowed_names}."
                 )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
