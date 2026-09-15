@@ -236,3 +236,15 @@ Before you push
 4. Capture screenshots of the test run and attach them to the PR as proof
 
 5. If a test fails because it surfaced a real issue in the product, flag that explicitly in the PR rather than reworking the test until it passes
+
+### Strict stateless replay matching
+
+Set `E2E_REPLAY_MATCH_PROFILE=stateless_v1` for both recording and replay to bind OpenAI `/v1/chat/completions` and Anthropic `/v1/messages` requests to their upstream destination, ordered query pairs, semantic headers and literal JSON content. The default remains `legacy`. Strict bundles use format 5 and cannot load as legacy bundles; select the matching profile or re-record with `E2E_FIXTURE_MODE=record`. Missing profile metadata never enrolls a legacy bundle in strict matching
+
+Strict matching preserves dates, UUIDs, hashes, model names, tool arguments, array order and omitted/null/empty/false/zero values. JSON object key order and header name casing may change. The strict body uses tagged JSON values so number precision and JSON types survive persistence, including exact numeric spelling and numbers larger than a floating-point value. Invalid UTF-8 query values fail eligibility. Duplicate JSON keys, unsupported endpoints, non-JSON bodies and unknown semantic headers fail eligibility before contacting a provider
+
+The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthropic-beta` and `openai-beta`, including missing versus present values. Authorization records presence and the case-insensitive scheme; `x-api-key` records presence only. Credential values and cookies are excluded. Credential query values are redacted while their position and field name remain in the identity. Never use real customer inputs in fixture qualification
+
+Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
+
+Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the existing legacy harness files with `--noconftest -o pythonpath=tests/e2e`; they need only synthetic HTTP providers and temporary fixture storage
