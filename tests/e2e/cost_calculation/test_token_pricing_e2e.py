@@ -11,6 +11,7 @@ tests/e2e/cost_map.json.
 from __future__ import annotations
 
 import pytest
+from typing import Final
 
 from conftest import CostCalcClient, cost_rows, register_scenario_deployment
 from cost_matrix import (
@@ -25,11 +26,11 @@ from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatStreamOptions
 
-pytestmark = [pytest.mark.e2e, pytest.mark.cost_map_stack]
+pytestmark: Final = [pytest.mark.e2e, pytest.mark.cost_map_stack]  # mutable-ok: pytest only accepts a list for pytestmark
 
-_MATRIX: list[tuple[FrontierModel, Case]] = [
+_MATRIX: Final[tuple[tuple[FrontierModel, Case], ...]] = tuple(
     (model, case) for model in FRONTIER_MODELS for case in cases_for(model)
-]
+)
 
 
 def _case_id(param: tuple[FrontierModel, Case]) -> str:
@@ -40,7 +41,7 @@ def _case_id(param: tuple[FrontierModel, Case]) -> str:
 def _chat_body(model_name: str, marker: str, case: Case) -> ChatBody:
     return ChatBody(
         model=model_name,
-        messages=[ChatMessage(role="user", content=f"{marker} scripted pricing call")],
+        messages=(ChatMessage(role="user", content=f"{marker} scripted pricing call"),),
         stream=case.stream,
         stream_options=ChatStreamOptions(include_usage=True) if case.stream else None,
         service_tier=case.service_tier,
@@ -58,9 +59,9 @@ class TestTokenPricing:
         model_case: tuple[FrontierModel, Case],
     ) -> None:
         model, case = model_case
-        marker = unique_marker()
+        marker: Final = unique_marker()
         model_name, _handle = register_scenario_deployment(client, resources, model, case, marker)
-        response = client.proxy.transport.send(
+        response: Final = client.proxy.transport.send(
             "/chat/completions",
             headers=client.proxy.transport.bearer(scoped_key),
             json=_chat_body(model_name, marker, case),
@@ -71,7 +72,7 @@ class TestTokenPricing:
         )
         assert response.stream_error is None, f"stream carried an error event: {response.stream_error}"
 
-        expected = expected_cost(model, case)
+        expected: Final = expected_cost(model, case)
         if case.exact_spend and not case.stream:
             # Streamed responses commit headers before the bill is computed, so
             # the x-litellm-response-cost header is asserted only on non-stream
@@ -82,7 +83,7 @@ class TestTokenPricing:
                 f"x-litellm-response-cost {response.response_cost} != expected {expected}"
             )
 
-        row = cost_rows.poll_cost_row_where(
+        row: Final = cost_rows.poll_cost_row_where(
             client.proxy,
             scoped_key,
             lambda r: r.metadata is not None and r.metadata.cost_breakdown is not None,

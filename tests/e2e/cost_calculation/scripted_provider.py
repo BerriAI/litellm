@@ -31,14 +31,16 @@ import json
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-Wire = Literal[
+Wire: TypeAlias = Literal[
     "openai_chat",
     "openai_responses",
     "anthropic_messages",
@@ -47,17 +49,19 @@ Wire = Literal[
     "fireworks_chat",
 ]
 
-_WIRE_MOUNTS: Final[dict[str, str]] = {
-    "openai_chat": "openai",
-    "openai_responses": "openai",
-    "anthropic_messages": "anthropic",
-    "gemini_generate": "gemini",
-    "together_chat": "together",
-    "fireworks_chat": "fireworks",
-}
+WIRE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "openai_chat": "openai",
+        "openai_responses": "openai",
+        "anthropic_messages": "anthropic",
+        "gemini_generate": "gemini",
+        "together_chat": "together",
+        "fireworks_chat": "fireworks",
+    }
+)
 
-StreamUsage = Literal["final_chunk", "absent"]
-ServiceTier = Literal["flex", "priority"]
+StreamUsage: TypeAlias = Literal["final_chunk", "absent"]
+ServiceTier: TypeAlias = Literal["flex", "priority"]
 
 
 class ScriptedUsage(BaseModel):
@@ -106,7 +110,7 @@ class Scenario(BaseModel):
 
     @property
     def mount(self) -> str:
-        return _WIRE_MOUNTS[self.wire]
+        return WIRE_MOUNTS[self.wire]
 
 
 class ScenarioRegistered(BaseModel):
@@ -128,369 +132,494 @@ class RenderedResponse:
     body: bytes
 
 
-def _json_bytes(payload: dict[str, object]) -> bytes:
-    return json.dumps(payload).encode("utf-8")
+def _jobj(*pairs: tuple[str, object]) -> Mapping[str, object]:
+    """A JSON object payload built in one shot and frozen."""
+    return MappingProxyType(dict(pairs))
 
 
-def _sse(events: tuple[tuple[str | None, dict[str, object] | str], ...]) -> bytes:
-    frames: list[str] = []
-    for event_name, data in events:
-        head = f"event: {event_name}\n" if event_name is not None else ""
-        payload = data if isinstance(data, str) else json.dumps(data)
-        frames.append(f"{head}data: {payload}\n\n")
-    return "".join(frames).encode("utf-8")
+def _jobj_opt(*pairs: tuple[str, object] | None) -> Mapping[str, object]:
+    """``_jobj`` where a ``None`` pair means the field is absent."""
+    return MappingProxyType(dict(pair for pair in pairs if pair is not None))
+
+
+def _json_bytes(payload: Mapping[str, object]) -> bytes:
+    return json.dumps(payload, default=dict).encode("utf-8")
+
+
+def _sse_frame(event_name: str | None, data: Mapping[str, object] | str) -> str:
+    head: Final = f"event: {event_name}\n" if event_name is not None else ""
+    payload: Final = data if isinstance(data, str) else json.dumps(data, default=dict)
+    return f"{head}data: {payload}\n\n"
+
+
+def _sse(events: tuple[tuple[str | None, Mapping[str, object] | str], ...]) -> bytes:
+    return "".join(_sse_frame(event_name, data) for event_name, data in events).encode("utf-8")
 
 
 # ---------- per-wire usage shapes ----------
 
 
-def _openai_usage(u: ScriptedUsage) -> dict[str, object]:
-    prompt_tokens = (
+def _openai_usage(u: ScriptedUsage) -> Mapping[str, object]:
+    prompt_tokens: Final = (
         u.fresh_input_tokens
         + u.cache_read_tokens
         + u.cache_write_5m_tokens
         + u.cache_write_1h_tokens
         + u.audio_input_tokens
     )
-    completion_tokens = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
-    prompt_details: dict[str, object] = {}
-    if u.cache_read_tokens:
-        prompt_details["cached_tokens"] = u.cache_read_tokens
-    if u.cache_write_5m_tokens or u.cache_write_1h_tokens:
-        prompt_details["cache_write_tokens"] = u.cache_write_5m_tokens + u.cache_write_1h_tokens
-        prompt_details["cache_creation_token_details"] = {
-            "ephemeral_5m_input_tokens": u.cache_write_5m_tokens,
-            "ephemeral_1h_input_tokens": u.cache_write_1h_tokens,
-        }
-    if u.audio_input_tokens:
-        prompt_details["audio_tokens"] = u.audio_input_tokens
-    completion_details: dict[str, object] = {}
-    if u.reasoning_tokens:
-        completion_details["reasoning_tokens"] = u.reasoning_tokens
-    if u.audio_output_tokens:
-        completion_details["audio_tokens"] = u.audio_output_tokens
-    usage: dict[str, object] = {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-    }
-    if prompt_details:
-        usage["prompt_tokens_details"] = prompt_details
-    if completion_details:
-        usage["completion_tokens_details"] = completion_details
-    return usage
+    completion_tokens: Final = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
+    prompt_details: Final = _jobj_opt(
+        ("cached_tokens", u.cache_read_tokens) if u.cache_read_tokens else None,
+        (
+            ("cache_write_tokens", u.cache_write_5m_tokens + u.cache_write_1h_tokens)
+            if u.cache_write_5m_tokens or u.cache_write_1h_tokens
+            else None
+        ),
+        (
+            (
+                "cache_creation_token_details",
+                _jobj(
+                    ("ephemeral_5m_input_tokens", u.cache_write_5m_tokens),
+                    ("ephemeral_1h_input_tokens", u.cache_write_1h_tokens),
+                ),
+            )
+            if u.cache_write_5m_tokens or u.cache_write_1h_tokens
+            else None
+        ),
+        ("audio_tokens", u.audio_input_tokens) if u.audio_input_tokens else None,
+    )
+    completion_details: Final = _jobj_opt(
+        ("reasoning_tokens", u.reasoning_tokens) if u.reasoning_tokens else None,
+        ("audio_tokens", u.audio_output_tokens) if u.audio_output_tokens else None,
+    )
+    return _jobj_opt(
+        ("prompt_tokens", prompt_tokens),
+        ("completion_tokens", completion_tokens),
+        ("total_tokens", prompt_tokens + completion_tokens),
+        ("prompt_tokens_details", prompt_details) if prompt_details else None,
+        ("completion_tokens_details", completion_details) if completion_details else None,
+    )
 
 
-def _anthropic_usage(u: ScriptedUsage) -> dict[str, object]:
+def _anthropic_usage(u: ScriptedUsage) -> Mapping[str, object]:
     # Anthropic reports uncached-only input_tokens; cache reads and writes ride
     # top-level fields, with the 5m/1h write split under cache_creation.
-    usage: dict[str, object] = {
-        "input_tokens": u.fresh_input_tokens,
-        "output_tokens": u.output_tokens,
-    }
-    if u.cache_read_tokens:
-        usage["cache_read_input_tokens"] = u.cache_read_tokens
-    if u.cache_write_5m_tokens or u.cache_write_1h_tokens:
-        usage["cache_creation_input_tokens"] = u.cache_write_5m_tokens + u.cache_write_1h_tokens
-        usage["cache_creation"] = {
-            "ephemeral_5m_input_tokens": u.cache_write_5m_tokens,
-            "ephemeral_1h_input_tokens": u.cache_write_1h_tokens,
-        }
-    if u.web_search_calls:
-        usage["server_tool_use"] = {"web_search_requests": u.web_search_calls}
-    return usage
+    return _jobj_opt(
+        ("input_tokens", u.fresh_input_tokens),
+        ("output_tokens", u.output_tokens),
+        ("cache_read_input_tokens", u.cache_read_tokens) if u.cache_read_tokens else None,
+        (
+            ("cache_creation_input_tokens", u.cache_write_5m_tokens + u.cache_write_1h_tokens)
+            if u.cache_write_5m_tokens or u.cache_write_1h_tokens
+            else None
+        ),
+        (
+            (
+                "cache_creation",
+                _jobj(
+                    ("ephemeral_5m_input_tokens", u.cache_write_5m_tokens),
+                    ("ephemeral_1h_input_tokens", u.cache_write_1h_tokens),
+                ),
+            )
+            if u.cache_write_5m_tokens or u.cache_write_1h_tokens
+            else None
+        ),
+        (
+            ("server_tool_use", _jobj(("web_search_requests", u.web_search_calls)))
+            if u.web_search_calls
+            else None
+        ),
+    )
 
 
-def _gemini_usage(u: ScriptedUsage) -> dict[str, object]:
+def _gemini_usage(u: ScriptedUsage) -> Mapping[str, object]:
     # promptTokenCount carries the cached count inside it; TEXT modality is the
     # cached-inclusive text count so litellm's implicit-caching subtraction lands
     # on the fresh figure. candidatesTokenCount includes reasoning + audio.
-    prompt_tokens = u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens
-    candidates = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
-    usage: dict[str, object] = {
-        "promptTokenCount": prompt_tokens,
-        "candidatesTokenCount": candidates,
-        "totalTokenCount": prompt_tokens + candidates,
-    }
-    if u.cache_read_tokens:
-        usage["cachedContentTokenCount"] = u.cache_read_tokens
-    if u.reasoning_tokens:
-        usage["thoughtsTokenCount"] = u.reasoning_tokens
-    prompt_details = [{"modality": "TEXT", "tokenCount": u.fresh_input_tokens + u.cache_read_tokens}]
-    if u.audio_input_tokens:
-        prompt_details.append({"modality": "AUDIO", "tokenCount": u.audio_input_tokens})
-    usage["promptTokensDetails"] = prompt_details
-    if u.audio_output_tokens:
-        usage["candidatesTokensDetails"] = [
-            {"modality": "TEXT", "tokenCount": u.output_tokens + u.reasoning_tokens},
-            {"modality": "AUDIO", "tokenCount": u.audio_output_tokens},
-        ]
-    return usage
+    prompt_tokens: Final = u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens
+    candidates: Final = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
+    return _jobj_opt(
+        ("promptTokenCount", prompt_tokens),
+        ("candidatesTokenCount", candidates),
+        ("totalTokenCount", prompt_tokens + candidates),
+        ("cachedContentTokenCount", u.cache_read_tokens) if u.cache_read_tokens else None,
+        ("thoughtsTokenCount", u.reasoning_tokens) if u.reasoning_tokens else None,
+        (
+            "promptTokensDetails",
+            (
+                _jobj(("modality", "TEXT"), ("tokenCount", u.fresh_input_tokens + u.cache_read_tokens)),
+                *(
+                    (_jobj(("modality", "AUDIO"), ("tokenCount", u.audio_input_tokens)),)
+                    if u.audio_input_tokens
+                    else ()
+                ),
+            ),
+        ),
+        (
+            (
+                "candidatesTokensDetails",
+                (
+                    _jobj(("modality", "TEXT"), ("tokenCount", u.output_tokens + u.reasoning_tokens)),
+                    _jobj(("modality", "AUDIO"), ("tokenCount", u.audio_output_tokens)),
+                ),
+            )
+            if u.audio_output_tokens
+            else None
+        ),
+    )
 
 
-def _responses_usage(u: ScriptedUsage) -> dict[str, object]:
-    input_tokens = u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens
-    output_tokens = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
-    usage: dict[str, object] = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-    }
-    input_details: dict[str, object] = {}
-    if u.cache_read_tokens:
-        input_details["cached_tokens"] = u.cache_read_tokens
-    if input_details:
-        usage["input_tokens_details"] = input_details
-    if u.reasoning_tokens:
-        usage["output_tokens_details"] = {"reasoning_tokens": u.reasoning_tokens}
-    return usage
+def _responses_usage(u: ScriptedUsage) -> Mapping[str, object]:
+    input_tokens: Final = u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens
+    output_tokens: Final = u.output_tokens + u.reasoning_tokens + u.audio_output_tokens
+    input_details: Final = _jobj_opt(
+        ("cached_tokens", u.cache_read_tokens) if u.cache_read_tokens else None,
+    )
+    return _jobj_opt(
+        ("input_tokens", input_tokens),
+        ("output_tokens", output_tokens),
+        ("total_tokens", input_tokens + output_tokens),
+        ("input_tokens_details", input_details) if input_details else None,
+        (
+            ("output_tokens_details", _jobj(("reasoning_tokens", u.reasoning_tokens)))
+            if u.reasoning_tokens
+            else None
+        ),
+    )
 
 
 # ---------- per-wire responses ----------
 
 
-def _openai_message(scenario: Scenario) -> dict[str, object]:
-    message: dict[str, object] = {"role": "assistant", "content": scenario.output.text}
-    if scenario.usage.web_search_calls:
-        message["annotations"] = [
-            {
-                "type": "url_citation",
-                "url_citation": {
-                    "url": "https://scripted.example/source",
-                    "title": "scripted source",
-                    "start_index": 0,
-                    "end_index": 1,
-                },
-            }
-            for _ in range(scenario.usage.web_search_calls)
-        ]
-    return message
+def _openai_message(scenario: Scenario) -> Mapping[str, object]:
+    return _jobj_opt(
+        ("role", "assistant"),
+        ("content", scenario.output.text),
+        (
+            (
+                "annotations",
+                tuple(
+                    _jobj(
+                        ("type", "url_citation"),
+                        (
+                            "url_citation",
+                            _jobj(
+                                ("url", "https://scripted.example/source"),
+                                ("title", "scripted source"),
+                                ("start_index", 0),
+                                ("end_index", 1),
+                            ),
+                        ),
+                    )
+                    for _ in range(scenario.usage.web_search_calls)
+                ),
+            )
+            if scenario.usage.web_search_calls
+            else None
+        ),
+    )
 
 
-def _openai_chat_body(scenario: Scenario, requested_model: str) -> dict[str, object]:
-    body: dict[str, object] = {
-        "id": f"chatcmpl-{scenario.scenario_id}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": scenario.output.response_model or requested_model,
-        "choices": [
-            {
-                "index": 0,
-                "message": _openai_message(scenario),
-                "finish_reason": scenario.output.finish_reason,
-            }
-        ],
-        "usage": _openai_usage(scenario.usage),
-    }
-    if scenario.service_tier is not None:
-        body["service_tier"] = scenario.service_tier
-    if scenario.output.provider_cost is not None:
-        body["cost"] = scenario.output.provider_cost
-    return body
+def _openai_chat_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
+    return _jobj_opt(
+        ("id", f"chatcmpl-{scenario.scenario_id}"),
+        ("object", "chat.completion"),
+        ("created", int(time.time())),
+        ("model", scenario.output.response_model or requested_model),
+        (
+            "choices",
+            (
+                _jobj(
+                    ("index", 0),
+                    ("message", _openai_message(scenario)),
+                    ("finish_reason", scenario.output.finish_reason),
+                ),
+            ),
+        ),
+        ("usage", _openai_usage(scenario.usage)),
+        ("service_tier", scenario.service_tier) if scenario.service_tier is not None else None,
+        ("cost", scenario.output.provider_cost) if scenario.output.provider_cost is not None else None,
+    )
 
 
-def _openai_chunk(scenario: Scenario, requested_model: str, **kw: object) -> dict[str, object]:
-    chunk: dict[str, object] = {
-        "id": f"chatcmpl-{scenario.scenario_id}",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": scenario.output.response_model or requested_model,
-    }
-    chunk.update(kw)
-    return chunk
+def _openai_chunk(
+    scenario: Scenario,
+    requested_model: str,
+    choices: tuple[Mapping[str, object], ...] = (),
+    usage: Mapping[str, object] | None = None,
+) -> Mapping[str, object]:
+    return _jobj_opt(
+        ("id", f"chatcmpl-{scenario.scenario_id}"),
+        ("object", "chat.completion.chunk"),
+        ("created", int(time.time())),
+        ("model", scenario.output.response_model or requested_model),
+        ("choices", choices),
+        ("usage", usage),
+    )
 
 
 def _openai_chat_sse(scenario: Scenario, requested_model: str) -> bytes:
-    _EMPTY_DELTA: Final[dict[str, object]] = {}
-    delta: dict[str, object] = {"role": "assistant", "content": scenario.output.text}
-    if scenario.usage.web_search_calls:
-        delta["annotations"] = _openai_message(scenario)["annotations"]
-    events: list[tuple[str | None, dict[str, object] | str]] = [
+    delta: Final = _jobj_opt(
+        ("role", "assistant"),
+        ("content", scenario.output.text),
         (
-            None,
-            _openai_chunk(
-                scenario,
-                requested_model,
-                choices=[{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-            ),
+            ("annotations", _openai_message(scenario)["annotations"])
+            if scenario.usage.web_search_calls
+            else None
         ),
+    )
+    return _sse(
         (
-            None,
-            _openai_chunk(
-                scenario,
-                requested_model,
-                choices=[{"index": 0, "delta": delta, "finish_reason": None}],
+            (
+                None,
+                _openai_chunk(
+                    scenario,
+                    requested_model,
+                    choices=(_jobj(("index", 0), ("delta", _jobj(("role", "assistant"))), ("finish_reason", None)),),
+                ),
             ),
-        ),
-        (
-            None,
-            _openai_chunk(
-                scenario,
-                requested_model,
-                choices=[
-                    {
-                        "index": 0,
-                        "delta": _EMPTY_DELTA,
-                        "finish_reason": scenario.output.finish_reason,
-                    }
-                ],
+            (
+                None,
+                _openai_chunk(
+                    scenario,
+                    requested_model,
+                    choices=(_jobj(("index", 0), ("delta", delta), ("finish_reason", None)),),
+                ),
             ),
-        ),
-    ]
-    if scenario.stream_usage == "final_chunk":
-        events.append(
-            (None, _openai_chunk(scenario, requested_model, choices=(), usage=_openai_usage(scenario.usage)))
+            (
+                None,
+                _openai_chunk(
+                    scenario,
+                    requested_model,
+                    choices=(
+                        _jobj(
+                            ("index", 0),
+                            ("delta", _jobj()),
+                            ("finish_reason", scenario.output.finish_reason),
+                        ),
+                    ),
+                ),
+            ),
+            *(
+                ((None, _openai_chunk(scenario, requested_model, usage=_openai_usage(scenario.usage))),)
+                if scenario.stream_usage == "final_chunk"
+                else ()
+            ),
+            (None, "[DONE]"),
         )
-    events.append((None, "[DONE]"))
-    return _sse(tuple(events))
+    )
 
 
-def _anthropic_body(scenario: Scenario, requested_model: str) -> dict[str, object]:
-    return {
-        "id": f"msg_{scenario.scenario_id}",
-        "type": "message",
-        "role": "assistant",
-        "model": scenario.output.response_model or requested_model,
-        "content": [{"type": "text", "text": scenario.output.text}],
-        "stop_reason": "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason,
-        "usage": _anthropic_usage(scenario.usage),
-    }
+def _anthropic_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
+    return _jobj(
+        ("id", f"msg_{scenario.scenario_id}"),
+        ("type", "message"),
+        ("role", "assistant"),
+        ("model", scenario.output.response_model or requested_model),
+        ("content", (_jobj(("type", "text"), ("text", scenario.output.text)),)),
+        (
+            "stop_reason",
+            "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason,
+        ),
+        ("usage", _anthropic_usage(scenario.usage)),
+    )
 
 
 def _anthropic_sse(scenario: Scenario, requested_model: str) -> bytes:
-    emit_usage = scenario.stream_usage == "final_chunk"
-    input_usage = {k: v for k, v in _anthropic_usage(scenario.usage).items() if k != "output_tokens"}
-    message_start: dict[str, object] = {
-        "type": "message_start",
-        "message": {
-            "id": f"msg_{scenario.scenario_id}",
-            "type": "message",
-            "role": "assistant",
-            "model": scenario.output.response_model or requested_model,
-            "content": [],
-            "stop_reason": None,
-            **({"usage": input_usage} if emit_usage else {}),
-        },
-    }
-    message_delta: dict[str, object] = {
-        "type": "message_delta",
-        "delta": {
-            "stop_reason": "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason
-        },
-        **({"usage": {"output_tokens": scenario.usage.output_tokens}} if emit_usage else {}),
-    }
+    emit_usage: Final = scenario.stream_usage == "final_chunk"
+    input_usage: Final = _jobj(
+        *(
+            (key, value)
+            for key, value in _anthropic_usage(scenario.usage).items()
+            if key != "output_tokens"
+        )
+    )
+    message_start: Final = _jobj(
+        ("type", "message_start"),
+        (
+            "message",
+            _jobj_opt(
+                ("id", f"msg_{scenario.scenario_id}"),
+                ("type", "message"),
+                ("role", "assistant"),
+                ("model", scenario.output.response_model or requested_model),
+                ("content", ()),
+                ("stop_reason", None),
+                ("usage", input_usage) if emit_usage else None,
+            ),
+        ),
+    )
+    message_delta: Final = _jobj_opt(
+        ("type", "message_delta"),
+        (
+            "delta",
+            _jobj(
+                (
+                    "stop_reason",
+                    "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason,
+                )
+            ),
+        ),
+        (
+            ("usage", _jobj(("output_tokens", scenario.usage.output_tokens)))
+            if emit_usage
+            else None
+        ),
+    )
     return _sse(
         (
             ("message_start", message_start),
             (
                 "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {"type": "text", "text": ""},
-                },
+                _jobj(
+                    ("type", "content_block_start"),
+                    ("index", 0),
+                    ("content_block", _jobj(("type", "text"), ("text", ""))),
+                ),
             ),
             (
                 "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "text_delta", "text": scenario.output.text},
-                },
+                _jobj(
+                    ("type", "content_block_delta"),
+                    ("index", 0),
+                    ("delta", _jobj(("type", "text_delta"), ("text", scenario.output.text))),
+                ),
             ),
-            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("content_block_stop", _jobj(("type", "content_block_stop"), ("index", 0))),
             ("message_delta", message_delta),
-            ("message_stop", {"type": "message_stop"}),
+            ("message_stop", _jobj(("type", "message_stop"))),
         )
     )
 
 
-def _gemini_body(scenario: Scenario, requested_model: str) -> dict[str, object]:
-    candidate: dict[str, object] = {
-        "content": {"parts": [{"text": scenario.output.text}], "role": "model"},
-        "finishReason": "STOP" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason.upper(),
-        "index": 0,
-    }
-    if scenario.usage.web_search_calls:
-        candidate["groundingMetadata"] = {
-            "webSearchQueries": [f"query {i}" for i in range(scenario.usage.web_search_calls)]
-        }
-    return {
-        "candidates": [candidate],
-        "usageMetadata": _gemini_usage(scenario.usage),
-        "modelVersion": scenario.output.response_model or requested_model,
-    }
+def _gemini_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
+    return _jobj(
+        (
+            "candidates",
+            (
+                _jobj_opt(
+                    (
+                        "content",
+                        _jobj(
+                            ("parts", (_jobj(("text", scenario.output.text)),)),
+                            ("role", "model"),
+                        ),
+                    ),
+                    (
+                        "finishReason",
+                        "STOP" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason.upper(),
+                    ),
+                    ("index", 0),
+                    (
+                        (
+                            "groundingMetadata",
+                            _jobj(
+                                (
+                                    "webSearchQueries",
+                                    tuple(f"query {i}" for i in range(scenario.usage.web_search_calls)),
+                                )
+                            ),
+                        )
+                        if scenario.usage.web_search_calls
+                        else None
+                    ),
+                ),
+            ),
+        ),
+        ("usageMetadata", _gemini_usage(scenario.usage)),
+        ("modelVersion", scenario.output.response_model or requested_model),
+    )
 
 
 def _gemini_sse(scenario: Scenario, requested_model: str) -> bytes:
-    first = _gemini_body(scenario, requested_model)
-    if scenario.stream_usage == "absent":
-        first = {k: v for k, v in first.items() if k != "usageMetadata"}
-    events: list[tuple[str | None, dict[str, object] | str]] = [(None, first)]
-    if scenario.stream_usage == "final_chunk":
-        events.append(
-            (
-                None,
-                {
-                    "candidates": [],
-                    "usageMetadata": _gemini_usage(scenario.usage),
-                    "modelVersion": scenario.output.response_model or requested_model,
-                },
-            )
-        )
-    return _sse(tuple(events))
-
-
-def _responses_body(scenario: Scenario, requested_model: str) -> dict[str, object]:
-    output: list[dict[str, object]] = [
-        {"type": "web_search_call", "id": f"ws_{i}", "status": "completed"}
-        for i in range(scenario.usage.web_search_calls)
-    ]
-    output.append(
-        {
-            "type": "message",
-            "id": f"msg_{scenario.scenario_id}",
-            "status": "completed",
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "output_text",
-                    "text": scenario.output.text,
-                    "annotations": [],
-                }
-            ],
-        }
+    emit_usage: Final = scenario.stream_usage == "final_chunk"
+    first: Final = (
+        _jobj(*((key, value) for key, value in _gemini_body(scenario, requested_model).items() if key != "usageMetadata"))
+        if scenario.stream_usage == "absent"
+        else _gemini_body(scenario, requested_model)
     )
-    return {
-        "id": f"resp_{scenario.scenario_id}",
-        "object": "response",
-        "created_at": int(time.time()),
-        "status": "completed",
-        "model": scenario.output.response_model or requested_model,
-        "output": output,
-        "usage": _responses_usage(scenario.usage),
-    }
+    return _sse(
+        (
+            (None, first),
+            *(
+                (
+                    (
+                        None,
+                        _jobj(
+                            ("candidates", ()),
+                            ("usageMetadata", _gemini_usage(scenario.usage)),
+                            ("modelVersion", scenario.output.response_model or requested_model),
+                        ),
+                    ),
+                )
+                if emit_usage
+                else ()
+            ),
+        )
+    )
+
+
+def _responses_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
+    return _jobj(
+        ("id", f"resp_{scenario.scenario_id}"),
+        ("object", "response"),
+        ("created_at", int(time.time())),
+        ("status", "completed"),
+        ("model", scenario.output.response_model or requested_model),
+        (
+            "output",
+            (
+                *(
+                    _jobj(("type", "web_search_call"), ("id", f"ws_{i}"), ("status", "completed"))
+                    for i in range(scenario.usage.web_search_calls)
+                ),
+                _jobj(
+                    ("type", "message"),
+                    ("id", f"msg_{scenario.scenario_id}"),
+                    ("status", "completed"),
+                    ("role", "assistant"),
+                    (
+                        "content",
+                        (
+                            _jobj(
+                                ("type", "output_text"),
+                                ("text", scenario.output.text),
+                                ("annotations", ()),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        ("usage", _responses_usage(scenario.usage)),
+    )
 
 
 def _responses_sse(scenario: Scenario, requested_model: str) -> bytes:
-    completed = _responses_body(scenario, requested_model)
-    if scenario.stream_usage == "absent":
-        completed = {k: v for k, v in completed.items() if k != "usage"}
-    created = {**completed, "status": "in_progress", "usage": None}
+    completed: Final = (
+        _jobj(*((key, value) for key, value in _responses_body(scenario, requested_model).items() if key != "usage"))
+        if scenario.stream_usage == "absent"
+        else _responses_body(scenario, requested_model)
+    )
+    created: Final = _jobj(
+        *((key, value) for key, value in completed.items() if key not in ("status", "usage")),
+        ("status", "in_progress"),
+        ("usage", None),
+    )
     return _sse(
         (
-            ("response.created", {"type": "response.created", "response": created}),
+            ("response.created", _jobj(("type", "response.created"), ("response", created))),
             (
                 "response.output_text.delta",
-                {
-                    "type": "response.output_text.delta",
-                    "item_id": f"msg_{scenario.scenario_id}",
-                    "output_index": scenario.usage.web_search_calls,
-                    "content_index": 0,
-                    "delta": scenario.output.text,
-                },
+                _jobj(
+                    ("type", "response.output_text.delta"),
+                    ("item_id", f"msg_{scenario.scenario_id}"),
+                    ("output_index", scenario.usage.web_search_calls),
+                    ("content_index", 0),
+                    ("delta", scenario.output.text),
+                ),
             ),
-            ("response.completed", {"type": "response.completed", "response": completed}),
+            ("response.completed", _jobj(("type", "response.completed"), ("response", completed))),
         )
     )
 
@@ -538,11 +667,11 @@ class _ScenarioStore:
 _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
 
 
-def _request_body(body: bytes) -> dict[str, object]:
+def _request_body(body: bytes) -> Mapping[str, object]:
     try:
         return _REQUEST_BODY.validate_json(body)
     except ValueError:
-        return {}
+        return MappingProxyType({})
 
 
 def _request_wants_stream(path_tail: str, body: bytes) -> bool:
@@ -554,52 +683,66 @@ def _request_wants_stream(path_tail: str, body: bytes) -> bool:
 
 
 def _request_model(body: bytes) -> str:
-    model = _request_body(body).get("model")
+    model: Final = _request_body(body).get("model")
     return model if isinstance(model, str) else "unknown"
 
 
 def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: bytes) -> RenderedResponse:
-    path = urlsplit(raw_path).path
-    segments = [segment for segment in path.split("/") if segment]
-    if method == "GET" and segments == ["health"]:
-        return RenderedResponse(200, "application/json", _json_bytes({"status": "ok"}))
+    path: Final = urlsplit(raw_path).path
+    segments: Final = tuple(segment for segment in path.split("/") if segment)
+    if method == "GET" and segments == ("health",):
+        return RenderedResponse(200, "application/json", _json_bytes(_jobj(("status", "ok"))))
     if segments and segments[0] == "_scenarios":
         if method == "POST" and len(segments) == 1:
             try:
-                scenario = Scenario.model_validate_json(body)
+                scenario: Final = Scenario.model_validate_json(body)
             except ValidationError as exc:
-                return RenderedResponse(400, "application/json", _json_bytes({"error": str(exc)}))
+                return RenderedResponse(
+                    400, "application/json", _json_bytes(_jobj(("error", str(exc))))
+                )
             store.put(scenario)
-            return RenderedResponse(200, "application/json", _json_bytes({"scenario_id": scenario.scenario_id}))
-        if method == "DELETE" and len(segments) == 2:
-            deleted = store.drop(segments[1])
             return RenderedResponse(
-                200 if deleted else 404, "application/json", _json_bytes({"deleted": deleted})
+                200, "application/json", _json_bytes(_jobj(("scenario_id", scenario.scenario_id)))
             )
-        return RenderedResponse(404, "application/json", _json_bytes({"error": "unknown control route"}))
+        if method == "DELETE" and len(segments) == 2:
+            deleted: Final = store.drop(segments[1])
+            return RenderedResponse(
+                200 if deleted else 404,
+                "application/json",
+                _json_bytes(_jobj(("deleted", deleted))),
+            )
+        return RenderedResponse(
+            404, "application/json", _json_bytes(_jobj(("error", "unknown control route")))
+        )
     if len(segments) < 2 or method != "POST":
-        return RenderedResponse(404, "application/json", _json_bytes({"error": f"no route for {method} {path}"}))
+        return RenderedResponse(
+            404, "application/json", _json_bytes(_jobj(("error", f"no route for {method} {path}")))
+        )
     scenario_id, mount = segments[0], segments[1]
-    scenario = store.get(scenario_id)
-    if scenario is None:
-        return RenderedResponse(404, "application/json", _json_bytes({"error": f"unknown scenario {scenario_id}"}))
-    if scenario.mount != mount:
+    found: Final = store.get(scenario_id)
+    if found is None:
+        return RenderedResponse(
+            404, "application/json", _json_bytes(_jobj(("error", f"unknown scenario {scenario_id}")))
+        )
+    if found.mount != mount:
         return RenderedResponse(
             400,
             "application/json",
-            _json_bytes({"error": f"scenario {scenario_id} is wire {scenario.wire}, not mount {mount}"}),
+            _json_bytes(
+                _jobj(("error", f"scenario {scenario_id} is wire {found.wire}, not mount {mount}"))
+            ),
         )
-    tail = "/".join(segments[2:])
-    return _render(scenario, stream=_request_wants_stream(tail, body), requested_model=_request_model(body))
+    tail: Final = "/".join(segments[2:])
+    return _render(found, stream=_request_wants_stream(tail, body), requested_model=_request_model(body))
 
 
 class _ScriptedHandler(BaseHTTPRequestHandler):
     store: Final[_ScenarioStore] = _ScenarioStore()
 
     def _dispatch(self, method: str) -> None:
-        length = int(self.headers.get("content-length") or 0)
-        body = self.rfile.read(length) if length else b""
-        rendered = handle_request(self.store, method, self.path, body)
+        length: Final = int(self.headers.get("content-length") or 0)
+        body: Final = self.rfile.read(length) if length else b""
+        rendered: Final = handle_request(self.store, method, self.path, body)
         self.send_response(rendered.status_code)
         self.send_header("content-type", rendered.content_type)
         self.send_header("content-length", str(len(rendered.body)))
@@ -621,11 +764,11 @@ DEFAULT_PORT: Final = 9100
 
 
 def serve(port: int = DEFAULT_PORT, bind_host: str = "127.0.0.1") -> None:
-    server = ThreadingHTTPServer((bind_host, port), _ScriptedHandler)
+    server: Final = ThreadingHTTPServer((bind_host, port), _ScriptedHandler)
     sys.stderr.write(f"scripted-provider listening on http://{bind_host}:{port}\n")
     server.serve_forever()
 
 
 if __name__ == "__main__":
-    port_arg = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+    port_arg: Final = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
     serve(port=port_arg)

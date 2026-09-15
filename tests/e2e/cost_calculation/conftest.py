@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -34,16 +34,16 @@ def _load_cost_rows() -> ModuleType:
     """Load quota_management/spend_tracking/cost_rows.py by path (the e2e tree
     has no package layout), the same trick the mcp suite uses for
     logging/datadog_reader.py."""
-    path = (
+    path: Final = (
         Path(__file__).resolve().parent.parent
         / "quota_management"
         / "spend_tracking"
         / "cost_rows.py"
     )
-    name = "e2e_spend_tracking_cost_rows"
-    spec = importlib.util.spec_from_file_location(name, path)
+    name: Final = "e2e_spend_tracking_cost_rows"
+    spec: Final = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
+    module: Final = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
@@ -59,7 +59,7 @@ class SpendCostBreakdown(Protocol):
     total_cost: float | None
     service_tier: str | None
 
-    def model_dump(self) -> dict[str, object]: ...
+    def model_dump(self) -> Mapping[str, object]: ...
 
 
 class SpendRowMetadata(Protocol):
@@ -89,7 +89,9 @@ class CostRowsModule(Protocol):
     ]
 
 
-cost_rows: Final[CostRowsModule] = cast(CostRowsModule, _load_cost_rows())
+cost_rows: Final[CostRowsModule] = cast(  # cast-ok: cost_rows.py is loaded by path, so basedpyright has no importable name for it; its surface is declared in CostRowsModule
+    CostRowsModule, _load_cost_rows()
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +103,7 @@ class CostCalcClient:
 
 @pytest.fixture(scope="session")
 def client() -> CostCalcClient:
-    proxy = build_proxy_client(
+    proxy: Final = build_proxy_client(
         base_url=COST_MAP_PROXY_URL,
         control_plane_base_url=COST_MAP_PROXY_URL,
         replica_urls=(COST_MAP_PROXY_URL,),
@@ -118,18 +120,18 @@ def register_scenario_deployment(
 ) -> tuple[str, ScenarioHandle]:
     """Register the case's scenario on the sidecar plus a deployment pointed at
     it; both are torn down by ``resources``. Returns the callable model_name."""
-    scenario: Scenario = case.scenario(
+    scenario: Final[Scenario] = case.scenario(
         scenario_id=f"sc-{marker}", model=model, text=f"scripted answer {marker}"
     )
-    handle = register_scenario(scenario)
+    handle: Final = register_scenario(scenario)
     resources.defer(lambda: delete_scenario(handle))
-    model_name = f"{model.model_name}-{marker}"
-    model_id = client.proxy.register_model(
+    model_name: Final = f"{model.model_name}-{marker}"
+    model_id: Final = client.proxy.register_model(
         ModelNewBody(
             model_name=model_name,
             litellm_params=LiteLLMParamsBody(
                 model=model.litellm_model,
-                api_key="sk-scripted-provider",
+                api_key=model.api_key,
                 api_base=handle.api_base(),
             ),
             model_info=ModelInfoBody(),
