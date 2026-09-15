@@ -143,10 +143,12 @@ async def test_atranscription_stream_preserves_duration_for_callback_cost():
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
     openai_client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
-    logging_obj = MagicMock()
-    logging_obj.model_call_details = {}
-    logging_obj.async_success_handler = AsyncMock()
-    logging_obj.async_failure_handler = AsyncMock()
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-transcribe", messages=[], stream=True, call_type="atranscription",
+        start_time=datetime.now(), litellm_call_id="transcription-cost-test", function_id="transcription-cost-test",
+    )
     audio_file = io.BytesIO()
     with wave.open(audio_file, "wb") as wav_file:
         wav_file.setnchannels(1)
@@ -167,8 +169,9 @@ async def test_atranscription_stream_preserves_duration_for_callback_cost():
     await openai_client.close()
 
     assert [event.type for event in received] == ["transcript.text.delta", "transcript.text.done"]
-    logging_obj.async_success_handler.assert_awaited_once()
-    logged_response = logging_obj.async_success_handler.await_args.kwargs["result"]
+    logged_response = logging_obj.model_call_details["async_complete_streaming_response"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.000075)
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(0.000075)
     assert logged_response._hidden_params["audio_transcription_duration"] == pytest.approx(1.0)
 
 

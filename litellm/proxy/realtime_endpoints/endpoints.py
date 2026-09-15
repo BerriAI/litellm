@@ -675,6 +675,13 @@ async def create_realtime_transcription_session(
         )
 
         transcription_session: Final = {k: v for k, v in body.items() if k != "model"}
+        await _authorize_and_bind_nested_transcription_models(
+            session_data=transcription_session,
+            user_api_key_dict=user_api_key_dict,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
+        _set_transcription_model_on_session(session=transcription_session, model=model, create_if_missing=True)
         data = {"model": model, "transcription_session": transcription_session}
 
         data = await add_litellm_data_to_request(
