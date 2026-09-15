@@ -355,7 +355,7 @@ class LangFuseLogger:
             self.langfuse_client = self._http_handler.client
             self.is_mock_mode = False
 
-        parameters: Final = {
+        self.langfuse_client_parameters: Final[dict[str, object]] = {
             "public_key": self.public_key,
             "secret_key": self.secret_key,
             "base_url": self.langfuse_host,
@@ -365,7 +365,7 @@ class LangFuseLogger:
             "httpx_client": self.langfuse_client,
             "environment": self.langfuse_environment,
         }
-        self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)
+        self.Langfuse: Langfuse = self.safe_init_langfuse_client(self.langfuse_client_parameters)
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
@@ -415,6 +415,21 @@ class LangFuseLogger:
         litellm.initialized_langfuse_clients += 1
         verbose_logger.debug("Created langfuse client number %s", litellm.initialized_langfuse_clients)
         return langfuse_client
+
+    def _renew_langfuse_client(self) -> Langfuse:
+        """Replace a client the cache evicted after handing this logger to the callback.
+
+        Bypasses the initialized-client ceiling: eviction already released this logger's slot, and the
+        replacement is never evicted itself, so its provider is retired with the logger instead.
+        """
+        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_client
+
+        return acquire_langfuse_client(
+            parameters=self.langfuse_client_parameters,
+            environment=self.langfuse_environment,
+            release=self.langfuse_release,
+            mock_mode=self.is_mock_mode,
+        )
 
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict[str, object]:
@@ -512,7 +527,8 @@ class LangFuseLogger:
             verbose_logger.debug("OUTPUT IN LANGFUSE: %s; original: %s", output, response_obj)
             from litellm.integrations.langfuse.langfuse_sdk import lease_langfuse_client
 
-            with lease_langfuse_client(self.Langfuse):
+            with lease_langfuse_client(self.Langfuse, self._renew_langfuse_client) as leased:
+                self.Langfuse = leased
                 trace_id, generation_id = self._log_langfuse_v2(
                     user_id=user_id,
                     metadata=metadata,

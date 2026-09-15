@@ -607,6 +607,10 @@ def _exports(client, exporter, name):
     return any(span.name == name for span in exporter.get_finished_spans())
 
 
+def _never_renew():
+    raise AssertionError("the lease renewed a client eviction never reached")
+
+
 def test_garbage_collected_throwaway_clients_do_not_hold_shared_resources_open():
     """A health probe or alerting lookup builds a client it never shuts down.
 
@@ -658,7 +662,7 @@ def test_eviction_defers_teardown_until_active_callback_finishes():
     def evict() -> None:
         shutdown_langfuse_client(client)
 
-    with lease_langfuse_client(client):
+    with lease_langfuse_client(client, _never_renew):
         evictor = threading.Thread(target=evict)
         evictor.start()
         evictor.join(timeout=5)
@@ -713,7 +717,7 @@ def test_teardown_failure_does_not_strand_queued_clients(monkeypatch):
             raise RuntimeError("teardown failed")
 
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._teardown_langfuse_client", teardown)
-    with lease_langfuse_client(clients[0]):
+    with lease_langfuse_client(clients[0], _never_renew):
         for client in clients:
             shutdown_langfuse_client(client)
 
@@ -738,17 +742,61 @@ def test_interrupt_during_deferred_teardown_propagates_and_requeues_the_client(m
 
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._teardown_langfuse_client", teardown)
     with pytest.raises(KeyboardInterrupt):
-        with lease_langfuse_client(client):
+        with lease_langfuse_client(client, _never_renew):
             shutdown_langfuse_client(client)
 
     assert state.pending_clients == {client}
     assert not state.teardown_in_progress
 
-    with lease_langfuse_client(client):
-        pass
+    replacement = Langfuse(public_key=PUBLIC_KEY, secret_key="sk-original", host="http://127.0.0.1:1")
+    with lease_langfuse_client(client, lambda: replacement) as leased:
+        assert leased is replacement
 
     assert calls == [client, client]
     assert not state.pending_clients
+
+
+def test_lease_on_a_client_evicted_after_the_cache_lookup_exports_through_a_renewed_one():
+    """Eviction can land between the cache handing out the logger and the callback taking its lease.
+
+    That callback must not export into a shut-down provider; the lease has to hand it a live client.
+    """
+    exporter = InMemorySpanExporter()
+    provider = build_isolated_tracer_provider(environment=None, release=None)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    evicted = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    register_langfuse_client(evicted)
+    shutdown_langfuse_client(evicted)
+    assert exporter._stopped
+
+    renewed_exporter = InMemorySpanExporter()
+    renewed_provider = build_isolated_tracer_provider(environment=None, release=None)
+    renewed_provider.add_span_processor(SimpleSpanProcessor(renewed_exporter))
+
+    def renew():
+        renewed = Langfuse(
+            public_key=PUBLIC_KEY,
+            secret_key="sk-original",
+            host="http://127.0.0.1:1",
+            tracer_provider=renewed_provider,
+            span_exporter=renewed_exporter,
+        )
+        register_langfuse_client(renewed)
+        return renewed
+
+    with lease_langfuse_client(evicted, renew) as leased:
+        assert leased is not evicted
+        assert _exports(leased, renewed_exporter, "after-lookup-eviction")
+        shutdown_langfuse_client(leased)
+        assert not renewed_exporter._stopped
+
+    assert renewed_exporter._stopped
 
 
 def test_queued_eviction_waits_for_the_last_of_two_overlapping_leases():
@@ -764,8 +812,8 @@ def test_queued_eviction_waits_for_the_last_of_two_overlapping_leases():
     )
     register_langfuse_client(client)
 
-    with lease_langfuse_client(client):
-        with lease_langfuse_client(client):
+    with lease_langfuse_client(client, _never_renew):
+        with lease_langfuse_client(client, _never_renew):
             shutdown_langfuse_client(client)
         assert not exporter._stopped
 
@@ -788,7 +836,7 @@ def test_a_client_adopted_during_deferred_teardown_keeps_exporting():
     )
     register_langfuse_client(evicted)
 
-    with lease_langfuse_client(evicted):
+    with lease_langfuse_client(evicted, _never_renew):
         shutdown_langfuse_client(evicted)
         adopter = Langfuse(public_key=PUBLIC_KEY, secret_key="sk-original", host="http://127.0.0.1:1")
         assert adopter._resources is evicted._resources
@@ -804,7 +852,7 @@ def test_leases_on_one_client_do_not_serialise_callbacks():
     both_inside = threading.Barrier(2, timeout=5)
 
     def hold_lease() -> None:
-        with lease_langfuse_client(client):
+        with lease_langfuse_client(client, _never_renew):
             both_inside.wait()
 
     holders = tuple(threading.Thread(target=hold_lease) for _ in range(2))
