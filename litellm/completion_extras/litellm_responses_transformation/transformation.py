@@ -20,6 +20,7 @@ from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomPara
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import ModelResponse
@@ -105,6 +106,7 @@ class _BuiltReasoningItem(TypedDict):
     id: str
     encrypted_content: str | None
     summary: Sequence[_ReasoningSummaryText]
+    content: ReadOnly[Sequence[_ReasoningSummaryText]]
 
 
 def _get_reasoning_items(
@@ -133,32 +135,62 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     return [dict(item) for item in replayed]  # mutable-ok: API message payload
 
 
+def _normalize_reasoning_parts(parts: Iterable[object] | None, default_type: str) -> Sequence[_ReasoningSummaryText]:
+    normalized: Final[list[_ReasoningSummaryText]] = []  # mutable-ok: local accumulator, returned once
+    for part in parts or ():
+        if isinstance(part, dict):
+            normalized.append(
+                {  # mutable-ok: freshly built per part
+                    "type": part.get("type", default_type),
+                    "text": part.get("text", ""),
+                }
+            )
+        else:
+            normalized.append(
+                {  # mutable-ok: freshly built per part
+                    "type": getattr(part, "type", default_type),
+                    "text": getattr(part, "text", ""),
+                }
+            )
+    return normalized
+
+
 def _build_reasoning_item(
     item_id: str,
     encrypted_content: str | None,
     summary_raw: Iterable[object] | None,
+    content_raw: Iterable[object] | None = None,
 ) -> _BuiltReasoningItem:
     """Build a ChatCompletionReasoningItem-shaped dict from raw response data.
 
     Handles both pydantic objects (attribute access) and plain dicts.
     """
-    summary: Final[list[_ReasoningSummaryText]] = []
-    for s in summary_raw or []:
-        if isinstance(s, dict):
-            summary.append({"type": s.get("type", "summary_text"), "text": s.get("text", "")})
-        else:
-            summary.append(
-                {
-                    "type": getattr(s, "type", "summary_text"),
-                    "text": getattr(s, "text", ""),
-                }
-            )
+    summary: Final[Sequence[_ReasoningSummaryText]] = _normalize_reasoning_parts(
+        summary_raw, default_type="summary_text"
+    )
+    content: Final[Sequence[_ReasoningSummaryText]] = _normalize_reasoning_parts(
+        content_raw, default_type="reasoning_text"
+    )
     return {
         "id": item_id,
         "type": "reasoning",
         "encrypted_content": encrypted_content,
         "summary": summary,
+        "content": content,
     }
+
+
+def _reasoning_content_from_built_item(reasoning_item: _BuiltReasoningItem) -> str:
+    """Chat ``reasoning_content`` for a reasoning item.
+
+    Raw reasoning content (e.g. vLLM ``reasoning_text`` parts) is the full chain of
+    thought and wins when present; the summary is the fallback so the two are never
+    concatenated into duplicate text.
+    """
+    content_text: Final = " ".join(part["text"] for part in reasoning_item["content"] if part.get("text"))
+    if content_text:
+        return content_text
+    return " ".join(s["text"] for s in reasoning_item["summary"] if s.get("text"))
 
 
 def _reasoning_item_from_output_item(item: object) -> _BuiltReasoningItem | None:
@@ -169,13 +201,24 @@ def _reasoning_item_from_output_item(item: object) -> _BuiltReasoningItem | None
             item_id=item.id,
             encrypted_content=getattr(item, "encrypted_content", None),
             summary_raw=item.summary,
+            content_raw=getattr(item, "content", None),
         )
     if isinstance(item, dict) and item.get("type") == "reasoning":
         return _build_reasoning_item(
             item_id=item.get("id", ""),
             encrypted_content=item.get("encrypted_content"),
             summary_raw=item.get("summary"),
+            content_raw=item.get("content"),
         )
+    if isinstance(item, BaseModel):
+        dumped: Final = item.model_dump()
+        if dumped.get("type") == "reasoning":
+            return _build_reasoning_item(
+                item_id=dumped.get("id", ""),
+                encrypted_content=dumped.get("encrypted_content"),
+                summary_raw=dumped.get("summary"),
+                content_raw=dumped.get("content"),
+            )
     return None
 
 
@@ -325,9 +368,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         item_type: Final = item.get("type")
 
-        # Ignore reasoning items for now
-        if item_type == "reasoning":
-            return None, index
+        # Reasoning dicts are intercepted by _convert_response_output_to_choices
+        # before this callback runs.
 
         # Handle message items with output_text content
         if item_type == "message":
@@ -656,7 +698,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
-            ResponseReasoningItem,
         )
 
         try:
@@ -679,15 +720,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         tool_call_index = 0
 
         for item in output_items:
-            if isinstance(item, ResponseReasoningItem):
-                pending_reasoning_item = _build_reasoning_item(
-                    item_id=item.id,
-                    encrypted_content=getattr(item, "encrypted_content", None),
-                    summary_raw=item.summary,
-                )
-                reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
+            # Typed ResponseReasoningItem and dict-form reasoning items (from providers
+            # whose output skips SDK parsing, e.g. GPT-5 Codex raw items) both land here
+            built_reasoning_item = _reasoning_item_from_output_item(item)  # rebind-ok: reassessed per loop item
+            if built_reasoning_item is not None:
+                pending_reasoning_item = built_reasoning_item
+                reasoning_content = _reasoning_content_from_built_item(built_reasoning_item)
+                continue
 
-            elif isinstance(item, ResponseOutputMessage):
+            if isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
                     # Extract annotations from content if present
@@ -760,6 +801,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
                     if choice is not None:
+                        if pending_reasoning_item is not None:
+                            choice.message.reasoning_content = reasoning_content
+                            choice.message.reasoning_items = [pending_reasoning_item]  # mutable-ok: response payload
+                            reasoning_content = None  # flush
+                            pending_reasoning_item = None  # flush
                         choices.append(choice)
             else:
                 pass  # don't fail request if item in list is not supported
@@ -790,10 +836,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         reasoning_items: Final = _reasoning_items_from_output_items(output_items)
         reasoning_content: Final = " ".join(
-            summary_block["text"]
-            for reasoning_item in reasoning_items
-            for summary_block in reasoning_item["summary"]
-            if summary_block.get("text")
+            text
+            for text in (_reasoning_content_from_built_item(reasoning_item) for reasoning_item in reasoning_items)
+            if text
         )
         message: Final = Message(
             content="",
@@ -1545,6 +1590,22 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     choices=[
                         StreamingChoices(
                             index=cast(int, parsed_chunk.get("summary_index")),
+                            delta=Delta(reasoning_content=content_part),
+                        )
+                    ]
+                )
+        elif event_type == "response.reasoning_text.delta":
+            # Raw (non-summary) reasoning deltas, e.g. from vLLM and other
+            # Responses-compatible backends that expose the full reasoning content.
+            content_part = parsed_chunk.get("delta", None)
+            if content_part:
+                # One Responses generation maps to one Chat choice, so reasoning
+                # deltas stream on choice 0 like output_text deltas do; content_index
+                # is a part index within the reasoning item, not a choice index.
+                return ModelResponseStream(
+                    choices=[  # mutable-ok: API streaming payload
+                        StreamingChoices(
+                            index=0,
                             delta=Delta(reasoning_content=content_part),
                         )
                     ]

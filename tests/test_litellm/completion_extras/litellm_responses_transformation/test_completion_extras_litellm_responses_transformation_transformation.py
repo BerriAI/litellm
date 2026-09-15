@@ -4287,3 +4287,189 @@ def test_system_string_after_a_developer_message_stays_in_input_in_client_order(
     assert instructions is None
     assert [item["role"] for item in input_items] == ["developer", "system", "user"]
     assert input_items[1] == _system_input_item("Be brief.")
+
+def test_openai_responses_chunk_parser_reasoning_text_delta():
+    """Raw reasoning_text deltas map to delta.reasoning_content (issue #40654)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "content_index": 0,
+        "delta": "First, count the bolts.",
+        "item_id": "rs_a1892a8a9de47516",
+        "output_index": 0,
+        "sequence_number": 3,
+        "type": "response.reasoning_text.delta",
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert isinstance(choice, StreamingChoices)
+    assert choice.index == 0
+    delta = choice.delta
+    assert isinstance(delta, Delta)
+    assert delta.content is None
+    assert delta.reasoning_content == "First, count the bolts."
+    assert delta.tool_calls is None
+
+
+def _make_raw_reasoning_output(content_text: str | None, summary_text: str | None) -> list:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.response_reasoning_item import (
+        Content,
+        ResponseReasoningItem,
+        Summary,
+    )
+
+    reasoning_item = ResponseReasoningItem(
+        id="rs_a1892a8a9de47516",
+        summary=[Summary(text=summary_text, type="summary_text")]
+        if summary_text is not None
+        else [],
+        type="reasoning",
+        content=[Content(text=content_text, type="reasoning_text")]
+        if content_text is not None
+        else None,
+        encrypted_content=None,
+        status=None,
+    )
+    output_message = ResponseOutputMessage(
+        id="msg_01",
+        content=[
+            ResponseOutputText(
+                annotations=[], text="303 bolts remain.", type="output_text", logprobs=[]
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    return [reasoning_item, output_message]
+
+
+def test_convert_response_output_raw_reasoning_content_without_summary():
+    """Reasoning items with raw content and an empty summary surface the raw text."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    output_items = _make_raw_reasoning_output(
+        content_text="raw thinking trace", summary_text=None
+    )
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        output_items
+    )
+
+    assert len(choices) == 1
+    message = choices[0].message
+    assert message.reasoning_content == "raw thinking trace"
+    assert message.reasoning_items is not None
+    assert message.reasoning_items[0]["content"][0]["text"] == "raw thinking trace"
+    assert message.reasoning_items[0]["content"][0]["type"] == "reasoning_text"
+
+
+def test_convert_response_output_mixed_reasoning_content_and_summary_no_duplication():
+    """With both raw content and a summary, the raw content wins; nothing is concatenated."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    output_items = _make_raw_reasoning_output(
+        content_text="full raw trace", summary_text="short summary"
+    )
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        output_items
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.reasoning_content == "full raw trace"
+
+
+def test_convert_response_output_summary_only_reasoning_unchanged():
+    """Summary-only reasoning items keep the pre-existing summary behavior."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    output_items = _make_raw_reasoning_output(
+        content_text=None, summary_text="short summary"
+    )
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        output_items
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.reasoning_content == "short summary"
+    assert choices[0].message.reasoning_items[0]["content"] == []
+
+
+def test_convert_response_output_dict_reasoning_carried_to_message_choice():
+    """Dict-form reasoning items (SDK parsing skipped) land on the following message choice."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    items = [
+        {
+            "type": "reasoning",
+            "id": "rs_dict1",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "dict raw trace"}],
+        },
+        {
+            "type": "message",
+            "id": "msg_dict1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "303 bolts remain.", "annotations": []}],
+        },
+    ]
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        items,
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    message = choices[0].message
+    assert message.content == "303 bolts remain."
+    assert message.reasoning_content == "dict raw trace"
+    assert message.reasoning_items is not None
+    assert message.reasoning_items[0]["content"][0]["text"] == "dict raw trace"
+
+
+def test_convert_response_output_dict_reasoning_item_with_content():
+    """Raw dict reasoning items (non-SDK-parsed payloads) also surface their content."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        _reasoning_content_from_built_item,
+        _reasoning_items_from_output_items,
+    )
+
+    reasoning_items = _reasoning_items_from_output_items(
+        [
+            {
+                "type": "reasoning",
+                "id": "rs_dict",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": "dict raw trace"}],
+            }
+        ]
+    )
+
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["content"][0]["text"] == "dict raw trace"
+    assert _reasoning_content_from_built_item(reasoning_items[0]) == "dict raw trace"
+
