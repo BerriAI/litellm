@@ -288,7 +288,6 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "type": "string",
             "enum": ["lyria_predict", "lyria_interactions"],
         },
-        "health_check_voice": STRING,
     }
 
 
@@ -376,7 +375,9 @@ def render(schema: JsonSchema) -> str:
 
 
 def validation_errors(prices: dict, schema: JsonSchema) -> tuple:
-    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER)
+    validator = jsonschema.Draft202012Validator(
+        schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
+    )
     return tuple(
         f"{'.'.join(str(part) for part in error.absolute_path)}: {error.message}"
         for error in validator.iter_errors(prices)
