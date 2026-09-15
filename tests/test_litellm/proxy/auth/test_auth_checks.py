@@ -5188,6 +5188,125 @@ async def test_inference_route_still_enforces_team_budget():
         )
 
 
+MCP_DISCOVERY_REST_ROUTES = [
+    "/mcp-rest/tools/list",
+    "/v1/mcp/tools",
+    "/mcp/tools",
+    "/mcp/tools/list",
+]
+
+
+@pytest.mark.parametrize("route", MCP_DISCOVERY_REST_ROUTES)
+@pytest.mark.asyncio
+async def test_mcp_tool_discovery_route_bypasses_team_budget(route):
+    """An exhausted budget must not block zero-spend MCP tool discovery."""
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+
+    result = await common_checks(
+        request_body={},
+        team_object=team_object,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+        request=MagicMock(),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize("method", ["initialize", "notifications/initialized", "ping", "tools/list"])
+@pytest.mark.parametrize("route", ["/mcp", "/mcp/some-server"])
+@pytest.mark.asyncio
+async def test_mcp_jsonrpc_zero_spend_method_bypasses_team_budget(route, method):
+    """An exhausted budget must not block zero-spend JSON-RPC methods on the /mcp transport."""
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+
+    result = await common_checks(
+        request_body={"jsonrpc": "2.0", "id": 1, "method": method, "params": {}},
+        team_object=team_object,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+        request=MagicMock(),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route,request_body",
+    [
+        ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "add"}}),
+        ("/mcp/some-server", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "add"}}),
+        ("/mcp-rest/tools/call", {"name": "add", "arguments": {}}),
+        ("/mcp/tools/call", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mcp_tool_call_route_still_enforces_team_budget(route, request_body):
+    """tools/call is spend-bearing and must stay budget-enforced, including when the
+    tools/call REST route carries a discovery-looking JSON-RPC body."""
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await common_checks(
+            request_body=request_body,
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+            request=MagicMock(),
+        )
+
+
+@pytest.mark.parametrize(
+    "route,request_body,expected",
+    [
+        ("/mcp-rest/tools/list", {}, True),
+        ("/v1/mcp/tools", {}, True),
+        ("/mcp/tools", {}, True),
+        ("/mcp/tools/list", {}, True),
+        ("/mcp", {"method": "initialize"}, True),
+        ("/mcp", {"method": "notifications/initialized"}, True),
+        ("/mcp", {"method": "ping"}, True),
+        ("/mcp", {"method": "tools/list"}, True),
+        ("/mcp/some-server", {"method": "tools/list"}, True),
+        ("/mcp", {"method": "tools/call"}, False),
+        ("/mcp/some-server", {"method": "tools/call"}, False),
+        ("/mcp", {}, False),
+        ("/mcp-rest/tools/call", {"method": "initialize"}, False),
+        ("/mcp/tools/call", {"method": "initialize"}, False),
+        ("/v1/chat/completions", {"method": "initialize"}, False),
+        ("/mcp-rest/other", {"method": "tools/list"}, False),
+    ],
+)
+def test_is_mcp_discovery_request(route, request_body, expected):
+    from litellm.proxy.auth.auth_checks import is_mcp_discovery_request
+
+    assert is_mcp_discovery_request(route=route, request_body=request_body) is expected
+
+
 @pytest.mark.asyncio
 async def test_virtual_key_max_budget_error_names_the_key():
     """BudgetExceededError for a virtual key must name the key (alias + masked key)
