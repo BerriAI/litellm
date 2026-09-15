@@ -326,9 +326,11 @@ async def _reserve_counters(
                     reserved_cost=reservation_cost,
                 )
                 try:
-                    reserved_value = await _reserve_counter(
+                    reserved_value = await _acquire_counter(
                         counter=counter,
                         reservation_cost=reservation_cost,
+                        entry=entry,
+                        applied_entries=applied_entries,
                     )
                 except _CounterReservationUnavailable as exc:
                     if exc.touched_counter and not exc.counter_invalidated:
@@ -340,7 +342,6 @@ async def _reserve_counters(
                         _raise_reservation_unavailable(counter_key=counter.counter_key)
                     continue
 
-                applied_entries.append(entry)
                 if reserved_value is not None:
                     current_spend = reserved_value
                 else:
@@ -911,6 +912,40 @@ def _coerce_window(window: object) -> Mapping[str, object]:
         return {}
     dumped: Final[object] = model_dump()
     return dumped if isinstance(dumped, Mapping) else {}
+
+
+async def _acquire_counter(
+    counter: _BudgetCounter,
+    reservation_cost: float,
+    entry: dict[str, float | str],
+    applied_entries: list[dict[str, float | str]],  # mutable-ok: the caller's rollback list
+) -> float | None:
+    """Increment the counter and record ``entry`` as applied once the increment went through.
+
+    A cancellation delivered while the increment is in flight leaves the request unable to tell whether
+    Redis applied it, so the increment keeps running shielded and the entry is recorded if it lands,
+    letting the caller's rollback release exactly what was reserved.
+    """
+    increment: Final = asyncio.ensure_future(_reserve_counter(counter=counter, reservation_cost=reservation_cost))
+    try:
+        reserved_value: Final = await asyncio.shield(increment)
+    except asyncio.CancelledError:
+        if await _increment_landed(increment):
+            applied_entries.append(entry)  # rebind-ok: the rollback list must see the landed increment
+        raise
+    applied_entries.append(entry)  # rebind-ok: the caller settles and rolls back through this list
+    return reserved_value
+
+
+async def _increment_landed(increment: asyncio.Future[float | None]) -> bool:
+    try:
+        await asyncio.shield(increment)
+    except _CounterReservationUnavailable:
+        return False
+    except asyncio.CancelledError:
+        # cancelled again while waiting: leave the counter to its TTL rather than refund what may not exist
+        return False
+    return True
 
 
 async def _reserve_counter(

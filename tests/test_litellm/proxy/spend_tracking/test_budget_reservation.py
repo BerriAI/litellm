@@ -269,28 +269,30 @@ async def test_release_budget_reservation_on_cancel_settles_each_entry_to_its_ow
 
 
 class _ParkingIncrementCache(DualCache):
-    """A spend-counter cache whose increment of ``parked_key`` never returns, so a test can cancel mid-reservation."""
+    """A spend-counter cache whose increment of ``parked_key`` waits for ``release``, like a Redis INCR whose
+    reply is still on the wire, so a test can cancel the request while that increment is in flight."""
 
     def __init__(self, parked_key: str) -> None:
         super().__init__()
         self.parked_key: Final = parked_key
         self.parked: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
 
     async def async_increment_cache(self, key: str, value: float, **kwargs: object) -> float | None:
         if key == self.parked_key:
             self.parked.set()
-            await asyncio.Event().wait()
+            await self.release.wait()
         return await super().async_increment_cache(key=key, value=value, **kwargs)
 
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
-async def test_reserve_budget_for_added_tags_releases_the_reserved_tag_when_cancelled_mid_acquisition(
+async def test_reserve_budget_for_added_tags_releases_every_counter_it_took_when_cancelled_mid_acquisition(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A client disconnect under SSE keepalives cancels the request while the second tag is being reserved;
-    the first tag's counter must not stay charged for a request that never reached the provider, and the
-    second tag, whose increment never happened, must not be refunded for it either."""
+    """A client disconnect under SSE keepalives cancels the request while the second tag's increment is in
+    flight. Neither tag may stay charged for a request that never reached the provider: the first was
+    reserved before the cancel, the second lands after it."""
     cache: Final = _ParkingIncrementCache(parked_key=f"spend:tag:{SECOND_HOOK_TAG}")
     cache.in_memory_cache.set_cache(key=f"spend:tag:{SECOND_HOOK_TAG}", value=0.3)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
@@ -303,6 +305,7 @@ async def test_reserve_budget_for_added_tags_releases_the_reserved_tag_when_canc
     await cache.parked.wait()
     assert cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") > 0
     reserving.cancel()
+    cache.release.set()
     with pytest.raises(asyncio.CancelledError):
         await reserving
 

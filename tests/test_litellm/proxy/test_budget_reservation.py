@@ -2764,11 +2764,12 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
         "input_cost": 0.5,
     }
     with patch(
-        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        "litellm.proxy.spend_tracking.budget_reservation._set_reserved_entries_actual_cost",
         new=AsyncMock(side_effect=RuntimeError("redis down")),
-    ):
+    ) as release:
         # must return without raising
         await release_budget_reservation_on_cancel(reservation)
+    release.assert_awaited_once()
 
 
 @pytest.mark.asyncio
