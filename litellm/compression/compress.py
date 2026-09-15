@@ -238,7 +238,9 @@ def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int
     """
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
-    last_assistant: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[-1:]
+    last_assistant: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[
+        -1:
+    ]
     return tuple(dict.fromkeys(system_indices + last_user + last_assistant + _cached_prefix_indices(messages)))
 
 
