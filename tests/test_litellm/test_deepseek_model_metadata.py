@@ -95,24 +95,24 @@ class TestBareModelFallback:
     entry in ``litellm.model_cost``."""
 
     def test_fallback_uses_bare_entry(self):
-        """Temporarily remove ``supports_system_messages`` from the prefixed
-        entry and verify the fallback still returns True."""
+        """Temporarily remove ``supports_response_schema`` from the prefixed
+        entry and verify the fallback returns the value from the bare entry (False)."""
         key = "deepseek/deepseek-chat"
-        original = litellm.model_cost.get(key, {}).get("supports_system_messages")
+        original = litellm.model_cost.get(key, {}).get("supports_response_schema")
         try:
             # Simulate the pre-fix state: field missing from prefixed entry
             if key in litellm.model_cost:
-                litellm.model_cost[key].pop("supports_system_messages", None)
+                litellm.model_cost[key].pop("supports_response_schema", None)
             result = _supports_factory(
                 model="deepseek-chat",
                 custom_llm_provider="deepseek",
-                key="supports_system_messages",
+                key="supports_response_schema",
             )
-            assert result is True
+            assert result is False
         finally:
             # Restore
             if key in litellm.model_cost and original is not None:
-                litellm.model_cost[key]["supports_system_messages"] = original
+                litellm.model_cost[key]["supports_response_schema"] = original
 
     def test_no_fallback_when_explicitly_false(self):
         """If the prefixed entry explicitly sets a capability to ``False``,

@@ -33,7 +33,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _create_json_tool_call_for_response_format(
         self,
-        json_schema: dict,
+        json_schema: dict[str, Any],
     ) -> ChatCompletionToolParam:
         return ChatCompletionToolParam(
             type="function",
@@ -50,69 +50,66 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        """
-        Map OpenAI params to DeepSeek params.
+        _non_default_params: Final[dict[str, Any]] = dict(non_default_params)
+        _optional_params: Final[dict[str, Any]] = dict(optional_params)
 
-        Handles `thinking` and `reasoning_effort` parameters for DeepSeek reasoner models.
-        DeepSeek supports `{"type": "enabled"}` and `{"type": "disabled"}` - no budget_tokens
-        like Anthropic. `reasoning_effort="none"` is the OpenAI-style way to ask for thinking
-        off, so it maps to `{"type": "disabled"}`; any other effort keeps thinking on.
-
-        Reference: https://api-docs.deepseek.com/guides/thinking_mode
-        """
-        _response_format: Final = non_default_params.get("response_format")
+        _response_format: Final = _non_default_params.get("response_format")
         if _response_format is not None and isinstance(_response_format, dict):
-            json_schema: dict | None = None
-            if "response_schema" in _response_format:
-                json_schema = _response_format["response_schema"]
-            elif "json_schema" in _response_format and isinstance(_response_format["json_schema"], dict):
-                json_schema = _response_format["json_schema"].get("schema")
+            raw_schema: Final = (
+                _response_format.get("response_schema")
+                if "response_schema" in _response_format
+                else (
+                    _response_format["json_schema"].get("schema")
+                    if isinstance(_response_format.get("json_schema"), dict)
+                    else None
+                )
+            )
+            json_schema: Final[dict[str, Any] | None] = (
+                raw_schema if isinstance(raw_schema, dict) else None
+            )
 
-            if json_schema is not None:
-                if not litellm.supports_response_schema(model=model, custom_llm_provider="deepseek"):
-                    if "tools" in non_default_params:
-                        raise litellm.BadRequestError(
-                            message=f"DeepSeek model '{model}' does not support native structured outputs. "
-                            "LiteLLM uses a tool-calling workaround for structured outputs on this model, "
-                            "which is incompatible with user-provided tools. "
-                            "Either use a model that supports native structured outputs, "
-                            "or remove the tools parameter.",
-                            model=model,
-                            llm_provider="deepseek",
-                        )
-                    _tool_choice: Final = {
-                        "type": "function",
-                        "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
-                    }
-                    _tool: Final = self._create_json_tool_call_for_response_format(
-                        json_schema=json_schema,
+            if json_schema is not None and not litellm.supports_response_schema(
+                model=model,
+                custom_llm_provider="deepseek",
+            ):
+                if _non_default_params.get("tools") or _optional_params.get("tools"):
+                    raise litellm.BadRequestError(
+                        message=f"DeepSeek model '{model}' does not support native structured outputs. "
+                        "LiteLLM uses a tool-calling workaround for structured outputs on this model, "
+                        "which is incompatible with user-provided tools. "
+                        "Either use a model that supports native structured outputs, "
+                        "or remove the tools parameter.",
+                        model=model,
+                        llm_provider="deepseek",
                     )
-                    optional_params["tools"] = [_tool]
-                    optional_params["tool_choice"] = _tool_choice
-                    optional_params["json_mode"] = True
-                    non_default_params.pop("response_format", None)
+                _tool_choice: Final = {
+                    "type": "function",
+                    "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+                }
+                _tool: Final = self._create_json_tool_call_for_response_format(
+                    json_schema=json_schema,
+                )
+                _optional_params["tools"] = [_tool]
+                _optional_params["tool_choice"] = _tool_choice
+                _optional_params["json_mode"] = True
+                _non_default_params.pop("response_format", None)
+                _non_default_params.pop("tools", None)
 
-        # Let parent handle standard params first
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_params: Final[dict[str, Any]] = dict(
+            super().map_openai_params(_non_default_params, _optional_params, model, drop_params)
+        )
 
-        # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
-        # Then re-add only if valid for DeepSeek
-        thinking_value: Final = optional_params.pop("thinking", None)
-        reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
+        thinking_value: Final = mapped_params.pop("thinking", None)
+        reasoning_effort: Final = mapped_params.pop("reasoning_effort", None)
 
-        if optional_params.get("json_mode") is True:
-            # DeepSeek rejects named tool_choice and tool_choice="required" while thinking mode is enabled (HTTP 400).
-            # Disable thinking mode when applying the tool-call workaround so tool_choice is accepted.
-            optional_params["thinking"] = {"type": "disabled"}
-        # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
+        if mapped_params.get("json_mode") is True:
+            mapped_params["thinking"] = {"type": "disabled"}
         elif isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
-            optional_params["thinking"] = {"type": thinking_value["type"]}
-
-        # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
+            mapped_params["thinking"] = {"type": thinking_value["type"]}
         elif reasoning_effort is not None:
-            optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+            mapped_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
 
-        return optional_params
+        return mapped_params
 
     def _fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """

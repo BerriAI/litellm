@@ -675,6 +675,32 @@ class TestDeepSeekResponseFormatTranslation:
 
         assert result["thinking"] == {"type": "disabled"}
 
+    def test_json_schema_with_empty_tools_list_succeeds(self):
+        schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+        non_default_params = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"schema": schema},
+            },
+            "tools": [],
+        }
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["json_mode"] is True
+        assert len(result["tools"]) == 1
+        assert result["tools"][0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+        assert result["tool_choice"] == {
+            "type": "function",
+            "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+        }
+
     def test_json_schema_conflicts_with_user_tools_raises_bad_request(self):
         schema = {"type": "object", "properties": {"status": {"type": "string"}}}
         non_default_params = {
@@ -801,6 +827,86 @@ class TestDeepSeekResponseFormatTranslation:
         assert choice.message.content == '{"answer": 42}'
         assert choice.message.tool_calls is None
         assert choice.finish_reason == "stop"
+
+    def test_streaming_tool_call_converts_to_content_chunks(self):
+        handler = self.config.get_model_response_iterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=True,
+        )
+
+        initial_chunk = {
+            "id": "chatcmpl-stream-1",
+            "created": 1234567890,
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": RESPONSE_FORMAT_TOOL_NAME,
+                                    "arguments": "",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        arg_chunk = {
+            "id": "chatcmpl-stream-1",
+            "created": 1234567890,
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "arguments": '{"status": "ok"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        final_chunk = {
+            "id": "chatcmpl-stream-1",
+            "created": 1234567890,
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+
+        res1 = handler.chunk_parser(initial_chunk)
+        assert res1.choices[0].delta.content == ""
+        assert res1.choices[0].delta.tool_calls is None
+
+        res2 = handler.chunk_parser(arg_chunk)
+        assert res2.choices[0].delta.content == '{"status": "ok"}'
+        assert res2.choices[0].delta.tool_calls is None
+
+        res3 = handler.chunk_parser(final_chunk)
+        assert res3.choices[0].finish_reason == "stop"
 
     def test_get_optional_params_deepseek_json_schema(self):
         schema = {"type": "object", "properties": {"value": {"type": "number"}}}
