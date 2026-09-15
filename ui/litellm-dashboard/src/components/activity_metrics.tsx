@@ -1,4 +1,13 @@
-import { AreaChart, BarChart, CustomLegend, CustomTooltip, LineChart } from "@/components/shared/charts";
+import {
+  AreaChart,
+  BarChart,
+  type ChartTooltipProps,
+  CustomLegend,
+  CustomTooltip,
+  formatCategoryName,
+  LineChart,
+  ValueTooltip,
+} from "@/components/shared/charts";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +27,15 @@ interface ActivityMetricsProps {
 
 const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =>
   averageResponseTimeMs(metrics.total_response_time_ms ?? 0, metrics.total_timed_requests ?? 0);
+
+export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProps) => (
+  <ValueTooltip
+    active={active}
+    payload={payload?.map((item) => ({ ...item, name: formatCategoryName(String(item.dataKey ?? "")) }))}
+    label={label}
+    valueFormatter={formatResponseTime}
+  />
+);
 
 const ModelSection = ({
   modelName,
@@ -182,6 +200,7 @@ const ModelSection = ({
                 categories={["metrics.avg_response_time_ms"]}
                 colors={["amber"]}
                 valueFormatter={formatResponseTime}
+                customTooltip={ResponseTimeTooltip}
                 connectNulls={true}
                 showLegend={false}
               />

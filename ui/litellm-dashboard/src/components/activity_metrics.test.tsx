@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ActivityMetrics, formatKeyLabel, processActivityData } from "./activity_metrics";
+import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeTooltip } from "./activity_metrics";
+import type { ChartTooltipProps } from "@/components/shared/charts";
 import { Team } from "./key_team_helpers/key_list";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData } from "./UsagePage/types";
 
@@ -1539,6 +1540,17 @@ describe("ActivityMetrics response time", () => {
     expect(screen.getByText("Avg Response Time per day")).toBeInTheDocument();
     expect(screen.getByText("Avg Response Time Ms")).toBeInTheDocument();
     expect(screen.getAllByText(/^\d+(\.\d+)?(ms|s)$/).length).toBeGreaterThan(1);
+  });
+
+  it("labels the chart tooltip with the readable series name and a formatted duration", () => {
+    const payload = [
+      { dataKey: "metrics.avg_response_time_ms", value: 1500, color: "#f59e0b", payload: timedModel.daily_data[0] },
+    ] as NonNullable<ChartTooltipProps["payload"]>;
+    render(<ResponseTimeTooltip active={true} payload={payload} label="2025-01-01" />);
+
+    expect(screen.getByText("Avg Response Time Ms")).toBeInTheDocument();
+    expect(screen.getByText("1.50s")).toBeInTheDocument();
+    expect(screen.queryByText("metrics.avg_response_time_ms")).not.toBeInTheDocument();
   });
 
   it("shows a dash and no response time chart when the model has no timed requests", () => {
