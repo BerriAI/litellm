@@ -41,10 +41,6 @@ def in_gateway_round() -> bool:
     return _GATEWAY_ROUND.get() is not None
 
 
-def is_memory_continuation_round() -> bool:
-    return (_GATEWAY_ROUND.get() or 0) > 0
-
-
 def _round_body(body: Mapping[str, object]) -> bytes:
     return json.dumps(
         {  # mutable-ok: Starlette and the gateway processor consume native request containers.

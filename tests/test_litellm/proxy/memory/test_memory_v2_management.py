@@ -415,7 +415,7 @@ async def test_capture_redacts_credentials_before_persisting_content_and_metadat
     fields = ("title", "content", "evidence", "when_to_use", "scope", "source")
     await management.capture_entry(_CAPTURE.model_copy(update={field: text for field in fields}), auth())
     data = database.db.litellm_memorytable.create.call_args.kwargs["data"]
-    stored = {"content": data["value"], **json.loads(data["metadata"])}
+    stored = {"content": data["value"], **data["metadata"].data}
     for field in fields:
         assert secret not in stored[field]
         assert "REDACTED" in stored[field]

@@ -3540,24 +3540,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         request_data: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
         model_value: Final = request_data.get("model")
         requested_model: Final = model_value if isinstance(model_value, str) else None
-        from litellm.proxy.memory.transport import is_memory_continuation_round
-
-        built_descriptors: Final = await self._build_request_rate_limit_descriptors(
+        descriptors: Final = await self._build_request_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=request_data,
             call_type=call_type,
         )
-        descriptors: Final = [  # mutable-ok: Existing limiter helpers consume native descriptor containers.
-            {  # mutable-ok: Existing limiter helpers consume native descriptor containers.
-                **descriptor,
-                "rate_limit": {  # mutable-ok: Existing limiter helpers consume native descriptor containers.
-                    key: value for key, value in (descriptor["rate_limit"] or {}).items() if key != "requests_per_unit"
-                },
-            }
-            if is_memory_continuation_round()
-            else descriptor
-            for descriptor in built_descriptors
-        ]
 
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:

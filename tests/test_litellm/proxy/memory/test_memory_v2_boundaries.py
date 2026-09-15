@@ -25,7 +25,7 @@ from litellm.proxy.memory.knowledge import MEMORY_TOOL_NAMES, execute_memory_too
 from litellm.proxy.memory.policy import MemoryAccess, MemoryIdentity, memory_digest, resolve_memory_access
 from litellm.proxy.memory.responses import serve_memory_response
 from litellm.proxy.memory.store import MemoryStore
-from litellm.proxy.memory.transport import is_memory_continuation_round
+from litellm.proxy.memory.transport import in_gateway_round
 from litellm.types.memory_v2 import MemoryCapture, MemoryEnrollment, MemorySearch, MemorySettings
 
 _NOW: Final = datetime(2026, 9, 12, tzinfo=timezone.utc)
@@ -629,6 +629,44 @@ _ROUTES: Final = ("acompletion", "aresponses", "anthropic_messages")
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", _ROUTES)
+@pytest.mark.parametrize("streaming", (False, True))
+@pytest.mark.parametrize("configuration", ("absent", "disabled", "no_database"))
+async def test_disabled_memory_leaves_inference_untouched(
+    prisma_edge: MagicMock, route: ServerToolRoute, streaming: bool, configuration: str
+) -> None:
+    from unittest.mock import patch
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.memory.gateway import process_gateway_memory
+
+    prisma_edge.db.litellm_config.find_unique.return_value = (
+        None if configuration == "absent" else SimpleNamespace(param_value=MemorySettings().model_dump())
+    )
+    data: Final = {
+        "messages": [{"role": "system", "content": "Original instructions"}, {"role": "user", "content": "hi"}],
+        "input": "hi",
+        "stream": streaming,
+        "caching": True,
+        "tools": [{"type": "function", "function": {"name": "litellm_memory_search"}}],
+    }
+    original: Final = json.dumps(data)
+    execute: Final = AsyncMock()
+    with patch.multiple(  # test-quality-ok: Inject the external configuration DB and worker cache.
+        "litellm.proxy.proxy_server",
+        prisma_client=None if configuration == "no_database" else prisma_edge,
+        user_api_key_cache=DualCache(),
+    ):
+        assert await process_gateway_memory(data, request(), UserAPIKeyAuth(user_id="owner"), route, execute) is None
+    assert json.dumps(data) == original
+    execute.assert_not_awaited()
+    prisma_edge.db.litellm_memorytable.find_many.assert_not_awaited()
+    prisma_edge.db.litellm_memorytable.create.assert_not_awaited()
+    prisma_edge.db.litellm_memorycontinuation.upsert.assert_not_awaited()
+    prisma_edge.db.litellm_usertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", _ROUTES)
 async def test_malformed_nonstreaming_provider_body_returns_502(prisma_edge: MagicMock, route: ServerToolRoute) -> None:
     from unittest.mock import patch
 
@@ -854,7 +892,7 @@ async def test_search_is_private_and_client_tools_keep_their_ids(
 
     async def execute(inner: Request, body: dict[str, object], auth: UserAPIKeyAuth) -> Response:
         observed.append(body)
-        assert is_memory_continuation_round() == (len(observed) > 1)
+        assert in_gateway_round()
         if len(observed) == 1:
             reply: Final = provider_response(
                 route, "INTERNAL HOUSEKEEPING", (search, application) if client_tool else (search,)
@@ -945,7 +983,7 @@ async def test_capture_rejects_fabricated_evidence_and_deduplicates_across_keys(
     assert saved["saved"] == 1
     prisma_edge.db.litellm_memorytable.find_unique.return_value = row(
         key=prisma_edge.db.litellm_memorytable.create.call_args.kwargs["data"]["key"],
-        metadata=prisma_edge.db.litellm_memorytable.create.call_args.kwargs["data"]["metadata"],
+        metadata=json.dumps(prisma_edge.db.litellm_memorytable.create.call_args.kwargs["data"]["metadata"].data),
         value=observation["content"],
     )
     repeated: Final = await execute_memory_tool(memory, call, ({"role": "user", "content": "Use port 8347"},))
@@ -1027,21 +1065,29 @@ async def test_previous_response_uses_owned_upstream_and_pending_tool_outputs(pr
     ),
 )
 @pytest.mark.parametrize("status", (429, 502))
+@pytest.mark.parametrize("route", _ROUTES)
+@pytest.mark.parametrize("streaming", (False, True))
 async def test_error_response_retains_status_and_retry_after_without_parsing_provider_body(
-    prisma_edge: MagicMock, body: bytes, status: int
+    prisma_edge: MagicMock, body: bytes, status: int, route: ServerToolRoute, streaming: bool
 ) -> None:
+    from unittest.mock import patch
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.memory.gateway import process_gateway_memory
+
     execute = AsyncMock(return_value=Response(body, status_code=status, headers={"retry-after": "7"}))
-    loop = GatewayMemoryLoop(
-        execute,
-        request(),
-        {"messages": [{"role": "user", "content": "hi"}]},
-        "acompletion",
-        store(prisma_edge),
-        UserAPIKeyAuth(),
-    )
-    with pytest.raises(HTTPException) as error:
-        async for _ in loop.run():
-            pass
+    caller = UserAPIKeyAuth(user_id="owner", token="a" * 64)
+    with patch.multiple(  # test-quality-ok: Inject external database, cache, and provider error responses.
+        "litellm.proxy.proxy_server", prisma_client=prisma_edge, user_api_key_cache=DualCache(), llm_router=None
+    ):
+        with pytest.raises(HTTPException) as error:
+            await process_gateway_memory(
+                {"messages": [{"role": "user", "content": "hi"}], "input": "hi", "stream": streaming},
+                request(),
+                caller,
+                route,
+                execute,
+            )
     assert error.value.status_code == status
     assert error.value.headers["retry-after"] == "7"
     assert "private provider" not in error.value.detail

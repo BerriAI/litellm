@@ -1,5 +1,4 @@
 import asyncio
-import json
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
@@ -222,6 +221,8 @@ class MemoryStore:
     async def _capture(
         self, capture: MemoryCapture, namespace: str, table: TableActions["LiteLLM_MemoryTable"]
     ) -> MemoryEntry:
+        from prisma import Json
+
         key: Final = f"memory-v2:{namespace}:{capture.key}"
         metadata: Final = {  # mutable-ok: Prisma query and write JSON.
             name: redact_memory(value)
@@ -238,7 +239,7 @@ class MemoryStore:
         content: Final = redact_memory(capture.content)
         data: Final = {  # mutable-ok: Prisma query and write JSON.
             "value": content,
-            "metadata": json.dumps(metadata),
+            "metadata": Json(metadata),
             "updated_by": self.actor,
         }
         existing: Final = await table.find_unique(
@@ -261,7 +262,7 @@ class MemoryStore:
                     "updated_at": capture.expected_revision,
                     "value": existing.value,
                     "metadata": {  # mutable-ok: Prisma query and write JSON.
-                        "equals": json.dumps(existing.metadata)
+                        "equals": Json(existing.metadata)
                     },
                 },
                 data=data,
