@@ -9,7 +9,7 @@ import threading
 import os
 import datetime
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import (
     Any,
     Callable,
@@ -53,6 +53,7 @@ from litellm.constants import (
     OPENAI_CHAT_COMPLETION_PARAMS as _openai_completion_params,  # backwards compatibility
     OPENAI_FINISH_REASONS,
     OPENAI_FINISH_REASONS as _openai_finish_reasons,  # backwards compatibility
+    OPENAI_REALTIME_AND_TRANSCRIPTION_MODELS,
     openai_compatible_endpoints,
     openai_compatible_providers,
     openai_text_completion_compatible_providers,
@@ -1034,6 +1035,7 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
 
 
 _populate_provider_model_sets(model_cost)
+open_ai_chat_completion_models.update(OPENAI_REALTIME_AND_TRANSCRIPTION_MODELS)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping
@@ -1512,7 +1514,9 @@ from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
     acreate_realtime_transcription_session,
+    acreate_realtime_translation_client_secret,
     arealtime_calls,
+    arealtime_translation_calls,
 )
 from .responses.main import _aresponses_websocket
 
@@ -1745,6 +1749,9 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.rerank.transformation import (
         VertexAIRerankConfig as VertexAIRerankConfig,
     )
+    from .llms.together_ai.chat.transformation import (
+        TogetherAIChatConfig as TogetherAIChatConfig,
+    )
     from .llms.fireworks_ai.rerank.transformation import (
         FireworksAIRerankConfig as FireworksAIRerankConfig,
     )
@@ -1790,9 +1797,6 @@ if TYPE_CHECKING:
         BedrockMantleAnthropicMessagesConfig as BedrockMantleAnthropicMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
-    from .llms.together_ai.chat.transformation import (
-        TogetherAIChatConfig as TogetherAIChatConfig,
-    )
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig as VertexGeminiConfig,
@@ -1951,6 +1955,9 @@ if TYPE_CHECKING:
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,
     )
+    from .llms.vertex_ai.interactions.transformation import (
+        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
+    )
     from .llms.litellm_proxy.responses.transformation import (
         LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig,
     )
@@ -1977,9 +1984,6 @@ if TYPE_CHECKING:
     )
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,
-    )
-    from .llms.vertex_ai.interactions.transformation import (
-        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
     )
     from .llms.openai.chat.o_series_transformation import (
         OpenAIOSeriesConfig as OpenAIOSeriesConfig,
