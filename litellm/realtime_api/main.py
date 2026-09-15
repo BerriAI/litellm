@@ -60,7 +60,9 @@ _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 def _model_params_with_stored_credentials(model_params: Mapping[str, Any]) -> Mapping[str, Any]:
     credential_name: Final = model_params.get("litellm_credential_name")
     credential_values: Final = (
-        CredentialAccessor.get_credential_values(credential_name) if isinstance(credential_name, str) else {}
+        CredentialAccessor.get_credential_values(credential_name)
+        if isinstance(credential_name, str)
+        else _EMPTY_MODEL_PARAMS
     )
     return MappingProxyType({**credential_values, **model_params})
 
