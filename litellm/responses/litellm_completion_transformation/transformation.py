@@ -2715,9 +2715,8 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
                 if reasoning_text:
-                    message_item = message_item.model_copy(  # rebind-ok: model_copy returns updated item
-                        update={"reasoning_content": reasoning_text}
-                    )
+                    setattr(message_item, "reasoning_content", reasoning_text)  # pyright: ignore[reportGeneralTypeIssues]  # extra='allow' model, attribute name is fixed
+
                 message_output_items.append(message_item)
         return message_output_items
 
