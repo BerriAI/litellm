@@ -101,6 +101,57 @@ class TestOpenInferProviderConfig:
             == "https://api.openinfer.ai/v1/chat/completions"
         )
 
+    def test_outgoing_chat_request_contract(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="openinfer/@oi/Llama-3.2-1B-Instruct",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key="sk-test",
+        )
+        assert model == "@oi/Llama-3.2-1B-Instruct"
+        assert provider == "openinfer"
+        assert api_key == "sk-test"
+        assert api_base == "https://api.openinfer.ai/v1"
+
+        provider_cfg = JSONProviderRegistry.get("openinfer")
+        assert provider_cfg is not None
+        config = create_config_class(provider_cfg)()
+
+        assert (
+            config.get_complete_url(
+                api_base=None,
+                api_key=api_key,
+                model=model,
+                optional_params={},
+                litellm_params={},
+            )
+            == "https://api.openinfer.ai/v1/chat/completions"
+        )
+
+        headers = config.validate_environment(
+            headers={},
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key=api_key,
+            api_base=api_base,
+        )
+        assert headers["Authorization"] == "Bearer sk-test"
+
+        optional_params = config.map_openai_params(
+            non_default_params={"max_completion_tokens": 128},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert optional_params["max_tokens"] == 128
+        assert "max_completion_tokens" not in optional_params
+
     @pytest.mark.parametrize(
         ("model", "input_cost_per_token", "output_cost_per_token"),
         (

@@ -966,7 +966,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
-    "openinfer",  # OpenInfer - JSON-configured provider
+    "openinfer",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
