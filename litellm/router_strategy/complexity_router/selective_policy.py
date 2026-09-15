@@ -76,10 +76,13 @@ class SelectiveHead(BaseModel):
         return self
 
     def linear(self, values: Mapping[str, float]) -> tuple[float, ...]:
-        return tuple(
+        outputs: Final = tuple(
             sum(coefficient * values.get(feature, 0.0) for feature, coefficient in zip(self.features, row)) + intercept
             for row, intercept in zip(self.coefficients, self.intercept)
         )
+        if not all(math.isfinite(value) for value in outputs):
+            raise OverflowError("Selective head produced a non-finite value")
+        return outputs
 
     def probabilities(self, values: Mapping[str, float]) -> tuple[float, ...]:
         if self.constant is not None:

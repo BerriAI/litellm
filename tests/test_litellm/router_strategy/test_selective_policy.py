@@ -72,6 +72,21 @@ def test_overflow_falls_back_to_the_capable_model() -> None:
     assert not policy.evaluate({}, 0.5, 0.9).use_efficient
 
 
+@pytest.mark.parametrize("coefficient", [1e308, -1e308])
+def test_overflowing_binary_logits_cannot_hide_as_equal_probabilities(coefficient: float) -> None:
+    head: Final = SelectiveHead(
+        features=("logit_p",), coefficients=((coefficient,),), intercept=(0.0,), classes=(0, 1)
+    )
+    policy: Final = SelectivePolicy(
+        version="test",
+        feature_schema="v2-v1",
+        target="scalar_calibration",
+        threshold=0.05,
+        heads=(head, head),
+    )
+    assert not policy.evaluate({}, 0.99999, 0.99999).use_efficient
+
+
 def test_per_model_policy_uses_both_fitted_heads() -> None:
     efficient: Final = SelectiveHead(
         features=("p_e",), coefficients=((0.0,),), intercept=(math.log(4.0),), classes=(0, 1)
