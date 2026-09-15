@@ -3015,7 +3015,12 @@ class Logging(LiteLLMLoggingBaseClass):
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
         complete_streaming_response: Final[
-            ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
+            ModelResponse
+            | TextCompletionResponse
+            | ResponsesAPIResponse
+            | InteractionsAPIResponse
+            | TranscriptionResponse
+            | None
         ] = self._get_assembled_streaming_response(
             result=result,
             start_time=start_time,
@@ -3834,10 +3839,17 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: list[object],
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None:
+    ) -> (
+        ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | None
+    ):
         if self.stream is not True:
             return None
-        if isinstance(result, ModelResponse) or isinstance(result, TextCompletionResponse):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse)):
             return result
         elif isinstance(
             result,

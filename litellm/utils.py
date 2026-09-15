@@ -3315,7 +3315,7 @@ def get_optional_params_transcription(
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
 
     # retrieve all parameters passed to the function
-    passed_params: Final = locals()
+    passed_params: Final = locals().copy()
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     passed_params.pop("model")

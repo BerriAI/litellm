@@ -586,7 +586,25 @@ def cost_per_token(
             data_residency=data_residency,
         )
     elif call_type == "atranscription" or call_type == "transcription":
-        if _transcription_usage_has_token_details(usage_block):
+        transcription_model_info: Final = _cached_get_model_info_helper(
+            model=model_without_prefix, custom_llm_provider=custom_llm_provider
+        )
+        has_token_pricing: Final = any(
+            transcription_model_info.get(field)
+            for field in (
+                "input_cost_per_token",
+                "output_cost_per_token",
+                "input_cost_per_audio_token",
+                "output_cost_per_audio_token",
+            )
+        )
+        if _transcription_usage_has_token_details(usage_block) and (
+            has_token_pricing
+            or (
+                transcription_model_info.get("input_cost_per_second") is None
+                and transcription_model_info.get("output_cost_per_second") is None
+            )
+        ):
             return generic_cost_per_token(
                 model=model_without_prefix,
                 usage=usage_block,
