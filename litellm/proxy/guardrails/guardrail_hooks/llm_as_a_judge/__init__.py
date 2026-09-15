@@ -78,7 +78,10 @@ class _LoggedCallParams(BaseModel):
     metadata: Mapping[str, object] | None = None
 
 
-def _is_judge_call(data: Mapping[str, object]) -> bool:
+def _is_logged_judge_call(data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
+    """logging_only is the only event whose ``data`` is the SDK's model_call_details rather than the client body."""
+    if event_type is not GuardrailEventHooks.logging_only:
+        return False
     try:
         params: Final = _LoggedCallParams.model_validate(data.get("litellm_params") or {})
     except ValidationError:
@@ -207,7 +210,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         return [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call, GuardrailEventHooks.post_call]
 
     def should_run_guardrail(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
-        if _is_judge_call(data):
+        if _is_logged_judge_call(data, event_type):
             return False
         return super().should_run_guardrail(data, event_type)
 

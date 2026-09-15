@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     LLMAsAJudgeGuardrail,
     _build_judge_prompt,
@@ -16,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -418,6 +420,20 @@ async def test_logging_only_judge_does_not_judge_its_own_judge_call():
     }
     assert guardrail.should_run_guardrail(judge_call, GuardrailEventHooks.logging_only) is False
     assert guardrail.should_run_guardrail(client_call, GuardrailEventHooks.logging_only) is True
+
+
+@pytest.mark.parametrize(
+    "event_type", [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call, GuardrailEventHooks.post_call]
+)
+def test_client_supplied_judge_origin_does_not_bypass_enforcing_hooks(event_type: GuardrailEventHooks):
+    guardrail: Final = _make_guardrail(event_hook=event_type)
+    forged_request: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrails": [guardrail.guardrail_name],
+        "litellm_params": {"metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN}},
+    }
+
+    assert guardrail.should_run_guardrail(forged_request, event_type) is True
 
 
 @pytest.mark.asyncio
