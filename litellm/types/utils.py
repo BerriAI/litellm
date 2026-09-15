@@ -2891,6 +2891,7 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    "capability_classifier",
     "llm_v2_classifier",
     "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
@@ -2905,6 +2906,9 @@ RoutingDecisionCause = Literal[
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
     # tier set, so the request routed to the configured fallback_tier without being classified.
     "classifier_fallback",
+    # The capability judge failed or returned an invalid verdict, so its fail-closed policy
+    # routed to capable_tier without consulting the unrelated complexity heuristic.
+    "capability_classifier_fallback",
     # The LLM classifier or classifier plugin failed and classifier_fallback is
     # 'default_model', so the request went to default_model without being classified.
     # Distinct from "default_fallback",
@@ -2980,6 +2984,13 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_crux: str  # writable-ok: added only when a capability verdict is available
+    classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
+    classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
+    classifier_p_solve: float  # writable-ok: added only when a capability verdict is available
+    classifier_calibrated_p_solve: ReadOnly[float]
+    classifier_calibration_version: ReadOnly[str]
+    classifier_threshold: float  # writable-ok: added only when a capability verdict is available
     escalated: bool
     context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
@@ -2995,7 +3006,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
 # logging off. Every other field aggregates the prompt without reproducing it and is kept,
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
 # fails if a field is added to the record without being placed in one set or the other.
-PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset({"signals", "matched_keyword", "escalation_keyword"})
+PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset(
+    {"signals", "matched_keyword", "escalation_keyword", "classifier_crux"}
+)
 DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "router_model_name",
@@ -3008,6 +3021,12 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_primary_rule",
+        "classifier_capability_boundary",
+        "classifier_p_solve",
+        "classifier_calibrated_p_solve",
+        "classifier_calibration_version",
+        "classifier_threshold",
         "escalated",
         "context_escalated",
         "context_escalation_original_tier",
