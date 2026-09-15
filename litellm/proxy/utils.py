@@ -3745,13 +3745,9 @@ class ProxyLogging:
 
     @staticmethod
     def _discard_deferred_stream_logging_for_failure(request_data: Mapping[str, object], error: Exception) -> bool:
-        """Drop the parked success dispatch when the stream ends in an error the proxy logs
-        as a failure (``_PROXY_ONLY_LLM_API_ERRORS``, e.g. a post_call guardrail block) and
-        the CSW parked an assembled ``ModelResponse``, carrying its usage onto the logging
-        object so the failure row bills what the stream consumed. Returns False, leaving the
-        parked dispatch for the caller to flush, for any other error and for the native
-        /v1/messages and responses shapes that park a logging coroutine with no usage.
-        """
+        """Drop the parked success dispatch for an assembled chat stream that ends in an error
+        ``post_call_failure_hook`` logs as a failure, billing its usage on the failure row instead.
+        Returns False when the parked dispatch should still be flushed by the caller."""
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging):
             return False
@@ -3761,11 +3757,7 @@ class ProxyLogging:
             return False
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
-        usage: Final[Usage | None] = getattr(assembled, "usage", None)
-        if isinstance(usage, Usage):
-            logging_obj.record_partial_usage_for_failure(
-                usage, logging_obj._response_cost_calculator(result=assembled) or 0.0
-            )
+        logging_obj.record_assembled_response_for_failure(assembled)
         return True
 
     async def _arelease_max_parallel_requests_on_disconnect(

@@ -639,8 +639,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
         self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
-        self._on_deferred_stream_complete: Callable[..., Awaitable[None]] | None = None
-        self._deferred_stream_complete_args: tuple[object, ...] | None = None
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -1992,6 +1990,12 @@ class Logging(LiteLLMLoggingBaseClass):
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
+
+    def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
+        """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
+        usage: Final = getattr(assembled, "usage", None)
+        if isinstance(usage, Usage):
+            self.record_partial_usage_for_failure(usage, self._response_cost_calculator(result=assembled) or 0.0)
 
     async def dispatch_failure_handlers(
         self,
