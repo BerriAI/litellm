@@ -4328,7 +4328,7 @@ async def test_centralized_checks_keep_admin_role_when_the_db_row_is_not_admin()
     token = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     with _proxy_admin_world(demoted_row):
-        with patch(
+        with patch(  # test-quality-ok: what the substitution hands common_checks IS the subject; no HTTP boundary and no injection seam on that call
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
