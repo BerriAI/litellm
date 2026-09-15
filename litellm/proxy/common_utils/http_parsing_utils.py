@@ -266,6 +266,24 @@ def _safe_set_request_parsed_body(
         verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
 
 
+def rewrite_request_model(
+    request_data: dict,  # mutable-ok: the request body is rewritten in place for every downstream reader
+    request: Request | None,
+    model: str,
+) -> None:
+    """Point the auth-time payload, the parsed-body cache, ``request.json()`` and ``request.body()`` at ``model``.
+    The cache and raw body keep only the keys the client sent, not params auth merged into ``request_data``.
+    """
+    request_data["model"] = model
+    if request is None:
+        return
+    cached_body: Final = _safe_get_request_parsed_body(request=request)
+    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
+    _safe_set_request_parsed_body(request=request, parsed_body=body)
+    request._json = body
+    request._body = orjson.dumps(body)
+
+
 def _safe_get_request_headers(request: Request | None) -> dict:
     """
     [Non-Blocking] Safely get the request headers.

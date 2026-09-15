@@ -8210,6 +8210,44 @@ async def test_router_settings_model_group_alias_leaves_form_bodies_alone(monkey
 
 
 @pytest.mark.asyncio
+async def test_router_settings_model_group_alias_rewrite_keeps_query_params_out_of_body(monkeypatch):
+    """LIT-3054: auth merges query params into its own copy of the body; the rewrite must not forward them."""
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body, populate_request_with_path_params
+
+    router = _alias_router()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    body = {"model": "AgentX-LLM", "messages": [{"role": "user", "content": "hi"}]}
+    request = _alias_request("/v1/chat/completions", body)
+    request.scope["query_string"] = b"api-version=2024-10-21&stream=true"
+    data = populate_request_with_path_params(request_data=await _read_request_body(request), request=request)
+    assert data["api-version"] == "2024-10-21"
+    token = _alias_token(monkeypatch, "key", {"AgentX-LLM": "claude-haiku"}, ["claude-haiku"])
+    await _enforce_key_and_fallback_model_access(valid_token=token, request_data=data, route="/v1/chat/completions", request=request, llm_model_list=router.model_list, llm_router=router)
+    downstream = await _read_request_body(request)
+    assert downstream == {**body, "model": "claude-haiku"}
+    assert json.loads(await request.body()) == downstream
+    assert await request.json() == downstream
+
+
+@pytest.mark.asyncio
+async def test_router_settings_model_group_alias_leaves_pass_through_bodies_alone(monkeypatch):
+    """LIT-3054: pass-through routes forward the body verbatim to the provider, so auth must not rewrite it."""
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    router = _alias_router()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    data = {"model": "AgentX-LLM", "messages": [{"role": "user", "content": "hi"}]}
+    route = "/anthropic/v1/messages"
+    request = _alias_request(route, data)
+    token = _alias_token(monkeypatch, "key", {"AgentX-LLM": "claude-haiku"}, ["claude-haiku", "AgentX-LLM"])
+    await _enforce_key_and_fallback_model_access(valid_token=token, request_data=data, route=route, request=request, llm_model_list=router.model_list, llm_router=router)
+    assert data["model"] == "AgentX-LLM"
+    assert (await request.json())["model"] == "AgentX-LLM"
+    assert get_client_requested_model(request) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("target, expect_denied", [("claude-haiku", False), ("claude-sonnet", True)])
 async def test_router_settings_model_group_alias_authorizes_target_for_team(monkeypatch, target, expect_denied):
     """LIT-3054: the team allowlist check in common_checks must judge the alias target, not the alias."""

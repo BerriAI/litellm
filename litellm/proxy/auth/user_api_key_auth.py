@@ -32,6 +32,7 @@ from litellm.constants import (
     INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
@@ -104,6 +105,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     populate_request_with_path_params,
     read_raw_json_body,
+    rewrite_request_model,
 )
 from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
@@ -237,22 +239,7 @@ async def _normalize_claude_model(
         request.scope[_CLAUDE_MODEL_NORMALIZED] = True
     if source is None:
         return
-    _rewrite_request_model(request_data, request, source)
-
-
-def _rewrite_request_model(
-    request_data: dict,  # mutable-ok: the request body is rewritten in place for every downstream reader
-    request: Request | None,
-    model: str,
-) -> None:
-    request_data["model"] = model
-    _safe_set_request_parsed_body(request=request, parsed_body=request_data)
-    if request is not None:
-        request._json = request_data
-        request._body = orjson.dumps(request_data)
-
-
-_MODEL_GROUP_ALIAS_RESOLVED: Final = "litellm.model_group_alias_resolved"
+    rewrite_request_model(request_data, request, source)
 
 
 async def _resolve_router_settings_model_group_alias(
@@ -264,13 +251,16 @@ async def _resolve_router_settings_model_group_alias(
     """Rewrite the requested model through the key's or team's ``router_settings.model_group_alias``
     before the allowlist checks, so they authorize the model group the request is routed to.
     """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
     if request is None or llm_router is None or not RouteChecks.is_llm_api_route(route=route):
         return
-    if request.scope.get(_MODEL_GROUP_ALIAS_RESOLVED) is True:
+    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
         return
-    request.scope[_MODEL_GROUP_ALIAS_RESOLVED] = True
+    request.scope[MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY] = True
+    if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
+        return
     requested: Final = request_data.get("model")
     if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
         return
@@ -284,7 +274,7 @@ async def _resolve_router_settings_model_group_alias(
         return
     verbose_proxy_logger.debug("router_settings.model_group_alias resolved %s -> %s before auth", requested, target)
     request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
-    _rewrite_request_model(request_data, request, target)
+    rewrite_request_model(request_data, request, target)
 
 
 def _get_model_names_for_budget_checks(
