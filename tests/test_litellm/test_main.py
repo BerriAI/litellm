@@ -1340,6 +1340,80 @@ def test_responses_api_bridge_check_gpt_5_tools_without_summary_stays_chat():
     assert model_info.get("mode") != "responses"
 
 
+@pytest.fixture
+def github_copilot_chat_catalog(local_model_cost_map: None) -> None:
+    litellm.register_model(
+        {
+            f"github_copilot/{model}": {
+                "litellm_provider": "github_copilot",
+                "max_tokens": 128000,
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+                "mode": "chat",
+            }
+            for model in ("gpt-5.4", "gpt-5.1")
+        }
+    )
+
+
+def test_responses_api_bridge_check_github_copilot_gpt_5_4_tools_plus_reasoning_routes_to_responses(
+    github_copilot_chat_catalog: None,
+) -> None:
+    """github_copilot/gpt-5.4 with tools + reasoning_effort should route to Responses API.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23156 - the copilot
+    variant that /v1/chat/completions rejects with "Function tools with reasoning_effort
+    are not supported for gpt-5.4 ... Please use /v1/responses instead".
+    """
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="github_copilot/gpt-5.4",
+        custom_llm_provider="github_copilot",
+        tools=[{"type": "function", "function": {"name": "get_weather"}}],
+        reasoning_effort="low",
+    )
+
+    assert model == "github_copilot/gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize("reasoning_effort", [None, "none", {"effort": "none"}])
+def test_responses_api_bridge_check_github_copilot_gpt_5_4_tools_without_reasoning_stays_chat(
+    reasoning_effort: str | dict[str, str] | None,
+    github_copilot_chat_catalog: None,
+) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="github_copilot/gpt-5.4",
+        custom_llm_provider="github_copilot",
+        tools=[{"type": "function", "function": {"name": "get_weather"}}],
+        reasoning_effort=reasoning_effort,
+    )
+
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_github_copilot_gpt_5_1_reasoning_summary_stays_chat(
+    github_copilot_chat_catalog: None,
+) -> None:
+    """The reasoning_summary bridge path stays openai/azure-only: a copilot gpt-5.1
+    (pre-5.4) request with reasoning_effort + reasoning_summary but no tools must NOT
+    bridge, so copilot is not lumped into the untested summary path."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="github_copilot/gpt-5.1",
+        custom_llm_provider="github_copilot",
+        tools=None,
+        reasoning_effort="medium",
+        reasoning_summary="auto",
+    )
+
+    assert model_info.get("mode") != "responses"
+
+
 @patch("litellm.completion_extras.responses_api_bridge.completion")
 def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
     mock_responses_completion,

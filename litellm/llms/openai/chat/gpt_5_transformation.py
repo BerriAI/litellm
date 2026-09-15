@@ -128,6 +128,37 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
+    def is_gpt5_responses_bridge_case(
+        cls,
+        model: str,
+        custom_llm_provider: str,
+        is_responses_mode: bool,
+        has_function_tool: bool,
+        has_reasoning_effort: bool,
+        has_reasoning_summary: bool,
+        reasoning_active: bool,
+        on_constraint_enforcing_endpoint: bool,
+    ) -> bool:
+        """Whether a GPT-5 chat request needs the Responses API for its tools or reasoning."""
+        if custom_llm_provider not in ("openai", "azure", "github_copilot"):
+            return False
+        if is_responses_mode:
+            return False
+        if not cls.is_model_gpt_5_model(model) or cls.is_model_gpt_5_search_model(model):
+            return False
+        if has_reasoning_effort and has_reasoning_summary and custom_llm_provider in ("openai", "azure"):
+            return True
+        return (
+            cls.is_model_gpt_5_4_plus_model(model)
+            and has_function_tool
+            and reasoning_active
+            and (
+                has_reasoning_effort
+                or (custom_llm_provider in ("openai", "azure") and on_constraint_enforcing_endpoint)
+            )
+        )
+
+    @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
         """The name this model is looked up by in the cost map.
 

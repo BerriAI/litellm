@@ -1122,20 +1122,15 @@ def responses_api_bridge_check(
     on_constraint_enforcing_endpoint: Final = (
         custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
-    if (
-        custom_llm_provider in ("openai", "azure")
-        and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(model)
-        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and (
-            (reasoning_effort is not None and reasoning_summary is not None)
-            or (
-                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-                and has_function_tool
-                and reasoning_active
-                and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
-            )
-        )
+    if OpenAIGPT5Config.is_gpt5_responses_bridge_case(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        is_responses_mode=model_info.get("mode") == "responses",
+        has_function_tool=has_function_tool,
+        has_reasoning_effort=reasoning_effort is not None,
+        has_reasoning_summary=reasoning_summary is not None,
+        reasoning_active=reasoning_active,
+        on_constraint_enforcing_endpoint=on_constraint_enforcing_endpoint,
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
