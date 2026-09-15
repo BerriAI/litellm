@@ -273,6 +273,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
+        if (!metrics?.metrics) return;
         if (!modelSpend[model]) {
           modelSpend[model] = {
             metrics: {
@@ -319,6 +320,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
+        if (!metrics?.metrics) return;
         if (!modelGroupSpend[modelGroup]) {
           modelGroupSpend[modelGroup] = {
             metrics: {
@@ -367,6 +369,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     const providerSpendMap: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
+        if (!metrics?.metrics) return;
         if (!providerSpendMap[provider]) {
           providerSpendMap[provider] = {
             metrics: {
@@ -412,6 +415,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
+        if (!metrics?.metrics) return;
         if (!keySpend[key]) {
           keySpend[key] = {
             metrics: {
