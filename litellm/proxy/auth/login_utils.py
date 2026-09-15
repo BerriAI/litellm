@@ -10,7 +10,7 @@ import secrets
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal
 
 import jwt
 from fastapi import HTTPException
@@ -263,11 +263,8 @@ async def authenticate_user(
     ) = None
 
     if prisma_client is not None:
-        _user_row = cast(
-            LiteLLM_UserTable | None,
-            await UserRepository(prisma_client).table.find_first(
-                where={"user_email": {"equals": username, "mode": "insensitive"}}
-            ),
+        _user_row = await UserRepository(prisma_client).table.find_first(
+            where={"user_email": {"equals": username, "mode": "insensitive"}}
         )
 
     """
@@ -414,7 +411,7 @@ async def authenticate_user(
                 user_id=user_id,
                 key=key,
                 user_email=user_email,
-                user_role=cast(str, user_role),
+                user_role=user_role.value if user_role is not None else LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
                 login_method="username_password",
                 password_reset_required=password_reset_required,
             )
@@ -458,7 +455,7 @@ def encode_ui_session_jwt(returned_ui_token_object: ReturnedUITokenObject, maste
     master key rotates, and the session-cookie readers that require a bounded lifetime
     (the MCP interactive sign-in) reject it.
     """
-    claims: Final = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
+    claims: Final = {**returned_ui_token_object, "exp": _ui_session_exp_timestamp()}
     return jwt.encode(claims, master_key, algorithm="HS256")
 
 

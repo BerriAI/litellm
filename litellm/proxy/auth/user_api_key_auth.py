@@ -1366,7 +1366,7 @@ async def _user_api_key_auth_builder(
             _lockout_reason is not None
             and master_key_lockout_action(
                 route=route,
-                method=request.method,
+                method=request.scope.get("method") or "",
                 reason=_lockout_reason,
                 stored_credentials_present=stored_credentials_present(),
             )

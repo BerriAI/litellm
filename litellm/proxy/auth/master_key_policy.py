@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, cast
+from typing import Final, Literal
 
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict, assert_never
@@ -109,11 +109,9 @@ def stored_credentials_present() -> bool:
 
     if not isinstance(llm_router, Router):
         return False
-    model_list: Final = cast(
-        "list[object]",
-        llm_router.model_list or [],  # pyright: ignore[reportUnknownMemberType]  # Router.model_list is declared bare `list`; elements are validated by the TypeAdapter below
+    deployments: Final = _DEPLOYMENT_MARKERS.validate_python(
+        llm_router.model_list or []  # pyright: ignore[reportUnknownMemberType]  # Router.model_list is declared bare `list`; elements are validated by the TypeAdapter
     )
-    deployments: Final = _DEPLOYMENT_MARKERS.validate_python(model_list)
     return any((d.get("model_info") or {}).get("db_model") is True for d in deployments)
 
 

@@ -1071,7 +1071,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
@@ -1785,7 +1785,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 5
+      "count": 4
     },
     "react-hooks/set-state-in-effect": {
       "count": 1

@@ -298,13 +298,9 @@ export default function ModelInfoView({
         custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
       },
     };
-    toast.info("Storing credential..");
-    try {
-      await credentialCreateCall(accessToken, credentialItem);
-      toast.success("Credential stored successfully");
-    } catch (error) {
-      toast.fromError(error);
-    }
+    await credentialCreateCall(accessToken, credentialItem)
+      .then(() => toast.success("Credential stored successfully"))
+      .catch((error) => toast.fromError(error));
   };
 
   const handleModelUpdate = async (

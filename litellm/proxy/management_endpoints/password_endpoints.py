@@ -58,7 +58,7 @@ def _user_table(
 )
 async def change_password(
     data: ChangePasswordRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
 ) -> ChangePasswordResponse:
     """
     Change the calling user's own password.
