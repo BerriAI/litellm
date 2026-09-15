@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from collections.abc import Mapping
 from fastapi.testclient import TestClient
 
 import litellm
@@ -72,6 +73,108 @@ def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, s
     assert savings[:4] == billed[:4]
     assert savings[4] == pytest.approx(billed[0] if read_rate is None else read_rate)
     assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+
+
+def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_audio_token": 6.5e-6,
+        "input_cost_per_audio_per_second": 0.00016,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=64,
+        completion_tokens=0,
+        total_tokens=64,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=64,
+            audio_length_seconds=2,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(2 * 0.00016)
+
+
+def test_generic_cost_per_token_prefers_image_per_image_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_image_token": 4.5e-7,
+        "input_cost_per_image": 0.00012,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=258,
+        completion_tokens=0,
+        total_tokens=258,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_tokens=258,
+            image_count=1,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(0.00012)
+
+
+def test_generic_cost_per_token_prefers_video_per_second_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_video_token": 1.2e-5,
+        "input_cost_per_video_per_second": 0.00079,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=516,
+        completion_tokens=0,
+        total_tokens=516,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            video_tokens=516,
+            video_length_seconds=2,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(2 * 0.00079)
 
 
 def test_missing_cache_read_uses_off_peak_input_rate():
@@ -4039,7 +4142,7 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
         cache_read_input_token_cost=6e-7,
         cache_read_input_audio_token_cost=6e-7,
         cache_creation_input_token_cost=7.5e-6,
-        cache_creation_input_token_cost_above_1hr=0.0,
+        cache_creation_input_token_cost_above_1hr=7.5e-6,
         output_cost_per_reasoning_token=3e-5,
     )
     assert breakdown.cache_read_cost == pytest.approx(200_000 * rates.cache_read_input_token_cost)
@@ -4560,7 +4663,7 @@ GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE = [
     ("gemini", "priority", 5.4e-07, 4.5e-06, 5e-08),
     ("vertex_ai", None, 3e-07, 2.5e-06, 3e-08),
     ("vertex_ai", "flex", 1.5e-07, 1.25e-06, 1.5e-08),
-    ("vertex_ai", "priority", 5.4e-07, 4.5e-06, 5e-08),
+    ("vertex_ai", "priority", 5.4e-07, 4.5e-06, 5.4e-08),
 ]
 
 
@@ -5334,3 +5437,72 @@ def test_realtime_models_bill_cached_text_and_audio_at_their_cache_read_rates(
 
     prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=custom_llm_provider)
     assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a_write_price():
+    """Azure and OpenAI publish no cache-write price and bill cache writes as ordinary input.
+    A deployment priced with only input, output, and cache-read rates must bill the creation
+    tokens the provider reports at the input rate, never at 0. The numbers are a cold 7,336-token
+    prompt on a deployment that reports all but 3 of them as cache creation."""
+    model_info = {
+        "input_cost_per_token": 2e-7,
+        "output_cost_per_token": 1.25e-6,
+        "cache_read_input_token_cost": 2e-8,
+    }
+    usage = Usage(
+        prompt_tokens=7336,
+        completion_tokens=23,
+        total_tokens=7359,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_creation_tokens=7333),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="custom-priced-deployment", usage=usage, custom_llm_provider="azure", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(7336 * 2e-7)
+    assert completion_cost == pytest.approx(23 * 1.25e-6)
+
+
+@pytest.mark.parametrize(
+    ("cache_rates", "current_time", "expected_creation", "expected_creation_1h"),
+    (
+        pytest.param({}, None, 2e-7, 2e-7, id="no-write-price-uses-the-input-rate"),
+        pytest.param({"cache_creation_input_token_cost": 2.5e-7}, None, 2.5e-7, 2.5e-7, id="no-1h-price-uses-the-write-price"),
+        pytest.param({"cache_creation_input_token_cost": 0.0}, None, 0.0, 0.0, id="explicit-zero-stays-zero"),
+        pytest.param(
+            {"off_peak_pricing": {"hours_utc": "00:00-23:59", "input_cost_per_token": 1e-7}},
+            datetime(2026, 9, 14, 12, tzinfo=timezone.utc),
+            1e-7,
+            1e-7,
+            id="no-write-price-uses-the-off-peak-input-rate",
+        ),
+        pytest.param(
+            {
+                "off_peak_pricing": {
+                    "hours_utc": "00:00-23:59",
+                    "input_cost_per_token": 1e-7,
+                    "cache_creation_input_token_cost": 3e-7,
+                }
+            },
+            datetime(2026, 9, 14, 12, tzinfo=timezone.utc),
+            3e-7,
+            3e-7,
+            id="no-1h-price-uses-the-off-peak-write-price",
+        ),
+    ),
+)
+def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_path(
+    cache_rates: Mapping[str, float | Mapping[str, float | str]],
+    current_time: datetime | None,
+    expected_creation: float,
+    expected_creation_1h: float,
+) -> None:
+    model_info = {"input_cost_per_token": 2e-7, "output_cost_per_token": 1.25e-6, **cache_rates}
+    usage = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
+
+    _, _, creation, creation_1h, _ = _get_token_base_cost(model_info, usage, current_time=current_time)
+
+    assert creation == pytest.approx(expected_creation)
+    assert creation_1h == pytest.approx(expected_creation_1h)
+

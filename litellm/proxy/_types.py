@@ -4,11 +4,12 @@ import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple
 
 import httpx
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     Json,
@@ -47,6 +48,7 @@ from litellm.types.proxy.carried_budget_state import (
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
@@ -284,6 +286,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team's `team_member_permissions`, non-admin members of that team may set
     # `access_group_ids` on keys they create/update. Default-deny.
     KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
+    AUTO_ROUTER_MANAGE = "/auto_router/manage"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -650,15 +653,18 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
+        KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
 
     management_routes = (
         [
             # user
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/update",
             "/user/bulk_update",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/info",
             "/user/list",
             "/user/daily/activity",
@@ -838,6 +844,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -864,6 +871,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
+        "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -887,6 +895,7 @@ class LiteLLMRoutes(enum.Enum):
         "/auto_router/validate_complexity_router_config",
         # Per-session auto-router read - the endpoint scopes the row to the caller's own key hash
         "/auto_router/session",
+        "/cost/predict-cache",
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
@@ -1980,8 +1989,14 @@ class OrgMember(MemberBase):
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
+RouterSettingsDict = Annotated[
+    dict[str, object],
+    BeforeValidator(validate_router_settings_dict, json_schema_input_type=UpdateRouterConfig),
+]
+
 
 class NewTeamRequest(TeamBase):
+    router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     tags: list | None = None
     guardrails: list[str] | None = None
@@ -2079,7 +2094,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
     enforced_file_expires_after: dict | None = None
-    router_settings: dict | None = None
+    router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members

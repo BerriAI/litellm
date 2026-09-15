@@ -1263,20 +1263,16 @@ class ComplexityRouterConfig(BaseModel):
     deployment_affinity: bool = Field(
         default=True,
         description=(
-            "When True and a session_id is resolvable on the request, pin the deployment chosen "
-            "inside each routed model group and reuse it whenever the session returns to that "
-            "group, without pinning which group the session routes to. Independent of "
-            "session_affinity, which pins the model group instead (and always carries this "
-            "deployment pin with it): with session_affinity off, "
-            "every turn is still classified on its own merits while a session that escalates to a "
-            "stronger tier and comes back still lands on the deployment it used before, which is "
-            "what keeps a provider prompt cache warm. Pins are held per model group, so switching "
-            "tiers does not disturb the pin left behind in the previous group. On by default "
-            "because re-shuffling a conversation across deployments of the same model discards "
-            "that cache for no benefit; set False to keep every turn load-balanced across the "
-            "group, which is what a deployment set with tight per-deployment rate limits wants. "
-            "Inert when no session_id is resolvable, since there is nothing to key a pin on, and "
-            "suppressed when plugins are configured, for the same reason session_affinity is."
+            "When True and a client session_id is resolvable, reuse the session's chosen model "
+            "for each classified tier and its deployment within each model group. With "
+            "session_affinity off, every turn is still classified: moving to another tier leaves "
+            "the previous tier's model pin intact for a later return. Pins yield to current "
+            "candidate, context, modality, and availability constraints. Adaptive selection chooses "
+            "the initial model from its eligible pool, then reuses that choice per tier. This "
+            "reduces avoidable provider prompt-cache misses; it does not guarantee cache hits. "
+            "Set False to select models and load-balance deployments on every turn, unless "
+            "session_affinity or user_turn classification requires a pin. Inert without a client "
+            "session_id and suppressed when plugins are configured."
         ),
     )
     session_affinity_ttl_seconds: int = Field(
@@ -1284,7 +1280,7 @@ class ComplexityRouterConfig(BaseModel):
         gt=0,
         description=(
             "TTL for the session affinity pin; refreshed on every cache hit. Bounds both the "
-            "session_affinity model pin and the deployment_affinity deployment pin, so it measures "
+            "session_affinity model pin and the deployment_affinity per-tier model and deployment pins, so it measures "
             "idle time for the session's routing decisions rather than total session length"
         ),
     )

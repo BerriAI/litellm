@@ -94,6 +94,42 @@ class Scenario:
         self.cleanups.callback(self.delete_key, token)
         return token
 
+    def team(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}", **fields})
+        identity: Final = string_value(created["team_id"])
+        self.cleanups.callback(self.delete_team, identity)
+        return identity
+
+    def delete_team(self, identity: str) -> None:
+        self.gateway.post("/team/delete", {"team_ids": [identity]})
+        assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (identity,)) == []
+
+    def project(self, team_id: str, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post(
+            "/project/new", {"team_id": team_id, "project_alias": f"integration-{uuid.uuid4().hex}", **fields}
+        )
+        identity: Final = string_value(created["project_id"])
+        self.cleanups.callback(self.delete_project, identity)
+        return identity
+
+    def delete_project(self, identity: str) -> None:
+        response: Final = self.gateway.request("DELETE", "/project/delete", {"project_ids": [identity]})
+        assert response.status_code == 200, response.text
+        assert read_rows('SELECT project_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (identity,)) == []
+
+    def user(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post(
+            "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}", "auto_create_key": False, **fields}
+        )
+        identity: Final = string_value(created["user_id"])
+        self.cleanups.callback(self.delete_user, identity)
+        return identity
+
+    def delete_user(self, identity: str) -> None:
+        response: Final = self.gateway.request("POST", "/user/delete", {"user_ids": [identity]})
+        assert response.status_code == 200 and response.json() == 1, response.text
+        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (identity,)) == []
+
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
         response: Final = self.gateway.request("GET", "/key/info", params={"key": sha256(token.encode()).hexdigest()})

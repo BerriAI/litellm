@@ -1490,8 +1490,8 @@ export interface paths {
          *
          *     Runs the same check every write path runs (the router's own pydantic model), so a form can
          *     show the backend's exact verdict while the operator is still editing rather than after a
-         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
-         *     naming their own team. Nothing is created, routed, or billed.
+         *     rejected save. Uses the same team opt-in and model-access checks as configuration
+         *     writes for members. Nothing is created, routed, or billed.
          */
         post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
@@ -3421,6 +3421,35 @@ export interface paths {
          *     ```
          */
         post: operations["estimate_cost_cost_estimate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cost/predict-cache": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Predict Cache Cost
+         * @description Compare the next native Anthropic request on two configured deployment IDs.
+         *
+         *     Estimates use provider token counting and recent successful cache telemetry for this key.
+         *     Unknown cache state uses the cold scenario when prices/counts are available. Cache observations
+         *     do not guarantee retention. v0 supports one message-content breakpoint, text and client tools;
+         *     system/tool-only breakpoints, thinking, images, nondefault Anthropic versions, beta headers and
+         *     request transforms are unknown.
+         *     Each provider count consumes one RPM unit and holds concurrency capacity; a comparison uses
+         *     up to four counts. The legacy rate limiter returns unknown without contacting the provider.
+         *     This endpoint does not generate tokens, prewarm caches, choose a model or alter routing.
+         */
+        post: operations["predict_cache_cost_cost_predict_cache_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8464,6 +8493,119 @@ export interface paths {
         get: operations["list_spend_log_users_management_v1_spend_logs_users_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/teams/{team_id}/members/bulk_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Team Members Action
+         * @description Remove up to 500 members from one team in one call. Same authorization as
+         *     `/team/member_delete`: proxy admins, the team's admins, and admins of the team's
+         *     organization. Each member is named by exactly one of `user_id` or `user_email`;
+         *     unknown body fields are a 422 and an unknown team is a 404.
+         *
+         *     `data` holds one result per requested member, in request order. A row is
+         *     `success: false` with an `error` when it names nobody on the team or repeats an
+         *     earlier row. The roster is rewritten once, under the team's advisory lock, so a
+         *     concurrent member_add is never overwritten from a stale read.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
+         *     ```
+         */
+        post: operations["bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/users/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Create Users Route
+         * @description Create up to 500 internal users in one request, optionally adding each one to teams.
+         *
+         *     Every entry in `users` takes the same fields as `/user/new`, with two differences: `auto_create_key`
+         *     defaults to `false` (opt in per user to also get a virtual key back) and `send_invite_email` is not
+         *     supported. Unknown fields are rejected with 422. Rows are validated together (duplicate ids or emails,
+         *     unknown teams, roles the caller may not grant), inserted in one statement, and each referenced team is
+         *     written once for all of its new members.
+         *
+         *     Rows fail independently: a bad row is reported in `data` with `success: false` and an `error`, and the
+         *     other rows still get created. A user that was created but could not be added to one of its teams is
+         *     reported with `success: true`, `teams` listing where they did land, and `error` naming the failed team.
+         *     The whole request is refused with a 403 problem document only if creating the valid rows would exceed
+         *     the license seat limit.
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X POST "http://localhost:4000/management/v1/users/bulk" \
+         *     -H "Content-Type: application/json" \
+         *     -H "Authorization: Bearer sk-1234" \
+         *     -d '{
+         *         "users": [
+         *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
+         *             {"user_email": "b@example.com", "user_role": "internal_user", "auto_create_key": true}
+         *         ]
+         *     }'
+         *     ```
+         *
+         *     Returns `data` (one entry per input row, in order, with `user_id`, `user_email`, `success`, `teams`,
+         *     `key`, `error`) and `meta` with `total_requested`, `created` and `failed`.
+         */
+        post: operations["bulk_create_users_route_management_v1_users_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/users/bulk_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Users Action
+         * @description Delete up to 500 users in one call, taking each out of every team it belongs to.
+         *     Same authorization as `/user/delete`: proxy admins may delete anyone, org admins
+         *     only users inside organizations they administer. Unknown body fields are a 422.
+         *
+         *     `data` holds one result per requested `user_id`, in request order. A row is
+         *     `success: false` with an `error` when the id is unknown, repeated in the request,
+         *     or outside the caller's scope. Rows that pass those checks are deleted together,
+         *     in one transaction, so either all of them go or none does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"user_ids": ["user-1", "user-2"]}'
+         *     ```
+         */
+        post: operations["bulk_delete_users_action_management_v1_users_bulk_delete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24504,6 +24646,172 @@ export interface components {
             budgets: string[];
         };
         /**
+         * BulkDeleteUserRequest
+         * @description Body of `POST /management/v1/users/bulk_delete`.
+         */
+        BulkDeleteUserRequest: {
+            /** User Ids */
+            user_ids: string[];
+        };
+        /**
+         * BulkDeleteUsersResponse
+         * @description `{data: [...]}` with one `UserDeleteResult` per requested user, in request order.
+         */
+        BulkDeleteUsersResponse: {
+            /** Data */
+            data: components["schemas"]["UserDeleteResult"][];
+        };
+        /**
+         * BulkNewUserItem
+         * @description One row of `POST /management/v1/users/bulk`: the `/user/new` body, with keys opt-in and invite emails
+         *     unsupported. Unknown fields are rejected, as on every `/management/v1` request body.
+         */
+        BulkNewUserItem: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Aliases
+             * @default {}
+             */
+            aliases: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: unknown[] | null;
+            /**
+             * Auto Create Key
+             * @default false
+             */
+            auto_create_key: boolean;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
+             * Config
+             * @default {}
+             */
+            config: {
+                [key: string]: unknown;
+            } | null;
+            /** Duration */
+            duration?: string | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Metadata
+             * @default {}
+             */
+            metadata: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organizations */
+            organizations?: string[] | null;
+            /**
+             * Permissions
+             * @default {}
+             */
+            permissions: {
+                [key: string]: unknown;
+            } | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Send Invite Email */
+            send_invite_email?: boolean | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Sso User Id */
+            sso_user_id?: string | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Teams */
+            teams?: string[] | components["schemas"]["NewUserRequestTeam"][] | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+            /** User Role */
+            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** BulkNewUserMeta */
+        BulkNewUserMeta: {
+            /** Created */
+            created: number;
+            /** Failed */
+            failed: number;
+            /** Total Requested */
+            total_requested: number;
+        };
+        /** BulkNewUserRequest */
+        BulkNewUserRequest: {
+            /** Users */
+            users: components["schemas"]["BulkNewUserItem"][];
+        };
+        /**
+         * BulkNewUserResponse
+         * @description `data` holds one result per input row, in input order.
+         */
+        BulkNewUserResponse: {
+            /** Data */
+            data: components["schemas"]["UserCreateResult"][];
+            meta: components["schemas"]["BulkNewUserMeta"];
+        };
+        /**
          * BulkTeamMemberAddRequest
          * @description Request for bulk team member addition
          */
@@ -24539,6 +24847,22 @@ export interface components {
             updated_team?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * BulkTeamMemberDeleteRequest
+         * @description Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`.
+         */
+        BulkTeamMemberDeleteRequest: {
+            /** Members */
+            members: components["schemas"]["TeamMemberRef"][];
+        };
+        /**
+         * BulkTeamMemberDeleteResponse
+         * @description `{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order.
+         */
+        BulkTeamMemberDeleteResponse: {
+            /** Data */
+            data: components["schemas"]["TeamMemberDeleteResult"][];
         };
         /**
          * BulkUpdateKeyRequest
@@ -24702,6 +25026,31 @@ export interface components {
             /** Failed Requests */
             failed_requests: number;
         };
+        /** CacheCostScenario */
+        CacheCostScenario: {
+            /** Input Cost */
+            input_cost: number;
+            tokens: components["schemas"]["CacheTokenBuckets"];
+        };
+        /** CacheEvidence */
+        CacheEvidence: {
+            /**
+             * Confidence
+             * @default observed
+             * @constant
+             */
+            confidence: "observed";
+            /** Expires At */
+            expires_at: number;
+            /** Observed At */
+            observed_at: number;
+            /**
+             * Source
+             * @default provider_usage
+             * @constant
+             */
+            source: "provider_usage";
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -24718,6 +25067,59 @@ export interface components {
             set_cache_response?: string | null;
             /** Status */
             status: string;
+        };
+        /** CachePredictionArm */
+        CachePredictionArm: {
+            /**
+             * Cache State
+             * @default unknown
+             * @enum {string}
+             */
+            cache_state: "warm" | "partial" | "stale" | "unknown" | "disabled";
+            cold?: components["schemas"]["CacheCostScenario"] | null;
+            /** Deployment Id */
+            deployment_id: string;
+            estimate?: components["schemas"]["CacheCostScenario"] | null;
+            evidence?: components["schemas"]["CacheEvidence"] | null;
+            /** Model */
+            model?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Token Count Source */
+            token_count_source?: "anthropic_count_tokens" | null;
+            warm?: components["schemas"]["CacheCostScenario"] | null;
+        };
+        /** CachePredictionRequest */
+        CachePredictionRequest: {
+            /** Candidate Deployment Id */
+            candidate_deployment_id: string;
+            /** Current Deployment Id */
+            current_deployment_id: string;
+            /** Request */
+            request: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        };
+        /** CachePredictionResponse */
+        CachePredictionResponse: {
+            /**
+             * Cache Guarantee
+             * @default false
+             * @constant
+             */
+            cache_guarantee: false;
+            /** Cache Rebuild Penalty */
+            cache_rebuild_penalty: number | null;
+            /**
+             * Pricing Basis
+             * @default input_before_discounts_and_margins
+             * @constant
+             */
+            pricing_basis: "input_before_discounts_and_margins";
+            stay: components["schemas"]["CachePredictionArm"];
+            switch: components["schemas"]["CachePredictionArm"];
+            /** Switch Delta */
+            switch_delta: number | null;
         };
         /** CacheSettingsField */
         CacheSettingsField: {
@@ -24799,6 +25201,29 @@ export interface components {
              * @description Connection status: 'success' or 'failed'
              */
             status: string;
+        };
+        /** CacheTokenBuckets */
+        CacheTokenBuckets: {
+            /**
+             * Cache Creation 1H Input Tokens
+             * @default 0
+             */
+            cache_creation_1h_input_tokens: number;
+            /**
+             * Cache Creation 5M Input Tokens
+             * @default 0
+             */
+            cache_creation_5m_input_tokens: number;
+            /**
+             * Cache Read Input Tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
+             * Uncached Input Tokens
+             * @default 0
+             */
+            uncached_input_tokens: number;
         };
         /**
          * CallTypes
@@ -28421,6 +28846,7 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -28446,7 +28872,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -29799,6 +30225,8 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Batches */
+            input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -29809,6 +30237,8 @@ export interface components {
             input_cost_per_image_above_128k_tokens?: number | null;
             /** Input Cost Per Image Token */
             input_cost_per_image_token?: number | null;
+            /** Input Cost Per Image Token Batches */
+            input_cost_per_image_token_batches?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -29851,6 +30281,8 @@ export interface components {
             input_cost_per_video_per_second_above_8s_interval?: number | null;
             /** Input Cost Per Video Token */
             input_cost_per_video_token?: number | null;
+            /** Input Cost Per Video Token Batches */
+            input_cost_per_video_token_batches?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Keepalive Seconds */
@@ -30948,6 +31380,12 @@ export interface components {
              * @description Enable content moderation to check for harmful content (harassment, hate speech, etc.).
              */
             content_moderation_check?: boolean | null;
+            /**
+             * Contextual Grounding From Messages
+             * @description ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.
+             * @default false
+             */
+            contextual_grounding_from_messages: boolean;
             /**
              * Credentials
              * @description Path to Google Cloud credentials JSON file or JSON string
@@ -32827,9 +33265,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Rpm Limit Type */
@@ -33580,9 +34016,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Secret Manager Settings */
@@ -33683,7 +34117,7 @@ export interface components {
          * PiiEntityType
          * @enum {string}
          */
-        PiiEntityType: "CREDIT_CARD" | "CRYPTO" | "DATE_TIME" | "EMAIL_ADDRESS" | "IBAN_CODE" | "IP_ADDRESS" | "NRP" | "LOCATION" | "PERSON" | "PHONE_NUMBER" | "MEDICAL_LICENSE" | "URL" | "US_BANK_NUMBER" | "US_DRIVER_LICENSE" | "US_ITIN" | "US_PASSPORT" | "US_SSN" | "UK_NHS" | "UK_NINO" | "UK_PASSPORT" | "UK_POSTCODE" | "UK_VEHICLE_REGISTRATION" | "ES_NIF" | "ES_NIE" | "IT_FISCAL_CODE" | "IT_DRIVER_LICENSE" | "IT_VAT_CODE" | "IT_PASSPORT" | "IT_IDENTITY_CARD" | "PL_PESEL" | "SG_NRIC_FIN" | "SG_UEN" | "AU_ABN" | "AU_ACN" | "AU_TFN" | "AU_MEDICARE" | "IN_PAN" | "IN_AADHAAR" | "IN_VEHICLE_REGISTRATION" | "IN_VOTER" | "IN_PASSPORT" | "FI_PERSONAL_IDENTITY_CODE";
+        PiiEntityType: "CREDIT_CARD" | "CRYPTO" | "DATE_TIME" | "EMAIL_ADDRESS" | "IBAN_CODE" | "IP_ADDRESS" | "NRP" | "LOCATION" | "PERSON" | "PHONE_NUMBER" | "MEDICAL_LICENSE" | "URL" | "MAC_ADDRESS" | "UUID" | "US_BANK_NUMBER" | "US_DRIVER_LICENSE" | "US_ITIN" | "US_PASSPORT" | "US_SSN" | "US_MBI" | "US_NPI" | "UK_NHS" | "UK_NINO" | "UK_PASSPORT" | "UK_POSTCODE" | "UK_VEHICLE_REGISTRATION" | "UK_DRIVING_LICENCE" | "ES_NIF" | "ES_NIE" | "ES_PASSPORT" | "IT_FISCAL_CODE" | "IT_DRIVER_LICENSE" | "IT_VAT_CODE" | "IT_PASSPORT" | "IT_IDENTITY_CARD" | "PL_PESEL" | "SG_NRIC_FIN" | "SG_UEN" | "AU_ABN" | "AU_ACN" | "AU_TFN" | "AU_MEDICARE" | "IN_PAN" | "IN_AADHAAR" | "IN_VEHICLE_REGISTRATION" | "IN_VOTER" | "IN_PASSPORT" | "IN_GSTIN" | "FI_PERSONAL_IDENTITY_CODE" | "DE_TAX_ID" | "DE_TAX_NUMBER" | "DE_VAT_ID" | "DE_PASSPORT" | "DE_ID_CARD" | "DE_FUEHRERSCHEIN" | "DE_SOCIAL_SECURITY" | "DE_HEALTH_INSURANCE" | "DE_LANR" | "DE_BSNR" | "DE_KFZ" | "DE_HANDELSREGISTER" | "DE_PLZ" | "KR_RRN" | "KR_FRN" | "KR_PASSPORT" | "KR_DRIVER_LICENSE" | "KR_BRN" | "CA_SIN" | "SE_PERSONNUMMER" | "SE_ORGANISATIONSNUMMER" | "TH_TNIN" | "TR_NATIONAL_ID" | "TR_LICENSE_PLATE" | "NG_NIN" | "NG_VEHICLE_REGISTRATION" | "PH_TIN" | "PH_UMID" | "PH_PASSPORT" | "ZA_ID_NUMBER";
         /**
          * PipelineTestRequest
          * @description Request body for testing a guardrail pipeline with sample messages.
@@ -35277,7 +35711,7 @@ export interface components {
             default_model?: string | null;
             /**
              * Deployment Affinity
-             * @description When True and a session_id is resolvable on the request, pin the deployment chosen inside each routed model group and reuse it whenever the session returns to that group, without pinning which group the session routes to. Independent of session_affinity, which pins the model group instead (and always carries this deployment pin with it): with session_affinity off, every turn is still classified on its own merits while a session that escalates to a stronger tier and comes back still lands on the deployment it used before, which is what keeps a provider prompt cache warm. Pins are held per model group, so switching tiers does not disturb the pin left behind in the previous group. On by default because re-shuffling a conversation across deployments of the same model discards that cache for no benefit; set False to keep every turn load-balanced across the group, which is what a deployment set with tight per-deployment rate limits wants. Inert when no session_id is resolvable, since there is nothing to key a pin on, and suppressed when plugins are configured, for the same reason session_affinity is.
+             * @description When True and a client session_id is resolvable, reuse the session's chosen model for each classified tier and its deployment within each model group. With session_affinity off, every turn is still classified: moving to another tier leaves the previous tier's model pin intact for a later return. Pins yield to current candidate, context, modality, and availability constraints. Adaptive selection chooses the initial model from its eligible pool, then reuses that choice per tier. This reduces avoidable provider prompt-cache misses; it does not guarantee cache hits. Set False to select models and load-balance deployments on every turn, unless session_affinity or user_turn classification requires a pin. Inert without a client session_id and suppressed when plugins are configured.
              * @default true
              */
             deployment_affinity: boolean;
@@ -35423,7 +35857,7 @@ export interface components {
             session_affinity: boolean;
             /**
              * Session Affinity Ttl Seconds
-             * @description TTL for the session affinity pin; refreshed on every cache hit. Bounds both the session_affinity model pin and the deployment_affinity deployment pin, so it measures idle time for the session's routing decisions rather than total session length
+             * @description TTL for the session affinity pin; refreshed on every cache hit. Bounds both the session_affinity model pin and the deployment_affinity per-tier model and deployment pins, so it measures idle time for the session's routing decisions rather than total session length
              * @default 3600
              */
             session_affinity_ttl_seconds: number;
@@ -37294,6 +37728,20 @@ export interface components {
             user_id?: string | null;
         };
         /**
+         * TeamMemberDeleteResult
+         * @description Outcome for one requested member, in request order.
+         */
+        TeamMemberDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
          * TeamMemberInfoResponse
          * @description Response for GET /team/{team_id}/members/me — caller's own membership row.
          */
@@ -37322,6 +37770,16 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMemberRef
+         * @description One member to remove, named by exactly one of `user_id` or `user_email`.
+         */
+        TeamMemberRef: {
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -38068,6 +38526,21 @@ export interface components {
              */
             blocked_users: string[];
         };
+        /** UpdateCredentialItem */
+        UpdateCredentialItem: {
+            /** Credential Info */
+            credential_info: {
+                [key: string]: unknown;
+            };
+            /** Credential Name */
+            credential_name: string;
+            /** Credential Values */
+            credential_values?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Id */
+            model_id?: string | null;
+        };
         /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
@@ -38586,6 +39059,12 @@ export interface components {
             tag_routing_prefix?: string | null;
             /** Timeout */
             timeout?: number | null;
+            /** Weights */
+            weights?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
         };
         /** UpdateSearchToolRequest */
         UpdateSearchToolRequest: {
@@ -38683,9 +39162,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Secret Manager Settings */
@@ -39473,6 +39950,44 @@ export interface components {
             severity: "info" | "warning" | "error";
         };
         /**
+         * UserCreateResult
+         * @description Outcome for one row of `POST /management/v1/users/bulk`. `teams` lists the teams the user was actually
+         *     added to.
+         */
+        UserCreateResult: {
+            /** Error */
+            error?: string | null;
+            /** Key */
+            key?: string | null;
+            /** Success */
+            success: boolean;
+            /** Teams */
+            teams?: string[] | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
+         * UserDeleteResult
+         * @description Outcome for one requested user, in request order. `teams_removed` lists the teams the user left.
+         */
+        UserDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /**
+             * Teams Removed
+             * @default []
+             */
+            teams_removed: string[];
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
+        };
+        /**
          * UserHeaderMapping
          * @description Map an incoming HTTP header to a LiteLLM user role.
          */
@@ -39879,6 +40394,11 @@ export interface components {
             input_cost_per_token?: number | null;
             /** Internal Router Model */
             internal_router_model?: boolean | null;
+            /**
+             * Member Auto Router
+             * @default false
+             */
+            member_auto_router: boolean;
             /** Output Cost Per Character */
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
@@ -40064,6 +40584,8 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Batches */
+            input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -40074,6 +40596,8 @@ export interface components {
             input_cost_per_image_above_128k_tokens?: number | null;
             /** Input Cost Per Image Token */
             input_cost_per_image_token?: number | null;
+            /** Input Cost Per Image Token Batches */
+            input_cost_per_image_token_batches?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -40116,6 +40640,8 @@ export interface components {
             input_cost_per_video_per_second_above_8s_interval?: number | null;
             /** Input Cost Per Video Token */
             input_cost_per_video_token?: number | null;
+            /** Input Cost Per Video Token Batches */
+            input_cost_per_video_token_batches?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Keepalive Seconds */
@@ -45446,6 +45972,39 @@ export interface operations {
             };
         };
     };
+    predict_cache_cost_cost_predict_cache_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CachePredictionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CachePredictionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_credentials_credentials_get: {
         parameters: {
             query?: never;
@@ -45659,7 +46218,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
         responses: {
@@ -51231,6 +51790,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_create_users_route_management_v1_users_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNewUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkNewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_users_action_management_v1_users_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Who the caller is acting for; recorded on the audit log entries this call writes. */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteUsersResponse"];
                 };
             };
             /** @description Validation Error */

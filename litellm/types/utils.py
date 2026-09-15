@@ -283,8 +283,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_video_token: float | None  # for gemini omni models with video input
     input_cost_per_audio_per_second: float | None  # only for vertex ai models
     input_cost_per_video_per_second: float | None  # only for vertex ai models
+    input_cost_per_audio_token_batches: ReadOnly[float | None]
+    input_cost_per_image_token_batches: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
+    input_cost_per_video_token_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
@@ -3585,7 +3588,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_video_per_second_above_128k_tokens: float | None = None
     input_cost_per_video_per_second_above_15s_interval: float | None = None
     input_cost_per_video_per_second_above_8s_interval: float | None = None
+    input_cost_per_audio_token_batches: float | None = None
+    input_cost_per_image_token_batches: float | None = None
     input_cost_per_token_batches: float | None = None
+    input_cost_per_video_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
@@ -3778,6 +3784,7 @@ all_litellm_params = (
         "id",
         "fallbacks",
         "routing_strategy",
+        "_router_weights",
         "azure",
         "headers",
         "model_list",
