@@ -6438,16 +6438,7 @@ class BaseLLMHTTPHandler:
         header auth when available; falls back to the legacy OpenAI-style defaults.
         """
         if use_openai_sdk:
-            trimmed_api_base: Final = api_base.rstrip("/")
-            normalized_api_base: Final = (
-                trimmed_api_base if trimmed_api_base.endswith("/v1") else f"{trimmed_api_base}/v1"
-            )
-            owns_client: Final = not isinstance(client, AsyncOpenAI)
-            openai_client: Final = (
-                client
-                if isinstance(client, AsyncOpenAI)
-                else AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0)
-            )
+            openai_client, owns_client, normalized_api_base = self._realtime_sdk_client(api_base, api_key, client)
             logging_obj.pre_call(
                 input=request_data,
                 api_key="",
@@ -6530,15 +6521,7 @@ class BaseLLMHTTPHandler:
         use_openai_sdk: bool = False,
     ) -> httpx.Response:
         if use_openai_sdk:
-            normalized_api_base = api_base.rstrip("/")
-            if not normalized_api_base.endswith("/v1"):
-                normalized_api_base = f"{normalized_api_base}/v1"
-            owns_client: Final = not isinstance(client, AsyncOpenAI)
-            openai_client: Final = (
-                client
-                if isinstance(client, AsyncOpenAI)
-                else AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0)
-            )
+            openai_client, owns_client, normalized_api_base = self._realtime_sdk_client(api_base, api_key, client)
             logging_obj.pre_call(
                 input=request_data,
                 api_key="",
@@ -6669,14 +6652,8 @@ class BaseLLMHTTPHandler:
         client: object | None,
         translation: bool,
     ) -> httpx.Response:
-        normalized_api_base = api_base.rstrip("/")
-        if not normalized_api_base.endswith("/v1"):
-            normalized_api_base = f"{normalized_api_base}/v1"
-        owns_client: Final = not isinstance(client, AsyncOpenAI)
-        openai_client: Final = (
-            client
-            if isinstance(client, AsyncOpenAI)
-            else AsyncOpenAI(api_key=openai_ephemeral_key, base_url=normalized_api_base, max_retries=0)
+        openai_client, owns_client, normalized_api_base = self._realtime_sdk_client(
+            api_base, openai_ephemeral_key, client
         )
         logging_obj.pre_call(
             input="realtime_sdp_offer",
@@ -6720,6 +6697,14 @@ class BaseLLMHTTPHandler:
         finally:
             if owns_client:
                 await openai_client.close()
+
+    @staticmethod
+    def _realtime_sdk_client(api_base: str, api_key: str, client: object | None) -> tuple[AsyncOpenAI, bool, str]:
+        trimmed_api_base: Final = api_base.rstrip("/")
+        normalized_api_base: Final = trimmed_api_base if trimmed_api_base.endswith("/v1") else f"{trimmed_api_base}/v1"
+        if isinstance(client, AsyncOpenAI):
+            return client, False, normalized_api_base
+        return AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0), True, normalized_api_base
 
     @staticmethod
     def _decoded_realtime_sdk_response(response: httpx.Response) -> httpx.Response:
