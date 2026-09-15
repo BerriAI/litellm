@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
 from litellm.types.caching import CachedEmbedding
+from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -107,6 +108,12 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
+def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
+    """True when the caller must receive a stream, including when a deployment hook downgraded
+    `kwargs["stream"]` to False for the provider call."""
+    return kwargs.get("stream", False) is True or converted_stream_requested(kwargs)
+
+
 def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) -> bool:
     """
     When stream=True, do not run success callbacks at cache-hit time.
@@ -117,7 +124,7 @@ def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) ->
     handlers when the stream finishes; firing them here too would double-count
     spend and callback records.
     """
-    return kwargs.get("stream", False) is True
+    return _stream_replay_requested(kwargs)
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
@@ -823,7 +830,7 @@ class LLMCachingHandler:
         if (call_type == CallTypes.acompletion.value or call_type == CallTypes.completion.value) and isinstance(
             cached_result, dict
         ):
-            if kwargs.get("stream", False) is True:
+            if _stream_replay_requested(kwargs):
                 cached_result = self._convert_cached_stream_response(
                     cached_result=cached_result,
                     call_type=call_type,
@@ -838,7 +845,7 @@ class LLMCachingHandler:
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
         ) and isinstance(cached_result, dict):
-            if kwargs.get("stream", False) is True:
+            if _stream_replay_requested(kwargs):
                 cached_result = self._convert_cached_stream_response(
                     cached_result=cached_result,
                     call_type=call_type,
@@ -893,7 +900,7 @@ class LLMCachingHandler:
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(cached_result, dict):
             use_chat_completion_cache: Final = _is_chat_completion_cached_dict(cached_result)
             if use_chat_completion_cache:
-                if kwargs.get("stream", False) is True:
+                if _stream_replay_requested(kwargs):
                     bridge_call_type: Final = (
                         CallTypes.acompletion.value if call_type == "aresponses" else CallTypes.completion.value
                     )
@@ -921,7 +928,7 @@ class LLMCachingHandler:
                 ):
                     response_obj._hidden_params["cache_hit"] = True
 
-                if kwargs.get("stream", False) is True:
+                if _stream_replay_requested(kwargs):
                     cached_result = CachedResponsesAPIStreamingIterator(
                         response=response_obj,
                         logging_obj=logging_obj,
