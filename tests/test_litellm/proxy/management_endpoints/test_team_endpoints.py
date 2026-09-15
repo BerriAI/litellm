@@ -245,6 +245,55 @@ async def test_validate_team_org_change_same_org_id():
         mock_access_check.assert_not_called()  # Ensure access check wasn't called
 
 
+@pytest.mark.parametrize(
+    "org_max_budget, team_max_budget, expect_blocked",
+    [
+        (0.0, 100.0, True),  # explicit zero org budget must still cap the team's budget
+        (0.0, None, False),  # team has no budget of its own, nothing to compare
+        (None, 100.0, False),  # unlimited (None) org budget never blocks
+        (50.0, 100.0, True),  # a positive org budget is still enforced normally
+    ],
+)
+@pytest.mark.asyncio
+async def test_validate_team_org_change_zero_org_budget_is_enforced(
+    org_max_budget, team_max_budget, expect_blocked
+):
+    """An organization with an explicit max_budget of 0 must still block moving in a
+    team with a larger budget, matching key/team/user zero-budget semantics.
+
+    Regression for LIT-7797: the truthy check `organization.litellm_budget_table.max_budget`
+    treated an explicit 0 the same as no budget table at all, silently skipping this guard.
+    """
+    org_id = "team-org-123"
+    new_org_id = "new-org-456"
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.organization_id = org_id
+    team.models = []
+    team.max_budget = team_max_budget
+    team.tpm_limit = None
+    team.rpm_limit = None
+    team.members_with_roles = []
+
+    organization = MagicMock(spec=LiteLLM_OrganizationTableWithMembers)
+    organization.organization_id = new_org_id
+    organization.models = []
+    organization.litellm_budget_table = (
+        LiteLLM_BudgetTable(max_budget=org_max_budget) if org_max_budget is not None else None
+    )
+    organization.members = []
+
+    mock_router = MagicMock(spec=Router)
+
+    if expect_blocked:
+        with pytest.raises(HTTPException) as exc_info:
+            validate_team_org_change(team=team, organization=organization, llm_router=mock_router)
+        assert exc_info.value.status_code == 403
+    else:
+        result = validate_team_org_change(team=team, organization=organization, llm_router=mock_router)
+        assert result is None or result is True
+
+
 @pytest.mark.asyncio
 async def test_validate_team_org_change_members_in_org():
     """
