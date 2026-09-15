@@ -3795,3 +3795,58 @@ def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_rout
 
     assert route.called
     assert response.content == b"mp3-bytes"
+
+
+FORWARDED_CLIENT_HEADERS: Final = {"x-forwarded-for": "10.0.0.1", "x-amzn-trace-id": "Root=1-lit7694"}
+
+
+def _chat_completion_json() -> Mapping[str, object]:
+    return {
+        "id": "chatcmpl-lit7694",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.4",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def _chat_completion_sse() -> bytes:
+    chunk: Final = {
+        "id": "chatcmpl-lit7694",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5.4",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    }
+    return f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_of_the_body(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=_chat_completion_sse(), headers={"content-type": "text/event-stream"})
+        if stream
+        else httpx.Response(200, json=_chat_completion_json())
+    )
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.4",
+        input="Reply with the single word ok",
+        stream=stream,
+        use_chat_completions_api=True,
+        headers=dict(FORWARDED_CLIENT_HEADERS),
+        api_key="sk-test",
+    )
+    if stream:
+        list(response)
+
+    assert route.called
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert "extra_headers" not in body
+    assert body["model"] == "gpt-5.4"
+    assert {k: request.headers[k] for k in FORWARDED_CLIENT_HEADERS} == FORWARDED_CLIENT_HEADERS

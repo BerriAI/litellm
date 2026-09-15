@@ -11503,6 +11503,12 @@
               "description": "Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
               "title": "Content Moderation Check"
             },
+            "contextual_grounding_from_messages": {
+              "default": false,
+              "description": "ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.",
+              "title": "Contextual Grounding From Messages",
+              "type": "boolean"
+            },
             "credentials": {
               "anyOf": [
                 {
