@@ -1,9 +1,7 @@
 import time
 import uuid
-from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, Final
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -22,18 +20,12 @@ from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     guardrail_initializer_registry,
     initialize_guardrail,
 )
-from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import (
-    agent_365_authorization_servers,
-    agent_365_scopes_supported,
-)
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
     SupportedGuardrailIntegrations,
 )
-from litellm.types.mcp import MCPAuth, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
@@ -307,29 +299,6 @@ class TestAllowFlow:
         assert evaluate_call.json["arguments"] == {"to": "user@example.com", "body": "hello"}
         assert evaluate_call.json["conversationId"] == "sess-123"
         assert evaluate_call.json["agentId"] == "agent-007"
-
-    @pytest.mark.asyncio
-    async def test_evaluate_payload_includes_listed_tool_metadata(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler)
-        schema: Final = {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]}
-        await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_tool_input_schema=schema))
-        assert handler.calls[1].json["tool"] == {
-            "name": "send_email",
-            "description": "Send an email",
-            "inputSchema": schema,
-        }
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("description", "schema"),
-        [(None, None), ("", None), (None, ["not", "a", "schema"]), (42, "type: object")],
-    )
-    async def test_evaluate_payload_omits_missing_or_malformed_tool_metadata(self, description, schema):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler)
-        await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_tool_input_schema=schema))
-        assert handler.calls[1].json["tool"] == {"name": "send_email"}
 
     @pytest.mark.asyncio
     async def test_agent_id_falls_back_to_key_alias(self):
@@ -1039,130 +1008,3 @@ class TestFinalArgumentsEvaluated:
                 )
         assert result["modified_arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
         assert handler.calls[1].json["arguments"] == {"turn": "please [REWRITE_ME_REDACTED] now"}
-
-
-ENTRA_ISSUER: Final = "https://login.microsoftonline.com/tenant-abc/v2.0"
-GATEWAY_SCOPE: Final = "api://gateway-app/access_as_user"
-
-
-def _mcp_server(auth_type: MCPAuth = MCPAuth.none, scopes: list[str] | None = None, **fields: Any) -> MCPServer:
-    return MCPServer(
-        server_id="tools-id",
-        name="tools",
-        server_name="tools",
-        transport=MCPTransport.http,
-        url="https://tools.test/mcp",
-        auth_type=auth_type,
-        scopes=scopes,
-        **fields,
-    )
-
-
-@pytest.fixture
-def registered_guardrail() -> Iterator[Agent365Guardrail]:
-    guardrail: Final = _make_guardrail(FakeHandler([]))
-    litellm.logging_callback_manager.add_litellm_callback(guardrail)
-    try:
-        yield guardrail
-    finally:
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(
-            litellm.callbacks, guardrail, require_self=False
-        )
-
-
-class TestAgent365AuthorizationServers:
-    def test_names_the_guardrail_tenant_for_a_scoped_gateway_signed_in_server(self, registered_guardrail):
-        assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == (ENTRA_ISSUER,)
-        assert agent_365_authorization_servers(
-            _mcp_server(MCPAuth.api_key, scopes=[GATEWAY_SCOPE], auth_value="k"), None
-        ) == (ENTRA_ISSUER,)
-
-    @pytest.mark.parametrize("scopes", [None, []], ids=["unset", "empty"])
-    def test_scopeless_server_signs_in_with_the_gateway_app_scope(self, registered_guardrail, scopes):
-        server: Final = _mcp_server(scopes=scopes)
-        assert agent_365_authorization_servers(server, None) == (ENTRA_ISSUER,)
-        assert agent_365_scopes_supported(server, None) == ("api://client-xyz/access_as_user",)
-
-    def test_admin_scopes_override_the_default_gateway_scope(self, registered_guardrail):
-        assert agent_365_scopes_supported(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == (GATEWAY_SCOPE,)
-
-    def test_no_default_scope_when_no_guardrail_gates_the_server(self):
-        assert agent_365_scopes_supported(_mcp_server(scopes=None), None) == ()
-
-    def test_silent_when_no_guardrail_is_registered(self):
-        assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == ()
-
-    @pytest.mark.parametrize(
-        "server",
-        [
-            _mcp_server(MCPAuth.oauth2, scopes=[GATEWAY_SCOPE]),
-            _mcp_server(MCPAuth.oauth2_token_exchange, scopes=[GATEWAY_SCOPE], token_exchange_endpoint="https://i/t"),
-            _mcp_server(MCPAuth.oauth2_id_jag, scopes=[GATEWAY_SCOPE]),
-            _mcp_server(MCPAuth.true_passthrough, scopes=[GATEWAY_SCOPE]),
-            _mcp_server(MCPAuth.oauth_delegate, scopes=[GATEWAY_SCOPE]),
-            _mcp_server(MCPAuth.none, scopes=[GATEWAY_SCOPE], extra_headers=["Authorization"]),
-        ],
-        ids=["oauth2", "token_exchange", "id_jag", "true_passthrough", "oauth_delegate", "forwards_authorization"],
-    )
-    def test_leaves_servers_whose_own_auth_mode_owns_sign_in_alone(self, registered_guardrail, server):
-        assert agent_365_authorization_servers(server, None) == ()
-
-    @pytest.mark.parametrize("header", ["x-api-key", "API-Key", "apikey"])
-    def test_forwarded_api_key_header_leaves_authorization_to_entra(self, registered_guardrail, header):
-        """An upstream API key rides in its own header, so the caller's ``Authorization`` still carries the
-        Entra assertion and a key-only client must be told where to sign in."""
-        server: Final = _mcp_server(MCPAuth.none, scopes=None, extra_headers=[header])
-
-        assert agent_365_authorization_servers(server, None) == (ENTRA_ISSUER,)
-        assert agent_365_scopes_supported(server, None) == ("api://client-xyz/access_as_user",)
-
-    def test_dedupes_guardrails_sharing_a_tenant(self, registered_guardrail):
-        twin: Final = _make_guardrail(FakeHandler([]))
-        twin.guardrail_name = "agent-365-twin"
-        litellm.logging_callback_manager.add_litellm_callback(twin)
-        try:
-            assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == (ENTRA_ISSUER,)
-        finally:
-            litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                litellm.callbacks, twin, require_self=False
-            )
-
-    def test_key_selected_guardrail_never_advertises_sign_in(self):
-        """The challenge a guarded key would get and the anonymous metadata fetch that follows it must name
-        the same issuer. The anonymous fetch cannot see the key, so neither side advertises Entra."""
-        guardrail: Final = _make_guardrail(FakeHandler([]))
-        guardrail.default_on = False
-        litellm.logging_callback_manager.add_litellm_callback(guardrail)
-        server: Final = _mcp_server(scopes=[GATEWAY_SCOPE])
-        plain_key: Final = UserAPIKeyAuth(api_key="sk-plain", user_id="u-1")
-        guarded_key: Final = UserAPIKeyAuth(
-            api_key="sk-guarded", user_id="u-2", metadata={"guardrails": ["agent-365-guard"]}
-        )
-        try:
-            with patch(  # test-quality-ok: key-selected guardrails read the proxy server premium global, no injection seam
-                "litellm.proxy.proxy_server.premium_user", True
-            ):
-                assert agent_365_authorization_servers(server, plain_key) == ()
-                assert agent_365_authorization_servers(server, guarded_key) == ()
-                assert agent_365_authorization_servers(server, None) == ()
-                assert agent_365_scopes_supported(_mcp_server(scopes=None), None) == ()
-        finally:
-            litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                litellm.callbacks, guardrail, require_self=False
-            )
-
-    @pytest.mark.parametrize(
-        "metadata",
-        [{"opted_out_global_guardrails": ["agent-365-guard"]}, {"disable_global_guardrails": True}],
-        ids=["opted-out", "globals-disabled"],
-    )
-    def test_key_opted_out_of_the_default_on_guardrail_is_not_challenged(self, registered_guardrail, metadata):
-        server: Final = _mcp_server(scopes=[GATEWAY_SCOPE])
-        opted_out: Final = UserAPIKeyAuth(api_key="sk-out", user_id="u-3", metadata=metadata)
-        team_opted_out: Final = UserAPIKeyAuth(api_key="sk-team", user_id="u-4", team_metadata=metadata)
-
-        assert agent_365_authorization_servers(server, opted_out) == ()
-        assert agent_365_authorization_servers(server, team_opted_out) == ()
-        assert agent_365_authorization_servers(server, UserAPIKeyAuth(api_key="sk-in", user_id="u-5")) == (
-            ENTRA_ISSUER,
-        )
