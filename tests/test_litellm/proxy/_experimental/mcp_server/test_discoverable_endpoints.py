@@ -11428,6 +11428,7 @@ def _oauth_identity_jwt(
         {
             "sub": "not-the-configured-user-id",
             "identity": {"user_id": owner},
+            "email": "owner@example.test",
             "iss": issuer,
             "aud": audience,
             "exp": int(time.time()) + expires_in,
@@ -11649,3 +11650,38 @@ async def test_oauth_jwt_uses_rbac_user_object_id(jwt_oauth_identity: tuple["JWT
     ]
     request: Final = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"})
     assert await _extract_user_id_from_request(request) == "jwt-owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", ["sso", "email"])
+@pytest.mark.parametrize("inactive", [False, True])
+async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+    inactive: bool,
+) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+
+    handler, signing_key = jwt_oauth_identity
+    external_id: Final = f"external-{identity}-{inactive}"
+    handler.litellm_jwtauth.user_email_jwt_field = "email"
+    owner: Final = LiteLLM_UserTable(
+        user_id="canonical-oauth-owner",
+        user_email="owner@example.test",
+        metadata={"scim_active": not inactive},
+        organization_memberships=[],
+    )
+    database: Final = MagicMock()
+    table: Final = database.db.litellm_usertable
+    table.find_unique = AsyncMock(side_effect=[None, owner if identity == "sso" else None])
+    table.find_first = AsyncMock(return_value=owner)
+    table.update = AsyncMock(return_value=owner)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    request: Final = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, owner=external_id)}"})
+    assert await _extract_user_id_from_request(request) == (None if inactive else "canonical-oauth-owner")
+    assert table.find_unique.await_count == 2
+    if identity == "email":
+        table.find_first.assert_awaited_once()
