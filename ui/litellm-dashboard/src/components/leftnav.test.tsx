@@ -108,6 +108,30 @@ const placementsOf = (page: string): string[] =>
     ),
   ]);
 
+const teamAdminAuthorization = {
+  userId: "team-admin-user-id",
+  accessToken: "test-access-token",
+  userRole: "internal",
+  isViewOnly: false,
+  token: "test-token",
+  userEmail: "teamadmin@example.com",
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
+const teamMemberAuthorization = {
+  userId: "team-member-user-id",
+  accessToken: "test-access-token",
+  userRole: "internal",
+  isViewOnly: false,
+  token: "test-token",
+  userEmail: "teamuser@example.com",
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
     collapsed: false,
@@ -527,17 +551,7 @@ describe("Sidebar (leftnav)", () => {
   });
 
   it("shows Projects to an internal user who administers a team", () => {
-    mockUseAuthorized.mockReturnValue({
-      userId: "team-admin-user-id",
-      accessToken: "test-access-token",
-      userRole: "internal",
-      isViewOnly: false,
-      token: "test-token",
-      userEmail: "teamadmin@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    });
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
     mockUseTeams.mockReturnValue({
       data: [
         {
@@ -554,17 +568,7 @@ describe("Sidebar (leftnav)", () => {
   });
 
   it("hides Projects when the feature flag is disabled for a team admin", () => {
-    mockUseAuthorized.mockReturnValue({
-      userId: "team-admin-user-id",
-      accessToken: "test-access-token",
-      userRole: "internal",
-      isViewOnly: false,
-      token: "test-token",
-      userEmail: "teamadmin@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    });
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
     mockUseTeams.mockReturnValue({
       data: [
         {
@@ -581,17 +585,7 @@ describe("Sidebar (leftnav)", () => {
   });
 
   it("hides Projects from an internal user who is not a team admin", () => {
-    mockUseAuthorized.mockReturnValue({
-      userId: "team-member-user-id",
-      accessToken: "test-access-token",
-      userRole: "internal",
-      isViewOnly: false,
-      token: "test-token",
-      userEmail: "teamuser@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    });
+    mockUseAuthorized.mockReturnValue(teamMemberAuthorization);
 
     renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
 
@@ -599,17 +593,7 @@ describe("Sidebar (leftnav)", () => {
   });
 
   it("applies the internal-user page allowlist to Projects for team admins", () => {
-    mockUseAuthorized.mockReturnValue({
-      userId: "team-admin-user-id",
-      accessToken: "test-access-token",
-      userRole: "internal",
-      isViewOnly: false,
-      token: "test-token",
-      userEmail: "teamadmin@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    });
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
     mockUseTeams.mockReturnValue({
       data: [
         {
