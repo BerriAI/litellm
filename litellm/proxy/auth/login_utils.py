@@ -411,7 +411,9 @@ async def authenticate_user(
                 user_id=user_id,
                 key=key,
                 user_email=user_email,
-                user_role=user_role.value if user_role is not None else LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+                user_role=user_role.value
+                if isinstance(user_role, LitellmUserRoles)
+                else (user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value),
                 login_method="username_password",
                 password_reset_required=password_reset_required,
             )
