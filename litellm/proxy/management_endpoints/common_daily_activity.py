@@ -1350,11 +1350,12 @@ async def get_daily_activity_aggregated(
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
-    Runs two GROUPING SETS queries in parallel: a key-free one for totals and the
-    model/provider/mcp/endpoint rollups (row count independent of key cardinality)
-    and a bounded one for the per-key rollups of the top USAGE_TOP_API_KEYS_LIMIT
-    keys by spend. breakdown.api_keys and every api_key_breakdown therefore list at
-    most that many keys, while the totals and the key-free rollups cover every key.
+    Runs one GROUPING SETS statement with two UNION ALL arms: a key-free one for totals
+    and the model/provider/mcp/endpoint rollups (row count independent of key
+    cardinality) and a bounded one for the per-key rollups of the top
+    USAGE_TOP_API_KEYS_LIMIT keys by spend. breakdown.api_keys and every
+    api_key_breakdown therefore list at most that many keys, while the totals and the
+    key-free rollups cover every key.
 
     include_entity_breakdown runs a small companion rollup query and folds
     `breakdown.entities` onto the response, as entity-scoped views like Team Usage need.
