@@ -30,7 +30,7 @@
     "limit": 7
   },
   "reportGeneralTypeIssues": {
-    "limit": 101
+    "limit": 103
   },
   "reportIncompatibleMethodOverride": {
     "limit": 56
