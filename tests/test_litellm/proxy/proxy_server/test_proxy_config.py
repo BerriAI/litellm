@@ -3470,6 +3470,30 @@ async def test_ProxyConfig__update_general_settings_cleared_db_max_batch_file_si
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_allowed_file_extensions(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"allowed_file_extensions": [".jsonl"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("allowed_file_extensions") == [".jsonl"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_allowed_file_extensions_wins_over_db(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allowed_file_extensions": [".pdf"]},
+    )
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"allowed_file_extensions"}
+    await pc._update_general_settings({"allowed_file_extensions": [".jsonl"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("allowed_file_extensions") == [".pdf"]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_none_input_noop():
     pc = ProxyConfig()
     # None input returns early.
