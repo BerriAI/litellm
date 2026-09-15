@@ -60,11 +60,11 @@ class ZAIChatConfig(OpenAIGPTConfig):
 
     def _map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict[str, object],
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: dict return contract of OpenAIGPTConfig
         supported_openai_params: Final = frozenset(self.get_supported_openai_params(model))
         reasoning_params: Final = MappingProxyType(
             {k: v for k, v in non_default_params.items() if k in ZAI_REASONING_PARAMS and k in supported_openai_params}
