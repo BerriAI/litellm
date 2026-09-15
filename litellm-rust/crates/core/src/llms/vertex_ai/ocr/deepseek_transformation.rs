@@ -2,6 +2,9 @@ mod types {
     use serde::{Deserialize, Serialize};
     use serde_json::{Map, Value};
 
+    use super::DeepSeekAi;
+    use crate::providers::model::ProviderModel;
+
     #[derive(Clone, Debug, Default, Serialize, Deserialize)]
     pub(crate) struct DeepSeekOcrParams {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -27,7 +30,7 @@ mod types {
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub(crate) struct DeepSeekOcrRequest {
-        pub model: String,
+        pub model: ProviderModel<DeepSeekAi>,
         pub messages: Vec<DeepSeekOcrMessage>,
         #[serde(flatten)]
         pub params: DeepSeekOcrParams,
@@ -105,13 +108,15 @@ mod mapping {
     use serde::de::IntoDeserializer;
     use serde_json::{Value, json};
 
+    use super::DeepSeekAi;
     use super::types::*;
     use crate::ocr::error::{OcrRequestError, OcrResponseError};
     use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument};
+    use crate::providers::model::ProviderModel;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     pub(crate) fn transform_ocr_request(
-        provider_model: &str,
+        provider_model: ProviderModel<DeepSeekAi>,
         document: OcrDocument,
         params: &DeepSeekOcrParams,
     ) -> Result<DeepSeekOcrRequest, OcrRequestError> {
@@ -123,7 +128,7 @@ mod mapping {
             extra_fields: serde_json::Map::new(),
         };
         Ok(DeepSeekOcrRequest {
-            model: provider_model.to_string(),
+            model: provider_model,
             messages: vec![DeepSeekOcrMessage {
                 role: UserRole::User,
                 content: vec![content],
@@ -220,11 +225,19 @@ use crate::ocr::prepare::{
     _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
 };
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
+use crate::providers::model::{ModelNamespace, ProviderModel, RoutedModel};
 use crate::url_utils::ApiUrl;
 use litellm_auth_gcp::{self as vertex, VertexConfig};
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_NAMESPACE: &str = "deepseek-ai";
 const DEFAULT_LOCATION: &str = "us-central1";
+
+#[derive(Clone, Debug)]
+pub(crate) struct DeepSeekAi;
+
+impl ModelNamespace for DeepSeekAi {
+    const NAME: &'static str = MODEL_NAMESPACE;
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct VertexAIDeepSeekOCRConfig;
@@ -270,7 +283,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         )?;
         let document = request.document.clone();
         let body =
-            mapping::transform_ocr_request(&provider_model(&request.model), document, &params)?;
+            mapping::transform_ocr_request(provider_model(&request.model)?, document, &params)?;
         transform_request_body(
             client,
             request,
@@ -292,12 +305,12 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
     }
 }
 
-fn provider_model(model: &str) -> String {
-    if model.starts_with(&format!("{MODEL_NAMESPACE}/")) {
-        model.to_string()
-    } else {
-        format!("{MODEL_NAMESPACE}/{model}")
-    }
+pub(crate) fn provider_model(model: &str) -> Result<ProviderModel<DeepSeekAi>, OcrRequestError> {
+    RoutedModel::new(model)
+        .and_then(RoutedModel::into_provider::<DeepSeekAi>)
+        .map_err(|_| OcrRequestError::RequestField {
+            path: "model".into(),
+        })
 }
 
 fn get_complete_url(
@@ -339,11 +352,13 @@ mod tests {
     #[test]
     fn config_owns_model_namespace_and_endpoint() {
         assert_eq!(
-            provider_model("deepseek-ocr-maas"),
+            provider_model("deepseek-ocr-maas").unwrap().as_str(),
             "deepseek-ai/deepseek-ocr-maas"
         );
         assert_eq!(
-            provider_model("deepseek-ai/deepseek-ocr-maas"),
+            provider_model("deepseek-ai/deepseek-ocr-maas")
+                .unwrap()
+                .as_str(),
             "deepseek-ai/deepseek-ocr-maas"
         );
         assert_eq!(

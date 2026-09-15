@@ -3,4 +3,5 @@ pub mod azure_ai;
 #[cfg(feature = "bedrock-auth")]
 pub mod bedrock;
 pub mod custom_llm_provider;
+pub(crate) mod model;
 pub mod openai;
