@@ -11066,7 +11066,7 @@ async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypa
     ]
 
 
-def _failing_group_with_healthy_fallback_router(num_retries):
+def _failing_group_with_healthy_fallback_router(num_retries: int) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
@@ -11094,8 +11094,8 @@ def _failing_group_with_healthy_fallback_router(num_retries):
     ids=["cap-spent-before-the-hop", "cap-not-reached-by-the-hop", "planted-negative-count-does-not-lift-the-cap"],
 )
 async def test_num_retries_per_request_counts_retries_across_fallback_hops(
-    monkeypatch, cap, planted_count, hop_refused
-):
+    monkeypatch: pytest.MonkeyPatch, cap: int, planted_count: int | None, hop_refused: bool
+) -> None:
     """num_retries_per_request caps the retries of one request, fallback hops included. Each hop starts a
     fresh per-hop attempted_retries at zero, so a cap read from that counter let every hop retry from zero
     and a request could spend far more retries than the cap allows. A caller who plants a negative count

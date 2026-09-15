@@ -11,7 +11,7 @@ import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
@@ -630,7 +630,7 @@ def test_deployment_callback_respects_cooldown_time(model_list):
 
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
-def test_log_retry(model_list, metadata_key):
+def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> None:
     """log_retry appends one flat record per failed attempt, copies neither the request kwargs nor the
     request metadata into it, counts every failed attempt of the request independently of the
     per-hop attempted_retries, and never trusts a negative count planted before the first failure"""
