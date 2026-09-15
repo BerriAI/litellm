@@ -1,9 +1,10 @@
-use litellm_core::Error;
 use std::future::Future;
 
-use litellm_core::ocr::wire::{OcrWireRequest, decode_request};
 use pyo3::prelude::*;
 use serde_json::Value;
+
+use litellm_core::Error;
+use litellm_core::ocr::wire::{OcrWireRequest, decode_request, validate_document_url};
 
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
@@ -28,6 +29,9 @@ fn prepare_ocr(
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
         .unwrap_or_default();
 
+    validate_document_url(&document)
+        .map_err(Error::from)
+        .map_err(ocr_error_to_pyerr)?;
     crate::errors::admit(litellm_core::ocr::admit_value(
         &options.model,
         options.custom_llm_provider.as_deref(),

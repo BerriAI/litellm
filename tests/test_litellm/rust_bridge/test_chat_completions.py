@@ -113,13 +113,19 @@ def test_decline_has_no_logging_effect_and_runs_one_fallback(monkeypatch: pytest
     assert events == []
 
 
-def test_streaming_uses_python_without_loading_native() -> None:
-    native_call: Final = _RecordingCall()
+def test_streaming_decline_comes_from_the_native_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_native_bridge(monkeypatch)
+    native_call: Final = _RecordingCall(error=_FakeDeclined("streaming"))
     bridge.set_rust_chat_completions(chat_completions=native_call)
     kwargs: Final = _call_kwargs(ModelResponse())
     kwargs["stream"] = True
     assert bridge.chat_completions(**kwargs) == "python"
-    assert native_call.calls == []
+    assert len(native_call.calls) == 1
+    assert native_call.calls[0]["host_facts"] == {
+        "stream": True,
+        "anthropic_user_id": False,
+        "bedrock_metadata_owned": False,
+    }
 
 
 def test_host_facts_reach_the_single_native_call(monkeypatch: pytest.MonkeyPatch) -> None:

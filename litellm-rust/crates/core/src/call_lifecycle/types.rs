@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallLifecycleContext {
     pub call_type: String,
@@ -28,48 +26,17 @@ pub trait CallLifecycleRequest {
     fn lifecycle_context(&self) -> CallLifecycleContext;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CallLifecyclePhase {
-    PreCall,
-    DuringCall,
-    ProviderCall,
-    SuccessCallback,
-    FailureCallback,
-}
-
-impl CallLifecyclePhase {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::PreCall => "pre_call",
-            Self::DuringCall => "during_call",
-            Self::ProviderCall => "provider_call",
-            Self::SuccessCallback => "success_callback",
-            Self::FailureCallback => "failure_callback",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CallLifecyclePhaseTiming {
-    pub phase: CallLifecyclePhase,
-    pub start_time: f64,
-    pub end_time: f64,
-    pub duration: Duration,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallLifecycleTiming {
     pub start_time: f64,
     pub end_time: f64,
-    pub phases: Vec<CallLifecyclePhaseTiming>,
 }
 
 impl CallLifecycleTiming {
-    pub fn new(start_time: f64, end_time: f64, phases: Vec<CallLifecyclePhaseTiming>) -> Self {
+    pub fn new(start_time: f64, end_time: f64) -> Self {
         Self {
             start_time,
             end_time,
-            phases,
         }
     }
 }

@@ -1,7 +1,10 @@
 mod bindings;
+pub(crate) mod completed;
+pub(crate) mod contract;
 mod dispatch;
 mod handle;
 mod preparation;
+pub(crate) mod request;
 mod runner;
 mod state;
 

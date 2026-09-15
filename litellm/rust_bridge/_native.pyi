@@ -1,11 +1,52 @@
 from asyncio import Future
 from collections.abc import Callable, Coroutine
-from typing import Literal, final, overload
+from typing import Literal, Protocol, TypedDict, final, overload
 
-from typing_extensions import Never
+from typing_extensions import Never, NotRequired, Required
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.lifecycle import Await, Complete
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
+
+class _CommonLifecycleRequest(TypedDict):
+    model: Required[str]
+    api_key: NotRequired[str | None]
+    api_base: NotRequired[str | None]
+    custom_llm_provider: NotRequired[str | None]
+    extra_headers: NotRequired[object]
+    timeout: NotRequired[object]
+
+class _MessagesLifecycleRequest(_CommonLifecycleRequest):
+    body: Required[object]
+    has_agentic_hook: NotRequired[bool | None]
+
+class _ChatCompletionsLifecycleRequest(_CommonLifecycleRequest):
+    messages: Required[object]
+    optional_params: NotRequired[object]
+    host_facts: NotRequired[object]
+
+class _TranscriptionLifecycleRequest(_CommonLifecycleRequest):
+    audio: Required[object]
+    optional_params: NotRequired[object]
+
+class _CompletedLifecycleHost(Protocol):
+    def invoke(
+        self,
+        operation: Literal[
+            "post_process",
+            "cache_response",
+            "cached_response",
+            "project",
+            "before_request",
+            "after_response",
+            "response",
+            "map_failure",
+        ],
+        payload: object,
+        request: object,
+        kwargs: dict[str, object],
+        logger: object,
+    ) -> Await | Complete: ...
 
 class RustBridgeDeclined(Exception): ...
 class RustBridgeUnavailable(Exception): ...
@@ -28,15 +69,54 @@ def _ocr_lifecycle(
     asynchronous: Literal[True],
     host: object,
 ) -> Coroutine[object, object, OCRResponse]: ...
+@overload
 def _messages_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
+    request: _MessagesLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[False],
+    host: _CompletedLifecycleHost,
+) -> object: ...
+@overload
+def _messages_lifecycle(
+    request: _MessagesLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[True],
+    host: _CompletedLifecycleHost,
+) -> Coroutine[object, object, object]: ...
+@overload
 def _chat_completions_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
+    request: _ChatCompletionsLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[False],
+    host: _CompletedLifecycleHost,
+) -> object: ...
+@overload
+def _chat_completions_lifecycle(
+    request: _ChatCompletionsLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[True],
+    host: _CompletedLifecycleHost,
+) -> Coroutine[object, object, object]: ...
+@overload
 def _transcription_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
+    request: _TranscriptionLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[False],
+    host: _CompletedLifecycleHost,
+) -> object: ...
+@overload
+def _transcription_lifecycle(
+    request: _TranscriptionLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: Literal[True],
+    host: _CompletedLifecycleHost,
+) -> Coroutine[object, object, object]: ...
 def _embeddings_lifecycle(
     request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
 ) -> Never: ...
@@ -181,11 +261,6 @@ def gil_stats() -> dict[str, int]: ...
 
 __all__ = [
     "_OCR_MAX_FILE_BYTES",
-    "ResponsesWebSocketConnection",
-    "RustBridgeDeclined",
-    "RustBridgeUnavailable",
-    "RustHostCallbackError",
-    "RustUpstreamError",
     "_chat_completions_lifecycle",
     "_embeddings_lifecycle",
     "_image_edit_lifecycle",
@@ -200,6 +275,11 @@ __all__ = [
     "_responses_lifecycle",
     "_speech_lifecycle",
     "_transcription_lifecycle",
+    "ResponsesWebSocketConnection",
+    "RustBridgeDeclined",
+    "RustBridgeUnavailable",
+    "RustHostCallbackError",
+    "RustUpstreamError",
     "achat_completions",
     "amessages",
     "aocr",

@@ -6,6 +6,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
 use super::bindings::PythonLogger;
+use super::contract::CallbackPhase;
 use super::state::PythonCallState;
 
 impl PythonCallState {
@@ -32,7 +33,7 @@ impl PythonCallState {
             state: self,
             logger,
         };
-        match success_dispatch(self.asynchronous, self.internal, &facts)? {
+        match success_dispatch(self.mode.is_async(), self.internal, &facts)? {
             SuccessDispatch::SyncBookkeeping => {
                 logger.success_bookkeeping(py, &self.response, &self.start, &self.end, false)
             }
@@ -62,7 +63,7 @@ impl PythonCallState {
         py: Python<'_>,
         asynchronous: bool,
     ) -> PyResult<Option<Py<PyAny>>> {
-        if !failure_dispatch(self.asynchronous, self.internal, self.logger.is_some()) {
+        if !failure_dispatch(self.mode.is_async(), self.internal, self.logger.is_some()) {
             return Ok(None);
         }
         let Some(error) = &self.error else {
@@ -95,9 +96,9 @@ impl SuccessFacts for PythonSuccessFacts<'_, '_> {
         self.logger.callbacks_needed(
             self.py,
             if asynchronous {
-                "async_success"
+                CallbackPhase::AsyncSuccess
             } else {
-                "sync_success"
+                CallbackPhase::SyncSuccess
             },
         )
     }

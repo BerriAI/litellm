@@ -3,6 +3,8 @@ use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
+use super::contract::CallbackPhase;
+
 #[derive(FromPyObject)]
 pub(crate) struct PythonLogger(Py<PyAny>);
 
@@ -19,7 +21,7 @@ impl PythonLogger {
         visit.call(&self.0)
     }
 
-    pub(crate) fn callbacks_needed(&self, py: Python<'_>, phase: &str) -> PyResult<bool> {
+    pub(crate) fn callbacks_needed(&self, py: Python<'_>, phase: CallbackPhase) -> PyResult<bool> {
         if !self
             .object(py)
             .getattr("_native_callback_fast_path")
@@ -29,7 +31,7 @@ impl PythonLogger {
         }
         py.import("litellm.rust_bridge.lifecycle")?
             .getattr("callbacks_needed")?
-            .call1((self.object(py), phase))?
+            .call1((self.object(py), phase.as_str()))?
             .extract()
     }
 
@@ -68,7 +70,7 @@ impl PythonLogger {
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
-        if !self.callbacks_needed(py, "sync_success_async")? {
+        if !self.callbacks_needed(py, CallbackPhase::SyncSuccessForAsyncCall)? {
             return Ok(());
         }
         self.object(py).call_method1(
@@ -89,9 +91,9 @@ impl PythonLogger {
         if !self.callbacks_needed(
             py,
             if asynchronous {
-                "async_failure"
+                CallbackPhase::AsyncFailure
             } else {
-                "sync_failure"
+                CallbackPhase::SyncFailure
             },
         )? {
             py.import("litellm.rust_bridge.lifecycle")?
@@ -129,7 +131,7 @@ impl PythonLogger {
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
-        if !self.callbacks_needed(py, "sync_success")? {
+        if !self.callbacks_needed(py, CallbackPhase::SyncSuccess)? {
             return self.success_bookkeeping(py, response, start, end, false);
         }
         let context = py.import("contextvars")?.call_method0("copy_context")?;
@@ -155,7 +157,7 @@ impl PythonLogger {
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
-        if !self.callbacks_needed(py, "async_success")? {
+        if !self.callbacks_needed(py, CallbackPhase::AsyncSuccess)? {
             return self.success_bookkeeping(py, response, start, end, true);
         }
         let context = py.import("contextvars")?.call_method0("copy_context")?;

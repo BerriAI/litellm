@@ -2,13 +2,15 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
-use litellm_core::call_lifecycle::host::{
-    HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
-};
+use tokio::sync::Mutex;
+
 use pyo3::exceptions::{PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
-use tokio::sync::Mutex;
+
+use litellm_core::call_lifecycle::host::{
+    HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
+};
 
 use super::handle::{Execution, ExecutionBody, ExecutionStep};
 use super::state::{PythonCallState, missing_state, now};
@@ -32,6 +34,20 @@ pub(crate) trait PythonRoute: Send + Sync {
         py: Python<'_>,
         operation: <Self::Call as NativeCall>::Operation,
     ) -> PyResult<<Self::Call as NativeCall>::Result>;
+    fn invoke_step(
+        &mut self,
+        py: Python<'_>,
+        operation: <Self::Call as NativeCall>::Operation,
+    ) -> PyResult<HostStep<<Self::Call as NativeCall>::Result, Py<PyAny>>> {
+        self.invoke(py, operation).map(HostStep::Ready)
+    }
+    fn accept_route(
+        &mut self,
+        _py: Python<'_>,
+        _value: Py<PyAny>,
+    ) -> PyResult<<Self::Call as NativeCall>::Result> {
+        Err(missing_state())
+    }
     fn cleanup(&mut self);
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
@@ -48,6 +64,7 @@ struct NativeCallState<C: NativeCall> {
 enum PendingOperation {
     Native,
     Host(HostPhase),
+    Route,
 }
 
 struct PythonLifecycle<R: PythonRoute> {
@@ -62,7 +79,7 @@ pub(crate) fn run_call<R: PythonRoute + 'static>(
     call: R::Call,
     route: R,
 ) -> PyResult<Py<PyAny>> {
-    let asynchronous = route.state().asynchronous;
+    let asynchronous = route.state().mode.is_async();
     let mut lifecycle = PythonLifecycle {
         route,
         call: Some(Arc::new(Mutex::new(NativeCallState { call, result: None }))),
@@ -102,7 +119,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
             call.result = Some(result);
             Ok(())
         };
-        if self.route.state().asynchronous {
+        if self.route.state().mode.is_async() {
             let mut future = Box::pin(future);
             if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
                 return Ok(HostStep::Ready(self.take_native_result()?));
@@ -182,6 +199,11 @@ impl<R: PythonRoute> PythonLifecycle<R> {
                 };
                 self.resume_core(py, Some(result))?
             }
+            (Some(PendingOperation::Route), Some(result)) => {
+                let result = result.and_then(|value| self.route.accept_route(py, value));
+                let result = result.map_err(|error| self.host_failure(py, error, None));
+                self.resume_core(py, Some(result))?
+            }
             _ => return Err(missing_state()),
         };
         loop {
@@ -215,7 +237,14 @@ impl<R: PythonRoute> PythonLifecycle<R> {
                         .map(|()| R::lifecycle_result()),
                     Err(error) => Err(error),
                 },
-                None => self.route.invoke(py, operation),
+                None => match self.route.invoke_step(py, operation) {
+                    Ok(HostStep::Ready(result)) => Ok(result),
+                    Ok(HostStep::Suspend(awaitable)) => {
+                        self.pending = Some(PendingOperation::Route);
+                        return Ok(ExecutionStep::Await(awaitable));
+                    }
+                    Err(error) => Err(error),
+                },
             };
             let result = match result {
                 Ok(result) => Ok(result),

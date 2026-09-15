@@ -490,7 +490,9 @@ async fn direct_native_host_drives_the_same_state_machine() {
             "DuringCall",
             "PostCall",
             "ConstructResponse",
+            "PostProcess",
             "DeploymentPostCall",
+            "CacheStore",
             "Finalize",
             "Success",
         ]

@@ -11,16 +11,17 @@ use crate::Error;
 mod client;
 mod common_utils;
 mod handler;
+pub mod lifecycle;
 mod prepare;
 pub mod transformation;
 pub mod types;
 
-use handler::{execute_messages_provider_call, execute_messages_provider_stream};
+use handler::execute_messages_provider_stream;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
-    execute_messages_provider_call(request).await
+    crate::call_lifecycle::provider::run_completed::<lifecycle::MessagesRoute>(request.into()).await
 }
 
 pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {

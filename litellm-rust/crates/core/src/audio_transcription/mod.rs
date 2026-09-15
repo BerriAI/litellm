@@ -1,6 +1,7 @@
 use crate::Error;
 mod client;
 mod handler;
+pub mod lifecycle;
 mod prepare;
 pub mod transformation;
 pub mod types;
@@ -13,8 +14,10 @@ pub use types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
-    execute_audio_transcription_provider_call(prepare_audio_transcription_provider_call(request)?)
-        .await
+    crate::call_lifecycle::provider::run_completed::<lifecycle::AudioTranscriptionRoute>(
+        request.into(),
+    )
+    .await
 }
 
 pub fn admit(

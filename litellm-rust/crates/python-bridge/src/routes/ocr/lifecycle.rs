@@ -11,6 +11,7 @@ use litellm_python_interop::{
 use super::callbacks;
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::project::{ProjectedOcrFields, admitted_call, project_request};
+use crate::lifecycle::contract::{CallMode, CallbackPhase, PythonCallType};
 use crate::lifecycle::{
     OperationClass, PythonCallState, PythonRoute, missing_state, now, run_call,
 };
@@ -99,7 +100,11 @@ impl PythonOcrHost {
             &projected.fields.secret_fields,
             &request.url,
         )?;
-        if !self.state.logger()?.callbacks_needed(py, "payload")? {
+        if !self
+            .state
+            .logger()?
+            .callbacks_needed(py, CallbackPhase::Payload)?
+        {
             self.state
                 .logger()?
                 .object(py)
@@ -147,7 +152,7 @@ impl PythonOcrHost {
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
         let logger = self.state.logger()?;
-        if logger.callbacks_needed(py, "payload")? {
+        if logger.callbacks_needed(py, CallbackPhase::Payload)? {
             let projected = self.projected()?;
             logger.post_ocr(
                 py,
@@ -301,8 +306,12 @@ fn _ocr_lifecycle(
             py,
             args.unbind(),
             kwargs.copy()?.unbind(),
-            asynchronous,
-            if asynchronous { "aocr" } else { "ocr" },
+            CallMode::from_async(asynchronous),
+            if asynchronous {
+                PythonCallType::AsyncOcr
+            } else {
+                PythonCallType::Ocr
+            },
         )?,
         adapter: host.unbind(),
         data: OcrHostData::Unprojected {

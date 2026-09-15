@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
 use super::bindings::{self, DeploymentHooks, PythonLogger};
+use super::contract::{CallMode, PythonCallType};
 use super::preparation;
 
 pub(crate) fn missing_state() -> PyErr {
@@ -19,9 +20,9 @@ pub(crate) struct PythonCallState {
     pub end: Option<Py<PyAny>>,
     pub response: Option<Py<PyAny>>,
     pub error: Option<Py<PyBaseException>>,
-    pub asynchronous: bool,
+    pub mode: CallMode,
     pub internal: bool,
-    pub call_type: &'static str,
+    pub call_type: PythonCallType,
 }
 
 pub(crate) fn now(py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -46,7 +47,7 @@ impl PythonCallState {
                 return Ok(HostStep::Suspend(DeploymentHooks::before_call(
                     py,
                     &self.kwargs,
-                    self.call_type,
+                    self.call_type.as_str(),
                 )?));
             }
             HostPhase::Prepare => self.prepare(py)?,
@@ -62,7 +63,7 @@ impl PythonCallState {
                     py,
                     &self.kwargs,
                     &self.response,
-                    self.call_type,
+                    self.call_type.as_str(),
                 )?));
             }
             HostPhase::Finalize => self.finalize(py)?,
@@ -75,7 +76,7 @@ impl PythonCallState {
                         py,
                         &self.kwargs,
                         error,
-                        self.call_type,
+                        self.call_type.as_str(),
                     )?));
                 }
             }
@@ -86,7 +87,9 @@ impl PythonCallState {
                     return Ok(HostStep::Suspend(awaitable));
                 }
             }
+            HostPhase::PostProcess | HostPhase::CacheStore => {}
             HostPhase::Execute
+            | HostPhase::CacheLookup
             | HostPhase::ConstructResponse
             | HostPhase::MapFailure
             | HostPhase::Complete => return Err(missing_state()),
@@ -114,8 +117,8 @@ impl PythonCallState {
         py: Python<'_>,
         args: Py<PyTuple>,
         kwargs: Py<PyDict>,
-        asynchronous: bool,
-        call_type: &'static str,
+        mode: CallMode,
+        call_type: PythonCallType,
     ) -> PyResult<Self> {
         Ok(Self {
             args,
@@ -125,7 +128,7 @@ impl PythonCallState {
             end: None,
             response: None,
             error: None,
-            asynchronous,
+            mode,
             internal: false,
             call_type,
         })
@@ -142,11 +145,11 @@ impl PythonCallState {
         self.internal = bindings::is_internal_call(py)?;
         let result = bindings::setup(
             py,
-            self.call_type,
+            self.call_type.as_str(),
             &self.args,
             &self.kwargs,
             &self.start,
-            self.asynchronous,
+            self.mode.is_async(),
         )?;
         self.logger = Some(result.logger()?);
         self.kwargs = result.kwargs()?;

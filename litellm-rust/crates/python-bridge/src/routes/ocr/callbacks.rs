@@ -8,6 +8,7 @@ use litellm_core::ocr::hooks::OcrPreCallRequest;
 use litellm_python_interop::to_py_preserving_errors as to_py;
 
 use crate::lifecycle::PythonLogger;
+use crate::lifecycle::contract::CallbackPhase;
 
 pub(super) struct OcrLoggingFields {
     model: String,
@@ -89,7 +90,7 @@ impl PythonLogger {
         kwargs.set_item("input", "OCR document processing")?;
         kwargs.set_item("api_key", api_key)?;
         kwargs.set_item("additional_args", &additional)?;
-        if self.callbacks_needed(py, "input")? {
+        if self.callbacks_needed(py, CallbackPhase::Input)? {
             self.object(py).call_method("pre_call", (), Some(&kwargs))?;
         } else {
             self.object(py)
@@ -109,7 +110,7 @@ impl PythonLogger {
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
         additional.set_item("headers", headers)?;
-        if self.callbacks_needed(py, "input")? {
+        if self.callbacks_needed(py, CallbackPhase::Input)? {
             let kwargs = PyDict::new(py);
             kwargs.set_item("original_response", to_py(py, original_response)?)?;
             kwargs.set_item("additional_args", &additional)?;

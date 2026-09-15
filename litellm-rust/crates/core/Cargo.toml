@@ -8,6 +8,8 @@ autotests = false
 
 [dependencies]
 bytes.workspace = true
+litellm-cache.workspace = true
+litellm-cache-memory.workspace = true
 futures-util.workspace = true
 base64.workspace = true
 azure_core.workspace = true

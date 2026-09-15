@@ -1,9 +1,10 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use litellm_python_interop::panic_to_pyerr;
 use pyo3::exceptions::{PyBaseException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
+
+use litellm_python_interop::panic_to_pyerr;
 
 pub(super) enum ExecutionStep {
     Return(Py<PyAny>),

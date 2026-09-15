@@ -88,7 +88,7 @@ bridge_route! {
         extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        host_facts: Option<Value>,
+        host_facts: Option<serde_json::Value>,
         on_request: Option<Py<PyAny>>,
     },
     prepare = prepare_chat_completions,

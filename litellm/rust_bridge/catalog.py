@@ -113,7 +113,7 @@ COMPONENTS: Final[Mapping[ComponentName, NativeComponent]] = MappingProxyType(
         ),
         ComponentName.CHAT_COMPLETIONS: _component(
             ComponentName.CHAT_COMPLETIONS,
-            _experimental_completed,
+            _experimental(),
             ("chat_completions", "achat_completions", "_chat_completions_lifecycle"),
         ),
         ComponentName.TRANSCRIPTION: _component(

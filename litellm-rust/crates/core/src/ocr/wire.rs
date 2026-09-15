@@ -210,13 +210,18 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
 }
 
 fn decode_document(value: Value) -> Result<OcrDocument, OcrRequestError> {
+    validate_document_url(&value)?;
+    decode_request_value(value, "document")
+}
+
+pub fn validate_document_url(value: &Value) -> Result<(), OcrRequestError> {
     let kind = value.get("type").and_then(Value::as_str);
     let missing_url = matches!(kind, Some("document_url")) && value.get("document_url").is_none()
         || matches!(kind, Some("image_url")) && value.get("image_url").is_none();
     if missing_url {
         return Err(OcrRequestError::MissingDocumentUrl);
     }
-    decode_request_value(value, "document")
+    Ok(())
 }
 
 fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSource {

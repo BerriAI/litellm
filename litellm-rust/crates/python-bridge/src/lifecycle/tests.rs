@@ -6,6 +6,7 @@ use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
+use super::contract::{CallMode, PythonCallType};
 use super::dispatch::{PendingLogging, PendingSuccess};
 use super::handle::{Execution, ExecutionBody, ExecutionStep};
 use super::*;
@@ -160,8 +161,8 @@ fn shared_runner_executes_a_non_ocr_adapter() {
                 py,
                 PyTuple::empty(py).unbind(),
                 PyDict::new(py).unbind(),
-                false,
-                "synthetic",
+                CallMode::Sync,
+                PythonCallType::Synthetic,
             )
             .unwrap(),
         );
@@ -196,8 +197,8 @@ fn ready_native_lifecycle_completes_without_scheduling() {
                 py,
                 PyTuple::empty(py).unbind(),
                 PyDict::new(py).unbind(),
-                true,
-                "synthetic",
+                CallMode::Async,
+                PythonCallType::Synthetic,
             )
             .unwrap(),
         );
@@ -280,8 +281,8 @@ fn error_execution(py: Python<'_>, error: Bound<'_, PyBaseException>) -> Executi
         py,
         PyTuple::empty(py).unbind(),
         PyDict::new(py).unbind(),
-        true,
-        "test",
+        CallMode::Async,
+        PythonCallType::Test,
     )
     .unwrap();
     state.retain_error(py, PyErr::from_value(error.into_any()));
@@ -342,9 +343,9 @@ fn state(
         end: Some(py.None()),
         response: Some(response),
         error: None,
-        asynchronous,
+        mode: CallMode::from_async(asynchronous),
         internal: false,
-        call_type: "test",
+        call_type: PythonCallType::Test,
     }
 }
 

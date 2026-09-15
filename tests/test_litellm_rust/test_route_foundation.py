@@ -7,26 +7,20 @@ import pytest
 from litellm.rust_bridge import _native
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import NATIVE_EXPORTS
-from litellm.rust_bridge.chat_completions.lifecycle import LIFECYCLE as CHAT_COMPLETIONS
-from litellm.rust_bridge.configuration import ExecutionDecision, ComponentName
+from litellm.rust_bridge.configuration import ComponentName, ExecutionDecision
 from litellm.rust_bridge.embeddings.lifecycle import LIFECYCLE as EMBEDDINGS
 from litellm.rust_bridge.image_edit.lifecycle import LIFECYCLE as IMAGE_EDIT
 from litellm.rust_bridge.image_generation.lifecycle import LIFECYCLE as IMAGE_GENERATION
-from litellm.rust_bridge.messages.lifecycle import LIFECYCLE as MESSAGES
 from litellm.rust_bridge.moderation.lifecycle import LIFECYCLE as MODERATION
 from litellm.rust_bridge.rerank.lifecycle import LIFECYCLE as RERANK
 from litellm.rust_bridge.responses.lifecycle import LIFECYCLE as RESPONSES
 from litellm.rust_bridge.route import ComponentExecution, NativeLifecycle
 from litellm.rust_bridge.runtime import BridgeErrorContext, invoke
 from litellm.rust_bridge.speech.lifecycle import LIFECYCLE as SPEECH
-from litellm.rust_bridge.transcription.lifecycle import LIFECYCLE as TRANSCRIPTION
 
 pytestmark = pytest.mark.requires_rust_extension
 
 UNIMPLEMENTED: Final[dict[ComponentName, NativeBinding[NativeLifecycle[object, object]]]] = {
-    ComponentName.MESSAGES: MESSAGES,
-    ComponentName.CHAT_COMPLETIONS: CHAT_COMPLETIONS,
-    ComponentName.TRANSCRIPTION: TRANSCRIPTION,
     ComponentName.EMBEDDINGS: EMBEDDINGS,
     ComponentName.RERANK: RERANK,
     ComponentName.IMAGE_GENERATION: IMAGE_GENERATION,
@@ -124,6 +118,16 @@ def test_chat_entrypoints_decline_before_the_host_callback(provider: str, facts:
 def test_transcription_declines_audio_format_before_credentials() -> None:
     with pytest.raises(_native.RustBridgeDeclined, match="audio format"):
         _native.transcription("model", {"format": "unsupported", "data": "YQ=="}, custom_llm_provider="bedrock")
+
+
+def test_transcription_lifecycle_declines_audio_format_before_host_work() -> None:
+    request: Final = {
+        "model": "model",
+        "audio": {"format": "unsupported", "data": "YQ=="},
+        "custom_llm_provider": "bedrock",
+    }
+    with pytest.raises(_native.RustBridgeDeclined, match="audio format"):
+        _native._transcription_lifecycle(request, (), {}, False, UntouchedInput())
 
 
 def test_websocket_declines_before_parsing_or_dialing_url() -> None:
