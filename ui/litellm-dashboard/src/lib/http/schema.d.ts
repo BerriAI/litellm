@@ -32566,6 +32566,11 @@ export interface components {
             /** Supported Reasoning Efforts */
             supported_reasoning_efforts?: string[] | null;
             /**
+             * Supports Fast Mode
+             * @default false
+             */
+            supports_fast_mode: boolean;
+            /**
              * Supports Function Calling
              * @default false
              */
