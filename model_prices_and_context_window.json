@@ -22430,6 +22430,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": {
         "cache_read_input_token_cost": 6e-07,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 1.2e-06,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -22817,6 +22818,7 @@
     "fireworks_ai/accounts/fireworks/models/minimax-m2p7": {
         "cache_read_input_token_cost": 6e-08,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -58390,6 +58392,7 @@
         "output_cost_per_token": 6.6e-07,
         "source": "https://api.fireworks.ai/v1/serverless/models",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -65767,9 +65770,14 @@
         "cache_read_input_token_cost": 3.9e-07,
         "input_cost_per_token": 2.1e-06,
         "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 6.6e-06,
-        "source": "https://api.fireworks.ai/v1/serverless/models"
+        "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     },
     "together_ai/arcee-ai/trinity-mini": {
         "input_cost_per_token": 4.5e-08,
