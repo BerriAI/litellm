@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 from importlib.metadata import version
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 from packaging.version import Version
 
@@ -143,13 +143,16 @@ def _logging_id(start_time: datetime | None, response_obj: object) -> str | None
     return litellm.utils.get_logging_id(start_time, response_obj)
 
 
+@runtime_checkable
+class _ResponseWithId(Protocol):
+    """Response payloads (ModelResponse and friends, or a plain dict) expose their provider id via ``get``."""
+
+    def get(self, key: Literal["id"], default: None = None, /) -> object: ...
+
+
 def _lookup_ids(litellm_call_id: str | None, response_obj: object) -> Mapping[str, str]:
     """v2 carried the response id inside the generation id; v4 hashes ids to 16 hex chars, so they ride in metadata."""
-    response_id: Final[object] = (
-        cast(Mapping[str, object], response_obj).get("id")
-        if isinstance(response_obj, Mapping)
-        else getattr(response_obj, "id", None)
-    )
+    response_id: Final[object] = response_obj.get("id") if isinstance(response_obj, _ResponseWithId) else None
     ids: Final[tuple[tuple[str, object], ...]] = (("litellm_call_id", litellm_call_id), ("response_id", response_id))
     return MappingProxyType({key: str(value) for key, value in ids if value is not None})
 
