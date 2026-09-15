@@ -33,7 +33,11 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+    is_expected_client_error,
+)
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -49,12 +53,16 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+from litellm.proxy.auth.auth_checks import (
+    _tag_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # auth's tag budget gate, reused for tags guardrails add post-auth
+    can_key_call_resolved_model,
+)
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -638,6 +646,30 @@ async def _resolve_per_request_model_group_alias(
         llm_router=llm_router,
     )
     return target
+
+
+async def _enforce_guardrail_added_tag_budgets(
+    data: Mapping[str, object],
+    tags_before_guardrails: frozenset[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    added_tags: Final = tuple(
+        tag for tag in get_tags_from_request_body(request_body=data) if tag not in tags_before_guardrails
+    )
+    if not added_tags:
+        return
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(data)
+    request_body: Final = {metadata_key: {"tags": list(added_tags)}}  # mutable-ok: budget check takes a dict
+    await _tag_max_budget_check(
+        request_body=request_body,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=user_api_key_dict,
+    )
 
 
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
@@ -1999,10 +2031,17 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        tags_before_guardrails: Final = frozenset(get_tags_from_request_body(request_body=self.data))
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+        )
+        await _enforce_guardrail_added_tag_budgets(
+            data=self.data,
+            tags_before_guardrails=tags_before_guardrails,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
         if route_type == "aget_responses":
             attach_post_call_pipelines_to_retrieval(
