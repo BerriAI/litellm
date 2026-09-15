@@ -342,21 +342,15 @@ def lease_langfuse_client(client: Langfuse) -> Generator[None]:
     try:
         yield
     finally:
-        _run_teardowns(state, state.release_lease(), propagate_base_exception=False)
+        _run_teardowns(state, state.release_lease())
 
 
-def _run_teardowns(
-    state: _LangfuseLifecycleState,
-    clients: tuple[Langfuse, ...],
-    *,
-    propagate_base_exception: bool = True,
-) -> None:
+def _run_teardowns(state: _LangfuseLifecycleState, clients: tuple[Langfuse, ...]) -> None:
     """Tear down ``clients``, then whatever eviction queued meanwhile, and hand the flag back.
 
     A failing ordinary teardown is logged and skipped rather than raised: the thread here is usually a
     request callback that merely held the last lease, and its request must not fail on eviction's behalf.
-    Interrupts requeue the unfinished batch and normally propagate, while a callback exception already
-    in flight takes precedence over an eviction interrupt.
+    An interrupt requeues the unfinished batch for the next eviction or lease exit and propagates.
     """
     batch = clients  # rebind-ok: drains each batch queued while the previous one was being torn down
     try:
@@ -370,9 +364,7 @@ def _run_teardowns(
                     verbose_logger.exception("Langfuse client teardown failed during cache eviction")
                 except BaseException:
                     state.requeue(batch[index:])
-                    if propagate_base_exception:
-                        raise
-                    return
+                    raise
             batch = state.next_teardown_batch()
     finally:
         state.end_teardown()

@@ -722,6 +722,35 @@ def test_teardown_failure_does_not_strand_queued_clients(monkeypatch):
     assert not state.teardown_in_progress
 
 
+def test_interrupt_during_deferred_teardown_propagates_and_requeues_the_client(monkeypatch):
+    """A Ctrl-C landing in the lease exit's teardown must reach the caller, not be swallowed."""
+    client = Langfuse(public_key=PUBLIC_KEY, secret_key="sk-original", host="http://127.0.0.1:1")
+    register_langfuse_client(client)
+    state = _lifecycle_state(client)
+    original_teardown = _teardown_langfuse_client
+    calls = []
+
+    def teardown(target):
+        calls.append(target)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        original_teardown(target)
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._teardown_langfuse_client", teardown)
+    with pytest.raises(KeyboardInterrupt):
+        with lease_langfuse_client(client):
+            shutdown_langfuse_client(client)
+
+    assert state.pending_clients == {client}
+    assert not state.teardown_in_progress
+
+    with lease_langfuse_client(client):
+        pass
+
+    assert calls == [client, client]
+    assert not state.pending_clients
+
+
 def test_queued_eviction_waits_for_the_last_of_two_overlapping_leases():
     exporter = InMemorySpanExporter()
     provider = build_isolated_tracer_provider(environment=None, release=None)
