@@ -12,11 +12,11 @@ use super::hooks::{
 use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
 use crate::AuthError;
 use crate::Error;
-use crate::auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 use crate::call_lifecycle::host::{
     HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
 };
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
+use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 
 pub type NativeResult<T> = Result<NativeOutcome<T>, Error>;
 

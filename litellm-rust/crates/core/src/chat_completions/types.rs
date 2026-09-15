@@ -41,7 +41,6 @@ pub(super) struct ProviderChatCompletionsRequest {
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: ChatCompletionsAuth,
-    #[cfg_attr(not(feature = "bedrock-auth"), allow(dead_code))]
     pub(super) optional_params: OpaqueParams,
     pub(super) timeout: Option<Duration>,
 }

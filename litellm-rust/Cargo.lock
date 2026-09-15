@@ -1983,6 +1983,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-cache-memory"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
+ "rstest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
@@ -2031,6 +2052,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "futures-util",
+ "litellm-auth",
  "litellm-core",
  "litellm-python-interop",
  "litellm-token-counter",

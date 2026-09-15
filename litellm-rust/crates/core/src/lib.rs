@@ -1,6 +1,4 @@
 pub mod audio_transcription;
-pub mod auth;
-pub mod caching;
 pub mod call_lifecycle;
 pub mod chat_completions;
 pub mod constants;
@@ -20,5 +18,5 @@ pub mod router;
 pub mod routing_utils;
 mod url_utils;
 
-pub use auth::Error as AuthError;
 pub use error::Error;
+pub use litellm_auth::Error as AuthError;

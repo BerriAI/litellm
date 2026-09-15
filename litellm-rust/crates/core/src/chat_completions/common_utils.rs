@@ -13,7 +13,6 @@ pub(super) fn chat_completions_provider_config(
 ) -> Option<&'static dyn ChatCompletionsProviderConfig> {
     match provider {
         "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
-        #[cfg(feature = "bedrock-auth")]
         "bedrock" => Some(
             &crate::providers::bedrock::chat_completions::transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
         ),

@@ -42,7 +42,6 @@ pub async fn execute_audio_transcription_provider_call(
         .into_json())
 }
 
-#[cfg(feature = "bedrock-auth")]
 async fn signed_headers(
     request: &ProviderAudioTranscriptionRequest,
     body: &[u8],
@@ -73,19 +72,4 @@ async fn signed_headers(
         SystemTime::now(),
     )?;
     Ok(unsigned.into_iter().chain(signature).collect())
-}
-
-#[cfg(not(feature = "bedrock-auth"))]
-async fn signed_headers(
-    request: &ProviderAudioTranscriptionRequest,
-    _body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
-
-    match request.auth {
-        AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
-            "AWS SigV4 requires the bedrock-auth feature",
-        )),
-        AudioTranscriptionAuth::Bearer => Ok(request.upstream_headers.clone()),
-    }
 }

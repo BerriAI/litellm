@@ -80,7 +80,6 @@ pub(super) fn as_response_error(err: Error) -> Error {
     }
 }
 
-#[cfg(feature = "bedrock-auth")]
 pub(super) async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     body: &[u8],
@@ -135,17 +134,4 @@ pub(super) async fn signed_headers(
     // as Python reattaches them. The guard above already rejected the names
     // that would collide, so no name appears twice.
     Ok(unsigned.into_iter().chain(signature).collect())
-}
-
-#[cfg(not(feature = "bedrock-auth"))]
-pub(super) async fn signed_headers(
-    request: &ProviderChatCompletionsRequest,
-    _body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
-            "AWS SigV4 requires the bedrock-auth feature",
-        )),
-        _ => Ok(request.upstream_headers.clone()),
-    }
 }

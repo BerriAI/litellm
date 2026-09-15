@@ -12,7 +12,7 @@ futures-util.workspace = true
 base64.workspace = true
 data-url = "0.3.2"
 litellm-auth.workspace = true
-litellm-auth-aws = { workspace = true, optional = true }
+litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
 moka.workspace = true
@@ -35,7 +35,6 @@ url.workspace = true
 veil.workspace = true
 [features]
 default = []
-bedrock-auth = ["dep:litellm-auth-aws"]
 observability = ["dep:tracing-subscriber"]
 
 [dev-dependencies]

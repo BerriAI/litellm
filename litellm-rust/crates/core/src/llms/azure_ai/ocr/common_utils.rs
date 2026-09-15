@@ -1,9 +1,9 @@
 use std::sync::OnceLock;
 
 use crate::Error;
-use crate::auth::{InputSource, Sourced};
 use crate::ocr::error::OcrError;
 use crate::ocr::types::OcrConnection;
+use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 
 pub(super) async fn resolve_entra(

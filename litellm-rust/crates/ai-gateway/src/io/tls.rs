@@ -1,6 +1,6 @@
 //! Outbound WebSocket dials over a TLS config this crate builds once and owns.
 //!
-//! `reqwest/rustls-tls` enables `rustls/ring` and `litellm-core`'s `bedrock-auth`
+//! `reqwest/rustls-tls` enables `rustls/ring` and `litellm-auth-aws`
 //! enables `rustls/aws-lc-rs`, so the bare `ClientConfig::builder()` that
 //! `tokio-tungstenite` uses when handed no connector panics rather than guess
 //! between them. Naming ring on a connector of our own settles that for these

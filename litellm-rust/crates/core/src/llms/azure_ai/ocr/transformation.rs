@@ -1,5 +1,4 @@
 use crate::Error;
-use crate::auth::{InputSource, Sourced};
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::llms::mistral::ocr::MistralOcrResponse;
@@ -10,6 +9,7 @@ use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection};
 use crate::url_utils::ApiUrl;
+use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
