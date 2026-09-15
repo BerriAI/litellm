@@ -23,6 +23,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
     RequestRateLimiterStash,
+    _as_counter,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
@@ -6546,9 +6547,21 @@ class _ReplicaRedis:
         return {key: self.snapshot[key] for key in key_list if key in self.snapshot}
 
 
-class _UnreachableReplicaRedis:
+class _LuaFailurePrimaryRedis:
+    """
+    Primary Redis whose Lua calls fail. That is how production reaches the in-memory
+    enforcement fallback, since a limiter with no primary Redis at all is now refused
+    whenever remote replicas are configured.
+    """
+
+    def async_register_script(self, script: str):
+        async def failing(keys, args):
+            raise ConnectionError("primary Redis Lua unavailable")
+
+        return failing
+
     async def async_batch_get_cache(self, key_list, parent_otel_span=None):
-        raise ConnectionError("replica unreachable")
+        return {}
 
 
 class _ScriptedPrimaryRedis:
@@ -6605,9 +6618,13 @@ class _ScriptedPrimaryRedis:
 
 
 def _rpm_handler(replicas, time_controller, rpm_limit: int):
-    """A limiter with no primary Redis, so the windowed check takes the in-memory path."""
+    """A limiter whose primary Redis fails every Lua call, so the windowed check lands on
+    the in-memory fallback."""
+    primary = _LuaFailurePrimaryRedis()
     return _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache()),
+        internal_usage_cache=InternalUsageCache(
+            DualCache(redis_cache=primary)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        ),
         time_provider=time_controller.now,
         remote_replica_caches=replicas,
     ), [
@@ -6724,25 +6741,31 @@ async def test_in_memory_atomic_fallback_still_counts_remote_usage(time_controll
 
 
 @pytest.mark.asyncio
-async def test_unreachable_replica_fails_open_and_warns(time_controller, caplog):
-    handler, descriptors = _rpm_handler(
-        [_UnreachableReplicaRedis()], time_controller, 100
+async def test_a_replica_that_reads_back_empty_fails_open(time_controller):
+    """RedisCache logs and swallows its own read failures and hands back an empty mapping,
+    so a replica outage reaches the limiter as an empty read. It must degrade to per-region
+    enforcement rather than reject traffic the other region cannot vouch for."""
+    handler, descriptors = _rpm_handler([_ReplicaRedis({})], time_controller, 100)
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99, (
+        "nothing was readable on the replica, so no remote term is charged"
     )
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        response = await handler.should_rate_limit(descriptors=descriptors)
 
-    assert response["overall_code"] == "OK", (
-        "a replica outage must degrade to per-region enforcement, not reject traffic "
-        "the other region cannot vouch for"
-    )
-    warnings = [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelno >= logging.WARNING
-    ]
-    assert len(warnings) == 1
-    assert "rate_limit_remote_replicas: replica read failed" in warnings[0]
+@pytest.mark.asyncio
+async def test_a_replica_read_missing_the_window_key_contributes_nothing(time_controller):
+    """A read that returns the counter but not its window cannot say which window that
+    counter belongs to, so charging it could bill usage from an already rolled-over window."""
+    _window_key, counter_key = _rpm_keys()
+    handler, descriptors = _rpm_handler([_ReplicaRedis({counter_key: 90})], time_controller, 100)
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99
 
 
 @pytest.mark.asyncio
@@ -6895,12 +6918,10 @@ async def test_reserve_tpm_without_replicas_allows_a_request_that_fits_locally(
 
 
 @pytest.mark.asyncio
-async def test_replica_failure_on_the_reservation_path_enforces_local_limits_only(
+async def test_an_empty_replica_read_on_the_reservation_path_enforces_local_limits_only(
     time_controller,
 ):
-    handler, descriptors = _tpm_handler(
-        [_UnreachableReplicaRedis()], time_controller, 1000
-    )
+    handler, descriptors = _tpm_handler([_ReplicaRedis({})], time_controller, 1000)
 
     response = await handler.reserve_tpm_tokens(
         descriptors=descriptors, estimated_tokens=200
@@ -6908,3 +6929,49 @@ async def test_replica_failure_on_the_reservation_path_enforces_local_limits_onl
 
     assert response["overall_code"] == "OK"
     assert response["statuses"][0]["limit_remaining"] == 800
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (12, 12),
+        (12.9, 12),
+        (True, 0),
+        (False, 0),
+        ("12", 12),
+        ("12.0", 12),
+        (b"12", 12),
+        (b"12.0", 12),
+        ("", 0),
+        ("garbage", 0),
+        (b"garbage", 0),
+        (None, 0),
+        ({"counter": 1}, 0),
+        ("inf", 0),
+        (float("inf"), 0),
+        (float("nan"), 0),
+    ],
+)
+def test_as_counter_coerces_whatever_redis_hands_back(value, expected):
+    """Counters come back as ints from a Lua call, as strings or bytes from a raw read, and
+    as None for a key that does not exist. A bool is never a counter, so it reads as 0."""
+    assert _as_counter(value) == expected
+
+
+def test_remote_replicas_without_a_local_redis_are_refused():
+    """Other regions read this region's usage off this region's Redis. With counters in
+    memory only there is nothing for them to read, so the shared limit would be enforced
+    in one direction and the operator would never be told."""
+    with pytest.raises(ValueError, match="rate_limit_remote_replicas"):
+        _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            remote_replica_caches=[_ReplicaRedis({})],
+        )
+
+
+def test_no_remote_replicas_still_runs_without_a_local_redis():
+    """The refusal is scoped to the cross-region feature; single-region in-memory
+    enforcement is untouched."""
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    assert handler.remote_replica_caches == ()

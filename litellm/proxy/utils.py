@@ -990,8 +990,7 @@ class ProxyLogging:
         self.service_logging_obj = ServiceLogging()
         self.db_spend_update_writer = DBSpendUpdateWriter()
         self.proxy_hook_mapping: dict[str, CustomLogger] = {}
-        # Read-only replicas of other regions' coordination Redis, handed to hooks that ask for
-        # them by name in _add_proxy_hooks. Empty unless the proxy configured them at startup.
+        # Injected into any hook that names `remote_replica_caches`, see _add_proxy_hooks.
         self.rate_limit_remote_replica_caches: tuple[RedisCache, ...] = ()
 
         # Guard flags to prevent duplicate background tasks
@@ -1010,8 +1009,7 @@ class ProxyLogging:
         self.slack_alerting_instance.update_values(llm_router=llm_router)
 
         ## REMOTE-REGION REPLICAS ##
-        # Set before _init_litellm_callbacks below, which constructs the proxy hooks
-        # that read this off the instance.
+        # Must be set before _init_litellm_callbacks below, which constructs the hooks that read it.
         self.rate_limit_remote_replica_caches = rate_limit_remote_replica_caches
 
         ## UPDATE INTERNAL USAGE CACHE ##

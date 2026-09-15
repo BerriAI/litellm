@@ -398,30 +398,21 @@ CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
 
-# One counter to look up on the remote-region replicas: (window key, counter key, window size).
+# (window key, counter key, window size)
 RemoteCounterProbe: TypeAlias = tuple[str, str, int]
 
-# Returned whenever no remote replica is configured, so every call site can branch on
-# falsiness without allocating a dict per request.
 _NO_REMOTE_OFFSETS: Final[Mapping[str, int]] = MappingProxyType({})
 
 
 def _as_counter(value: object) -> int:
     """Coerce a counter read out of Redis (or a replica) to an int, treating anything unreadable as 0."""
-    match value:
-        case bool():
-            return 0
-        case int() | float():
-            return int(value)
-        case bytes():
-            return _as_counter(value.decode("utf-8", errors="ignore"))
-        case str():
-            try:
-                return int(float(value))
-            except ValueError:
-                return 0
-        case _:
-            return 0
+    if isinstance(value, bool) or not isinstance(value, int | float | str | bytes):
+        return 0
+    text: Final = value.decode("utf-8", errors="ignore") if isinstance(value, bytes) else value
+    try:
+        return int(float(text))
+    except (ValueError, OverflowError):
+        return 0
 
 
 def _merged_counter(local_value: CacheCounterValue | None, remote_offset: int) -> CacheCounterValue | None:
@@ -430,7 +421,7 @@ def _merged_counter(local_value: CacheCounterValue | None, remote_offset: int) -
 
     A missing local counter with a non-zero remote term must report the remote value
     rather than None: `is_cache_list_over_limit` reads None as "no counter yet" and
-    hands back the full limit, which would drop the remote usage on the floor.
+    hands back the full limit, dropping the remote usage on the floor.
     """
     if local_value is None:
         return remote_offset or None
@@ -519,8 +510,7 @@ class AtomicCounterMeta(TypedDict):
     increment: int
     ttl: int
     window_size: int
-    # Sum of this counter across the remote-region replicas. Subtracted from the limit
-    # sent to Lua, and added back when reporting, so `current_limit` stays the configured one.
+    # Subtracted from the limit sent to Lua, added back when reporting.
     remote_offset: ReadOnly[int]
 
 
@@ -653,11 +643,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
-        # Read-only replicas of other regions' coordination Redis. Deliberately NOT tied to
-        # `_is_redis_cluster()`: that reports the mode of the primary, and a replica may
-        # differ. `RedisClusterCache` overrides the batch read with `mget_nonatomic`, so a
-        # cluster replica is slot-safe here without hash-tag grouping.
+        # `RedisClusterCache` overrides the batch read with `mget_nonatomic`, so a cluster
+        # replica is slot-safe here whatever mode the local primary runs in.
         self.remote_replica_caches = tuple(remote_replica_caches)
+        if self.remote_replica_caches and self.internal_usage_cache.dual_cache.redis_cache is None:
+            raise ValueError(
+                "general_settings.rate_limit_remote_replicas is set, but this region keeps its rate-limit "
+                "counters in memory only, so the other regions can never read them and the shared limit is "
+                "enforced in one direction. Give this region a Redis of its own under "
+                "general_settings.coordination_redis (or litellm_settings.cache with type: redis), or remove "
+                "general_settings.rate_limit_remote_replicas."
+            )
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -1179,17 +1175,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
 
     async def _read_replica_counters(self, replica: RedisCache, keys: Sequence[str]) -> Mapping[str, object]:
-        """Read one remote replica's copy of these counters. An unreachable replica contributes nothing."""
-        try:
-            return await replica.async_batch_get_cache(key_list=list(keys))
-        except Exception as e:  # noqa: BLE001  # any replica failure must degrade to local-only enforcement
-            log_redis_failure(
-                verbose_proxy_logger,
-                logging.WARNING,
-                "rate_limit_remote_replicas: replica read failed, enforcing against local counters only",
-                e,
-            )
-            return {}
+        """`RedisCache` logs and swallows its own failures, so an unreachable replica comes back empty."""
+        return await replica.async_batch_get_cache(key_list=list(keys))
 
     async def _remote_counter_offsets(
         self,
@@ -1198,16 +1185,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> Mapping[str, int]:
         """
         Sum each counter's value across the remote replicas, counting a replica
-        only while its copy of that counter's window is still current. An
-        unreachable replica contributes nothing (fail open): a region whose
-        replica link is down falls back to the per-region enforcement it has
-        today, rather than rejecting traffic the other region cannot vouch for.
+        only while its copy of that counter's window is still current. A replica
+        that reads back empty contributes nothing, so a region whose replica link
+        is down falls back to the per-region enforcement it has today.
         """
         if not self.remote_replica_caches or not probes:
             return _NO_REMOTE_OFFSETS
 
         keys: Final = [key for window_key, counter_key, _ in probes for key in (window_key, counter_key)]
-        # One concurrent round trip per replica, not one after another.
         replica_reads: Final = await asyncio.gather(
             *(self._read_replica_counters(replica, keys) for replica in self.remote_replica_caches)
         )
@@ -1236,11 +1221,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         must never be written back to the in-memory cache, or the next request's
         in-memory pre-check would count the remote term a second time.
 
-        Each probe carries its OWN descriptor's window size, not `self.window_size`:
-        a descriptor may override it (`rate_limit.window_size`), and using the global
-        one would mis-judge whether the replica's copy of that window is still current
-        -- dropping remote usage for a longer window, and counting expired remote usage
-        for a shorter one.
+        Each probe carries its own descriptor's window size, not `self.window_size`,
+        because a descriptor may override it with `rate_limit.window_size`.
         """
         offsets: Final = await self._remote_counter_offsets(
             probes=tuple(
@@ -1486,9 +1468,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
 
-            # Single merge point for all three branches above (read-only, Redis Lua, in-memory
-            # fallback), so response headers become cross-region aware for free. It sits AFTER
-            # the in-memory write-back, which keeps storing the local Redis result.
+            # Must stay after the in-memory write-back above, which stores the local value only.
             merged_values: Final = (
                 await self._merge_remote_counters(keys_to_fetch, cache_values, key_metadata, now_int)
                 if self.remote_replica_caches
@@ -1858,9 +1838,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not descriptor_groups:
             return RateLimitResponse(overall_code="OK", statuses=[])
 
-        # The first pass above exists only to learn which counter keys are in play;
-        # it is pure, and with no replicas configured `_remote_counter_offsets` returns
-        # the shared empty mapping and the groups are reused as-is.
+        # The first pass exists only to learn which counter keys are in play; it is pure,
+        # so with no offsets to apply the groups it built are reused as-is.
         remote_offsets: Final = await self._remote_counter_offsets(
             probes=tuple(
                 (meta["window_key"], meta["counter_key"], meta["window_size"])
@@ -1927,7 +1906,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         `remote_offsets` carries each counter's usage in the other regions. It is
         subtracted from the limit sent to Lua rather than added to the counter,
         because `local + remote + increment > limit` is the same test as
-        `local + increment > limit - remote` — so the shared Lua script needs no
+        `local + increment > limit - remote`, so the shared Lua script needs no
         change. `meta` keeps the true configured limit for reporting.
         """
         descriptor_key: Final = descriptor["key"]
@@ -1963,8 +1942,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             keys.extend([window_key, counter_key])
             # 4-tuple matches the Lua ARGV layout:
             #   [limit, increment, ttl_seconds, window_size_seconds].
-            # A remote region that has already burned the quota drives the limit
-            # negative, which the script blocks on — the correct answer.
+            # A remote region that already burned the quota drives the limit negative, which blocks.
             args.extend([int(limit_value) - remote_offset, inc_amount, ttl_seconds, window_size_seconds])
             meta.append(
                 {
@@ -2095,9 +2073,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         status_code: Final = int(raw[0])
         if status_code == 1:
             # Over limit: { 1, counter_index (1-based), current_counter, limit }
-            # `raw[3]` is the limit the script was given, which is the configured limit
-            # minus the remote-region usage; report the configured one and add the remote
-            # term back onto the local counter. Identical to raw[3] at a zero offset.
+            # `raw[3]` is the reduced limit the script was given, so report `meta` instead.
             descriptor_index: Final = int(raw[1]) - 1
             current_counter: Final = int(raw[2])
             meta = per_counter_meta[descriptor_index]
@@ -2178,9 +2154,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
             current_counter = 0 if window_expired else int(raw_counter or 0)
-            # Same reduced-limit algebra as the Lua path: `local + remote + increment > limit`
-            # is `local + increment > limit - remote`. Without this, a Lua failure would fall
-            # back to enforcement that silently ignores the other regions.
             effective_limit = meta["current_limit"] - meta["remote_offset"]
             over_limit = (
                 current_counter + meta["increment"] > effective_limit

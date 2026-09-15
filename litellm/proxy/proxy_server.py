@@ -4446,11 +4446,8 @@ def _build_redis_usage_cache(
     branch on cluster mode (e.g. the v3 rate limiter) take the cluster path;
     everything else (host/url/sentinel) gets a plain `RedisCache`.
 
-    `allow_env_cluster_fallback=False` suppresses the REDIS_CLUSTER_NODES
-    fallback. The env var names THIS pod's local cluster, so borrowing it for a
-    client that is meant to reach a different Redis (a remote region's replica)
-    would silently connect to the local one instead — set it False whenever the
-    caller's connection target is not the local coordination Redis.
+    `allow_env_cluster_fallback=False` suppresses the REDIS_CLUSTER_NODES fallback, which names
+    THIS pod's local cluster. Pass it whenever the target is not the local coordination Redis.
     """
     startup_nodes = redis_params.get("startup_nodes")
     if startup_nodes is None and allow_env_cluster_fallback:
@@ -5083,10 +5080,9 @@ class ProxyConfig:
     def _init_rate_limit_remote_replicas(self, config: Mapping[str, Any]) -> tuple[RedisCache, ...]:
         """
         Builds the read-only remote-region replica clients from
-        `general_settings.rate_limit_remote_replicas`. Deliberately does NOT
-        call `_attach_redis_usage_cache`: these clients are replicas of another
-        region's Redis and must never back spend counters, the pod lock
-        manager, or any cache the proxy writes to.
+        `general_settings.rate_limit_remote_replicas`. These are replicas of another region's
+        Redis, so they are deliberately not attached to the usage cache, the pod lock manager,
+        or anything else the proxy writes to.
         """
         raw_replicas: Final = (config.get("general_settings") or {}).get("rate_limit_remote_replicas")
         if raw_replicas is None:
@@ -5105,16 +5101,11 @@ class ProxyConfig:
                     "set one of host, url, startup_nodes, or sentinel_nodes"
                 )
 
-        # REDIS_CLUSTER_NODES names THIS region's cluster, and litellm._redis applies it to any
-        # client built without an explicit `startup_nodes` -- so a replica entry that only sets
-        # `host` or `url` would silently connect to the local Redis instead. The limiter would then
-        # add this region's counters to themselves and every limit would run at half its configured
-        # value, with nothing in the logs to say so. Refuse to start instead: the operator either
-        # names the replica's own cluster nodes, or the env var has no business being set here.
+        # litellm._redis applies REDIS_CLUSTER_NODES to any client with no explicit `startup_nodes`,
+        # so a host-only replica entry would silently connect to THIS region's cluster and the
+        # limiter would add this region's counters to themselves.
         if get_secret_str("REDIS_CLUSTER_NODES") is not None:
-            env_ambiguous: Final = [
-                params for params in replica_params if not params.startup_nodes
-            ]
+            env_ambiguous: Final = [params for params in replica_params if not params.startup_nodes]
             if env_ambiguous:
                 raise ValueError(
                     "REDIS_CLUSTER_NODES is set, which would point every "
@@ -5126,11 +5117,8 @@ class ProxyConfig:
                     "general_settings.coordination_redis.startup_nodes instead."
                 )
 
-        # REDIS_SOCKET_TIMEOUT (0.1s) instead of RedisCache's 5.0s default, so a degraded
-        # replica cannot add seconds to every request; a per-entry socket_timeout wins.
-        #
-        # allow_env_cluster_fallback=False keeps the proxy-level builder from doing the same
-        # substitution for an entry that reached here legitimately.
+        # REDIS_SOCKET_TIMEOUT instead of RedisCache's 5.0s default, so a degraded replica cannot
+        # add seconds to every request. A per-entry socket_timeout still wins.
         replicas: Final = tuple(
             _build_redis_usage_cache(
                 {"socket_timeout": REDIS_SOCKET_TIMEOUT, **params.model_dump(exclude_none=True)},
