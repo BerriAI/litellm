@@ -70,6 +70,8 @@ pub enum Error {
     AzureTokenAcquisition(String),
     #[error("credential acquisition failed: Vertex AI credentials: {0}")]
     VertexTokenAcquisition(String),
+    #[error("{0}")]
+    ProviderAuthentication(String),
     #[error("credential acquisition failed: {}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
     CredentialChain(Vec<Error>),
     #[error("credential caller failed: credential caller returned an empty credential")]
@@ -107,24 +109,6 @@ pub enum Error {
         "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable"
     )]
     MissingOpenAiResponsesApiKey,
-    #[error("AWS profile credentials failed: {0}")]
-    AwsProfile(String),
-    #[error("AWS default credentials failed: {0}")]
-    AwsDefaultChain(String),
-    #[error("AWS role credentials failed: {0}")]
-    AwsAssumeRole(String),
-    #[error("AWS web identity credentials failed: {0}")]
-    AwsWebIdentity(String),
-    #[error("AWS web identity expiration was invalid: {0}")]
-    AwsWebIdentityExpiration(String),
-    #[error("AWS signing parameters failed: {0}")]
-    AwsSigningParameters(String),
-    #[error("AWS signable request failed: {0}")]
-    AwsSignableRequest(String),
-    #[error("AWS request signing failed: {0}")]
-    AwsSigning(String),
-    #[error("AWS web identity response had no credentials")]
-    AwsMissingWebIdentityCredentials,
     #[error("invalid authentication header")]
     InvalidHeader,
 }

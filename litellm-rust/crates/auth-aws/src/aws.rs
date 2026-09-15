@@ -15,8 +15,7 @@ use aws_sigv4::http_request::{
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
 
-use litellm_auth::Error;
-
+use super::Error;
 use super::constants::{
     AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
     AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
