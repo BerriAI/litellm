@@ -534,6 +534,36 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert two_breakdown["total_cost"] == pytest.approx(two_cost)
         assert two_breakdown["tool_usage_cost"] == pytest.approx(2 * one_breakdown["tool_usage_cost"])
 
+    def test_a_query_repeated_across_turns_is_reported_once_per_turn(self, handler):
+        """The reported query count must agree with the bill, which charges every grounded turn.
+
+        The session usage collapsed duplicate query strings across turns while the price was
+        per turn, so two turns asking the same question paid two fees yet reported one query.
+        Duplicates within one turn still collapse, since that turn ran one search.
+        """
+        head, turn = self._live_messages(self.AUDIO_SESSION[:1])
+        grounding = self._grounding_frame({"webSearchQueries": ["q"]})
+        logging_obj = self._priced_logging_obj()
+
+        result = handler.vertex_ai_live_passthrough_handler(
+            websocket_messages=[head, grounding, turn, grounding, turn],
+            logging_obj=logging_obj,
+            url_route="/vertex_ai/live",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            request_body={},
+            model=self.NATIVE_AUDIO_MODEL,
+            custom_llm_provider="vertex_ai",
+        )
+        _, one_breakdown = self._billed_session(handler, [head, grounding, turn])
+        repeated_within_turn = handler._session_usage(
+            [head, self._grounding_frame({"webSearchQueries": ["q", "q"]}), turn], self.NATIVE_AUDIO_MODEL
+        )
+
+        assert result["result"].usage.prompt_tokens_details.web_search_requests == 2
+        assert logging_obj.cost_breakdown["tool_usage_cost"] == pytest.approx(2 * one_breakdown["tool_usage_cost"])
+        assert repeated_within_turn.prompt_tokens_details.web_search_requests == 1
+
     def test_the_fixed_cost_margin_is_charged_once_per_session(self, handler):
         """A fixed cost margin is a flat per-request fee, and a Live session is one spend row.
 
