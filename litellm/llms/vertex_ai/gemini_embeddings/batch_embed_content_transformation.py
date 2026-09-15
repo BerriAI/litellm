@@ -371,13 +371,12 @@ def _usage_from_embed_content_response(
 
     details: Final[Sequence[PromptTokensDetails]] = usage_metadata.get("promptTokensDetails") or ()
     if not details:
-        image_tokens: Final = prompt_tokens if _count_input_images(input, resolved_files) else 0
         return Usage(
             prompt_tokens=prompt_tokens,
             total_tokens=total_tokens,
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 text_tokens=0,
-                image_tokens=image_tokens,
+                image_tokens=prompt_tokens if _count_input_images(input, resolved_files) else 0,
             ),
         )
 
