@@ -44,6 +44,65 @@ async def test_route_request_dynamic_credentials(route_type, required_body_param
 
 
 @pytest.mark.asyncio
+async def test_route_request_distinguishes_dropped_deployments_from_unknown_models():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "pool",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+            },
+            {
+                "model_name": "x",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic_v2",
+                        "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                    },
+                },
+                "model_info": {"id": "id-x"},
+            },
+            {
+                "model_name": "y",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic_v2",
+                        "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                    },
+                },
+                "model_info": {"id": "id-y"},
+            },
+        ],
+        auto_router_capability_limit=lambda: 1,
+        ignore_invalid_deployments=True,
+    )
+    assert "id-y" in router.dropped_deployments
+
+    with pytest.raises(HTTPException) as dropped_error:
+        await route_request(
+            data={"model": "y", "messages": [{"role": "user", "content": "Hello"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+    assert dropped_error.value.status_code == 400
+    assert "configured on the proxy but failed to load" in str(dropped_error.value.detail)
+
+    with pytest.raises(HTTPException) as unknown_error:
+        await route_request(
+            data={"model": "unknown", "messages": [{"role": "user", "content": "Hello"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+    assert unknown_error.value.status_code == 400
+    assert "Invalid model name" in str(unknown_error.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_without_team_id():
     import litellm
 

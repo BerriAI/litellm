@@ -5280,6 +5280,81 @@ async def test_model_info_v1_oci_secrets_not_leaked():
         assert "/path/to/oci_api_key.pem" not in result_str
 
 
+@pytest.mark.asyncio
+async def test_model_info_v1_lists_dropped_deployments_for_admins_only(monkeypatch):
+    from litellm.types.router import DroppedDeployment
+
+    model_data: Final = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "openai/gpt-4o"},
+        "model_info": {"id": "model-id"},
+    }
+    mock_router = MagicMock()
+    mock_router.model_list = [model_data]
+    mock_router.get_model_list_from_model_alias.return_value = []
+    mock_router.get_model_names.return_value = ["gpt-4o"]
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.dropped_deployments = {
+        "dropped-id": DroppedDeployment(
+            model_name="dropped-model",
+            model_id="dropped-id",
+            error="At most 1 auto-router",
+        )
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [model_data])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"infer_model_from_keys": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+
+    admin_response = await proxy_server_module.model_info_v1(
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_model_id=None,
+    )
+    admin_payload = json.loads(admin_response.body.decode())
+    assert admin_payload["dropped_deployments"] == [
+        {
+            "model_name": "dropped-model",
+            "model_id": "dropped-id",
+            "error": "At most 1 auto-router",
+        }
+    ]
+
+    user_response = await proxy_server_module.model_info_v1(
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        litellm_model_id=None,
+    )
+    assert "dropped_deployments" not in json.loads(user_response.body.decode())
+
+
+def test_add_deployment_processes_db_rows_in_created_at_order(monkeypatch):
+    from datetime import datetime
+
+    config = proxy_server_module.ProxyConfig()
+    earlier: Final = types.SimpleNamespace(
+        created_at=datetime(2025, 1, 1),
+        model_id="id-earlier",
+        model_name="earlier",
+        litellm_params={"model": "openai/gpt-4o-mini"},
+    )
+    later: Final = types.SimpleNamespace(
+        created_at=datetime(2025, 1, 2),
+        model_id="id-later",
+        model_name="later",
+        litellm_params={"model": "openai/gpt-4o"},
+    )
+    mock_router = MagicMock()
+    mock_router.upsert_deployment.return_value = object()
+    monkeypatch.setattr(proxy_server_module, "llm_router", mock_router)
+    config.get_model_info_with_id = MagicMock(side_effect=lambda model, db_model: {"id": model.model_id})
+
+    assert config._add_deployment([later, earlier]) == 2
+    assert [call.kwargs["deployment"].model_name for call in mock_router.upsert_deployment.call_args_list] == [
+        "earlier",
+        "later",
+    ]
+
+
 def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
     """
     /model/info serializes its multi-megabyte listing itself with orjson. FastAPI must not

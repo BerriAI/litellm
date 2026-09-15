@@ -149,10 +149,25 @@ _AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for 
 
 
 class ProxyModelNotFoundError(HTTPException):
-    def __init__(self, route: str, model_name: str, retryable_with_model_read_through: bool = True):
-        self.retryable_with_model_read_through: Final = retryable_with_model_read_through
+    def __init__(
+        self,
+        route: str,
+        model_name: str,
+        retryable_with_model_read_through: bool = True,
+        configured_but_failed_to_load: bool = False,
+    ):
+        self.retryable_with_model_read_through: Final = (
+            retryable_with_model_read_through and not configured_but_failed_to_load
+        )
         self.spend_log_error_message: Final = f"{route}: Invalid model name passed in. {_AVAILABLE_MODELS_HINT}"
-        detail: Final = {"error": f"{route}: Invalid model name passed in model={model_name}. {_AVAILABLE_MODELS_HINT}"}
+        detail: Final = {
+            "error": (
+                f"{route}: model={model_name} is configured on the proxy but failed to load. "
+                "Ask your proxy admin to check `/model/info` for the reason."
+                if configured_but_failed_to_load
+                else f"{route}: Invalid model name passed in model={model_name}. {_AVAILABLE_MODELS_HINT}"
+            )
+        }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
@@ -476,7 +491,14 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     data.pop("enable_tag_filtering", None)
 
     team_id: Final = get_team_id_from_data(data)
-    router_model_names: Final = llm_router.model_names if llm_router is not None else []
+    dropped_model_names: Final = (
+        frozenset(dropped_deployment.model_name for dropped_deployment in llm_router.dropped_deployments.values())
+        if llm_router is not None
+        else frozenset()
+    )
+    router_model_names: Final = (
+        (frozenset(llm_router.model_names) - dropped_model_names) if llm_router is not None else frozenset()
+    )
     is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
@@ -634,11 +656,14 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif (
-            is_proxy_admin_without_team
-            and data["model"] not in router_model_names
-            and data["model"] in llm_router.team_public_model_names
-        ) or llm_router.is_recognized_model(data["model"]):
+        elif data["model"] not in dropped_model_names and (
+            (
+                is_proxy_admin_without_team
+                and data["model"] not in router_model_names
+                and data["model"] in llm_router.team_public_model_names
+            )
+            or llm_router.is_recognized_model(data["model"])
+        ):
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:
@@ -713,7 +738,11 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     # if no route found then it's a bad request
     route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
+    dropped_deployment: Final = (
+        llm_router.dropped_deployment_for_model_name(data.get("model", "")) if llm_router is not None else None
+    )
     raise ProxyModelNotFoundError(
         route=route_name,
         model_name=data.get("model", ""),
+        configured_but_failed_to_load=dropped_deployment is not None,
     )

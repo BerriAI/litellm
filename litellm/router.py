@@ -234,6 +234,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentModelListingInfo,
     DeploymentTypedDict,
+    DroppedDeployment,
     FallbackAccessCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
@@ -908,6 +909,7 @@ class Router:
         self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
+        self.dropped_deployments: Mapping[str, DroppedDeployment] = MappingProxyType({})
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -8950,6 +8952,16 @@ class Router:
                 verbose_router_logger.exception(
                     "Error creating deployment: %s, ignoring and continuing with other deployments.", e
                 )
+                self.dropped_deployments = MappingProxyType(
+                    {
+                        **self.dropped_deployments,
+                        str(_model_info.get("id") or ""): DroppedDeployment(
+                            model_name=_model_name,
+                            model_id=str(_model_info.get("id") or ""),
+                            error=str(e),
+                        ),
+                    }
+                )
                 return None
             else:
                 raise e
@@ -9884,14 +9896,32 @@ class Router:
                 )
             ):
                 self._finalize_adaptive_router_if_configured()
+            if _deployment_model_id in self.dropped_deployments:
+                self.dropped_deployments = MappingProxyType(
+                    {
+                        model_id: dropped
+                        for model_id, dropped in self.dropped_deployments.items()
+                        if model_id != _deployment_model_id
+                    }
+                )
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.warning(
+                verbose_router_logger.error(
                     "Error upserting deployment %s (id=%s): %s. Dropping it and continuing with other deployments.",
                     deployment.model_name,
                     deployment.model_info.id,
                     e,
+                )
+                self.dropped_deployments = MappingProxyType(
+                    {
+                        **self.dropped_deployments,
+                        _deployment_model_id: DroppedDeployment(
+                            model_name=deployment.model_name,
+                            model_id=_deployment_model_id,
+                            error=str(e),
+                        ),
+                    }
                 )
                 self._restore_deployment_after_failed_upsert(
                     previous_deployment=_deployment_on_router, model_id=_deployment_model_id
@@ -10079,6 +10109,10 @@ class Router:
         - The deleted deployment
         - OR None (if deleted deployment not found)
         """
+        if id in self.dropped_deployments:
+            self.dropped_deployments = MappingProxyType(
+                {model_id: dropped for model_id, dropped in self.dropped_deployments.items() if model_id != id}
+            )
         deployment_idx = None
         if id in self.model_id_to_deployment_index_map:
             deployment_idx = self.model_id_to_deployment_index_map[id]
@@ -10108,6 +10142,16 @@ class Router:
                 return None
         except Exception:
             return None
+
+    def dropped_deployment_for_model_name(self, model_name: str) -> DroppedDeployment | None:
+        return next(
+            (
+                dropped_deployment
+                for dropped_deployment in self.dropped_deployments.values()
+                if dropped_deployment.model_name == model_name
+            ),
+            None,
+        )
 
     def _get_router_deployment_budget_limiter(
         self,
