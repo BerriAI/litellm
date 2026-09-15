@@ -21,15 +21,21 @@ from typing import Final
 
 import pytest
 import requests
-from e2e_config import CONTROL_PLANE_BASE_URL, FIXTURE_DIR, FIXTURE_MODE_RAW, PROXY_BASE_URL, unique_marker
+from e2e_config import CONTROL_PLANE_BASE_URL, FIXTURE_DIR, FIXTURE_MODE_RAW, PROXY_BASE_URL, REMOTE_EDGE, unique_marker
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
 from e2e_http import unwrap
-from fixture_mode import fixture_mode_collection_error, fixture_report_lines
+from fixture_mode import (
+    fixture_mode_collection_error,
+    fixture_report_lines,
+    parse_fixture_mode,
+    reset_deterministic_markers,
+)
 from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
 from models import TeamNewBody, UserNewBody, UserNewResponse
 from provider_edge import replay_leftover_error
+from provider_edge_control import ControlRequest
 from proxy_client import ProxyClient, build_proxy_client
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
@@ -100,6 +106,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     """Abort before collection when E2E_FIXTURE_MODE can never work: an unknown
     mode value, or replay against a missing, unreadable, or stale bundle (the
     stale message names the bundle's age). Live and record modes pass through."""
+    if REMOTE_EDGE is not None:
+        status: Final = REMOTE_EDGE.command(ControlRequest(action="status"))
+        if status.mode != parse_fixture_mode(FIXTURE_MODE_RAW):
+            raise pytest.UsageError("remote edge mode does not match requested fixture mode")
+        return
     reason = fixture_mode_collection_error(
         FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc)
     )
@@ -108,6 +119,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 
 def pytest_report_header(config: pytest.Config) -> list[str]:
+    if REMOTE_EDGE is not None:
+        return [f"e2e fixture mode: {FIXTURE_MODE_RAW} through trusted remote edge"]
     return fixture_report_lines(FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc))
 
 
@@ -157,6 +170,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     the proxy too: only provider-bound traffic replays from the bundle."""
     if item.get_closest_marker("e2e") is None:
         return
+    if REMOTE_EDGE is not None:
+        REMOTE_EDGE.begin(item.nodeid)
+        reset_deterministic_markers(item.nodeid)
     reason = _proxy_fail_reason()
     if reason is not None:
         pytest.fail(reason)
@@ -182,6 +198,12 @@ def pytest_runtest_makereport(
     report = yield
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
+    if REMOTE_EDGE is not None and item.get_closest_marker("e2e") is not None:
+        try:
+            REMOTE_EDGE.phase(item.nodeid, report.when, report.passed)
+        except RuntimeError as error:
+            report.outcome = "failed"
+            report.longrepr = str(error)
     return report
 
 
@@ -193,6 +215,8 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, None, None]:
     yield so fixture finalizers replay their recorded calls first. Failed tests
     are left alone - their own failure already explains any unconsumed tail."""
     result = yield
+    if REMOTE_EDGE is not None:
+        return result
     if not item.stash.get(_CALL_PASSED, False):
         return result
     reason = replay_leftover_error(

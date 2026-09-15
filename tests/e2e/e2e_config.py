@@ -15,6 +15,7 @@ from typing import Final
 from dotenv import load_dotenv
 from fixture_mode import deterministic_marker, parse_fixture_mode
 from provider_edge import provider_edge_api_base
+from provider_edge_remote import RemoteEdge
 
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
 # Compose injects them into the proxy container, but pytest on the host does not
@@ -120,6 +121,10 @@ PROVIDER_EDGE_BIND_HOST = os.environ.get("E2E_PROVIDER_EDGE_BIND_HOST", "").stri
 PROVIDER_EDGE_ADVERTISE_HOST = (
     os.environ.get("E2E_PROVIDER_EDGE_ADVERTISE_HOST", "").strip() or PROVIDER_EDGE_BIND_HOST
 )
+REMOTE_EDGE: Final = (
+    RemoteEdge(os.environ.get("E2E_PROVIDER_EDGE_CONTROL_URL", ""), os.environ.get("E2E_PROVIDER_EDGE_DATA_URL", ""))
+    if os.environ.get("E2E_PROVIDER_EDGE_CONTROL_URL") or os.environ.get("E2E_PROVIDER_EDGE_DATA_URL") else None
+)
 
 # Deliberately modest concurrency. The suite shares its proxy with every other
 # suite in the run, and 750 users at spawn rate 50 saturated the request path hard
@@ -206,6 +211,7 @@ def provider_edge_base(mount: str) -> str | None:
         bind_host=PROVIDER_EDGE_BIND_HOST,
         advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
         forward_timeout=REQUEST_TIMEOUT,
+        remote=REMOTE_EDGE,
     )
 
 

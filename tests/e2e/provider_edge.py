@@ -45,14 +45,14 @@ import hashlib
 import re
 import threading
 from collections import deque
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import islice
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, assert_never
+from typing import TYPE_CHECKING, Final, Literal, Protocol, assert_never
 from urllib.parse import parse_qsl, urlsplit
 
 from e2e_http import (
@@ -95,6 +95,9 @@ from fixture_mode import (
 from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
 from pydantic import JsonValue, TypeAdapter
 
+if TYPE_CHECKING:
+    from provider_edge_remote import RemoteEdge
+
 EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "openai": "https://api.openai.com",
@@ -130,13 +133,9 @@ _RESPONSE_DROPPED_HEADERS: Final[frozenset[str]] = _HOP_BY_HOP_HEADERS | {
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
-_BOUNDARY_PATTERN: Final = re.compile(
-    r'(?:^|;)\s*boundary\s*=\s*(?:"([^"]*)"|([^;,\s]+))', re.IGNORECASE
-)
+_BOUNDARY_PATTERN: Final = re.compile(r'(?:^|;)\s*boundary\s*=\s*(?:"([^"]*)"|([^;,\s]+))', re.IGNORECASE)
 _DISPOSITION_NAME_PATTERN: Final = re.compile(r'(?:^|;)\s*name="([^"]*)"', re.IGNORECASE)
-_DISPOSITION_FILENAME_PATTERN: Final = re.compile(
-    r'(?:^|;)\s*filename="([^"]*)"', re.IGNORECASE
-)
+_DISPOSITION_FILENAME_PATTERN: Final = re.compile(r'(?:^|;)\s*filename="([^"]*)"', re.IGNORECASE)
 _UNPARSED_MULTIPART: Final = "<unparsed-multipart>"
 _BOUNDARY_PLACEHOLDER: Final = b"--<boundary>"
 _BINARY_FIELD_PREFIX: Final = "<binary:sha256:"
@@ -441,6 +440,7 @@ class ReplaySource:
     or poll loop replays its recorded responses in recorded order)."""
 
     bundle: LoadedBundle
+    test_key: Callable[[], str] = current_test_key
     _pools: dict[str, dict[str, deque[Interaction]]] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -452,7 +452,7 @@ class ReplaySource:
         return self._pools.get(slug, {})
 
     def next_interaction(self, request: RecordedRequest) -> Interaction:
-        test_key: Final = current_test_key()
+        test_key: Final = self.test_key()
         slug: Final = slug_for_test(test_key)
         pool: Final = self._pool(slug)
         canonical: Final = canonicalize(request)
@@ -494,6 +494,13 @@ class RecordEdge:
 
     recorder: BundleRecorder
     lock: threading.Lock
+    test_key: Callable[[], str] = current_test_key
+    before_attempt: Callable[[], str | None] | None = None
+    response_finished: Callable[[RecordedResponse], None] | None = None
+    response_byte_limit: int | Callable[[], int] | None = None
+    recording_error: Callable[[RecordedRequest, RecordedResponse], str | None] | None = None
+    upstream_headers: Mapping[str, Mapping[str, str]] = field(default_factory=lambda: MappingProxyType({}))
+    request_error: Callable[[bytes | None], str | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -514,6 +521,7 @@ class ProviderRequestObservation:
     marker: str
     _count: int = field(default=0, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _remote_count: Callable[[], int] | None = field(default=None, init=False)
 
     def observe(self, body: bytes | None) -> None:
         if body is not None and self.marker.encode() in body:
@@ -523,7 +531,17 @@ class ProviderRequestObservation:
     @property
     def count(self) -> int:
         with self._lock:
-            return self._count
+            return self._remote_count() if self._remote_count is not None else self._count
+
+    def bind_remote_count(self, reader: Callable[[], int]) -> None:
+        with self._lock:
+            self._remote_count = reader
+
+    def finish_remote_count(self) -> None:
+        with self._lock:
+            if self._remote_count is not None:
+                self._count = self._remote_count()
+                self._remote_count = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -646,11 +664,17 @@ def _upstream_url(upstream_base: str, upstream_path: str, query: str) -> str:
     return f"{url}?{query}" if query else url
 
 
-def _persist(
-    backend: RecordEdge, test_key: str, request: RecordedRequest, response: RecordedResponse
-) -> None:
+def _persist(backend: RecordEdge, test_key: str, request: RecordedRequest, response: RecordedResponse) -> None:
     with backend.lock:
+        if backend.recording_error is not None and (error := backend.recording_error(request, response)) is not None:
+            raise OSError(error)
         backend.recorder.record(test_key=test_key, request=request, response=response)
+        if backend.response_finished is not None:
+            backend.response_finished(response)
+
+
+def _response_byte_limit(backend: RecordEdge) -> int | None:
+    return backend.response_byte_limit() if callable(backend.response_byte_limit) else backend.response_byte_limit
 
 
 def _recording_steps(
@@ -670,12 +694,16 @@ def _recording_steps(
     have gone red."""
     collected: list[bytes] = []
     truncated: str | None = None
+    byte_limit: Final = _response_byte_limit(backend)
     try:
         with closing(head.steps) as steps:
             for step in steps:
                 match step:
                     case StreamChunk():
-                        pass
+                        if byte_limit is not None and sum(map(len, collected)) + len(step.data) > byte_limit:
+                            truncated = "capture response byte limit reached"  # rebind-ok: preserve truncation in the persisted stream
+                            yield StreamTruncation(reason=truncated)
+                            return
                     case StreamTruncation(reason=reason):
                         truncated = f"upstream: {reason}"
                     case _:
@@ -696,7 +724,7 @@ def _recording_steps(
         )
 
 
-def _drain_to_response(head: StreamHead) -> RecordedHttpResponse:
+def _drain_to_response(head: StreamHead, byte_limit: int | None = None) -> RecordedHttpResponse:
     """A response the detection rule did not call streamed: drain the same step
     iterator, join the pieces, and store today's buffered shape byte for byte. A
     truncation part way through degrades to the synthetic 502 exactly as the eager
@@ -707,6 +735,8 @@ def _drain_to_response(head: StreamHead) -> RecordedHttpResponse:
         for step in steps:
             match step:
                 case StreamChunk(data=data):
+                    if byte_limit is not None and sum(map(len, pieces)) + len(data) > byte_limit:
+                        return _network_error_response("capture response byte limit reached")
                     pieces.append(data)
                 case StreamTruncation(reason=reason):
                     return _network_error_response(reason)
@@ -725,9 +755,18 @@ def _handle_record(
     body: bytes | None,
     timeout: float,
 ) -> EdgeOutcome:
-    test_key: Final = current_test_key()
+    test_key: Final = backend.test_key()
+    if backend.request_error is not None:
+        request_error: Final = backend.request_error(body)
+        if request_error is not None:
+            return _text_reply(REPLAY_MISS_STATUS, request_error)
+    if backend.before_attempt is not None:
+        denial: Final = backend.before_attempt()
+        if denial is not None:
+            return _text_reply(REPLAY_MISS_STATUS, denial)
     forwarded: Final = {
-        name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
+        **{name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS},
+        **backend.upstream_headers.get(request.path.lstrip("/").partition("/")[0], {}),
     }
     head: Final = forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
     match head:
@@ -742,7 +781,7 @@ def _handle_record(
                 steps=_recording_steps(backend, test_key, request, head),
             )
         case StreamHead():
-            buffered: Final = _drain_to_response(head)
+            buffered: Final = _drain_to_response(head, _response_byte_limit(backend))
             _persist(backend, test_key, request, buffered)
             return _recorded_outcome(buffered)
         case _:
@@ -841,6 +880,16 @@ def handle_edge_request(
             assert_never(backend)
 
 
+class RequestGuard(Protocol):
+    def begin_request(self) -> str | None: ...
+
+    def end_request(self) -> None: ...
+
+
+class RequestObserver(Protocol):
+    def observe(self, body: bytes | None) -> None: ...
+
+
 class _EdgeHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -862,6 +911,19 @@ class _EdgeHandler(BaseHTTPRequestHandler):
     def _handle(self) -> None:
         edge_server: Final = self.server
         assert isinstance(edge_server, _EdgeHTTPServer)
+        if edge_server.guard is not None:
+            denial: Final = edge_server.guard.begin_request()
+            if denial is not None:
+                self._write_reply(_text_reply(REPLAY_MISS_STATUS, denial))
+                self.close_connection = True
+                return
+        try:
+            self._serve(edge_server)
+        finally:
+            if edge_server.guard is not None:
+                edge_server.guard.end_request()
+
+    def _serve(self, edge_server: _EdgeHTTPServer) -> None:
         length: Final = int(self.headers.get("content-length") or "0")
         body: Final = self.rfile.read(length) if length else None
         if edge_server.observation is not None:
@@ -939,13 +1001,15 @@ class _EdgeHTTPServer(ThreadingHTTPServer):
         backend: EdgeBackend,
         mounts: Mapping[str, str],
         forward_timeout: float,
-        observation: ProviderRequestObservation | None,
+        observation: RequestObserver | None,
+        guard: RequestGuard | None,
     ) -> None:
         super().__init__(bind, _EdgeHandler)
         self.backend: Final = backend
         self.mounts: Final = mounts
         self.forward_timeout: Final = forward_timeout
         self.observation: Final = observation
+        self.guard: Final = guard
 
 
 @dataclass(frozen=True, slots=True)
@@ -974,14 +1038,16 @@ def start_provider_edge(
     bind_host: str = "127.0.0.1",
     advertise_host: str | None = None,
     forward_timeout: float = 60.0,
-    observation: ProviderRequestObservation | None = None,
+    observation: RequestObserver | None = None,
+    guard: RequestGuard | None = None,
+    bind_port: int = 0,
 ) -> RunningEdge:
     """Boot an edge server on an OS-assigned port in a daemon thread.
     ``advertise_host`` is what api_base URLs name (it differs from the bind
     host when the proxy runs in a container and reaches the host machine via
     a gateway address like host.docker.internal)."""
     server: Final = _EdgeHTTPServer(
-        (bind_host, 0), backend=backend, mounts=mounts, forward_timeout=forward_timeout, observation=observation
+        (bind_host, bind_port), backend=backend, mounts=mounts, forward_timeout=forward_timeout, observation=observation, guard=guard
     )
     thread: Final = threading.Thread(target=server.serve_forever, name="e2e-provider-edge", daemon=True)
     thread.start()
@@ -1047,10 +1113,15 @@ def provider_edge_api_base(
     bind_host: str,
     advertise_host: str,
     forward_timeout: float = 60.0,
+    remote: RemoteEdge | None = None,
 ) -> str | None:
     """The api_base a suite gives an edge-wired deployment: None in live mode
     (the deployment keeps its real provider api_base) and the process-wide edge
     server's mount URL in record and replay, booting the server on first use."""
+    if remote is not None:
+        if parse_fixture_mode(mode_raw) not in ("record", "replay") or mount not in EDGE_MOUNTS:
+            raise ValueError("remote edge requires a supported record/replay mount")
+        return remote.edge.api_base(mount)
     mode: Final = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode(value=value):
@@ -1092,7 +1163,18 @@ def observed_provider_edge(
     advertise_host: str,
     forward_timeout: float = 60.0,
     mounts: Mapping[str, str] = EDGE_MOUNTS,
+    remote: RemoteEdge | None = None,
 ) -> Generator[ProviderEdge, None, None]:
+    if remote is not None:
+        if parse_fixture_mode(mode_raw) not in ("record", "replay"):
+            raise ValueError("remote observation requires record/replay mode")
+        observation_id: Final = remote.observe(observation.marker)
+        observation.bind_remote_count(lambda: remote.count(observation_id))
+        try:
+            yield remote.edge
+        finally:
+            observation.finish_remote_count()
+        return
     running: Final = start_provider_edge(
         _observed_backend(mode_raw, bundle_dir), mounts=mounts,
         bind_host=bind_host, advertise_host=advertise_host,
