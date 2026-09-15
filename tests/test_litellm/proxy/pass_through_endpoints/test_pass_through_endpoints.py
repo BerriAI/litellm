@@ -496,6 +496,26 @@ def test_is_vertex_route_ignores_plain_predict_path_segment():
     )
 
 
+def test_interactions_create_routes_are_tracked_for_vertex_and_gemini():
+    """
+    Regression for LIT-6896: Interactions API (gemini-omni) passthrough responses
+    were never handed to the Vertex/Gemini logging handlers, so SpendLogs rows
+    landed with zero tokens and zero spend. Only the create URL is billable;
+    GET/DELETE on an interaction id and non-Google `/interactions` URLs stay generic.
+    """
+    handler = PassThroughEndpointLogging()
+    vertex_create = "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/global/interactions"
+    gemini_create = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+    assert handler.is_vertex_route(vertex_create) is True
+    assert handler.is_vertex_route(f"{vertex_create}/abc123") is False
+    assert handler.is_vertex_route("https://upstream.example.com/api/interactions") is False
+
+    assert handler.is_gemini_route(gemini_create, custom_llm_provider="gemini") is True
+    assert handler.is_gemini_route(f"{gemini_create}/abc123", custom_llm_provider="gemini") is False
+    assert handler.is_gemini_route(gemini_create, custom_llm_provider=None) is False
+
+
 @pytest.mark.asyncio
 async def test_custom_passthrough_predict_path_logs_via_generic_handler():
     """
