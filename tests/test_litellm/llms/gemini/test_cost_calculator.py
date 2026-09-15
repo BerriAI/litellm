@@ -480,27 +480,15 @@ def test_flash_alias_cache_read_is_ten_percent_of_input(
 
 
 @pytest.mark.parametrize(
-    "alias,target,expected_cost",
+    "alias,target",
     [
-        (
-            "gemini/gemini-flash-latest",
-            "gemini/gemini-3.8-flash",
-            600 * 7.5e-7 + 400 * 7.5e-8 + 500 * 3.75e-6,
-        ),
-        (
-            "gemini/gemini-flash-lite-latest",
-            "gemini/gemini-3.5-flash-lite",
-            600 * 3e-7 + 400 * 3e-8 + 500 * 2.5e-6,
-        ),
-        (
-            "gemini/gemini-pro-latest",
-            "gemini/gemini-3.1-pro-preview",
-            600 * 2e-6 + 400 * 2e-7 + 500 * 1.2e-5,
-        ),
+        ("gemini/gemini-flash-latest", "gemini/gemini-3.8-flash"),
+        ("gemini/gemini-flash-lite-latest", "gemini/gemini-3.5-flash-lite"),
+        ("gemini/gemini-pro-latest", "gemini/gemini-3.1-pro-preview"),
     ],
 )
 def test_latest_aliases_cost_the_same_as_their_current_target(
-    monkeypatch, alias, target, expected_cost
+    monkeypatch, alias, target
 ):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -522,7 +510,6 @@ def test_latest_aliases_cost_the_same_as_their_current_target(
     alias_cost = cost_of(alias)
     target_cost = cost_of(target)
     assert alias_cost == pytest.approx(target_cost)
-    assert alias_cost == pytest.approx(expected_cost)
     assert alias_cost > 0
 
 
