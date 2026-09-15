@@ -150,6 +150,7 @@ class _PrismaDictableRow(Protocol):
 
 class _PrismaJWTKeyMappingRow(Protocol):
     token: str
+    jwt_issuer: str
     jwt_claim_name: str
     jwt_claim_value: str
 
@@ -3603,9 +3604,18 @@ async def _fetch_key_object_from_db_with_reconnect(
             raise
 
 
-def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str) -> str:
-    """Cache key under which ``_resolve_jwt_to_virtual_key`` stores a JWT-claim-to-key mapping."""
-    return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
+def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None) -> str:
+    """Cache key under which a JWT-claim-to-key mapping is stored, scoped to one
+    issuer (or the issuer-agnostic/global scope when ``jwt_issuer`` is falsy).
+
+    Scoped by issuer (when one is configured) so a cached hit or ``__NO_MAPPING__`` miss
+    for one issuer's claim value can never be served to a different issuer whose claim
+    value happens to collide. Unchanged for the global scope, keeping the single-issuer
+    (no ``litellm_jwtauth.issuers`` configured) cache key format stable across this fix.
+    """
+    if not jwt_issuer:
+        return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
+    return f"jwt_key_mapping:{jwt_issuer}:{jwt_claim_name}:{jwt_claim_value}"
 
 
 @log_db_metrics
@@ -3617,7 +3627,7 @@ async def get_jwt_key_mapping_cache_keys_for_token(
     mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(
         where={"token": hashed_token}
     )
-    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value) for m in mappings)
+    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
 
 
 @log_db_metrics
@@ -3625,9 +3635,14 @@ async def get_jwt_key_mapping_object(
     jwt_claim_name: str,
     jwt_claim_value: str,
     prisma_client: PrismaClient,
+    jwt_issuer: str | None = None,
 ) -> str | None:
     """
-    Lookup a JWT-to-virtual-key mapping from the database.
+    Lookup a JWT-to-virtual-key mapping from the database for one exact scope:
+    ``jwt_issuer`` (or the global/issuer-agnostic scope when falsy). Does not fall
+    back to the global scope itself -- a caller that wants "issuer-scoped mapping,
+    else the global one" queries both scopes itself, so each result can be cached
+    under its own scope's key (see ``_resolve_jwt_to_virtual_key``).
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
     """
@@ -3635,6 +3650,7 @@ async def get_jwt_key_mapping_object(
         where={
             "jwt_claim_name": jwt_claim_name,
             "jwt_claim_value": jwt_claim_value,
+            "jwt_issuer": jwt_issuer or "",
             "is_active": True,
         }
     )

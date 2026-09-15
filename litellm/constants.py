@@ -1777,6 +1777,7 @@ DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_PROMPT_
 LENGTH_OF_LITELLM_GENERATED_KEY: Final = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
 MINIMUM_CUSTOM_KEY_LENGTH: Final = int(os.getenv("MINIMUM_CUSTOM_KEY_LENGTH", 16))
 SECRET_MANAGER_REFRESH_INTERVAL: Final = int(os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400))
+OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS: Final = frozenset({"openai", "azure"})
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
     "default_team_params",
@@ -1794,6 +1795,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     # test_general_settings_ui_fields_are_db_overridable enforces that pairing.
     "enable_anthropic_prompt_caching",
     "anthropic_prompt_caching_ttl",
+    "openai_system_messages_first",
     "max_ui_session_budget",
     "budget_rollover",
     "mcp_tool_search",

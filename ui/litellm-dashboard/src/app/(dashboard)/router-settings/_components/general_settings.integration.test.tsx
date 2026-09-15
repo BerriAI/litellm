@@ -46,6 +46,15 @@ const SETTINGS_FIXTURE = [
     field_default_value: null,
   },
   {
+    field_name: "openai_system_messages_first",
+    field_type: "Boolean",
+    field_value: false,
+    field_description: "openai system first toggle",
+    stored_in_db: null,
+    field_tab: "prompt_caching",
+    field_default_value: false,
+  },
+  {
     field_name: "max_ui_session_budget",
     field_type: "Dollar",
     field_value: 7.5,
@@ -154,6 +163,39 @@ describe("GeneralSettings General tab", () => {
     expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "model_access_denied_message");
     expect(within(row).getByText("In DB")).toBeInTheDocument();
     expect(within(row).queryByText("Not Set")).not.toBeInTheDocument();
+  });
+});
+
+describe("GeneralSettings Prompt Caching tab", () => {
+  beforeEach(() => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([...SETTINGS_FIXTURE.map((s) => ({ ...s }))]);
+    vi.mocked(updateConfigFieldSetting).mockClear();
+    vi.mocked(deleteConfigFieldSetting).mockClear();
+  });
+
+  it("persists openai_system_messages_first when its switch is turned on", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+
+    await user.click(await screen.findByRole("tab", { name: "Prompt Caching" }));
+    const toggle = await screen.findByRole("switch", { name: "System messages first for OpenAI" });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+
+    expect(toggle).toBeChecked();
+    expect(updateConfigFieldSetting).toHaveBeenCalledWith("token", "openai_system_messages_first", true);
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prompt caching rows off the General tab table", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+
+    await user.click(screen.getByText("General"));
+    await settingsRow("max_ui_session_budget");
+
+    expect(screen.queryByText("openai_system_messages_first")).not.toBeInTheDocument();
   });
 });
 
