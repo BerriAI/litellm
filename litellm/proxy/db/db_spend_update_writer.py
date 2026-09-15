@@ -666,6 +666,7 @@ class DBSpendUpdateWriter:
             await self._update_org_db(
                 response_cost=response_cost,
                 org_id=org_id,
+                user_id=user_id,
                 prisma_client=prisma_client,
             )
         except Exception:
@@ -901,6 +902,7 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         org_id: str | None,
         prisma_client: PrismaClient | None,
+        user_id: str | None = None,
     ):
         try:
             if org_id is None or prisma_client is None:
@@ -916,6 +918,16 @@ class DBSpendUpdateWriter:
                     response_cost=response_cost,
                 )
             )
+
+            if user_id is not None:
+                org_member_key: Final = f"organization_id::{org_id}::user_id::{user_id}"
+                await self.spend_update_queue.add_update(
+                    update=SpendUpdateQueueItem(
+                        entity_type=Litellm_EntityType.ORGANIZATION_MEMBER,
+                        entity_id=org_member_key,
+                        response_cost=response_cost,
+                    )
+                )
         except Exception as e:
             spend_log_error(
                 "Spend tracking - failed to enqueue org spend update. org_id=%s, response_cost=%s - %s",
@@ -1163,14 +1175,15 @@ class DBSpendUpdateWriter:
                 if db_spend_update_transactions is not None:
                     verbose_proxy_logger.info(
                         "Spend tracking - committing spend updates from Redis to DB: "
-                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d, agents=%d, "
-                        "model_access_groups=%d",
+                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, org_members=%d, tags=%d, "
+                        "agents=%d, model_access_groups=%d",
                         len(db_spend_update_transactions.get("key_list_transactions") or {}),
                         len(db_spend_update_transactions.get("user_list_transactions") or {}),
                         len(db_spend_update_transactions.get("team_list_transactions") or {}),
                         len(db_spend_update_transactions.get("org_list_transactions") or {}),
                         len(db_spend_update_transactions.get("end_user_list_transactions") or {}),
                         len(db_spend_update_transactions.get("team_member_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("org_member_list_transactions") or {}),
                         len(db_spend_update_transactions.get("tag_list_transactions") or {}),
                         len(db_spend_update_transactions.get("agent_list_transactions") or {}),
                         len(db_spend_update_transactions.get("model_access_group_list_transactions") or {}),
@@ -1698,6 +1711,30 @@ class DBSpendUpdateWriter:
                                     where={"organization_id": org_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
+                    break
+                except Exception as e:
+                    await self._handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+
+        ### UPDATE ORG Membership TABLE with spend ###
+        org_member_list_transactions: Final = db_spend_update_transactions.get("org_member_list_transactions")
+        verbose_proxy_logger.debug("Org Membership Spend transactions: %s", org_member_list_transactions)
+        if org_member_list_transactions is not None and len(org_member_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with _spend_update_tx(prisma_client) as transaction, transaction.batch_() as batcher:
+                        for key, response_cost in sorted(org_member_list_transactions.items()):
+                            _, org_id, _, user_id = key.split("::", 3)
+                            batcher.litellm_organizationmembership.update_many(
+                                where={"organization_id": org_id, "user_id": user_id},
+                                data={"spend": {"increment": response_cost}},
+                            )
                     break
                 except Exception as e:
                     await self._handle_spend_update_failure(
