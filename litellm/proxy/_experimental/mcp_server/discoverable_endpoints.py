@@ -1236,8 +1236,9 @@ async def exchange_token_with_server(
                 "exchange_token_with_server: could not resolve a LiteLLM user_id for the request, "
                 "so the per-user token for server=%s was NOT stored. The authorization_code egress "
                 "requires the stored token, so the client will be challenged with 401 on reconnect. "
-                "Ensure the request carries a valid LiteLLM key (x-litellm-api-key or Authorization), "
-                "or store it via POST /mcp/server/{id}/oauth-user-credential.",
+                "Ensure the request carries a valid LiteLLM key or enabled JWT identity "
+                "(x-litellm-api-key or Authorization), "
+                "or store it via POST /v1/mcp/server/{id}/oauth-user-credential.",
                 resolved_server.server_id,
             )
 

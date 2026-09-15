@@ -306,10 +306,66 @@ async def _extract_user_id_from_request(request: Request) -> str | None:
     (including a transient DB outage) collapses to ``None`` here and the caller simply skips the store;
     the bridge mint, which must status those outcomes differently, consumes
     :func:`_resolve_active_litellm_key` directly."""
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+
+    token: Final = _litellm_key_from_request(request)
+    if token is not None and JWTHandler.is_jwt(token):
+        return await _extract_jwt_user_id(token)
     resolved: Final = await _resolve_active_litellm_key(request)
     if not isinstance(resolved, _ResolvedKey):
         return None
     return _active_key_user_id(resolved.key)
+
+
+async def _extract_jwt_user_id(token: str) -> str | None:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _resolve_jwt_to_virtual_key,  # pyright: ignore[reportPrivateUsage]  # reuse admission mapping policy without provisioning a new key
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
+        general_settings,
+        jwt_handler,
+        premium_user,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if general_settings.get("enable_jwt_auth") is not True or premium_user is not True:
+        return None
+    try:
+        claims: Final = await jwt_handler.auth_jwt(token=token)
+        validate: Final = jwt_handler.litellm_jwtauth.custom_validate
+        if validate is not None and not validate(claims):
+            return None
+        if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
+            mapped: Final = await _resolve_jwt_to_virtual_key(
+                jwt_claims=claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if isinstance(mapped, UserAPIKeyAuth):
+                return None if await _key_owner_scim_deactivated(mapped) else _active_key_user_id(mapped)
+            if mapped is not None:
+                return None
+        user_id, _, valid_email = await JWTAuthManager.get_user_info(jwt_handler, claims)
+        object_id: Final = jwt_handler.get_object_id(token=claims, default_value=None)
+        owner_id: Final = (
+            object_id
+            if jwt_handler.get_rbac_role(token=claims) == LitellmUserRoles.INTERNAL_USER and object_id
+            else user_id
+        )
+        if not owner_id or valid_email is False:
+            return None
+        owner: Final = await load_active_user_by_id(owner_id)
+        return None if isinstance(owner, str) else owner.user_id
+    except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
+        verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
+        return None
 
 
 _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
