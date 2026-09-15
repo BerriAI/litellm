@@ -1028,7 +1028,7 @@ def _with_capability_forecast(
         "classifier_primary_rule": verdict.primary_rule,
         "classifier_capability_boundary": verdict.capability_boundary,
         "classifier_p_solve": verdict.p_solve,
-        "classifier_threshold": forecast.threshold,
+        **({"classifier_threshold": forecast.threshold} if forecast.selective_decision is None else {}),
     }
     if forecast.calibration_version is None:
         return enriched
@@ -1343,6 +1343,8 @@ class ComplexityRouter(CustomLogger):
                 empirical=capability.card.empirical
                 if capability is not None and capability.card is not None
                 else False,
+                supplement=capability.empirical_supplement if capability is not None else None,
+                forecast_context=capability.forecast_context if capability is not None else None,
             )
         definitions: Final = self.config.tier_definitions
         if definitions is not None:
@@ -1897,6 +1899,7 @@ class ComplexityRouter(CustomLogger):
                 signals=(
                     f"capability-boundary:{forecast.verdict.capability_boundary}",
                     f"capability-rule:{forecast.verdict.primary_rule}",
+                    *(forecast.selective_decision.signals if forecast.selective_decision is not None else ()),
                 ),
                 cause="capability_classifier",
                 classifier_cost=classifier_cost,
@@ -2237,16 +2240,7 @@ class ComplexityRouter(CustomLogger):
             ),
         )
         verdict: Final = parse_capability_classifier_verdict(content)
-        threshold: Final = verdict.routing_threshold(capability.base_threshold, capability.threshold_step)
-        calibration: Final = capability.calibration
-        forecast: Final = CapabilityClassifierForecast(
-            verdict=verdict,
-            threshold=threshold,
-            p_solve=calibration.calibrate(verdict.p_solve, verdict.primary_rule)
-            if calibration is not None
-            else verdict.p_solve,
-            calibration_version=calibration.version if calibration is not None else None,
-        )
+        forecast: Final = capability.classify(verdict)
         selected_tier: Final = (
             capability.efficient_tier if forecast.meets_routing_threshold() else capability.capable_tier
         )

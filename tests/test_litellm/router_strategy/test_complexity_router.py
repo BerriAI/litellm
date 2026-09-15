@@ -2407,6 +2407,52 @@ def _capability_reply(
 
 
 class TestCapabilityClassifierConfig:
+    def test_selective_policy_overrides_raw_threshold(self) -> None:
+        config: Final = CapabilityClassifierConfig.model_validate(
+            {
+                "efficient_tier": "SIMPLE",
+                "capable_tier": "REASONING",
+                "base_threshold": 0.5,
+                "selective_policy": {
+                    "version": "test",
+                    "feature_schema": "cap-v1",
+                    "target": "paired",
+                    "threshold": 0.05,
+                    "heads": [{"constant": 2}],
+                },
+            }
+        )
+        verdict: Final = CapabilityClassifierVerdict.model_validate(
+            {
+                "crux": "A local parser change",
+                "primary_rule": "SUP-1",
+                "capability_boundary": "supported",
+                "p_solve": 0.1,
+            }
+        )
+        result: Final = config.classify(verdict)
+        assert result.meets_routing_threshold()
+        assert result.p_solve == 0.1
+        assert result.selective_decision is not None
+        assert result.selective_decision.score == -1.0
+
+    def test_selective_policy_rejects_another_classifier_feature_schema(self) -> None:
+        with pytest.raises(ValidationError, match="cap-v1"):
+            CapabilityClassifierConfig.model_validate(
+                {
+                    "efficient_tier": "SIMPLE",
+                    "capable_tier": "REASONING",
+                    "base_threshold": 0.5,
+                    "selective_policy": {
+                        "version": "test",
+                        "feature_schema": "v2-v1",
+                        "target": "rescue",
+                        "threshold": 0.05,
+                        "heads": [{"constant": 1}],
+                    },
+                }
+            )
+
     @pytest.mark.parametrize(
         "offsets",
         (

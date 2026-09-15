@@ -32,7 +32,8 @@ with warnings.catch_warnings():
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
-from .capability_classifier import CapabilityRule
+from .capability_classifier import CapabilityClassifierForecast, CapabilityClassifierVerdict, CapabilityRule
+from .selective_policy import SelectivePolicy, verdict_features
 from .tier_predictor import TrainedTierArtifact
 
 
@@ -642,6 +643,9 @@ class CapabilityClassifierConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
     card: CapabilityCardConfig | None = None
+    selective_policy: SelectivePolicy | None = None
+    empirical_supplement: str | None = Field(default=None, min_length=1, max_length=4000)
+    forecast_context: str | None = Field(default=None, min_length=1, max_length=4000)
 
     efficient_tier: str = Field(
         description="Tier used when the efficient model's forecasted solve probability meets the adjusted threshold",
@@ -692,9 +696,38 @@ class CapabilityClassifierConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_threshold_range(self) -> "CapabilityClassifierConfig":
+        if self.selective_policy is not None:
+            if self.selective_policy.feature_schema != "cap-v1":
+                raise ValueError("The capability classifier requires a cap-v1 selective policy")
+            if self.calibration is not None:
+                raise ValueError("selective_policy and calibration are mutually exclusive")
         if self.base_threshold + 2 * self.threshold_step > 1.0:
             raise ValueError("base_threshold + 2 * threshold_step must be at most 1")
         return self
+
+    def classify(self, verdict: CapabilityClassifierVerdict) -> CapabilityClassifierForecast:
+        return CapabilityClassifierForecast(
+            verdict=verdict,
+            threshold=verdict.routing_threshold(self.base_threshold, self.threshold_step),
+            p_solve=self.calibration.calibrate(verdict.p_solve, verdict.primary_rule)
+            if self.calibration
+            else verdict.p_solve,
+            calibration_version=self.calibration.version if self.calibration else None,
+            selective_decision=self.selective_policy.evaluate(
+                verdict_features(
+                    verdict.crux,
+                    {
+                        "p_e": verdict.p_solve,
+                        f"rule:{verdict.primary_rule}": 1.0,
+                        f"boundary:{verdict.capability_boundary}": 1.0,
+                    },
+                ),
+                verdict.p_solve,
+                verdict.p_solve,
+            )
+            if self.selective_policy is not None
+            else None,
+        )
 
 
 MAX_CUSTOM_PATTERN_REPEAT: Final[int] = 64

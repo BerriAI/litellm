@@ -24952,6 +24952,10 @@ export interface components {
              * @description Tier used when the efficient model's forecasted solve probability meets the adjusted threshold
              */
             efficient_tier: string;
+            /** Empirical Supplement */
+            empirical_supplement?: string | null;
+            /** Forecast Context */
+            forecast_context?: string | null;
             /**
              * Max Output Tokens
              * @description Maximum completion tokens available to the capability classifier verdict
@@ -24965,6 +24969,7 @@ export interface components {
              * @enum {string}
              */
             response_format: "json_schema" | "json_object";
+            selective_policy?: components["schemas"]["SelectivePolicy"] | null;
             /**
              * Threshold Step
              * @description Amount added once for uncertain or unmatched verdicts and twice for unsupported verdicts
@@ -36227,6 +36232,55 @@ export interface components {
             search_provider: string;
             /** Timeout */
             timeout?: number | null;
+        };
+        /** SelectiveHead */
+        SelectiveHead: {
+            /**
+             * Classes
+             * @default []
+             */
+            classes: (0 | 1 | 2 | 3)[];
+            /**
+             * Coefficients
+             * @default []
+             */
+            coefficients: number[][];
+            /** Constant */
+            constant?: (0 | 1 | 2 | 3) | null;
+            /**
+             * Features
+             * @default []
+             */
+            features: string[];
+            /**
+             * Intercept
+             * @default []
+             */
+            intercept: number[];
+        };
+        /** SelectivePolicy */
+        SelectivePolicy: {
+            /**
+             * Costs
+             * @default []
+             */
+            costs: components["schemas"]["SelectiveHead"][];
+            /**
+             * Feature Schema
+             * @enum {string}
+             */
+            feature_schema: "cap-v1" | "v2-v1";
+            /** Heads */
+            heads: components["schemas"]["SelectiveHead"][];
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "paired" | "rescue" | "per_model" | "scalar_calibration" | "benefit_per_dollar";
+            /** Threshold */
+            threshold: number;
+            /** Version */
+            version: string;
         };
         /**
          * ShadowEvalJobResponse
