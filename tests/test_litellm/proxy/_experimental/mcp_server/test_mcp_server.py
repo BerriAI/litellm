@@ -2165,23 +2165,29 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
         stateless_called.append(1)
 
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, None, None, None, None),
         ),
-        patch(
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[MagicMock()],
         ),
-        patch(
+        patch(  # test-quality-ok: init flag is a module global; no injection seam
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
         ),
-        patch.object(session_manager_stateless, "handle_request", side_effect=stateless_handle),
-        patch.object(session_manager_stateless, "_server_instances", {}),
-        patch.object(session_manager_stateful, "_server_instances", {}),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "handle_request", side_effect=stateless_handle
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "_server_instances", {}
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateful, "_server_instances", {}
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
@@ -2223,22 +2229,26 @@ async def test_mcp_routing_batch_body_is_not_stashed_for_auth():
     send = AsyncMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, None, None, None, None),
         ),
-        patch(
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[MagicMock()],
         ),
-        patch(
+        patch(  # test-quality-ok: init flag is a module global; no injection seam
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
         ),
-        patch.object(session_manager_stateless, "handle_request", new=AsyncMock()),
-        patch.object(session_manager_stateless, "_server_instances", {}),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "handle_request", new=AsyncMock()
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "_server_instances", {}
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
