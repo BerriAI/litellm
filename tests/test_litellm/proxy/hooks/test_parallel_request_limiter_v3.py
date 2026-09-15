@@ -6547,6 +6547,20 @@ class _ReplicaRedis:
         return {key: self.snapshot[key] for key in key_list if key in self.snapshot}
 
 
+class _OpenBreakerReplicaRedis:
+    """Replica whose circuit breaker has opened: the guard raises before the read body runs."""
+
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+        from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+
+class _ExplodingReplicaRedis:
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+        raise ConnectionError("replica unreachable")
+
+
 class _LuaFailurePrimaryRedis:
     """
     Primary Redis whose Lua calls fail. That is how production reaches the in-memory
@@ -6756,6 +6770,36 @@ async def test_a_replica_that_reads_back_empty_fails_open(time_controller):
 
 
 @pytest.mark.asyncio
+async def test_a_replica_whose_breaker_is_open_fails_open(time_controller):
+    """`async_batch_get_cache` swallows its own read failures, but the circuit-breaker guard
+    wrapping it raises before the body once the replica's breaker opens, which is the state a
+    replica outage settles into after a few failed reads. That must not fail the request."""
+    handler, descriptors = _rpm_handler([_OpenBreakerReplicaRedis()], time_controller, 100)
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99
+
+
+@pytest.mark.asyncio
+async def test_a_replica_read_that_raises_fails_open_and_warns(time_controller, caplog):
+    handler, descriptors = _rpm_handler([_ExplodingReplicaRedis()], time_controller, 100)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99
+    replica_warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING and "replica read failed" in record.getMessage()
+    ]
+    assert len(replica_warnings) == 1
+
+
+@pytest.mark.asyncio
 async def test_a_replica_read_missing_the_window_key_contributes_nothing(time_controller):
     """A read that returns the counter but not its window cannot say which window that
     counter belongs to, so charging it could bill usage from an already rolled-over window."""
@@ -6914,6 +6958,20 @@ async def test_reserve_tpm_without_replicas_allows_a_request_that_fits_locally(
 
     assert response["overall_code"] == "OK"
     assert response["statuses"][0]["current_limit"] == 1000
+    assert response["statuses"][0]["limit_remaining"] == 800
+
+
+@pytest.mark.asyncio
+async def test_an_open_replica_breaker_on_the_reservation_path_enforces_local_limits_only(
+    time_controller,
+):
+    handler, descriptors = _tpm_handler([_OpenBreakerReplicaRedis()], time_controller, 1000)
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=descriptors, estimated_tokens=200
+    )
+
+    assert response["overall_code"] == "OK"
     assert response["statuses"][0]["limit_remaining"] == 800
 
 

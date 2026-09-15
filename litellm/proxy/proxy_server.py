@@ -1002,6 +1002,9 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
+    for replica in rate_limit_remote_replica_caches:
+        await replica.disconnect()
+
     await jwt_handler.close()
 
     if db_writer_client is not None:

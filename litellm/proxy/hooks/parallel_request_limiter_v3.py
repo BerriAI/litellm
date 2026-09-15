@@ -1175,8 +1175,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
 
     async def _read_replica_counters(self, replica: RedisCache, keys: Sequence[str]) -> Mapping[str, object]:
-        """`RedisCache` logs and swallows its own failures, so an unreachable replica comes back empty."""
-        return await replica.async_batch_get_cache(key_list=list(keys))
+        """
+        `async_batch_get_cache` swallows read failures itself, but its circuit-breaker
+        guard raises `RedisCircuitBreakerOpenError` before the body runs once the
+        replica's breaker opens. A replica must never fail the request either way.
+        """
+        try:
+            return await replica.async_batch_get_cache(key_list=list(keys))
+        except Exception as e:  # noqa: BLE001  # any replica failure degrades to local-only enforcement, never a 500
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.WARNING,
+                "rate_limit_remote_replicas: replica read failed, enforcing against local counters only",
+                e,
+            )
+            return {}
 
     async def _remote_counter_offsets(
         self,
@@ -1186,8 +1199,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Sum each counter's value across the remote replicas, counting a replica
         only while its copy of that counter's window is still current. A replica
-        that reads back empty contributes nothing, so a region whose replica link
-        is down falls back to the per-region enforcement it has today.
+        that reads back empty or fails contributes nothing, so a region whose
+        replica link is down falls back to the per-region enforcement it has today.
         """
         if not self.remote_replica_caches or not probes:
             return _NO_REMOTE_OFFSETS

@@ -131,6 +131,29 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_event_closes_rate_limit_remote_replicas(monkeypatch):
+    fake_replicas = (MagicMock(), MagicMock())
+    for replica in fake_replicas:
+        replica.disconnect = AsyncMock()
+    monkeypatch.setattr(ps, "rate_limit_remote_replica_caches", fake_replicas, raising=False)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert [replica.disconnect.await_count for replica in fake_replicas] == [1, 1]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
     """
     The gateway request fold lives in memory, so shutdown drains it to the database.
