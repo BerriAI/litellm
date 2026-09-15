@@ -326,6 +326,38 @@ async def test_reserve_budget_for_added_tags_releases_every_counter_it_took_when
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_reserve_budget_for_added_tags_keeps_waiting_for_the_increment_through_a_second_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A shutdown that cancels the request again while it waits for the parked increment must not lose track
+    of that increment: once it lands, the counter is released like the rest."""
+    cache: Final = _ParkingIncrementCache(parked_key=f"spend:tag:{SECOND_HOOK_TAG}")
+    cache.in_memory_cache.set_cache(key=f"spend:tag:{SECOND_HOOK_TAG}", value=0.3)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    prisma: Final = _budgeted_tag_prisma((HOOK_TAG, SECOND_HOOK_TAG), max_budget=1.0)
+
+    reserving: Final = asyncio.create_task(
+        _reserve_added_tags("/v1/chat/completions", prisma, tags=(HOOK_TAG, SECOND_HOOK_TAG))
+    )
+    await cache.parked.wait()
+    reserving.cancel()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not reserving.done()
+    reserving.cancel()
+    cache.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await reserving
+
+    acquired: Final = [key for key, value in cache.landed if value > 0]
+    assert acquired == [f"spend:tag:{HOOK_TAG}", f"spend:tag:{SECOND_HOOK_TAG}"]
+    assert cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") == pytest.approx(0.0)
+    assert cache.in_memory_cache.get_cache(key=f"spend:tag:{SECOND_HOOK_TAG}") == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
 async def test_reserve_budget_for_added_tags_ignores_tags_without_a_budget(spend_counter_cache: DualCache):
     assert await _reserve_added_tags("/v1/chat/completions", _budgeted_tag_prisma((), max_budget=1.0)) is None
 

@@ -938,14 +938,14 @@ async def _acquire_counter(
 
 
 async def _increment_landed(increment: asyncio.Future[float | None]) -> bool:
-    try:
-        await asyncio.shield(increment)
-    except _CounterReservationUnavailable:
-        return False
-    except asyncio.CancelledError:
-        # cancelled again while waiting: leave the counter to its TTL rather than refund what may not exist
-        return False
-    return True
+    """Wait for the in-flight increment to settle, through any further cancellation, so the caller can tell
+    whether the counter holds a reservation it must release."""
+    while not increment.done():
+        try:
+            await asyncio.wait((increment,))
+        except asyncio.CancelledError:
+            continue
+    return not increment.cancelled() and increment.exception() is None
 
 
 async def _reserve_counter(
