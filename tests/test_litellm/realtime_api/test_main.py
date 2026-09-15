@@ -277,6 +277,40 @@ async def test_azure_health_check_resolves_stored_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected_url"),
+    [
+        ("xai", "grok-voice-latest", "wss://api.x.ai/v1/realtime?model=grok-voice-latest"),
+        ("openai", "gpt-realtime", "wss://api.openai.com/v1/realtime?model=gpt-realtime"),
+    ],
+)
+async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
+    monkeypatch, custom_llm_provider: str, model: str, expected_url: str
+):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="voice-key",
+                credential_values={"api_key": "sk-from-credential"},
+                credential_info={},
+            )
+        ],
+    )
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_key=None,
+            model_params={"model": f"{custom_llm_provider}/{model}", "litellm_credential_name": "voice-key"},
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-credential"}
+    assert connect.url == expected_url
+
+
+@pytest.mark.asyncio
 async def test_azure_health_check_probes_ga_transcription_url_for_transcription_model(local_model_cost_map):
     """Regression for LIT-6240: transcription-only models (mode audio_transcription
     in the cost map) are GA-only and 400 on the beta path, so the health probe

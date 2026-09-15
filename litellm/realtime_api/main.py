@@ -55,6 +55,7 @@ xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _model_params_with_stored_credentials(model_params: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -602,13 +603,15 @@ def _azure_realtime_health_protocol(
 
 def _realtime_health_check_auth_headers(
     custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, Any]
-) -> Mapping[str, str | None]:
-    if custom_llm_provider != "azure":
-        return MappingProxyType({"api-key": api_key})
-    return azure_realtime.get_auth_headers(
-        api_key=api_key,
-        azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
-    )
+) -> Mapping[str, str]:
+    if custom_llm_provider == "azure":
+        return azure_realtime.get_auth_headers(
+            api_key=api_key,
+            azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
+        )
+    if api_key is None:
+        return _EMPTY_AUTH_HEADERS
+    return MappingProxyType({"Authorization": f"Bearer {api_key}"})
 
 
 async def _realtime_health_check(
