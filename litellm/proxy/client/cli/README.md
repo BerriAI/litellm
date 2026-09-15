@@ -580,8 +580,8 @@ What the command changed is recorded in `~/.litellm/claude_configure_state.json`
 `lite configure claude`, `lite login --config-claude`, `lite up` and `lite autoroute up` also install a status line (`~/.litellm/statusline.py`, registered as `statusLine` in `~/.claude/settings.json` unless you already run one) that shows which model the auto-router actually served the last turn and, once the proxy has recorded the session, what the session cost against the router's savings baseline:
 
 ```
-claude-auto · Routed to: claude-haiku-4-5  -63% vs Claude Opus 5
-LiteLLM       ████████░░░░░░░░░░░░░░░░  $0.14
+Routed to: claude-haiku-4-5  -63% vs Claude Opus 5
+claude-auto   ████████░░░░░░░░░░░░░░░░  $0.14
 Claude Opus 5 ████████████████████████  $0.38
 ```
 

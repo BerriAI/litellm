@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import litellm
+from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -1080,6 +1081,173 @@ def test_boundary_key_accepts_pydantic_litellm_params_instance():
             "fake-azure-resource-key-a",
         )
     )
+
+
+def test_boundary_key_resolves_missing_values_from_named_credential():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    with (
+        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="account-a",
+                    credential_values={
+                        "api_base": "https://account-a.example.com",
+                        "api_key": "credential-key-a",
+                    },
+                    credential_info={},
+                )
+            ],
+        )
+    ):
+        boundary = EncryptedContentAffinityCheck._encryption_boundary_key({"litellm_credential_name": "account-a"})
+
+    assert boundary == ("https://account-a.example.com", "credential-key-a")
+
+
+def test_boundary_key_matches_named_credential_precedence():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    with (
+        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="account-a",
+                    credential_values={
+                        "api_base": "https://credential.example.com",
+                        "api_key": "credential-key-a",
+                    },
+                    credential_info={},
+                )
+            ],
+        )
+    ):
+        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
+            {
+                "api_base": "https://deployment.example.com",
+                "api_key": "deployment-key",
+                "litellm_credential_name": "account-a",
+            }
+        )
+
+    assert boundary == ("https://credential.example.com", "credential-key-a")
+
+
+def test_boundary_key_resolves_credential_when_explicit_values_are_empty():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    with (
+        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="account-a",
+                    credential_values={
+                        "api_base": "https://credential.example.com",
+                        "api_key": "credential-key-a",
+                    },
+                    credential_info={},
+                )
+            ],
+        )
+    ):
+        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
+            {
+                "api_base": "",
+                "api_key": "",
+                "litellm_credential_name": "account-a",
+            }
+        )
+
+    assert boundary == ("https://credential.example.com", "credential-key-a")
+
+
+def test_boundary_fallback_matches_deployments_with_same_named_credential_values():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    with (
+        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="account-a",
+                    credential_values={
+                        "api_base": "https://account-a.example.com",
+                        "api_key": "credential-key-a",
+                    },
+                    credential_info={},
+                ),
+                CredentialItem(
+                    credential_name="account-a-peer",
+                    credential_values={
+                        "api_base": "https://account-a.example.com",
+                        "api_key": "credential-key-a",
+                    },
+                    credential_info={},
+                ),
+                CredentialItem(
+                    credential_name="account-b",
+                    credential_values={
+                        "api_base": "https://account-b.example.com",
+                        "api_key": "credential-key-b",
+                    },
+                    credential_info={},
+                ),
+            ],
+        )
+    ):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.3-codex",
+                    "litellm_params": {
+                        "model": "azure/gpt-5.3-codex",
+                        "litellm_credential_name": "account-a",
+                    },
+                    "model_info": {"id": "origin"},
+                }
+            ],
+            num_retries=0,
+        )
+        check = EncryptedContentAffinityCheck(router=router)
+        healthy_deployments = [
+            {
+                "model_info": {"id": "peer-same-boundary"},
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "litellm_credential_name": "account-a-peer",
+                },
+            },
+            {
+                "model_info": {"id": "peer-different-boundary"},
+                "litellm_params": {
+                    "model": "azure/gpt-5.4",
+                    "litellm_credential_name": "account-b",
+                },
+            },
+        ]
+
+        matches, originating = check._find_deployments_on_same_encryption_boundary(
+            healthy_deployments=healthy_deployments,
+            model_id="origin",
+        )
+
+    assert originating is not None
+    assert [deployment["model_info"]["id"] for deployment in matches] == ["peer-same-boundary"]
 
 
 def test_boundary_key_rejects_non_dict_like_inputs():

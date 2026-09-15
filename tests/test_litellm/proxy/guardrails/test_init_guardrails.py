@@ -71,6 +71,52 @@ def test_initialize_bedrock_forwards_chunk_budget_chars():
     assert initialized[-1].chunk_budget_chars == 60_000
 
 
+def test_initialize_bedrock_forwards_contextual_grounding_from_messages():
+    """`contextual_grounding_from_messages: true` in config.yaml must make the post-call
+    payload carry the plain system prompt and user turn as grounding_source and query."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    test_guardrail = {
+        "guardrail_name": "test_bedrock_grounding_from_messages",
+        "litellm_params": {
+            "guardrail": SupportedGuardrailIntegrations.BEDROCK.value,
+            "mode": "post_call",
+            "guardrailIdentifier": "test-guardrail",
+            "guardrailVersion": "DRAFT",
+            "contextual_grounding_from_messages": True,
+        },
+    }
+    messages = [
+        {"role": "system", "content": "Returns are accepted for 30 days."},
+        {"role": "user", "content": "How long is the return window?"},
+    ]
+    response = ModelResponse(
+        choices=[Choices(index=0, message=Message(role="assistant", content="30 days."), finish_reason="stop")]
+    )
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [
+            {"text": {"text": "Returns are accepted for 30 days.", "qualifiers": ["grounding_source"]}},
+            {"text": {"text": "How long is the return window?", "qualifiers": ["query"]}},
+            {"text": {"text": "30 days.", "qualifiers": ["guard_content"]}},
+        ],
+    }
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
+
+    initialized = [
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, BedrockGuardrail) and callback.guardrail_name == "test_bedrock_grounding_from_messages"
+    ]
+    assert initialized, "bedrock guardrail was not registered as a callback"
+    actual_request = initialized[-1].convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    assert json.loads(json.dumps(actual_request)) == expected_request
+
+
 def test_initialize_guardrail_preserves_guardrail_info():
     """
     Regression (LIT-2529): initialize_guardrail must carry guardrail_info into the
