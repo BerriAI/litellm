@@ -313,7 +313,18 @@ export const getRequestLogsTableColumns = ({
     header: "Internal User",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={row.original.user} />,
+    cell: ({ row }) => {
+      const userEmail = readMetaString(row.original.metadata, "user_api_key_user_email");
+      if (userEmail) {
+        return (
+          <div className="flex flex-col">
+            <TruncatedText value={userEmail} />
+            <span className="text-[10px] text-muted-foreground">{row.original.user ?? "-"}</span>
+          </div>
+        );
+      }
+      return <TruncatedText value={row.original.user} />;
+    },
   },
   {
     id: "end_user",
