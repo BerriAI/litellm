@@ -31,7 +31,7 @@ from .handler import (
     normalize_reasoning_content,
 )
 from .handler import (
-    _normalize_choice as _normalize_choice_fn,
+    normalize_choice as _normalize_choice_fn,
 )
 from .models import (
     ChatCompletionTool,
@@ -432,7 +432,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return normalize_reasoning_content(raw)
 
     @staticmethod
-    def _normalize_choice(choice: dict) -> dict:  # mutable-ok: generic dict from raw JSON
+    def _normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic dict from raw JSON
         return _normalize_choice_fn(choice)
 
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
