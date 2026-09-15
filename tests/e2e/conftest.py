@@ -22,9 +22,9 @@ from typing import Final
 
 import pytest
 import requests
-
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
+    COST_MAP_OPT_IN_ENV,
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
@@ -53,6 +53,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "managed_files": MANAGED_FILES_OPT_IN_ENV,
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
+        "cost_map_stack": COST_MAP_OPT_IN_ENV,
     }
 )
 
@@ -119,6 +120,12 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
         "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "cost_map_stack: needs a proxy whose whole cost map is tests/e2e/cost_map.json "
+        "(LITELLM_MODEL_COST_MAP_URL) plus a scripted-provider sidecar; deselected unless "
+        "E2E_COST_MAP_STACK is set",
     )
 
 

@@ -1,0 +1,7 @@
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  proxy_batch_write_at: 5
+
+model_list: []
