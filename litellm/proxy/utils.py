@@ -26,7 +26,6 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
-    NON_INFERENCE_CALL_TYPES,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
@@ -7235,20 +7234,49 @@ async def _monitor_spend_logs_queue(
 
 MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
-_OBJECT_ID_KEYED_SPEND_LOG_CALL_TYPES: Final = NON_INFERENCE_CALL_TYPES | frozenset(
+_RESPONSE_ID_KEYED_SPEND_LOG_CALL_TYPES: Final = frozenset(
     {
-        CallTypes.create_batch.value,
-        CallTypes.acreate_batch.value,
-        CallTypes.retrieve_batch.value,
-        CallTypes.aretrieve_batch.value,
-        CallTypes.create_file.value,
-        CallTypes.acreate_file.value,
+        CallTypes.completion.value,
+        CallTypes.acompletion.value,
+        CallTypes.text_completion.value,
+        CallTypes.atext_completion.value,
+        CallTypes.embedding.value,
+        CallTypes.aembedding.value,
+        CallTypes.image_generation.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.image_edit.value,
+        CallTypes.aimage_edit.value,
+        CallTypes.moderation.value,
+        CallTypes.amoderation.value,
+        CallTypes.transcription.value,
+        CallTypes.atranscription.value,
+        CallTypes.speech.value,
+        CallTypes.aspeech.value,
+        CallTypes.rerank.value,
+        CallTypes.arerank.value,
+        CallTypes.search.value,
+        CallTypes.asearch.value,
+        CallTypes.anthropic_messages.value,
+        CallTypes.aanthropic_messages.value,
+        CallTypes.responses.value,
+        CallTypes.aresponses.value,
+        CallTypes.generate_content.value,
+        CallTypes.agenerate_content.value,
+        CallTypes.generate_content_stream.value,
+        CallTypes.agenerate_content_stream.value,
+        CallTypes.ocr.value,
+        CallTypes.aocr.value,
+        CallTypes.vector_store_search.value,
+        CallTypes.avector_store_search.value,
+        CallTypes.pass_through.value,
+        CallTypes.llm_passthrough_route.value,
+        CallTypes.allm_passthrough_route.value,
     }
 )
-"""Rows keyed on the id of the object the call addressed rather than on a fresh response id:
-the zero-priced reads and management calls of a stored object, batch polls (every poll of one
-batch collapses into its single cost row, the claim in ``_claim_batch_cost_spend_log``) and file
-uploads. A second row for one of these collapses on purpose."""
+"""The inference calls, whose provider mints a response id per call: a stored row with the same
+``request_id`` is another request the provider gave the same id. Every other call type (object
+creates, reads, polls and management calls, batch cost claims) is keyed on the id of the object
+it addressed, and a second row for one of those collapses on purpose."""
 
 
 def _is_transient_spend_log_write_error(e: Exception) -> bool:
@@ -7277,11 +7305,11 @@ async def _spend_logs_rekeyed_after_duplicate_skip(
     landed, so the rows are read back by identity from the writer (a lagging read replica
     would report the rows this very insert landed as missing): a stored row carrying this
     row's ``request_id`` AND ``litellm_call_id``, or already keyed on its call id, is this row
-    or a replay of it after a transport retry, and stays skipped. Rows keyed on an object id
-    collapse on purpose, and a row already keyed on its call id has nothing left to fall back
-    to; those are skipped and only logged.
+    or a replay of it after a transport retry, and stays skipped. Rows of a call type keyed on
+    an object id collapse on purpose, and a row already keyed on its call id has nothing left to
+    fall back to; those are skipped and only logged.
     """
-    unverified: Final = tuple(row for row in rows if row.get("call_type") not in _OBJECT_ID_KEYED_SPEND_LOG_CALL_TYPES)
+    unverified: Final = tuple(row for row in rows if row.get("call_type") in _RESPONSE_ID_KEYED_SPEND_LOG_CALL_TYPES)
     if not unverified:
         return ()
     stored_identities: Final = await SpendLogsRepository(WriterPinnedClient(repo.prisma_client.db)).stored_identities(
