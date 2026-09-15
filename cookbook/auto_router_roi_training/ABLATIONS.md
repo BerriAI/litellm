@@ -1,3 +1,5 @@
+> **Historical benchmark invalidated:** the 25-task live run exposed upstream fixes through Git objects outside the task checkout. Its quality and savings figures are withdrawn. These files retain the audit record, not evidence of routing improvements. Fresh isolated experiments are in progress
+
 # Card and calibration ablations
 
 These comparisons hold the boundary at the original default: capability base 0.5 with step 0.1, or V2 quality gap 0.05. All coefficients were fitted on the training split. This table reports every raw card and the fixed middle regularization strength of 10 for calibrated variants; the JSON contains all strengths. No variant is chosen using these held-out results

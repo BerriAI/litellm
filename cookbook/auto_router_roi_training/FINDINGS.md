@@ -1,3 +1,5 @@
+> **Historical benchmark invalidated:** the 25-task live run exposed upstream fixes through Git objects outside the task checkout. Its quality and savings figures are withdrawn. These files retain the audit record, not evidence of routing improvements. Fresh isolated experiments are in progress
+
 # What the training experiment showed
 
 Both implementations now support runnable, opt-in trained profiles. Training covered three cards, raw probabilities, per-model calibration, task-dependent calibration, and pair-specific boundaries, including combinations. All fitting and policy selection used the DeepSWE training and validation splits. The 25 fresh SWE-bench tasks were used only for evaluation
