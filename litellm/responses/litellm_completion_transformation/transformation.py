@@ -2715,7 +2715,8 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
                 if reasoning_text:
-                    setattr(message_item, "reasoning_content", reasoning_text)  # pyright: ignore[reportGeneralTypeIssues]  # extra='allow' model, attribute name is fixed
+                    # pyright: ignore[reportGeneralTypeIssues]  # extra='allow' model, attribute name is fixed
+                    setattr(message_item, "reasoning_content", reasoning_text)
 
                 message_output_items.append(message_item)
         return message_output_items
