@@ -109,7 +109,9 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
 
 
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
-    return kwargs.get("stream", False) is True or converted_stream_requested(kwargs)
+    if kwargs.get("stream", False) is True:
+        return True
+    return converted_stream_requested(kwargs) and not kwargs.get("_agentic_loop_depth")
 
 
 def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> bool:
