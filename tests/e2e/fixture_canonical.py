@@ -23,9 +23,8 @@ from dataclasses import dataclass
 from functools import reduce
 from typing import Final
 
-from pydantic import JsonValue
-
 from fixture_bundle import RecordedRequest
+from pydantic import JsonValue
 
 VOLATILE_HEADER_NAMES: Final[frozenset[str]] = frozenset(
     {
@@ -123,6 +122,12 @@ class CanonicalRequest:
 
 
 def canonicalize(request: RecordedRequest) -> CanonicalRequest:
+    if request.strict_identity is not None:
+        return CanonicalRequest(
+            method=request.method,
+            path=request.path,
+            content=json.dumps(request.strict_identity.model_dump(mode="json"), sort_keys=True, separators=(",", ":")),
+        )
     file_identity: Final[JsonValue | None] = (
         None
         if request.file_name is None and request.file_sha256 is None
