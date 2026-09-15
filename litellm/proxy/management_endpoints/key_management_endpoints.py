@@ -1078,7 +1078,9 @@ async def validate_team_id_used_in_service_account_request(
     return True
 
 
-_BUDGET_NUMERIC_KEYS = frozenset(["max_budget", "soft_budget", "max_parallel_requests", "tpm_limit", "rpm_limit"])
+_BUDGET_NUMERIC_KEYS = frozenset(
+    ["max_budget", "soft_budget", "max_parallel_requests", "tpm_limit", "rpm_limit", "tpd_limit"]
+)
 
 
 def _enforce_upperbound_key_params(
@@ -1957,6 +1959,7 @@ async def generate_key_fn(
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+    - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -2163,6 +2166,7 @@ async def generate_service_account_key_fn(
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+    - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
@@ -3192,6 +3196,7 @@ async def update_key_fn(
     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
     - tpm_limit: Optional[int] - Tokens per minute limit
     - rpm_limit: Optional[int] - Requests per minute limit
+    - tpd_limit: Optional[int] - Tokens per day limit, charged by batch submissions instead of tpm_limit/rpm_limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
@@ -4355,6 +4360,7 @@ async def generate_key_helper_fn(
     metadata: dict | None = {},
     tpm_limit: int | None = None,
     rpm_limit: int | None = None,
+    tpd_limit: int | None = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
     update_key_values: dict | None = None,
     key_alias: str | None = None,
@@ -4503,6 +4509,7 @@ async def generate_key_helper_fn(
             "metadata": metadata_json,
             "tpm_limit": tpm_limit,
             "rpm_limit": rpm_limit,
+            "tpd_limit": tpd_limit,
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
             "allowed_cache_controls": allowed_cache_controls,

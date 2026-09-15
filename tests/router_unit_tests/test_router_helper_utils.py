@@ -2099,8 +2099,12 @@ def test_handle_clientside_credential_metadata_loading(
     assert result_deployment.model_info.id != "original-id-123"
     assert result_deployment.model_info.original_model_id == "original-id-123"
 
-    # Verify the deployment was added to the router
-    assert len(router.model_list) == len(model_list) + 1
+    # The caller-supplied credential must stay scoped to this call: it must never be
+    # registered as a router deployment, or a later caller with no override of their
+    # own could be load-balanced onto it and reach the provider with this credential
+    # (see LIT-7811).
+    assert len(router.model_list) == len(model_list)
+    assert router.get_deployment(model_id=result_deployment.model_info.id) is None
 
     # Test that the function correctly uses the right metadata key
     # For acompletion, it should use "metadata"
@@ -2260,12 +2264,61 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     assert result_deployment.model_info.id != "original-id-responses"
     assert result_deployment.model_info.original_model_id == "original-id-responses"
 
-    # Verify the deployment was added to the router
-    assert len(router.model_list) == len(model_list) + 1
+    # The caller-supplied credential must stay scoped to this call: it must never be
+    # registered as a router deployment (see LIT-7811).
+    assert len(router.model_list) == len(model_list)
+    assert router.get_deployment(model_id=result_deployment.model_info.id) is None
 
     print(
         "✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata"
     )
+
+
+def test_handle_clientside_credential_still_registers_custom_pricing(model_list):
+    """A clientside-credential call must still price against the deployment's own
+    custom rate, even though the call's ephemeral deployment is never added to the
+    router (see LIT-7811): losing that registration would silently fall back to
+    public catalog pricing for every clientside-credential call on a deployment
+    with a custom rate configured."""
+    router = Router(model_list=model_list)
+    deployment = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {
+            "model": "gpt-4.1",
+            "api_key": "test_key",
+            "input_cost_per_token": 0.0001234,
+            "output_cost_per_token": 0.0005678,
+        },
+        "model_info": {"id": "original-id-pricing"},
+    }
+    kwargs = {"api_key": "client_side_key", "metadata": {"model_group": "gpt-4.1"}}
+
+    result_deployment = router._handle_clientside_credential(
+        deployment=deployment, kwargs=kwargs, function_name="acompletion"
+    )
+
+    registered = litellm.model_cost.get(result_deployment.model_info.id)
+    assert registered is not None
+    assert registered["input_cost_per_token"] == 0.0001234
+    assert registered["output_cost_per_token"] == 0.0005678
+
+
+def test_register_deployment_pricing_direct_call():
+    """Direct-call unit test for the pricing-registration helper `_handle_clientside_credential`
+    relies on, so it prices a deployment that is deliberately never added to `self.model_list`."""
+    deployment = Deployment(
+        model_name="gpt-4.1",
+        litellm_params=LiteLLM_Params(
+            model="gpt-4.1",
+            api_key="test_key",
+            input_cost_per_token=0.0009999,
+        ),
+        model_info=ModelInfo(id="direct-call-pricing-id"),
+    )
+
+    Router._register_deployment_pricing(deployment=deployment)
+
+    assert litellm.model_cost["direct-call-pricing-id"]["input_cost_per_token"] == 0.0009999
 
 
 def test_get_metadata_variable_name_from_kwargs(model_list):
