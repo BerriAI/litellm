@@ -35,6 +35,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     admin_can_invite_user,
 )
 from litellm.proxy.management_endpoints.common_utils import _has_non_empty_value
+from litellm.types.utils import BudgetConfig
 
 
 class TestUpdateMetadataFieldsEmptyCollections:
@@ -1162,3 +1163,54 @@ async def test_router_weights_validate_current_deployment_scope(
         assert exc.value.detail == error
     else:
         await validation
+
+
+@pytest.mark.parametrize(
+    "model_max_budget, error",
+    [
+        ({"gpt-4o": BudgetConfig(max_budget=-1.0, budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=float("inf"), budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=float("nan"), budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0)}, "requires a budget_duration"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="fortnight")}, "budget_duration"),
+        ({"  ": BudgetConfig(max_budget=5.0, budget_duration="1d")}, "non-empty model names"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="1d", tpm_limit=1000)}, "not enforced on a team"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="1d", rpm_limit=10)}, "not enforced on a team"),
+    ],
+    ids=["negative", "inf", "nan", "no_cap", "no_duration", "bad_duration", "blank_model", "tpm_limit", "rpm_limit"],
+)
+def test_validate_team_model_max_budget_rejects_unenforceable_entries(model_max_budget, error) -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    with pytest.raises(HTTPException) as exc:
+        validate_team_model_max_budget(model_max_budget=model_max_budget, premium_user=True)
+    assert exc.value.status_code == 400
+    assert error in exc.value.detail["error"]
+
+
+def test_validate_team_model_max_budget_accepts_a_zero_cap_and_prefixed_models() -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    assert (
+        validate_team_model_max_budget(
+            model_max_budget={
+                "gpt-4o": BudgetConfig(max_budget=0.0, budget_duration="1d"),
+                "openai/gpt-4o-mini": BudgetConfig(max_budget=2.5, budget_duration="30d"),
+            },
+            premium_user=True,
+        )
+        is None
+    )
+
+
+def test_validate_team_model_max_budget_is_license_gated_only_when_set() -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    validate_team_model_max_budget(model_max_budget=None, premium_user=False)
+    validate_team_model_max_budget(model_max_budget={}, premium_user=False)
+    with pytest.raises(HTTPException) as exc:
+        validate_team_model_max_budget(
+            model_max_budget={"gpt-4o": BudgetConfig(max_budget=1.0, budget_duration="1d")}, premium_user=False
+        )
+    assert exc.value.status_code == 403

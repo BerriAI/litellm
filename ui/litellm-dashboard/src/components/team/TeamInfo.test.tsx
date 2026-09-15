@@ -1609,6 +1609,99 @@ describe("TeamInfoView", () => {
     });
   });
 
+  describe("per-model budgets", () => {
+    const teamWithModelBudget = () =>
+      createMockTeamData({
+        models: ["gpt-4"],
+        model_max_budget: { "gpt-4": { max_budget: 5, budget_duration: "1d" } },
+        model_max_budget_usage: { "gpt-4": { current_spend: 1.25, budget_limit: 5, time_period: "1d" } },
+      });
+
+    const openSettingsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+    };
+
+    const savedPayload = async () => {
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+      return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+    };
+
+    it("shows the stored per-model budget and its current spend in the read-only settings view", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      expect(await screen.findByText("Per-Model Budget (gpt-4): $5 per 1d, spent $1.25")).toBeInTheDocument();
+    });
+
+    it("seeds the editor from the stored budget and keeps it read-only without an enterprise license", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={false} />);
+
+      await openSettingsEditor(user);
+
+      expect(screen.getByPlaceholderText("Max spend ($)")).toHaveValue(5);
+      expect(screen.getByPlaceholderText("Max spend ($)")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
+    });
+
+    it("leaves model_max_budget out of a save that did not touch it", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await openSettingsEditor(user);
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await savedPayload()).not.toHaveProperty("model_max_budget");
+    });
+
+    it("sends the edited cap for the model", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await openSettingsEditor(user);
+      fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "2.5" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect((await savedPayload()).model_max_budget).toEqual({ "gpt-4": { budget_limit: 2.5, time_period: "1d" } });
+    });
+
+    it("sends an empty model_max_budget when the last row is removed, so the stored cap is cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithModelBudget());
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await openSettingsEditor(user);
+      await user.click(screen.getByRole("button", { name: "Remove model budget" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect((await savedPayload()).model_max_budget).toEqual({});
+    });
+  });
+
   describe("team member settings", () => {
     it("should populate Default Key Duration from the team's stored metadata", async () => {
       const user = userEvent.setup({ delay: null });

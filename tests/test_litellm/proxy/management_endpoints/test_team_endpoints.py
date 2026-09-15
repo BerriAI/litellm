@@ -14651,3 +14651,232 @@ async def test_team_info_reports_parent_organization_models_only_to_team_manager
         )
 
     assert response["team_info"].organization_models == expected_models
+
+
+_EXISTING_TEAM_MODEL_CAPS: Final = {
+    "gpt-4o": {"max_budget": 10.0, "budget_duration": "1d"},
+    "claude-sonnet-4-6": {"max_budget": 5.0, "budget_duration": "7d"},
+}
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        {**_EXISTING_TEAM_MODEL_CAPS, "gpt-4o": {"max_budget": 20.0, "budget_duration": "1d"}},
+        {**_EXISTING_TEAM_MODEL_CAPS, "gpt-4o": {"max_budget": 10.0, "budget_duration": "30d"}},
+        {**_EXISTING_TEAM_MODEL_CAPS, "gpt-4o": {"budget_duration": "1d"}},
+        {"claude-sonnet-4-6": _EXISTING_TEAM_MODEL_CAPS["claude-sonnet-4-6"]},
+        {},
+        None,
+    ],
+    ids=["raise", "change_duration", "drop_cap_value", "remove_model", "clear_all", "clear_with_null"],
+)
+def test_team_admin_cannot_loosen_team_model_caps(requested) -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(team_id="t1", model_max_budget=requested),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_model_max_budget=_EXISTING_TEAM_MODEL_CAPS,
+        )
+    assert exc.value.status_code == 403
+    assert "proxy admin" in exc.value.detail["error"]
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        {**_EXISTING_TEAM_MODEL_CAPS, "gpt-4o": {"max_budget": 2.0, "budget_duration": "1d"}},
+        {**_EXISTING_TEAM_MODEL_CAPS, "gpt-4o-mini": {"max_budget": 1.0, "budget_duration": "1d"}},
+        dict(_EXISTING_TEAM_MODEL_CAPS),
+    ],
+    ids=["lower", "add_model", "unchanged"],
+)
+def test_team_admin_can_tighten_or_keep_team_model_caps(requested) -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    assert (
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(team_id="t1", model_max_budget=requested),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_model_max_budget=_EXISTING_TEAM_MODEL_CAPS,
+        )
+        is None
+    )
+
+
+def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_admins() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    team_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin")
+    outcomes = (
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(team_id="t1", max_budget=1.0),
+            user_api_key_dict=team_admin,
+            existing_model_max_budget=_EXISTING_TEAM_MODEL_CAPS,
+        ),
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(team_id="t1", model_max_budget={}),
+            user_api_key_dict=team_admin,
+            existing_model_max_budget={"gpt-4o": "not-a-budget", "gpt-4o-mini": {"budget_duration": "1d"}},
+        ),
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(team_id="t1", model_max_budget=None),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            existing_model_max_budget=_EXISTING_TEAM_MODEL_CAPS,
+        ),
+    )
+    assert outcomes == (None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_auth):
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+
+    team_create_result = MagicMock(team_id="team-model-caps")
+    team_create_result.model_dump.return_value = {"team_id": "team-model-caps"}
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    with patch("litellm.proxy.proxy_server.premium_user", True):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        await new_team(
+            data=NewTeamRequest(
+                team_alias="model-caps",
+                model_max_budget={"gpt-4o": {"max_budget": 10.0, "budget_duration": "1d"}},
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data["model_max_budget"] == {
+        "gpt-4o": {"max_budget": 10.0, "budget_duration": "1d", "tpm_limit": None, "rpm_limit": None}
+    }
+
+
+@pytest.mark.asyncio
+async def test_new_team_rejects_unenforceable_model_max_budget(mock_db_client, mock_admin_auth):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    mock_db_client.db.litellm_teamtable.create = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.premium_user", True), pytest.raises(ProxyException) as exc:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        await new_team(
+            data=NewTeamRequest(team_alias="model-caps", model_max_budget={"gpt-4o": {"max_budget": 10.0}}),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert exc.value.code == "400"
+    assert "budget_duration" in str(exc.value.message)
+    mock_db_client.db.litellm_teamtable.create.assert_not_awaited()
+
+
+def _existing_team_with_model_caps(caps):
+    existing = MagicMock()
+    existing.team_id = "standalone-team-123"
+    existing.organization_id = None
+    existing.max_budget = None
+    existing.model_id = None
+    existing.model_max_budget = caps
+    existing.model_dump.return_value = {
+        "team_id": "standalone-team-123",
+        "organization_id": None,
+        "model_max_budget": caps,
+        "members_with_roles": [{"user_id": "team-admin-model-caps", "role": "admin"}],
+    }
+    return existing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleared_with", [{}, None], ids=["empty_mapping", "null"])
+async def test_update_team_clearing_model_max_budget_writes_an_empty_mapping(
+    disable_audit_logging_for_mocked_team, cleared_with
+):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    ):
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=_existing_team_with_model_caps(_EXISTING_TEAM_MODEL_CAPS)
+        )
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+        updated = _existing_team_with_model_caps({})
+        updated.litellm_model_table = None
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="standalone-team-123", model_max_budget=cleared_with),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+    assert mock_prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["model_max_budget"] == {}
+
+
+@pytest.mark.asyncio
+async def test_update_team_model_max_budget_raise_blocked_for_team_admin():
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()),  # test-quality-ok: stubs the audit write so the test observes only the team update result
+    ):
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=_existing_team_with_model_caps(_EXISTING_TEAM_MODEL_CAPS)
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock()
+
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(
+                    team_id="standalone-team-123",
+                    model_max_budget={
+                        **_EXISTING_TEAM_MODEL_CAPS,
+                        "gpt-4o": {"max_budget": 100.0, "budget_duration": "1d"},
+                    },
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin-model-caps", models=[]
+                ),
+            )
+
+    assert exc.value.code == "403"
+    assert "proxy admin" in str(exc.value.message).lower()
+    mock_prisma.db.litellm_teamtable.update.assert_not_awaited()

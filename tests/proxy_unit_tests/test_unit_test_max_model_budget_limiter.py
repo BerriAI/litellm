@@ -587,6 +587,8 @@ def _success_kwargs(
     response_cost=0.5,
     key_hash=None,
     key_model_max_budget=None,
+    team_id=None,
+    team_model_max_budget=None,
     user_id=None,
     user_model_max_budget=None,
     end_user_id=None,
@@ -600,6 +602,7 @@ def _success_kwargs(
             "end_user": end_user_id,
             "metadata": {
                 "user_api_key_hash": key_hash,
+                "user_api_key_team_id": team_id,
                 "user_api_key_user_id": user_id,
                 "user_api_key_end_user_id": end_user_id,
             },
@@ -607,6 +610,7 @@ def _success_kwargs(
         "litellm_params": {
             "metadata": {
                 "user_api_key_model_max_budget": key_model_max_budget,
+                "user_api_key_team_model_max_budget": team_model_max_budget,
                 "user_api_key_user_model_max_budget": user_model_max_budget,
                 "user_api_key_end_user_model_max_budget": end_user_model_max_budget,
             },
@@ -1417,3 +1421,266 @@ async def test_spend_logged_on_one_replica_is_enforced_and_reported_on_another()
     replica_c = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     with pytest.raises(litellm.BudgetExceededError):
         await replica_c.is_key_within_model_budget(user_api_key, "gpt-4")
+
+
+def _log_success(limiter, **kwargs):
+    return limiter.async_log_success_event(
+        _success_kwargs(**kwargs), response_obj=None, start_time=None, end_time=None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_model",
+    ["gpt-4", "openai/gpt-4"],
+    ids=["bare_model", "provider_prefixed_model"],
+)
+async def test_team_model_budget_is_shared_by_every_key_without_an_override(request_model):
+    """
+    Two keys on the same team, neither carrying a matching key-level entry,
+    charge one team counter and are both refused once it is spent.
+    """
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
+    check = lambda: limiter.is_team_within_model_budget(
+        team_id="team-1",
+        team_model_max_budget=team_model_max_budget,
+        key_model_max_budget=None,
+        model=request_model,
+    )
+
+    assert await check() is True
+    await _log_success(
+        limiter,
+        model_group=request_model,
+        response_cost=0.6,
+        key_hash="vk-a",
+        team_id="team-1",
+        team_model_max_budget=team_model_max_budget,
+    )
+    assert await check() is True
+    await _log_success(
+        limiter,
+        model_group=request_model,
+        response_cost=0.6,
+        key_hash="vk-b",
+        team_id="team-1",
+        team_model_max_budget=team_model_max_budget,
+    )
+
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-1:gpt-4:1d") == pytest.approx(1.2)
+    with pytest.raises(litellm.BudgetExceededError) as exc:
+        await check()
+    assert exc.value.entity_type == Litellm_EntityType.TEAM.value
+    assert await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.TEAM,
+        entity_id="team-1",
+        model_max_budget=team_model_max_budget,
+        cache=dual_cache,
+    ) == {"gpt-4": {"current_spend": pytest.approx(1.2), "budget_limit": 1.0, "time_period": "1d"}}
+
+
+@pytest.mark.asyncio
+async def test_key_override_replaces_the_team_cap_for_that_model():
+    """
+    A key with its own entry for the model is gated on the key counter alone:
+    the exhausted team counter does not block it, and its spend never lands on
+    the team counter.
+    """
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
+    key_model_max_budget = {"gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
+    await dual_cache.async_set_cache(key="team_model_spend:team-1:gpt-4:1d", value=9.0)
+
+    assert (
+        await limiter.is_team_within_model_budget(
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=key_model_max_budget,
+            model="openai/gpt-4",
+        )
+        is True
+    )
+
+    await _log_success(
+        limiter,
+        model_group="openai/gpt-4",
+        response_cost=2.0,
+        key_hash="vk-override",
+        key_model_max_budget=key_model_max_budget,
+        team_id="team-1",
+        team_model_max_budget=team_model_max_budget,
+    )
+
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-1:gpt-4:1d") == 9.0
+    assert await dual_cache.async_get_cache(key="virtual_key_spend:vk-override:gpt-4:1d") == 2.0
+
+
+@pytest.mark.asyncio
+async def test_key_entry_for_another_model_does_not_lift_the_team_cap():
+    """A key override only covers the model it names; other models stay on the team counter."""
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
+    key_model_max_budget = {"claude-3": {"budget_limit": 5.0, "time_period": "1d"}}
+
+    await _log_success(
+        limiter,
+        model_group="gpt-4",
+        response_cost=1.5,
+        key_hash="vk-other",
+        key_model_max_budget=key_model_max_budget,
+        team_id="team-1",
+        team_model_max_budget=team_model_max_budget,
+    )
+
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-1:gpt-4:1d") == 1.5
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_team_within_model_budget(
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=key_model_max_budget,
+            model="gpt-4",
+        )
+
+
+@pytest.mark.asyncio
+async def test_team_budget_leaves_unconfigured_models_alone():
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    team_model_max_budget = {"gpt-4": {"budget_limit": 0.0, "time_period": "1d"}}
+
+    assert (
+        await limiter.is_team_within_model_budget(
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=None,
+            model="claude-3",
+        )
+        is True
+    )
+    with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock) as mock_increment:
+        await _log_success(
+            limiter,
+            model_group="claude-3",
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+        )
+    mock_increment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_counters_are_isolated_by_team_model_and_window():
+    """Same model on two teams, and two models with different windows on one team, never share a counter."""
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    team_model_max_budget = {
+        "gpt-4": {"budget_limit": 10.0, "time_period": "1d"},
+        "claude-3": {"budget_limit": 10.0, "time_period": "30d"},
+    }
+
+    for team_id, model in (("team-1", "gpt-4"), ("team-2", "gpt-4"), ("team-1", "claude-3")):
+        await _log_success(
+            limiter,
+            model_group=model,
+            response_cost=1.0,
+            team_id=team_id,
+            team_model_max_budget=team_model_max_budget,
+        )
+
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-1:gpt-4:1d") == 1.0
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-2:gpt-4:1d") == 1.0
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-1:claude-3:30d") == 1.0
+    assert await dual_cache.async_get_cache(key="team_model_budget_start_time:team-1:claude-3:30d") is not None
+
+
+@pytest.mark.asyncio
+async def test_malformed_team_entry_is_skipped_and_its_sibling_still_enforced():
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    team_model_max_budget = {
+        "gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"},
+        "claude-3": {"budget_limit": 0.0, "time_period": "1d"},
+    }
+
+    assert (
+        await limiter.is_team_within_model_budget(
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=None,
+            model="gpt-4",
+        )
+        is True
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_team_within_model_budget(
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=None,
+            model="claude-3",
+        )
+
+
+@pytest.mark.asyncio
+async def test_malformed_key_entry_does_not_count_as_an_override():
+    """A key entry the limiter cannot enforce must not also switch the team cap off."""
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
+    key_model_max_budget = {"gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"}}
+
+    await _log_success(
+        limiter,
+        model_group="gpt-4",
+        response_cost=1.5,
+        key_hash="vk-bad",
+        key_model_max_budget=key_model_max_budget,
+        team_id="team-1",
+        team_model_max_budget=team_model_max_budget,
+    )
+
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-1:gpt-4:1d") == 1.5
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_team_within_model_budget(
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=key_model_max_budget,
+            model="gpt-4",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_entry",
+    [
+        {"time_period": "1d", "tpm_limit": 100},
+        {"time_period": "1d", "rpm_limit": 10},
+        {"budget_limit": -1.0, "time_period": "1d"},
+    ],
+)
+async def test_key_entry_without_a_spend_cap_does_not_lift_the_team_cap(key_entry):
+    """A key row that only rate-limits the model, or has no enforceable cap, leaves the team cap in force."""
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
+    key_model_max_budget = {"gpt-4": key_entry}
+
+    await _log_success(
+        limiter,
+        model_group="openai/gpt-4",
+        response_cost=1.5,
+        key_hash="vk-rate-limited",
+        key_model_max_budget=key_model_max_budget,
+        team_id="team-1",
+        team_model_max_budget=team_model_max_budget,
+    )
+
+    assert await dual_cache.async_get_cache(key="team_model_spend:team-1:gpt-4:1d") == 1.5
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_team_within_model_budget(
+            team_id="team-1",
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=key_model_max_budget,
+            model="openai/gpt-4",
+        )

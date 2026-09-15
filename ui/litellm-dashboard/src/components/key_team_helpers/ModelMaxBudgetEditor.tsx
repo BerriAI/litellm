@@ -144,6 +144,7 @@ export function ModelMaxBudgetEditor({
               onClick={() => removeEntry(entry.id)}
               disabled={!premiumUser}
               title={hintWhenLocked}
+              aria-label="Remove model budget"
               className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors p-1"
             >
               <X className="w-4 h-4" />
