@@ -14,9 +14,8 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import PrismaClient
 
 
 # Mock classes for testing
@@ -1803,3 +1802,40 @@ def test_reset_budget_for_tags_linked_to_budgets_management_cache_delete_failure
     asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
 
     prisma_client.db.litellm_tagtable.update_many.assert_awaited_once()
+
+
+def test_get_data_filters_explicit_budget_id_endusers_by_spend():
+    """
+    Regression for the CPU-spike bug: PrismaClient.get_data's enduser +
+    budget_id_list query read every end-user linked to an expiring shared
+    budget, including ones already at spend=0. On a large shared-budget
+    population, that means every no-op reset tick still fetches (and the
+    caller then re-processes) the full customer count forever.
+
+    The sibling query for budget_id=NULL end-users
+    (_get_endusers_with_no_budget_id) already filters on spend > 0; this
+    locks in the same filter for the explicit-budget_id path so the two
+    stay symmetric.
+
+    Calls the real PrismaClient.get_data (not a mock of it) against a fake
+    client exposing only what this branch touches, so a regression here
+    would actually be caught.
+    """
+    endusertable = MagicMock()
+    endusertable.find_many = AsyncMock(return_value=[])
+    fake_prisma_client = types.SimpleNamespace(
+        db=types.SimpleNamespace(litellm_endusertable=endusertable)
+    )
+
+    asyncio.run(
+        PrismaClient.get_data(
+            fake_prisma_client,
+            table_name="enduser",
+            query_type="find_all",
+            budget_id_list=["budget-1", "budget-2"],
+        )
+    )
+
+    endusertable.find_many.assert_awaited_once_with(
+        where={"budget_id": {"in": ["budget-1", "budget-2"]}, "spend": {"gt": 0}}
+    )

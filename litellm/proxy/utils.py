@@ -3393,7 +3393,7 @@ class PrismaClient:
             elif table_name == "enduser" and budget_id_list is not None:
                 if query_type == "find_all":
                     response = await EndUserRepository(self).table.find_many(
-                        where={"budget_id": {"in": budget_id_list}}
+                        where={"budget_id": {"in": budget_id_list}, "spend": {"gt": 0}}
                     )
                     return response
             elif table_name == "team":
