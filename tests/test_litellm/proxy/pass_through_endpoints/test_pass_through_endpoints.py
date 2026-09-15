@@ -1167,14 +1167,14 @@ def test_resolve_llm_passthrough_timeout_stream_timeout_precedence():
         )
         == 90.0
     )
-    with patch("litellm.proxy.proxy_server.general_settings", {}):
-        assert (
-            resolve_llm_passthrough_timeout(
-                litellm_params={"stream_timeout": 1800},
-                router_stream_timeout=1800,
-            )
-            == DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS
+    assert (
+        resolve_llm_passthrough_timeout(
+            litellm_params={"stream_timeout": 1800},
+            router_timeout=120,
+            router_stream_timeout=1800,
         )
+        == 120.0
+    )
 
 
 @pytest.mark.asyncio
