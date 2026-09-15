@@ -69,7 +69,6 @@ def phoenix_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
                 ExporterSpec(
                     kind=cfg.protocol if hasattr(cfg, "protocol") else "otlp_http",
                     endpoint=cfg.endpoint,

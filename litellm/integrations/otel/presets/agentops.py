@@ -53,7 +53,6 @@ def agentops_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
                 ExporterSpec(
                     kind=_AGENTOPS_EXPORTER_KIND,
                     endpoint=_AGENTOPS_ENDPOINT,
