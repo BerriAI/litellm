@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final, Literal
 
 import jwt
 from fastapi import HTTPException
+from prisma.models import LiteLLM_UserTable as PrismaUser
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -251,7 +252,7 @@ async def authenticate_user(
         )
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
-    _user_row: LiteLLM_UserTable | None = None
+    _user_row: PrismaUser | None = None
     user_role: (
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
