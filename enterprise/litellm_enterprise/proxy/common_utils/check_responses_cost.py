@@ -214,7 +214,7 @@ class CheckResponsesCost:
                 # Decrypts rows written before model_object_id held the provider's own id.
                 responses_id_security = ResponsesIDSecurity().provider_response_id(job.model_object_id)
                 
-                probe_metadata: Final = {
+                probe_metadata: dict[str, str] = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
                     **({"user_api_key_team_id": job.team_id} if job.team_id else {}),
                     **({"user_api_key": job.api_key, "user_api_key_hash": job.api_key} if job.api_key else {}),
@@ -263,7 +263,7 @@ class CheckResponsesCost:
             verbose_proxy_logger.info(
                 f"Response {unified_object_id} has terminal status {response.status}, marked as complete"
             )
-            billing_metadata: Final = {
+            billing_metadata: dict[str, str] = {
                 **probe_metadata,
                 INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
             }
