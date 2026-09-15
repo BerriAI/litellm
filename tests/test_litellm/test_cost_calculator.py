@@ -3909,6 +3909,57 @@ def _batch_cache_usage() -> Usage:
     )
 
 
+def test_batch_cost_calculator_prices_multimodal_tokens_at_modality_rates():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {
+        "input_cost_per_token_batches": 1e-7,
+        "input_cost_per_audio_token_batches": 3.25e-6,
+        "input_cost_per_image_token_batches": 2.25e-7,
+        "input_cost_per_video_token_batches": 6e-6,
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=64,
+            image_tokens=10,
+            video_tokens=6,
+        ),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-embedding-2",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(20 * 1e-7 + 64 * 3.25e-6 + 10 * 2.25e-7 + 6 * 6e-6)
+
+
+def test_batch_cost_calculator_falls_back_to_text_batch_rate_for_modalities():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {"input_cost_per_token_batches": 1e-7}
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=64),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-embedding-2",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(100 * 1e-7)
+
+
 def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
     """
     LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
