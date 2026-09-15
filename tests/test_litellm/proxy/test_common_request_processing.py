@@ -396,8 +396,13 @@ class TestProxyBaseLLMRequestProcessing:
         )
         tag_check = AsyncMock()
         monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_check)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "reserve_budget_for_added_tags", AsyncMock(return_value=None)
+        )
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
         monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", None)
         return mock_request, mock_proxy_logging_obj, tag_check
 
     @pytest.mark.asyncio
@@ -606,6 +611,137 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         tag_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("master_key", "user_custom_auth", "general_settings", "checked"),
+        [
+            (None, None, {}, False),
+            (None, None, {"enable_jwt_auth": True}, True),
+            ("sk-master", object(), {}, False),
+            ("sk-master", object(), {"custom_auth_run_common_checks": True}, True),
+            ("sk-master", None, {}, True),
+        ],
+    )
+    async def test_common_processing_pre_call_logic_enforces_hook_added_tags_only_where_auth_runs_common_checks(
+        self, monkeypatch, master_key, user_custom_auth, general_settings, checked
+    ):
+        """A deployment whose auth wrapper skips common_checks (no-auth dev mode, custom auth without opt-in)
+        never budget-checked tags before, so a hook-added tag must not start 429ing it."""
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            data["metadata"]["tags"].append("guardrail-tag")
+            return data
+
+        mock_request, mock_proxy_logging_obj, tag_check = self._tag_budget_rig(
+            monkeypatch, request_data={"model": "live-mini", "metadata": {"tags": []}}, pre_call_hook=mock_pre_call_hook
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", user_custom_auth)
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings=general_settings,
+            user_api_key_dict=ProxyUserAPIKeyAuth(token="test-token"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        assert tag_check.await_count == (1 if checked else 0)
+
+    @staticmethod
+    def _reservation(counter_key: str) -> dict:
+        return {
+            "reserved_cost": 0.5,
+            "entries": [
+                {"counter_key": counter_key, "entity_type": "Tag", "entity_id": counter_key, "reserved_cost": 0.5}
+            ],
+            "finalized": False,
+            "input_cost": 0.1,
+            "input_tokens": 3,
+        }
+
+    async def _run_with_hook_added_tag(self, monkeypatch, user_api_key_dict, general_settings: dict):
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            data["metadata"]["tags"].append("guardrail-tag")
+            return data
+
+        mock_request, mock_proxy_logging_obj, _ = self._tag_budget_rig(
+            monkeypatch, request_data={"model": "live-mini", "metadata": {"tags": []}}, pre_call_hook=mock_pre_call_hook
+        )
+        reserve = AsyncMock(return_value=self._reservation("spend:tag:guardrail-tag"))
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "reserve_budget_for_added_tags", reserve)
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+        return processing_obj, reserve
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_folds_the_hook_tag_reservation_into_the_auth_reservation(
+        self, monkeypatch
+    ):
+        """Auth reserved the body tags before the hook ran. The hook-added tag gets its own reservation
+        so a burst cannot overshoot it, and it must join the same reservation object auth left on the
+        key, since that object is what the success, failure and cancel paths settle."""
+        auth_reservation = self._reservation("spend:key:test-token")
+        user_api_key_dict = ProxyUserAPIKeyAuth(token="test-token")
+        user_api_key_dict.budget_reservation = auth_reservation
+
+        processing_obj, reserve = await self._run_with_hook_added_tag(
+            monkeypatch, user_api_key_dict, general_settings={"fail_closed_budget_enforcement": True}
+        )
+
+        reserve.assert_awaited_once()
+        assert reserve.call_args.kwargs["tags"] == ("guardrail-tag",)
+        assert reserve.call_args.kwargs["request_body"] is processing_obj.data
+        assert reserve.call_args.kwargs["route"] == "/v1/chat/completions"
+        assert reserve.call_args.kwargs["valid_token"] is user_api_key_dict
+        assert reserve.call_args.kwargs["fail_closed_budget_enforcement"] is True
+        assert user_api_key_dict.budget_reservation is auth_reservation
+        assert [entry["counter_key"] for entry in auth_reservation["entries"]] == [
+            "spend:key:test-token",
+            "spend:tag:guardrail-tag",
+        ]
+        assert "user_api_key_budget_reservation" not in processing_obj.data["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_attaches_the_hook_tag_reservation_when_auth_reserved_nothing(
+        self, monkeypatch
+    ):
+        """With no reservation from auth, the hook tag's reservation has to be placed where the
+        settlement paths look: on the auth object (failure, cancel) and in the request metadata (success)."""
+        user_api_key_dict = ProxyUserAPIKeyAuth(token="test-token")
+
+        processing_obj, reserve = await self._run_with_hook_added_tag(
+            monkeypatch, user_api_key_dict, general_settings={}
+        )
+
+        reservation = reserve.return_value
+        assert user_api_key_dict.budget_reservation is reservation
+        assert processing_obj.data["metadata"]["user_api_key_budget_reservation"] is reservation
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_skips_the_hook_tag_reservation_when_reservation_is_disabled(
+        self, monkeypatch
+    ):
+        """disable_budget_reservation turns off auth's reservation too, so only the read check runs."""
+        user_api_key_dict = ProxyUserAPIKeyAuth(token="test-token")
+
+        _, reserve = await self._run_with_hook_added_tag(
+            monkeypatch, user_api_key_dict, general_settings={"disable_budget_reservation": True}
+        )
+
+        reserve.assert_not_awaited()
+        assert user_api_key_dict.budget_reservation is None
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_arms_auto_router_compression_before_guardrails(

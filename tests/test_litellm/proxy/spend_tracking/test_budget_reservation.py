@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import math
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -15,6 +16,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import (
     count_request_input_tokens,
     estimate_request_max_cost,
+    reserve_budget_for_added_tags,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -134,6 +136,104 @@ async def test_repeated_token_counting_never_touches_a_tiny_budget(
     assert isinstance(reserved_cost, float)
     assert reserved_cost > 0
     assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reserved_cost)
+
+
+HOOK_TAG: Final = "hook-added-tag"
+BODY_TAG: Final = "body-tag"
+CHAT_BODY: Final[dict[str, object]] = {
+    "model": "gpt-4o",
+    "messages": ANTHROPIC_MESSAGES,
+    "max_tokens": 5,
+    "metadata": {"tags": [BODY_TAG]},
+}
+
+
+def _budgeted_tag_prisma(tag_names: tuple[str, ...], max_budget: float) -> MagicMock:
+    """A tag table where every named tag carries ``max_budget`` and no spend yet."""
+
+    def _row(tag_name: str) -> MagicMock:
+        row = MagicMock()
+        row.tag_name = tag_name
+        row.dict = MagicMock(
+            return_value={
+                "tag_name": tag_name,
+                "spend": 0.0,
+                "models": [],
+                "litellm_budget_table": {"max_budget": max_budget},
+            }
+        )
+        return row
+
+    async def find_many(**kwargs: object) -> list[object]:
+        where = kwargs.get("where")
+        if not isinstance(where, dict):
+            return [SimpleNamespace(tag_name=name) for name in tag_names]
+        return [_row(name) for name in where["tag_name"]["in"] if name in tag_names]
+
+    prisma = MagicMock()
+    prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=find_many)
+    return prisma
+
+
+async def _reserve_added_tags(
+    route: str, prisma: MagicMock, tags: tuple[str, ...] = (HOOK_TAG,)
+) -> dict[str, object] | None:
+    return await reserve_budget_for_added_tags(
+        tags=tags,
+        request_body=dict(CHAT_BODY),
+        route=route,
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="hashed-hook-tag-key", max_budget=100.0, spend=0.0),
+        prisma_client=prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reserve_budget_for_added_tags_reserves_only_the_hook_tags_counter(spend_counter_cache: DualCache):
+    """The body tag and the key were reserved at auth; the post-hook reservation touches only the added tag."""
+    reservation: Final = await _reserve_added_tags(
+        "/v1/chat/completions", _budgeted_tag_prisma((HOOK_TAG, BODY_TAG), max_budget=1.0)
+    )
+
+    assert reservation is not None
+    entries: Final = reservation["entries"]
+    assert isinstance(entries, list)
+    assert [entry["counter_key"] for entry in entries] == [f"spend:tag:{HOOK_TAG}"]
+    reserved_cost: Final = reservation["reserved_cost"]
+    assert isinstance(reserved_cost, float) and reserved_cost > 0
+    assert spend_counter_cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") == pytest.approx(reserved_cost)
+    assert spend_counter_cache.in_memory_cache.get_cache(key=f"spend:tag:{BODY_TAG}") is None
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:hashed-hook-tag-key") is None
+
+
+@pytest.mark.asyncio
+async def test_reserve_budget_for_added_tags_rejects_a_tag_with_no_room_for_the_estimate(
+    spend_counter_cache: DualCache,
+):
+    """Two requests race past the read check; the second reservation finds the estimate no longer fits."""
+    prisma: Final = _budgeted_tag_prisma((HOOK_TAG,), max_budget=0.000001)
+
+    first: Final = await _reserve_added_tags("/v1/chat/completions", prisma)
+    assert first is not None
+    assert first["reserved_cost"] == pytest.approx(0.000001)
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _reserve_added_tags("/v1/chat/completions", prisma)
+
+    assert exc_info.value.entity_id == HOOK_TAG
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("/guardrails/apply_guardrail", "/v1/models", *TOKEN_COUNTING_ROUTES[:2]))
+async def test_reserve_budget_for_added_tags_skips_routes_auth_never_reserves(spend_counter_cache: DualCache, route):
+    assert await _reserve_added_tags(route, _budgeted_tag_prisma((HOOK_TAG,), max_budget=1.0)) is None
+    assert spend_counter_cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") is None
+
+
+@pytest.mark.asyncio
+async def test_reserve_budget_for_added_tags_ignores_tags_without_a_budget(spend_counter_cache: DualCache):
+    assert await _reserve_added_tags("/v1/chat/completions", _budgeted_tag_prisma((), max_budget=1.0)) is None
 
 
 BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"

@@ -2481,6 +2481,33 @@ def test_route_skips_budget_checks_matches_auth_scope(route, expected):
     assert route_skips_budget_checks(route=route) is expected
 
 
+@pytest.mark.parametrize(
+    ("general_settings", "master_key", "custom_auth_configured", "expected"),
+    [
+        ({}, None, False, True),
+        ({"enable_jwt_auth": True}, None, False, False),
+        ({"enable_oauth2_auth": True}, None, False, False),
+        ({"enable_oauth2_proxy_auth": True}, None, False, False),
+        ({}, "sk-master", False, False),
+        ({}, "sk-master", True, True),
+        ({"custom_auth_run_common_checks": True}, "sk-master", True, False),
+        ({"custom_auth_run_common_checks": False}, "sk-master", True, True),
+    ],
+)
+def test_auth_skips_common_checks_names_the_deployments_that_never_run_them(
+    general_settings, master_key, custom_auth_configured, expected
+):
+    """No-auth dev mode and a custom auth hook without the opt-in run no common_checks, so no budget checks."""
+    from litellm.proxy.auth.auth_checks import auth_skips_common_checks
+
+    assert (
+        auth_skips_common_checks(
+            general_settings=general_settings, master_key=master_key, custom_auth_configured=custom_auth_configured
+        )
+        is expected
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_team_object_raises_404_when_not_found():
     from unittest.mock import AsyncMock, MagicMock

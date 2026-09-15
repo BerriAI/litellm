@@ -235,7 +235,68 @@ async def reserve_budget_for_request(
     )
     if not counters:
         return None
+    return await _reserve_counters(
+        counters=counters,
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        valid_token=valid_token,
+        fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+        raw_body=raw_body,
+    )
 
+
+async def reserve_budget_for_added_tags(
+    tags: Sequence[str],
+    request_body: dict[str, object],  # mutable-ok: the request payload the proxy threads through the pipeline
+    route: str,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    fail_closed_budget_enforcement: bool = False,
+) -> dict[str, object] | None:  # mutable-ok: the reservation dict the settlement paths stamp in place
+    """
+    Reserve the request's estimated cost against ``tags`` a pre-call hook added.
+
+    Auth reserved the body tags before the hook ran, so without this a burst of
+    requests all read the same spend for a hook-added tag and all get through.
+    Same route and model guards as ``reserve_budget_for_request``; the caller
+    folds the result into the request's reservation so one settlement covers both.
+    """
+    if not RouteChecks.is_llm_api_route(route=route) or _is_unbilled_route(route):
+        return None
+    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
+        return None
+    counters: Final = await _tag_budget_counters(
+        tag_names=_dedupe_tags(list(tags)),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if not counters:
+        return None
+    return await _reserve_counters(
+        counters=counters,
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        valid_token=valid_token,
+        fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+        raw_body=None,
+    )
+
+
+async def _reserve_counters(
+    counters: Sequence[_BudgetCounter],
+    request_body: dict[str, object],  # mutable-ok: the request payload the proxy threads through the pipeline
+    route: str,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+    fail_closed_budget_enforcement: bool,
+    raw_body: bytes | None,
+) -> dict[str, object] | None:  # mutable-ok: the reservation dict the settlement paths stamp in place
     input_token_counts: Final = await count_request_input_tokens(
         request_body=request_body,
         route=route,
@@ -582,10 +643,24 @@ async def _get_tag_budget_counters(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> list[_BudgetCounter]:
-    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
-    tag_names: Final = _dedupe_tags(get_tags_from_request_body(request_body=request_body))
+    return await _tag_budget_counters(
+        tag_names=_dedupe_tags(get_tags_from_request_body(request_body=request_body)),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _tag_budget_counters(
+    tag_names: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> list[_BudgetCounter]:
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
     if not tag_names:
         return []
 

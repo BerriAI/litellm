@@ -860,6 +860,27 @@ def route_skips_budget_checks(route: str) -> bool:
     )
 
 
+_AUTHN_FLAGS: Final = ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
+
+
+def auth_skips_common_checks(
+    general_settings: Mapping[str, object], master_key: str | None, custom_auth_configured: bool
+) -> bool:
+    """
+    Whether ``user_api_key_auth`` runs no ``common_checks`` at all for this deployment.
+
+    That is the case in no-auth dev mode (no master key and no JWT or OAuth2
+    auth configured, so the proxy is unauthenticated by configuration) and behind
+    a custom auth hook that did not opt in with ``custom_auth_run_common_checks``.
+    Post-auth checks that mirror ``common_checks`` skip themselves on the same terms.
+    """
+    no_auth_mode: Final = master_key is None and not any(general_settings.get(flag, False) for flag in _AUTHN_FLAGS)
+    custom_auth_opted_out: Final = custom_auth_configured and not general_settings.get(
+        "custom_auth_run_common_checks", False
+    )
+    return no_auth_mode or custom_auth_opted_out
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
