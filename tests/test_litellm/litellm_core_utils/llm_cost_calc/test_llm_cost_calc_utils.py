@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -5334,3 +5335,44 @@ def test_realtime_models_bill_cached_text_and_audio_at_their_cache_read_rates(
 
     prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=custom_llm_provider)
     assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+@pytest.mark.parametrize("tokens,cached_audio,token_rate,unit_rate,expected", [
+    (10, 0, 0.1, 7.0, 3.0),
+    (10, 0, 0.0, 7.0, 0.0),
+    (10, 0, None, 7.0, 42.0),
+    (0, 0, 0.1, 7.0, 42.0),
+    (0, 10, 0.1, 7.0, 28.0),
+    (10, 0, None, None, 0.2),
+    (10, 0, None, 0.0, 0.0),
+])
+def test_modality_tokens_and_physical_units_are_alternative_prices(
+    tokens: int, cached_audio: int, token_rate: float | None,
+    unit_rate: float | None, expected: float,
+) -> None:
+    info: Final[ModelInfo] = {
+        "input_cost_per_token": 0.01,
+        "input_cost_per_audio_token": token_rate,
+        "input_cost_per_image_token": token_rate,
+        "input_cost_per_video_token": token_rate,
+        "input_cost_per_audio_per_second": unit_rate,
+        "input_cost_per_image": unit_rate,
+        "input_cost_per_video_per_second": unit_rate,
+        "cache_read_input_token_cost": 0.0,
+    }
+    usage: Final = Usage(
+        prompt_tokens=3 * tokens + cached_audio,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=0, audio_tokens=tokens + cached_audio,
+            image_tokens=tokens, video_tokens=tokens,
+            cached_tokens=cached_audio,
+            cached_tokens_details={"audio_tokens": cached_audio},
+            image_count=2, audio_length_seconds=2.0,
+            video_length_seconds=2.0,
+        ),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        "modality-unit-test", usage, "vertex_ai", model_info=info,
+    )
+    assert prompt_cost == pytest.approx(expected)
+    assert completion_cost == 0

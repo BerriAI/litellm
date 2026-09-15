@@ -707,6 +707,24 @@ def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: 
     return 0.0
 
 
+def _calculate_modality_input_cost(
+    model_info: ModelInfo,
+    tokens: int,
+    token_cost_key: str,
+    units: float,
+    unit_cost_key: str,
+    token_fallback_key: str | None = None,
+    cached_tokens: int = 0,
+) -> float:
+    token_rate: Final = _get_cost_per_unit(model_info, token_cost_key, None)
+    if token_rate is not None and tokens + cached_tokens > 0:
+        return tokens * token_rate
+    unit_rate: Final = _get_cost_per_unit(model_info, unit_cost_key, None)
+    if unit_rate is not None and units > 0:
+        return units * unit_rate
+    return calculate_cost_component(model_info, token_fallback_key or token_cost_key, tokens)
+
+
 def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float | None = 0.0) -> float | None:
     # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
     cost_per_unit: Final = model_info.get(cost_key)
@@ -955,26 +973,30 @@ def _calculate_input_cost(
         audio_cache_read_rate if audio_cache_read_rate is not None else cache_read_cost
     )
 
-    ### AUDIO COST
-    if prompt_tokens_details["audio_tokens"]:
-        audio_cost_key: Final = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
-        prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
-
-    ### IMAGE TOKEN COST
-    if prompt_tokens_details["image_tokens"]:
-        # For image token costs:
-        # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
-        image_token_cost_key = "input_cost_per_image_token"
-        if model_info.get(image_token_cost_key) is None:
-            image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, image_token_cost_key, prompt_tokens_details["image_tokens"])
-
-    ### VIDEO TOKEN COST
-    if prompt_tokens_details["video_tokens"]:
-        video_token_cost_key = "input_cost_per_video_token"
-        if model_info.get(video_token_cost_key) is None:
-            video_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, video_token_cost_key, prompt_tokens_details["video_tokens"])
+    prompt_cost += _calculate_modality_input_cost(
+        model_info,
+        prompt_tokens_details["audio_tokens"],
+        _get_service_tier_cost_key("input_cost_per_audio_token", service_tier),
+        prompt_tokens_details["audio_length_seconds"],
+        "input_cost_per_audio_per_second",
+        cached_tokens=cache_hit_audio_tokens,
+    )
+    prompt_cost += _calculate_modality_input_cost(
+        model_info,
+        prompt_tokens_details["image_tokens"],
+        "input_cost_per_image_token",
+        prompt_tokens_details["image_count"],
+        "input_cost_per_image",
+        token_fallback_key="input_cost_per_token",
+    )
+    prompt_cost += _calculate_modality_input_cost(
+        model_info,
+        prompt_tokens_details["video_tokens"],
+        "input_cost_per_video_token",
+        prompt_tokens_details["video_length_seconds"],
+        "input_cost_per_video_per_second",
+        token_fallback_key="input_cost_per_token",
+    )
 
     ### CACHE WRITING COST - Now uses tiered pricing
     if (
@@ -994,28 +1016,6 @@ def _calculate_input_cost(
             model_info,
             "input_cost_per_character",
             prompt_tokens_details["character_count"],
-        )
-
-    ### IMAGE COUNT COST
-    if prompt_tokens_details["image_count"]:
-        prompt_cost += calculate_cost_component(
-            model_info, "input_cost_per_image", prompt_tokens_details["image_count"]
-        )
-
-    ### VIDEO LENGTH COST
-    if prompt_tokens_details["video_length_seconds"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_video_per_second",
-            prompt_tokens_details["video_length_seconds"],
-        )
-
-    ### AUDIO LENGTH COST
-    if prompt_tokens_details["audio_length_seconds"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_audio_per_second",
-            prompt_tokens_details["audio_length_seconds"],
         )
 
     if prompt_tokens_details["query_count"]:
