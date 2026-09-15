@@ -2612,6 +2612,12 @@ def _supports_provider_info_factory(model: str, custom_llm_provider: str | None,
     return None
 
 
+def supports_mid_conversation_system(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_mid_conversation_system"
+    )
+
+
 def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.

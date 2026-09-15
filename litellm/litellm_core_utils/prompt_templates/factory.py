@@ -32,6 +32,7 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
+    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -4283,6 +4284,13 @@ def get_assistant_message_block_or_continue_message(
 
 class BedrockConverseMessagesProcessor:
     @staticmethod
+    def system_message(message: ChatCompletionSystemMessage, model: str) -> BedrockMessageBlock | None:
+        blocks: Final = litellm.AmazonConverseConfig().transform_system_message_content(message, model=model)
+        if not blocks:
+            return None
+        return BedrockMessageBlock(role="system", content=[BedrockContentBlock(**block) for block in blocks])
+
+    @staticmethod
     def _initial_message_setup(
         messages: list,
         model: str,
@@ -4335,6 +4343,13 @@ class BedrockConverseMessagesProcessor:
         )
 
         while msg_i < len(messages):
+            if messages[msg_i]["role"] == "system":
+                if system_message := BedrockConverseMessagesProcessor.system_message(
+                    cast(ChatCompletionSystemMessage, messages[msg_i]), model
+                ):
+                    contents.append(system_message)
+                msg_i += 1
+                continue
             user_content: list[BedrockContentBlock] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
@@ -4707,6 +4722,13 @@ def _bedrock_converse_messages_pt(
     )
 
     while msg_i < len(messages):
+        if messages[msg_i]["role"] == "system":
+            if system_message := BedrockConverseMessagesProcessor.system_message(
+                cast(ChatCompletionSystemMessage, messages[msg_i]), model
+            ):
+                contents.append(system_message)
+            msg_i += 1
+            continue
         user_content: list[BedrockContentBlock] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##

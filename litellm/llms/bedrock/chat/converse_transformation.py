@@ -1225,30 +1225,43 @@ class AmazonConverseConfig(BaseConfig):
                 cache_point["ttl"] = ttl
         return cache_point
 
+    def transform_system_message_content(
+        self, message: ChatCompletionSystemMessage, model: str | None = None
+    ) -> list[SystemContentBlock]:
+        system_content_blocks: Final[list[SystemContentBlock]] = []
+        if isinstance(message["content"], str) and message["content"]:
+            system_content_blocks.append(SystemContentBlock(text=message["content"]))
+            cache_block = self.get_cache_point_block(message, block_type="system", model=model)
+            if cache_block:
+                system_content_blocks.append(cache_block)
+        elif isinstance(message["content"], list):
+            for m in message["content"]:
+                if m.get("type") == "text" and m.get("text"):
+                    system_content_blocks.append(SystemContentBlock(text=m["text"]))
+                    cache_block = self.get_cache_point_block(m, block_type="system", model=model)
+                    if cache_block:
+                        system_content_blocks.append(cache_block)
+        return system_content_blocks
+
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        system_prompt_indices: Final = []
-        system_content_blocks: Final[list[SystemContentBlock]] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                system_prompt_indices.append(idx)
-                if isinstance(message["content"], str) and message["content"]:
-                    system_content_blocks.append(SystemContentBlock(text=message["content"]))
-                    cache_block = self.get_cache_point_block(message, block_type="system", model=model)
-                    if cache_block:
-                        system_content_blocks.append(cache_block)
-                elif isinstance(message["content"], list):
-                    for m in message["content"]:
-                        if m.get("type") == "text" and m.get("text"):
-                            system_content_blocks.append(SystemContentBlock(text=m["text"]))
-                            cache_block = self.get_cache_point_block(m, block_type="system", model=model)
-                            if cache_block:
-                                system_content_blocks.append(cache_block)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-        return messages, system_content_blocks
+        from litellm.utils import supports_mid_conversation_system
+
+        hoist_count: Final = (
+            next((idx for idx, message in enumerate(messages) if message["role"] != "system"), len(messages))
+            if model is not None and supports_mid_conversation_system(model=model, custom_llm_provider="bedrock")
+            else len(messages)
+        )
+        system_content_blocks: Final = [
+            block
+            for message in messages[:hoist_count]
+            if message["role"] == "system"
+            for block in self.transform_system_message_content(message, model=model)
+        ]
+        return [
+            message for idx, message in enumerate(messages) if idx >= hoist_count or message["role"] != "system"
+        ], system_content_blocks
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
         if "top_k" in inference_params:

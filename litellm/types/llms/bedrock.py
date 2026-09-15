@@ -210,7 +210,7 @@ class ContentBlock(TypedDict, total=False):
 
 class MessageBlock(TypedDict):
     content: list[ContentBlock]
-    role: Literal["user", "assistant"]
+    role: ReadOnly[Literal["user", "assistant", "system"]]
 
 
 class ConverseMetricsBlock(TypedDict):

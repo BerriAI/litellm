@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+from copy import deepcopy
+from typing import Final
 
 import httpx
 import pytest
@@ -11,7 +13,190 @@ from unittest.mock import MagicMock, patch
 import litellm
 from litellm import ModelResponse, RateLimitError, completion
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from litellm.types.llms.bedrock import ConverseTokenUsageBlock
+from litellm.types.llms.bedrock import ConverseTokenUsageBlock, RequestObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolParam,
+)
+
+
+async def _system_append_request(
+    messages: list[AllMessageValues], model: str, use_async: bool,
+    tools: list[ChatCompletionToolParam] | None = None,
+) -> RequestObject:
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = {"tools": tools} if tools is not None else {}
+    if use_async:
+        return await config._async_transform_request(
+            model=model, messages=deepcopy(messages), optional_params=optional_params,
+            litellm_params={}, headers={},
+        )
+    return config._transform_request(
+        model=model, messages=deepcopy(messages), optional_params=optional_params,
+        litellm_params={}, headers={},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "late_system",
+    [
+        {"role": "system", "content": "New instruction",
+         "cache_control": {"type": "ephemeral"}},
+        {"role": "system", "content": [
+            {"type": "text", "text": "New instruction",
+             "cache_control": {"type": "ephemeral"}},
+        ]},
+    ],
+    ids=["string-cache", "text-block-cache"],
+)
+async def test_system_append_preserves_cached_prefix_and_native_role(
+    use_async: bool, late_system: ChatCompletionSystemMessage
+) -> None:
+    prefix: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Initial instruction"},
+        {"role": "system", "content": "Second initial instruction"},
+        {"role": "user", "content": [{
+            "type": "text", "text": "Cached conversation",
+            "cache_control": {"type": "ephemeral"},
+        }]},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-5"
+    before: Final = await _system_append_request(prefix, model, use_async)
+    after: Final = await _system_append_request(
+        [*prefix, late_system,
+         {"role": "assistant", "content": "Acknowledged"},
+         {"role": "user", "content": "<system-reminder>Continue</system-reminder>"}],
+        model, use_async,
+    )
+
+    assert before["system"] == after["system"] == [
+        {"text": "Initial instruction"}, {"text": "Second initial instruction"},
+    ]
+    assert after["messages"][:len(before["messages"])] == before["messages"]
+    assert after["messages"][1] == {
+        "role": "system",
+        "content": [{"text": "New instruction"}, {"cachePoint": {"type": "default"}}],
+    }
+    assert [message["role"] for message in after["messages"]] == [
+        "user", "system", "assistant", "user",
+    ]
+    assert after["messages"][-1]["content"] == [
+        {"text": "<system-reminder>Continue</system-reminder>"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "model", ["us.anthropic.claude-haiku-4-5-20251001-v1:0",
+              "amazon.nova-pro-v1:0", "unknown-model"]
+)
+async def test_system_append_keeps_legacy_hoisting(
+    use_async: bool, model: str
+) -> None:
+    result: Final = await _system_append_request(
+        [{"role": "system", "content": "Initial instruction"},
+         {"role": "user", "content": "Earlier question"},
+         {"role": "system", "content": "New instruction"},
+         {"role": "assistant", "content": "Acknowledged"},
+         {"role": "user", "content": "Continue"}],
+        model, use_async,
+    )
+
+    assert result["system"] == [
+        {"text": "Initial instruction"}, {"text": "New instruction"},
+    ]
+    assert [message["role"] for message in result["messages"]] == [
+        "user", "assistant", "user",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_system_append_native_messages_bridge(use_async: bool) -> None:
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "bedrock/converse/us.anthropic.claude-sonnet-5",
+            "max_tokens": 16,
+            "system": "Initial instruction",
+            "messages": [
+                {"role": "user", "content": "Earlier question"},
+                {"role": "system", "content": [{
+                    "type": "text", "text": "New instruction",
+                    "cache_control": {"type": "ephemeral"},
+                }]},
+                {"role": "assistant", "content": "Acknowledged"},
+                {"role": "user", "content": "Continue"},
+            ],
+        }
+    )
+    result: Final = await _system_append_request(
+        request["messages"], "us.anthropic.claude-sonnet-5", use_async,
+    )
+
+    assert result["system"] == [{"text": "Initial instruction"}]
+    assert result["messages"][1] == {
+        "role": "system",
+        "content": [{"text": "New instruction"}, {"cachePoint": {"type": "default"}}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_system_append_preserves_tool_result_adjacency(use_async: bool) -> None:
+    result: Final = await _system_append_request(
+        [{"role": "user", "content": "Read the file"},
+         {"role": "assistant", "content": None, "tool_calls": [{
+             "id": "tool_1", "type": "function",
+             "function": {"name": "read_file", "arguments": "{}"},
+         }]},
+         {"role": "tool", "tool_call_id": "tool_1", "content": "File contents"},
+         {"role": "system", "content": "Use the file contents"},
+         {"role": "assistant", "content": "Acknowledged"},
+         {"role": "user", "content": "Continue"}],
+        "us.anthropic.claude-sonnet-5", use_async,
+        tools=[{"type": "function", "function": {
+            "name": "read_file", "parameters": {"type": "object", "properties": {}},
+        }}],
+    )
+
+    assert "system" not in result
+    assert [message["role"] for message in result["messages"]] == [
+        "user", "assistant", "user", "system", "assistant", "user",
+    ]
+    assert result["messages"][1]["content"][0]["toolUse"]["toolUseId"] == "tool_1"
+    assert result["messages"][2]["content"][0]["toolResult"]["toolUseId"] == "tool_1"
+    assert result["messages"][3]["content"] == [{"text": "Use the file contents"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_system_append_filters_empty_system_content(use_async: bool) -> None:
+    result: Final = await _system_append_request(
+        [{"role": "user", "content": "Earlier question"},
+         {"role": "system", "content": ""},
+         {"role": "system", "content": [{"type": "text", "text": ""}]},
+         {"role": "assistant", "content": "Acknowledged"},
+         {"role": "user", "content": "Continue"}],
+        "us.anthropic.claude-sonnet-5", use_async,
+    )
+
+    assert "system" not in result
+    assert [message["role"] for message in result["messages"]] == [
+        "user", "assistant", "user",
+    ]
 
 
 def test_transform_usage():
