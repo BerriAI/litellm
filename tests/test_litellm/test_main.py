@@ -3850,3 +3850,48 @@ def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_
     assert "extra_headers" not in body
     assert body["model"] == "gpt-5.4"
     assert {k: request.headers[k] for k in FORWARDED_CLIENT_HEADERS} == FORWARDED_CLIENT_HEADERS
+
+
+@pytest.mark.asyncio
+async def test_atranscription_honors_custom_llm_provider_for_unprefixed_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    mock_route: Final = respx_mock.post("https://upstream-proxy.example/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "privet"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="audio-group/openai/gpt-4o-transcribe",
+        custom_llm_provider="openai",
+        api_base="https://upstream-proxy.example/v1",
+        api_key="fake-upstream-key",
+        file=("reply.wav", b"RIFF0000WAVEfmt ", "audio/wav"),
+    )
+
+    assert response.text == "privet"
+    assert mock_route.call_count == 1
+    assert b'name="model"\r\n\r\naudio-group/openai/gpt-4o-transcribe\r\n' in mock_route.calls.last.request.content
+
+
+@pytest.mark.asyncio
+async def test_aspeech_honors_custom_llm_provider_for_unprefixed_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    mock_route: Final = respx_mock.post("https://upstream-proxy.example/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"mp3-bytes", headers={"content-type": "audio/mpeg"})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="audio-group/openai/gpt-4o-mini-tts",
+        custom_llm_provider="openai",
+        api_base="https://upstream-proxy.example/v1",
+        api_key="fake-upstream-key",
+        input="privet",
+        voice="alloy",
+    )
+
+    assert response.content == b"mp3-bytes"
+    assert mock_route.call_count == 1
+    assert json.loads(mock_route.calls.last.request.content)["model"] == "audio-group/openai/gpt-4o-mini-tts"
