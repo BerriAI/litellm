@@ -28,16 +28,12 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
       ? [...entityCategories, { category: "Custom", entities: customEntities }]
       : entityCategories;
 
-  // Create a lookup map to quickly find an entity's category
-  const entityToCategoryMap = new Map<string, string>();
-  entityCategories.forEach((category) => {
-    category.entities.forEach((entity) => {
-      entityToCategoryMap.set(entity, category.category);
-    });
-  });
-  customEntities.forEach((entity) => {
-    entityToCategoryMap.set(entity, "Custom");
-  });
+  const entityToCategoryMap = new Map<string, string>([
+    ...entityCategories.flatMap((category) =>
+      category.entities.map((entity): [string, string] => [entity, category.category]),
+    ),
+    ...customEntities.map((entity): [string, string] => [entity, "Custom"]),
+  ]);
 
   // Filter entities based on selected categories
   const filteredEntities = allEntities.filter((entity) => {
