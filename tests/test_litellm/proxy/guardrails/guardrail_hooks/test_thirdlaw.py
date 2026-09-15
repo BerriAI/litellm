@@ -111,10 +111,17 @@ def _request_data() -> JsonDict:
                 "cost_center": "eng-42",
                 "team_cost_center": "team-eng-42",
                 "guardrails": ["leaked-key-level-guardrail"],
+                "opted_out_global_guardrails": ["leaked-opt-out"],
             },
             "user_api_key_auth": UserAPIKeyAuth(
                 team_metadata={"cost_center": "team-eng-42", "guardrails": ["team-guard"], "tags": ["team-tag"]},
-                project_metadata={"cost_center": "project-eng-42", "policies": ["project-policy"]},
+                project_metadata={
+                    "cost_center": "project-eng-42",
+                    "policies": ["project-policy"],
+                    # A project can route through a named provider credential; the name itself
+                    # is proxy operational config, not admin-authored data, and must not leak.
+                    "model_config": [{"azure": {"litellm_credentials": "prod-azure-cred"}}],
+                },
                 organization_metadata={"cost_center": "org-eng-42", "disable_global_guardrails": True},
             ),
             "guardrails": ["thirdlaw-guard"],
@@ -300,7 +307,7 @@ async def test_pre_call_payload_shape():
     assert payload["request_body"]["model"] == "gpt-5.6"
     assert payload["request_body"]["tools"][0]["function"]["name"] == "get_weather"
     assert payload["request_body"]["temperature"] == 0.2
-    for stripped_key in ("secret_fields", "api_key", "metadata", "guardrails", "litellm_call_id"):
+    for stripped_key in ("secret_fields", "api_key", "metadata", "guardrails", "litellm_call_id", "litellm_session_id"):
         assert stripped_key not in payload["request_body"]
     assert "response_body" not in payload
     assert "sk-forwarded-provider-key" not in json.dumps(payload)
@@ -327,6 +334,23 @@ async def test_pre_call_payload_includes_extended_identity_and_hierarchy_metadat
     assert metadata["user_api_key_auth_metadata"] == {"cost_center": "eng-42", "team_cost_center": "team-eng-42"}
 
 
+async def test_pre_call_payload_falls_back_to_metadata_session_id():
+    """A caller can declare a session purely via `metadata.session_id` (litellm's own
+
+    documented alternative to the `x-litellm-session-id` header, see the "missing_session_id"
+    reject-policy error message in litellm_pre_call_utils.py) without ever populating the
+    call-level `litellm_session_id` field this guardrail also reads.
+    """
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    data = _request_data()
+    del data["litellm_session_id"]
+    data["metadata"]["session_id"] = "client-declared-session"
+    await _run_pre_call(g, data)
+    metadata = _sent_payload(g)["metadata"]
+
+    assert metadata["litellm_session_id"] == "client-declared-session"
+
+
 async def test_pre_call_payload_strips_reserved_keys_from_hierarchy_metadata():
     g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
     await _run_pre_call(g, _request_data())
@@ -334,7 +358,14 @@ async def test_pre_call_payload_strips_reserved_keys_from_hierarchy_metadata():
 
     assert metadata["project_metadata"] == {"cost_center": "project-eng-42"}
     assert metadata["organization_metadata"] == {"cost_center": "org-eng-42"}
-    for reserved_key in ("guardrails", "tags", "policies", "disable_global_guardrails"):
+    for reserved_key in (
+        "guardrails",
+        "tags",
+        "policies",
+        "disable_global_guardrails",
+        "opted_out_global_guardrails",
+        "model_config",
+    ):
         assert reserved_key not in metadata["user_api_key_auth_metadata"]
         assert reserved_key not in metadata["project_metadata"]
         assert reserved_key not in metadata["organization_metadata"]

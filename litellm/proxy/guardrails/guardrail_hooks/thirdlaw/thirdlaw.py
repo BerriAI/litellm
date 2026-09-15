@@ -47,6 +47,9 @@ from litellm.proxy.guardrails.stream_surface import (
     is_terminal_error_stream,
     responses_deltas_absent_from_body,
 )
+from litellm.proxy.litellm_pre_call_utils import (
+    _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # shared list
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -83,6 +86,7 @@ _BODY_STRIP_KEYS: Final = frozenset(
         "litellm_call_id",
         "litellm_logging_obj",
         "litellm_metadata",
+        "litellm_session_id",
         "litellm_trace_id",
         "metadata",
         "provider_specific_header",
@@ -115,13 +119,21 @@ _USER_METADATA_FIELDS: Final = (
     "agent_id",
 )
 
-# Admin-facing control keys litellm reserves inside a key/team/project/org's own
-# custom `metadata` dict (rate/budget overrides, guardrails, tags, etc.) -- never
-# admin-typed custom data. Reused here so team/project/org metadata gets the same
-# "only what an admin actually typed" shape litellm core already gives
-# `user_api_key_auth_metadata`.
+# Admin-facing control keys litellm reserves inside a key/team/project/org's own custom
+# `metadata` dict -- never admin-typed custom data. Combines the management-endpoint
+# reserved fields (rate/budget overrides, guardrails, tags, etc.) with litellm's own
+# client-forgery denylist (guardrail-bypass and internal routing/logging signals): the
+# same reasoning that makes these untrustworthy coming from a caller makes them
+# unsuitable to forward to a third-party guardrail. ``model_config`` is added
+# separately -- it can carry ``litellm_credentials`` selector names for provider
+# routing, which is proxy operational config, not admin-authored metadata.
 _RESERVED_METADATA_KEYS: Final = frozenset(
-    (*LiteLLM_ManagementEndpoint_MetadataFields, *LiteLLM_ManagementEndpoint_MetadataFields_Premium)
+    (
+        *LiteLLM_ManagementEndpoint_MetadataFields,
+        *LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+        *_UNTRUSTED_METADATA_CONTROL_FIELDS,
+        "model_config",
+    )
 )
 
 _WireEvent: TypeAlias = Literal["pre_call", "during_call", "post_call"]
@@ -202,7 +214,10 @@ def _request_metadata(request_data: Mapping[str, object]) -> ThirdlawGuardrailRe
     )
     call_id: Final = request_data.get("litellm_call_id")
     trace_id: Final = request_data.get("litellm_trace_id")
-    session_id: Final = request_data.get("litellm_session_id")
+    # litellm_session_id (call-level, header/Anthropic-metadata-derived) and metadata.session_id
+    # (settable directly by a caller per litellm's own "missing_session_id" documentation) are
+    # two independent, equally valid sources; litellm core itself treats either as sufficient.
+    session_id: Final = request_data.get("litellm_session_id") or merged.get("session_id")
     model: Final = request_data.get("model")
     tags_value: Final = merged.get("tags")
     tags_list: Final = _JSON_LIST_ADAPTER.validate_python(tags_value) if isinstance(tags_value, list) else None
