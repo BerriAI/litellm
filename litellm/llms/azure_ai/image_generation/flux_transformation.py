@@ -85,6 +85,11 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
 
     @staticmethod
     def _map_parameter(name: str, value: object) -> tuple[tuple[str, object], ...]:
+        if isinstance(value, str):
+            if name in ("n", "num_images", "width", "height", "steps", "seed", "safety_tolerance"):
+                return (("num_images" if name == "n" else name, int(value)),)
+            if name == "guidance":
+                return ((name, float(value)),)
         if name == "n":
             return (("num_images", value),)
         if name != "size":

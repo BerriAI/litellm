@@ -82,7 +82,14 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # set optional params
-        image_response.size = image_response.size or optional_params.get("size", "1024x1024")
+        width: Final = optional_params.get("width")
+        height: Final = optional_params.get("height")
+        requested_size: Final = (
+            f"{width}x{height}"
+            if isinstance(width, int) and isinstance(height, int)
+            else optional_params.get("size", "1024x1024")
+        )
+        image_response.size = image_response.size or requested_size
         image_response.quality = image_response.quality or optional_params.get("quality", "high")
         image_response.output_format = image_response.output_format or optional_params.get("output_format", "png")
 

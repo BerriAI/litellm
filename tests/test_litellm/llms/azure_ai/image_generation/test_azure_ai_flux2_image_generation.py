@@ -170,3 +170,21 @@ def test_flux2_cost_uses_mapped_dimensions_after_response_transformation(dimensi
         optional_params=params,
         call_type="image_generation",
     ) == pytest.approx(5e-08 * 2048 * 1024 * 2)
+
+
+def test_flux2_response_preserves_mapped_dimensions():
+    config = AzureFoundryFluxImageGenerationConfig()
+    params = config.map_openai_params(
+        non_default_params={"size": "2048x1024"}, optional_params={}, model="FLUX.2-flex", drop_params=False
+    )
+    response = config.transform_image_generation_response(
+        model="FLUX.2-flex",
+        raw_response=httpx.Response(200, json={"data": [{"b64_json": "aW1n"}]}),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={"prompt": "A landscape"},
+        optional_params=params,
+        litellm_params={},
+        encoding=None,
+    )
+    assert response.size == "2048x1024"

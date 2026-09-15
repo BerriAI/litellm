@@ -144,7 +144,7 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
         )
 
 
-@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}))
+@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
     def respond(request: httpx.Request) -> httpx.Response:
@@ -170,8 +170,8 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
         api_base="https://example.services.ai.azure.com",
         client=client,
         n=2,
-        guidance=4.5,
-        steps=32,
+        guidance="4.5",
+        steps="32",
         **dimensions,
     )
 
