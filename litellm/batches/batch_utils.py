@@ -9,8 +9,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+from litellm.llms.vertex_ai.batches.transformation import vertex_prompt_tokens_details
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import ModelInfo, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import token_counter
 
 
@@ -310,35 +311,6 @@ def _aggregate_batch_cost_usage_models(
     )
 
 
-def _vertex_prompt_tokens_details(
-    usage_metadata: Mapping[str, object],
-) -> PromptTokensDetailsWrapper | None:
-    raw_details: Final = usage_metadata.get("promptTokensDetails")
-    if not isinstance(raw_details, list):
-        return None
-
-    def _normalize(detail: object) -> tuple[str, int] | None:
-        if not isinstance(detail, Mapping):
-            return None
-        modality: Final = detail.get("modality")
-        token_count: Final = detail.get("tokenCount")
-        if not isinstance(modality, str) or not isinstance(token_count, int):
-            return None
-        return modality.upper(), token_count
-
-    parsed_details: Final = tuple(_normalize(detail) for detail in raw_details)
-    normalized: Final = tuple(detail for detail in parsed_details if detail is not None)
-    if len(normalized) != len(parsed_details):
-        return None
-
-    return PromptTokensDetailsWrapper(
-        text_tokens=sum(token_count for modality, token_count in normalized if modality in ("TEXT", "DOCUMENT")),
-        audio_tokens=sum(token_count for modality, token_count in normalized if modality == "AUDIO"),
-        image_tokens=sum(token_count for modality, token_count in normalized if modality == "IMAGE"),
-        video_tokens=sum(token_count for modality, token_count in normalized if modality == "VIDEO"),
-    )
-
-
 def calculate_vertex_ai_batch_cost_and_usage(
     vertex_ai_batch_responses: list[dict],
     model_name: str | None = None,
@@ -385,7 +357,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             prompt_tokens=_prompt,
             completion_tokens=_completion,
             total_tokens=_total,
-            prompt_tokens_details=_vertex_prompt_tokens_details(usage_metadata),
+            prompt_tokens_details=vertex_prompt_tokens_details(usage_metadata),
         )
 
         try:
