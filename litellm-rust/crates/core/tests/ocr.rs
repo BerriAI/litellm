@@ -64,8 +64,8 @@ async fn facade_executes_direct_mistral_once() {
     .await
     .unwrap();
     server.await.unwrap();
-    assert_eq!(result.pages[0]["markdown"], "hello");
-    assert_eq!(result.pages[0]["custom"], "preserved");
+    assert_eq!(result.pages[0].markdown, "hello");
+    assert_eq!(result.pages[0].extra_fields["custom"], "preserved");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with("POST /v1/ocr "));
@@ -104,7 +104,10 @@ async fn facade_retains_native_response_when_requested() {
     .unwrap();
 
     server.await.unwrap();
-    assert_eq!(response.provider_native_response, Some(provider_response));
+    assert_eq!(
+        response.provider_native_response.as_ref(),
+        provider_response.as_object()
+    );
 }
 
 #[tokio::test]
@@ -520,7 +523,7 @@ async fn direct_native_host_drives_the_same_state_machine() {
                     OcrHostOperation::PostCall(_) => "PostCall".into(),
                     OcrHostOperation::ConstructResponse(_) => "ConstructResponse".into(),
                     OcrHostOperation::Success { response, .. } => {
-                        assert_eq!(response.pages[0]["markdown"], "native");
+                        assert_eq!(response.pages[0].markdown, "native");
                         "Success".into()
                     }
                     _ => panic!("unexpected OCR operation"),
@@ -536,7 +539,7 @@ async fn direct_native_host_drives_the_same_state_machine() {
         }
     };
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "native");
+    assert_eq!(response.pages[0].markdown, "native");
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(
         operations,

@@ -1,10 +1,11 @@
-use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-use crate::llms::cohere::ocr::transformation::CohereParseConfig;
+use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
+use crate::llms::cohere::ocr::transformation::{CohereParseConfig, CohereRequest};
 use crate::llms::cohere::ocr::{CohereParams, CohereResponse, validate_document};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
-use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
+use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument};
+use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
 use litellm_auth_azure::AzureAuthInputs;
 
@@ -14,20 +15,60 @@ const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 pub(crate) struct AzureAICohereParseConfig;
 
 impl BaseOcrConfig for AzureAICohereParseConfig {
+    type OcrParams = CohereParams;
+    type ProviderRequest = CohereRequest;
     type ProviderResponse = CohereResponse;
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
         CohereParseConfig.get_supported_ocr_params(model)
     }
 
-    async fn prepare_request(
+    fn map_ocr_params(
+        &self,
+        non_default_params: &OpaqueParams,
+        optional_params: &OpaqueParams,
+        model: &str,
+    ) -> Result<CohereParams, crate::ocr::Error> {
+        CohereParseConfig.map_ocr_params(non_default_params, optional_params, model)
+    }
+
+    async fn async_transform_ocr_request(
+        &self,
+        model: &str,
+        document: OcrDocument,
+        optional_params: &CohereParams,
+        headers: &[(String, String)],
+        context: OcrRequestContext<'_>,
+    ) -> Result<CohereRequest, crate::ocr::Error> {
+        validate_document(&document)?;
+        let document = inline_remote_document(
+            context.client.document_fetcher(),
+            document,
+            context.connection,
+        )
+        .await?;
+        CohereParseConfig.transform_ocr_request(model, document, optional_params, headers)
+    }
+
+    fn normalize_response(
+        &self,
+        model: &str,
+        response: CohereResponse,
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+        CohereParseConfig.normalize_response(model, response)
+    }
+}
+
+impl AzureAICohereParseConfig {
+    pub(crate) async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = crate::ocr::wire::decode_request_value::<CohereParams>(
-            serde_json::Value::Object(request.optional_params.clone().into()),
-            "optional_params",
+        let params = self.map_ocr_params(
+            &request.optional_params,
+            &OpaqueParams::default(),
+            &request.model,
         )?;
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
@@ -48,61 +89,56 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
                     "Missing Azure AI API Base - Set AZURE_AI_API_BASE or pass api_base".into(),
                 ))
             })?;
-        let headers = super::transformation::validate_environment(
-            &request.connection,
-            &config,
-            &credential_env,
-        )
-        .await?;
-        validate_document(&request.document)?;
+        let headers = super::transformation::AzureAIOCRConfig
+            .validate_environment(&request.connection, &config, &credential_env)
+            .await?;
         let remote = request.document.source().starts_with("http://")
             || request.document.source().starts_with("https://");
-        let document = inline_remote_document(
-            client.document_fetcher(),
-            request.document.clone(),
-            &request.connection,
-        )
-        .await?;
-        let body = CohereParseConfig.transform_ocr_request(&request.model, document, params)?;
+        let body = self
+            .async_transform_ocr_request(
+                &request.model,
+                request.document.clone(),
+                &params,
+                &headers,
+                OcrRequestContext {
+                    client,
+                    connection: &request.connection,
+                },
+            )
+            .await?;
         transform_request_body(
             client,
             request,
-            &complete_url(&base)?,
+            &self.get_complete_url(&base)?,
             &headers,
             !remote,
             body,
             |body| {
-                validate_document(&body.document)?;
-                validate_inline_document(&body.document)
+                validate_document(&body.document.as_document())?;
+                validate_inline_document(&body.document.as_document())
             },
         )
         .await
     }
-
-    fn transform_ocr_response(
-        &self,
-        request: &LiteLLMOcrRequest,
-        response: CohereResponse,
-    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        CohereParseConfig.transform_ocr_response(request, response)
-    }
 }
 
-fn complete_url(base: &str) -> Result<String, crate::ocr::Error> {
-    let mut url = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(invalid_api_base());
+impl AzureAICohereParseConfig {
+    fn get_complete_url(&self, base: &str) -> Result<String, crate::ocr::Error> {
+        let mut url = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(invalid_api_base());
+        }
+        let path = url.path().trim_end_matches('/').to_string();
+        if path.ends_with("/v2/parse") {
+            url.set_path(&path);
+            return Ok(url.into());
+        }
+        url.set_path(path.strip_suffix("/models").unwrap_or(&path));
+        ApiUrl::parse(url.as_str())
+            .and_then(|url| url.complete_path(&["providers", "cohere", "v2", "parse"]))
+            .map(|url| url.into_string())
+            .map_err(|_| invalid_api_base())
     }
-    let path = url.path().trim_end_matches('/').to_string();
-    if path.ends_with("/v2/parse") {
-        url.set_path(&path);
-        return Ok(url.into());
-    }
-    url.set_path(path.strip_suffix("/models").unwrap_or(&path));
-    ApiUrl::parse(url.as_str())
-        .and_then(|url| url.complete_path(&["providers", "cohere", "v2", "parse"]))
-        .map(|url| url.into_string())
-        .map_err(|_| invalid_api_base())
 }
 
 fn invalid_api_base() -> crate::ocr::Error {
@@ -124,14 +160,22 @@ mod tests {
             "/providers/cohere/v2/parse",
         ] {
             assert_eq!(
-                complete_url(&format!("https://example.com{suffix}?tenant=a")).unwrap(),
+                AzureAICohereParseConfig
+                    .get_complete_url(&format!("https://example.com{suffix}?tenant=a"))
+                    .unwrap(),
                 "https://example.com/providers/cohere/v2/parse?tenant=a"
             );
         }
         assert_eq!(
-            complete_url("https://example.com/v2/parse?tenant=a").unwrap(),
+            AzureAICohereParseConfig
+                .get_complete_url("https://example.com/v2/parse?tenant=a")
+                .unwrap(),
             "https://example.com/v2/parse?tenant=a"
         );
-        assert!(complete_url("relative/path").is_err());
+        assert!(
+            AzureAICohereParseConfig
+                .get_complete_url("relative/path")
+                .is_err()
+        );
     }
 }

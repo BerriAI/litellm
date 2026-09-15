@@ -31,8 +31,11 @@ async fn facade_executes_vertex_deepseek_at_the_openai_endpoint() {
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "recognized");
-    assert_eq!(response.usage_info.unwrap()["prompt_tokens"], 1);
+    assert_eq!(response.pages[0].markdown, "recognized");
+    assert_eq!(
+        response.usage_info.unwrap().extra_fields["prompt_tokens"],
+        1
+    );
     let requests = seen.lock().unwrap();
     assert!(requests[0].starts_with(
         "POST /v1/projects/project-1/locations/europe-west4/endpoints/openapi/chat/completions "

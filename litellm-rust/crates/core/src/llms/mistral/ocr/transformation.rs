@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::constants::MISTRAL_OCR_API_BASE;
-use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
 use crate::ocr::prepare::{credential_env, transform_request_body};
-use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+use crate::ocr::types::{
+    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo,
+};
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
 
@@ -22,26 +24,14 @@ pub(crate) struct MistralOcrRequest {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub(crate) struct MistralOcrResponse {
     #[serde(default)]
-    pub pages: Vec<Value>,
-    pub model: Option<String>,
+    pub pages: Vec<OcrPage>,
+    #[serde(
+        default,
+        deserialize_with = "serde_with::rust::double_option::deserialize"
+    )]
+    pub model: Option<Option<String>>,
     pub document_annotation: Option<Value>,
-    pub usage_info: Option<Value>,
-    #[serde(flatten)]
-    pub extra_fields: Map<String, Value>,
-}
-pub(crate) fn transform_ocr_response(
-    model: &str,
-    response: MistralOcrResponse,
-) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-    Ok(LiteLLMOcrResponse {
-        pages: response.pages,
-        model: response.model.unwrap_or_else(|| model.to_string()),
-        document_annotation: response.document_annotation,
-        usage_info: response.usage_info,
-        object: "ocr".to_string(),
-        extra_fields: response.extra_fields,
-        provider_native_response: None,
-    })
+    pub usage_info: Option<OcrUsageInfo>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -53,17 +43,20 @@ impl MistralOCRConfig {
         &self,
         model: &str,
         document: OcrDocument,
-        params: &OpaqueParams,
+        optional_params: &OpaqueParams,
+        _headers: &[(String, String)],
     ) -> Result<MistralOcrRequest, crate::ocr::Error> {
         Ok(MistralOcrRequest {
             model: model.to_string(),
             document,
-            params: params.clone(),
+            params: optional_params.clone(),
         })
     }
 }
 
 impl BaseOcrConfig for MistralOCRConfig {
+    type OcrParams = OpaqueParams;
+    type ProviderRequest = MistralOcrRequest;
     type ProviderResponse = MistralOcrResponse;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
@@ -84,63 +77,128 @@ impl BaseOcrConfig for MistralOCRConfig {
         ]
     }
 
-    async fn prepare_request(
+    fn map_ocr_params(
+        &self,
+        non_default_params: &OpaqueParams,
+        _optional_params: &OpaqueParams,
+        model: &str,
+    ) -> Result<OpaqueParams, crate::ocr::Error> {
+        let supported = self.get_supported_ocr_params(model);
+        Ok(non_default_params
+            .iter()
+            .filter(|(name, _)| supported.contains(&name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect())
+    }
+
+    async fn async_transform_ocr_request(
+        &self,
+        model: &str,
+        document: OcrDocument,
+        optional_params: &OpaqueParams,
+        headers: &[(String, String)],
+        _context: OcrRequestContext<'_>,
+    ) -> Result<MistralOcrRequest, crate::ocr::Error> {
+        self.transform_ocr_request(model, document, optional_params, headers)
+    }
+
+    fn normalize_response(
+        &self,
+        model: &str,
+        response: MistralOcrResponse,
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+        normalize_response(model, response)
+    }
+}
+
+impl MistralOCRConfig {
+    pub(crate) async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.model, &request.optional_params);
-        let headers = validate_environment(&request.connection, &credential_env)?;
-        let url = get_complete_url(request.connection.api_base.as_deref())?;
-        let body = self.transform_ocr_request(&request.model, request.document.clone(), &params)?;
+        let params = self.map_ocr_params(
+            &request.optional_params,
+            &OpaqueParams::default(),
+            &request.model,
+        )?;
+        let headers = self.validate_environment(&request.connection, &credential_env)?;
+        let url = self.get_complete_url(request.connection.api_base.as_deref())?;
+        let body = self
+            .async_transform_ocr_request(
+                &request.model,
+                request.document.clone(),
+                &params,
+                &headers,
+                OcrRequestContext {
+                    client,
+                    connection: &request.connection,
+                },
+            )
+            .await?;
         transform_request_body(client, request, &url, &headers, true, body, |_| Ok(())).await
     }
+}
 
-    fn transform_ocr_response(
+pub(crate) fn normalize_response(
+    model: &str,
+    response: MistralOcrResponse,
+) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+    let model = match response.model {
+        Some(Some(model)) => model,
+        Some(None) => {
+            return Err(crate::ocr::Error::ResponseField {
+                path: "model".into(),
+            });
+        }
+        None => model.to_string(),
+    };
+    Ok(LiteLLMOcrResponse {
+        document_annotation: response.document_annotation,
+        usage_info: response.usage_info,
+        ..LiteLLMOcrResponse::new(model, response.pages)
+    })
+}
+
+impl MistralOCRConfig {
+    fn get_complete_url(&self, api_base: Option<&str>) -> Result<String, crate::ocr::Error> {
+        let base = api_base
+            .map(str::trim)
+            .filter(|base| !base.is_empty())
+            .unwrap_or(MISTRAL_OCR_API_BASE);
+        ApiUrl::parse(base)
+            .and_then(|url| url.complete_path(&["v1", "ocr"]))
+            .map(|url| url.into_string())
+            .map_err(|_| crate::ocr::Error::RequestField {
+                path: "api_base".into(),
+            })
+    }
+
+    fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
-        response: MistralOcrResponse,
-    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        transform_ocr_response(&request.model, response)
+        connection: &OcrConnection,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Vec<(String, String)>, crate::ocr::Error> {
+        if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
+            return Ok(connection.extra_headers.clone());
+        }
+        let api_key = connection
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+            .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
+            .ok_or(litellm_auth::Error::MissingApiKey {
+                provider: "Mistral",
+                environment_variable: MISTRAL_API_KEY_ENV,
+            })?;
+        Ok(
+            std::iter::once(("Authorization".into(), format!("Bearer {api_key}")))
+                .chain(connection.extra_headers.clone())
+                .collect(),
+        )
     }
-}
-
-pub(crate) fn get_complete_url(api_base: Option<&str>) -> Result<String, crate::ocr::Error> {
-    let base = api_base
-        .map(str::trim)
-        .filter(|base| !base.is_empty())
-        .unwrap_or(MISTRAL_OCR_API_BASE);
-    ApiUrl::parse(base)
-        .and_then(|url| url.complete_path(&["v1", "ocr"]))
-        .map(|url| url.into_string())
-        .map_err(|_| crate::ocr::Error::RequestField {
-            path: "api_base".into(),
-        })
-}
-
-fn validate_environment(
-    connection: &OcrConnection,
-    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, crate::ocr::Error> {
-    if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
-        return Ok(connection.extra_headers.clone());
-    }
-    let api_key = connection
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or(litellm_auth::Error::MissingApiKey {
-            provider: "Mistral",
-            environment_variable: MISTRAL_API_KEY_ENV,
-        })?;
-    Ok(
-        std::iter::once(("Authorization".into(), format!("Bearer {api_key}")))
-            .chain(connection.extra_headers.clone())
-            .collect(),
-    )
 }
 
 #[cfg(test)]
@@ -149,9 +207,102 @@ mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
+    #[test]
+    fn explicit_null_model_does_not_use_the_missing_model_default() {
+        let response = serde_json::from_value(json!({"model":null})).unwrap();
+        assert_eq!(
+            normalize_response("fallback", response).unwrap_err(),
+            crate::ocr::Error::ResponseField {
+                path: "model".into()
+            }
+        );
+    }
+
+    #[test]
+    fn response_validates_normalized_shapes_at_the_provider_boundary() {
+        for (payload, path) in [
+            (json!({"pages":[42]}), "pages[0]"),
+            (json!({"pages":[{"index":0}]}), "pages[0]"),
+            (
+                json!({"pages":[{"index":0,"markdown":42}]}),
+                "pages[0].markdown",
+            ),
+            (
+                json!({"pages":[{"index":0,"markdown":"","images":[42]}]}),
+                "pages[0].images[0]",
+            ),
+            (
+                json!({"pages":[{"index":0,"markdown":"","dimensions":{"width":1.5}}]}),
+                "pages[0].dimensions.width",
+            ),
+            (
+                json!({"usage_info":{"pages_processed":"bad"}}),
+                "usage_info.pages_processed",
+            ),
+        ] {
+            let error = crate::ocr::wire::decode_response::<MistralOcrResponse>(
+                &serde_json::to_vec(&payload).unwrap(),
+                false,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                crate::ocr::Error::ResponseField { path: path.into() }
+            );
+        }
+    }
+
+    #[test]
+    fn response_normalizes_python_numeric_inputs_and_shared_defaults() {
+        let response = serde_json::from_value(json!({
+            "pages":[{"index":"2","markdown":"text","dimensions":{"width":1.0},"extension":false}],
+            "usage_info":{"pages_processed":true,"credits":"1.5","custom":0},
+            "extra":"ignored"
+        }))
+        .unwrap();
+        let response = normalize_response("model", response).unwrap();
+        assert_eq!(response.pages[0].index, 2);
+        assert_eq!(
+            response.pages[0].dimensions.as_ref().unwrap().width,
+            Some(1)
+        );
+        assert_eq!(
+            response.usage_info.as_ref().unwrap().pages_processed,
+            Some(1)
+        );
+        assert_eq!(response.usage_info.as_ref().unwrap().credits, Some(1.5));
+        let serialized = response.into_json();
+        assert_eq!(serialized["pages"][0]["extension"], false);
+        assert!(serialized["pages"][0]["images"].is_null());
+        assert!(serialized["usage_info"]["doc_size_bytes"].is_null());
+        assert_eq!(serialized["usage_info"]["custom"], 0);
+        assert!(serialized["content"].is_null());
+        assert!(serialized.get("extra").is_none());
+    }
+
+    #[test]
+    fn parameter_mapping_uses_only_supported_non_default_values() {
+        let input =
+            serde_json::from_value(json!({"pages":null,"extract_header":false,"unknown":true}))
+                .unwrap();
+        let supplied = serde_json::from_value(json!({"pages":[1],"extract_footer":true})).unwrap();
+        let params = MistralOCRConfig
+            .map_ocr_params(&input, &supplied, "model")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(params).unwrap(),
+            json!({"pages":null,"extract_header":false})
+        );
+    }
+
     fn mapped_params(value: Value) -> Value {
         let params = serde_json::from_value::<OpaqueParams>(value).unwrap();
-        serde_json::to_value(MistralOCRConfig.map_ocr_params("model", &params)).unwrap()
+        serde_json::to_value(
+            MistralOCRConfig
+                .map_ocr_params(&params, &OpaqueParams::default(), "model")
+                .unwrap(),
+        )
+        .unwrap()
     }
 
     fn document() -> OcrDocument {
@@ -219,10 +370,10 @@ mod tests {
     }
 
     #[rstest]
-    fn map_ocr_params_preserves_unknown_params() {
+    fn map_ocr_params_filters_unsupported_non_default_params() {
         let mapped = mapped_params(json!({"extract_header":true,"unsupported_param":"value"}));
         assert_eq!(mapped["extract_header"], true);
-        assert_eq!(mapped["unsupported_param"], "value");
+        assert!(mapped.get("unsupported_param").is_none());
     }
 
     #[rstest]
@@ -275,7 +426,7 @@ mod tests {
         let params: OpaqueParams = serde_json::from_value(json!({name: value.clone()})).unwrap();
         let result = serde_json::to_value(
             MistralOCRConfig
-                .transform_ocr_request("model", document(), &params)
+                .transform_ocr_request("model", document(), &params, &[])
                 .unwrap(),
         )
         .unwrap();
@@ -298,7 +449,7 @@ mod tests {
         let params: OpaqueParams = serde_json::from_value(json!({name:value.clone()})).unwrap();
         let result = serde_json::to_value(
             MistralOCRConfig
-                .transform_ocr_request("mistral-ocr-latest", document(), &params)
+                .transform_ocr_request("mistral-ocr-latest", document(), &params, &[])
                 .unwrap(),
         )
         .unwrap();
@@ -316,7 +467,7 @@ mod tests {
         .unwrap();
         let result = serde_json::to_value(
             MistralOCRConfig
-                .transform_ocr_request("mistral-ocr-latest", document(), &params)
+                .transform_ocr_request("mistral-ocr-latest", document(), &params, &[])
                 .unwrap(),
         )
         .unwrap();
@@ -341,9 +492,7 @@ mod tests {
                 "usage_info":{"pages_processed":1}
             }))
             .unwrap();
-        let result = transform_ocr_response("model", response)
-            .unwrap()
-            .into_json();
+        let result = normalize_response("model", response).unwrap().into_json();
         assert_eq!(result["pages"][0]["blocks"][0]["type"], "title");
         assert_eq!(result["pages"][0]["blocks"][0]["bbox"]["x"], 1);
         assert_eq!(
@@ -373,24 +522,31 @@ mod tests {
         });
         let response: MistralOcrResponse =
             serde_json::from_value(json!({"pages":[page.clone()]})).unwrap();
-        let result = transform_ocr_response("model", response)
-            .unwrap()
-            .into_json();
-        assert_eq!(result["pages"][0], page);
+        let result = normalize_response("model", response).unwrap().into_json();
+        assert_eq!(result["pages"][0]["tables"], page["tables"]);
+        assert_eq!(result["pages"][0]["hyperlinks"], page["hyperlinks"]);
+        assert_eq!(result["pages"][0]["header"], page["header"]);
+        assert_eq!(result["pages"][0]["footer"], page["footer"]);
+        assert!(result["pages"][0]["images"].is_null());
+        assert!(result["pages"][0]["dimensions"].is_null());
     }
 
     #[test]
     fn complete_url_defaults_and_dedupes_v1() {
         assert_eq!(
-            get_complete_url(None).unwrap(),
+            MistralOCRConfig.get_complete_url(None).unwrap(),
             "https://api.mistral.ai/v1/ocr"
         );
         assert_eq!(
-            get_complete_url(Some("https://example.com/v1?tenant=a")).unwrap(),
+            MistralOCRConfig
+                .get_complete_url(Some("https://example.com/v1?tenant=a"))
+                .unwrap(),
             "https://example.com/v1/ocr?tenant=a"
         );
         assert_eq!(
-            get_complete_url(Some("https://example.com/v1/ocr?tenant=a")).unwrap(),
+            MistralOCRConfig
+                .get_complete_url(Some("https://example.com/v1/ocr?tenant=a"))
+                .unwrap(),
             "https://example.com/v1/ocr?tenant=a"
         );
     }
@@ -402,12 +558,15 @@ mod tests {
             ..OcrConnection::default()
         };
         assert_eq!(
-            validate_environment(&explicit, &|_| Some("environment".into())).unwrap()[0],
+            MistralOCRConfig
+                .validate_environment(&explicit, &|_| Some("environment".into()))
+                .unwrap()[0],
             ("Authorization".into(), "Bearer explicit".into())
         );
 
         assert_eq!(
-            validate_environment(&OcrConnection::default(), &|_| Some("environment".into()))
+            MistralOCRConfig
+                .validate_environment(&OcrConnection::default(), &|_| Some("environment".into()))
                 .unwrap()[0],
             ("Authorization".into(), "Bearer environment".into())
         );
@@ -420,7 +579,9 @@ mod tests {
             ..OcrConnection::default()
         };
         assert_eq!(
-            validate_environment(&connection, &|_| None).unwrap(),
+            MistralOCRConfig
+                .validate_environment(&connection, &|_| None)
+                .unwrap(),
             connection.extra_headers
         );
     }
@@ -428,7 +589,7 @@ mod tests {
     #[test]
     fn environment_rejects_missing_key() {
         assert!(matches!(
-            validate_environment(&OcrConnection::default(), &|_| None),
+            MistralOCRConfig.validate_environment(&OcrConnection::default(), &|_| None),
             Err(crate::ocr::Error::Auth(
                 litellm_auth::Error::MissingApiKey {
                     provider: "Mistral",

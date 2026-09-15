@@ -15,14 +15,6 @@ use serde_json::{Map, Value};
 #[serde(transparent)]
 pub struct OpaqueParams(Map<String, Value>);
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ParsedProviderParams<T> {
-    #[serde(flatten)]
-    pub known: T,
-    #[serde(default, flatten)]
-    pub extra_params: OpaqueParams,
-}
-
 pub fn is_control_param(name: &str) -> bool {
     matches!(
         name,

@@ -12,6 +12,7 @@ pub mod params;
 pub mod providers;
 pub mod responses;
 pub mod routing_utils;
+mod serde_compat;
 mod url_utils;
 
 pub use error::Error;

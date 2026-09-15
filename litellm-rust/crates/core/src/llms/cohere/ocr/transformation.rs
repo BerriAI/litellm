@@ -1,12 +1,18 @@
+use crate::serde_compat::LaxI64;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
+use serde_with::serde_as;
 
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
-use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::prepare::{credential_env, transform_request_body};
-use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+use crate::ocr::types::{
+    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage,
+    OcrUsageInfo,
+};
+use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -17,17 +23,38 @@ pub(crate) enum OutputFormat {
     Blocks,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 pub(crate) struct CohereParams {
-    #[serde(default)]
-    pub output_format: OutputFormat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<OutputFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub req_format: Option<crate::ocr::types::OcrResponseFormat>,
+    #[serde(flatten)]
+    pub extra_fields: OpaqueParams,
 }
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct CohereRequest {
     pub model: String,
-    pub document: OcrDocument,
+    pub document: CohereParseDocument,
     pub output_format: OutputFormat,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub(crate) enum CohereParseDocument {
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: String },
+}
+
+impl CohereParseDocument {
+    pub(crate) fn as_document(&self) -> OcrDocument {
+        let Self::ImageUrl { image_url } = self;
+        OcrDocument::ImageUrl {
+            image_url: image_url.clone(),
+            extra_fields: Default::default(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -37,128 +64,20 @@ pub(crate) struct CohereResponse {
     meta: Option<CohereMeta>,
 }
 
+#[serde_as]
 #[derive(Deserialize)]
 struct CoherePage {
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
     index: Option<i64>,
     markdown: Option<CohereMarkdown>,
-    blocks: Option<Vec<CohereBlock>>,
+    blocks: Option<Vec<Map<String, Value>>>,
 }
 
 #[derive(Deserialize, Serialize)]
 struct CohereMarkdown {
     #[serde(default)]
     content: String,
-    images: Option<Vec<CohereImage>>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct CohereBoundingBox<T> {
-    top_left_x: T,
-    top_left_y: T,
-    bottom_right_x: T,
-    bottom_right_y: T,
-    #[serde(flatten)]
-    extra_fields: Map<String, Value>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum CohereImageCategory {
-    Other,
-    Flowchart,
-    Logo,
-    Signature,
-}
-
-#[derive(Deserialize, Serialize)]
-struct CohereImage {
-    id: String,
-    description: String,
-    category: CohereImageCategory,
-    bounding_box: CohereBoundingBox<i64>,
-    bounding_box_normalized: CohereBoundingBox<f64>,
-    #[serde(flatten)]
-    extra_fields: Map<String, Value>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum CohereBlock {
-    Text {
-        text: CohereText,
-        #[serde(flatten)]
-        extra_fields: Map<String, Value>,
-    },
-    Image {
-        image: CohereImage,
-        #[serde(flatten)]
-        extra_fields: Map<String, Value>,
-    },
-    Table {
-        table: CohereTable,
-        #[serde(flatten)]
-        extra_fields: Map<String, Value>,
-    },
-}
-
-#[derive(Deserialize, Serialize)]
-struct CohereText {
-    content: String,
-    #[serde(flatten)]
-    extra_fields: Map<String, Value>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct CohereTable {
-    r#type: CohereTableType,
-    html: String,
-    bounding_box: CohereBoundingBox<i64>,
-    bounding_box_normalized: CohereBoundingBox<f64>,
-    title: Option<String>,
-    description: Option<String>,
-    #[serde(flatten)]
-    extra_fields: Map<String, Value>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum CohereTableType {
-    Html,
-}
-
-#[derive(Serialize)]
-struct NormalizedCohereImage {
-    id: String,
-    description: String,
-    category: CohereImageCategory,
-    bbox: CohereBoundingBox<i64>,
-    bounding_box: CohereBoundingBox<i64>,
-    bounding_box_normalized: CohereBoundingBox<f64>,
-    #[serde(flatten)]
-    extra_fields: Map<String, Value>,
-}
-
-impl From<CohereImage> for NormalizedCohereImage {
-    fn from(image: CohereImage) -> Self {
-        Self {
-            id: image.id,
-            description: image.description,
-            category: image.category,
-            bbox: image.bounding_box.clone(),
-            bounding_box: image.bounding_box,
-            bounding_box_normalized: image.bounding_box_normalized,
-            extra_fields: image.extra_fields,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct NormalizedCoherePage {
-    index: i64,
-    markdown: String,
-    images: Option<Vec<NormalizedCohereImage>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    blocks: Option<Vec<CohereBlock>>,
+    images: Option<Vec<Map<String, Value>>>,
 }
 
 #[derive(Deserialize)]
@@ -166,8 +85,10 @@ struct CohereMeta {
     billed_units: Option<CohereBilledUnits>,
 }
 
+#[serde_as]
 #[derive(Deserialize)]
 struct CohereBilledUnits {
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
     pages: Option<i64>,
 }
 
@@ -179,54 +100,101 @@ impl CohereParseConfig {
         &self,
         model: &str,
         document: OcrDocument,
-        params: CohereParams,
+        optional_params: &CohereParams,
+        _headers: &[(String, String)],
     ) -> Result<CohereRequest, crate::ocr::Error> {
-        validate_document(&document)?;
-        Ok(CohereRequest {
-            model: model.into(),
-            document,
-            output_format: params.output_format,
-        })
+        let image_url = image_url(document)?;
+        Ok(build_request(model, image_url, optional_params))
     }
 }
 
 impl BaseOcrConfig for CohereParseConfig {
+    type OcrParams = CohereParams;
+    type ProviderRequest = CohereRequest;
     type ProviderResponse = CohereResponse;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
-        &["output_format"]
+        &["output_format", "req_format"]
     }
 
-    async fn prepare_request(
+    fn map_ocr_params(
+        &self,
+        non_default_params: &OpaqueParams,
+        optional_params: &OpaqueParams,
+        _model: &str,
+    ) -> Result<CohereParams, crate::ocr::Error> {
+        if let Some(value) = non_default_params
+            .get("req_format")
+            .filter(|value| !value.is_null())
+        {
+            serde_json::from_value::<crate::ocr::types::OcrResponseFormat>(value.clone())
+                .map_err(|_| crate::ocr::Error::RequestFormat)?;
+        }
+        let fields = optional_params
+            .iter()
+            .chain(non_default_params.iter().filter(|(name, value)| {
+                matches!(name.as_str(), "output_format" | "req_format") && !value.is_null()
+            }))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        crate::ocr::wire::decode_request_value(Value::Object(fields), "optional_params")
+    }
+
+    async fn async_transform_ocr_request(
+        &self,
+        model: &str,
+        document: OcrDocument,
+        optional_params: &CohereParams,
+        headers: &[(String, String)],
+        _context: OcrRequestContext<'_>,
+    ) -> Result<CohereRequest, crate::ocr::Error> {
+        self.transform_ocr_request(model, document, optional_params, headers)
+    }
+
+    fn normalize_response(
+        &self,
+        model: &str,
+        response: CohereResponse,
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+        normalize_response(model, response)
+    }
+}
+
+impl CohereParseConfig {
+    pub(crate) async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = crate::ocr::wire::decode_request_value::<CohereParams>(
-            serde_json::Value::Object(request.optional_params.clone().into()),
-            "optional_params",
+        let params = self.map_ocr_params(
+            &request.optional_params,
+            &OpaqueParams::default(),
+            &request.model,
         )?;
-        let headers = validate_environment(&request.connection, &credential_env)?;
-        let url = complete_url(
+        let headers = self.validate_environment(&request.connection, &credential_env)?;
+        let url = self.get_complete_url(
             request
                 .connection
                 .api_base
                 .as_deref()
                 .unwrap_or(COHERE_PARSE_API_BASE),
         )?;
-        let body = self.transform_ocr_request(&request.model, request.document.clone(), params)?;
+        let body = self
+            .async_transform_ocr_request(
+                &request.model,
+                request.document.clone(),
+                &params,
+                &headers,
+                OcrRequestContext {
+                    client,
+                    connection: &request.connection,
+                },
+            )
+            .await?;
         transform_request_body(client, request, &url, &headers, true, body, |body| {
-            validate_document(&body.document)
+            validate_document(&body.document.as_document())
         })
         .await
-    }
-
-    fn transform_ocr_response(
-        &self,
-        request: &LiteLLMOcrRequest,
-        response: CohereResponse,
-    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        transform_response(&request.model, response)
     }
 }
 
@@ -246,74 +214,141 @@ pub(crate) fn validate_document(document: &OcrDocument) -> Result<(), crate::ocr
     Ok(())
 }
 
-pub(crate) fn transform_response(
+pub(crate) fn normalize_response(
     model: &str,
     response: CohereResponse,
 ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-    let pages_processed = response
-        .meta
-        .and_then(|meta| meta.billed_units)
-        .and_then(|units| units.pages)
-        .map(Ok)
-        .unwrap_or_else(|| {
-            i64::try_from(response.pages.len())
-                .map_err(|_| crate::ocr::Error::NumericRange("pages"))
-        })?;
+    let pages_processed = billed_pages(&response).map(Ok).unwrap_or_else(|| {
+        i64::try_from(response.pages.len()).map_err(|_| crate::ocr::Error::NumericRange("pages"))
+    })?;
     let pages = response
         .pages
         .into_iter()
         .enumerate()
-        .map(|(position, page)| {
-            let index = page.index.map(Ok).unwrap_or_else(|| {
-                i64::try_from(position).map_err(|_| crate::ocr::Error::NumericRange("page index"))
-            })?;
-            let (content, images) = page
-                .markdown
-                .map(|markdown| {
-                    let images =
-                        markdown
-                            .images
-                            .filter(|images| !images.is_empty())
-                            .map(|images| {
-                                images
-                                    .into_iter()
-                                    .map(NormalizedCohereImage::from)
-                                    .collect::<Vec<_>>()
-                            });
-                    (markdown.content, images)
-                })
-                .unwrap_or_default();
-            serde_json::to_value(NormalizedCoherePage {
-                index,
-                markdown: content,
-                images,
-                blocks: page.blocks,
-            })
-            .map_err(|_| crate::ocr::Error::ResponseField {
-                path: "pages".into(),
-            })
-        })
+        .map(|(position, page)| normalize_page(page, position))
         .collect::<Result<Vec<_>, crate::ocr::Error>>()?;
     Ok(LiteLLMOcrResponse {
-        pages,
-        model: model.into(),
-        document_annotation: None,
-        usage_info: Some(json!({"pages_processed": pages_processed})),
-        object: "ocr".into(),
-        extra_fields: Map::new(),
-        provider_native_response: None,
+        usage_info: Some(OcrUsageInfo {
+            pages_processed: Some(pages_processed),
+            ..Default::default()
+        }),
+        ..LiteLLMOcrResponse::new(model, pages)
     })
 }
 
-fn complete_url(base: &str) -> Result<String, crate::ocr::Error> {
-    let parsed = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(invalid_api_base());
+fn image_url(document: OcrDocument) -> Result<String, crate::ocr::Error> {
+    validate_document(&document)?;
+    let OcrDocument::ImageUrl { image_url, .. } = document else {
+        return Err(crate::ocr::Error::CohereImageOnly);
+    };
+    Ok(image_url)
+}
+
+fn build_request(model: &str, image_url: String, params: &CohereParams) -> CohereRequest {
+    CohereRequest {
+        model: model.into(),
+        document: CohereParseDocument::ImageUrl { image_url },
+        output_format: params.output_format.unwrap_or_default(),
     }
-    ApiUrl::parse(base)
-        .and_then(|url| url.complete_path(&["v2", "parse"]))
-        .map(|url| url.into_string())
-        .map_err(|_| invalid_api_base())
+}
+
+fn page_image(
+    mut image: Map<String, Value>,
+    path: &str,
+) -> Result<OcrPageImage, crate::ocr::Error> {
+    if let Some(Value::Object(bbox)) = image.get("bounding_box") {
+        image.insert("bbox".into(), Value::Object(bbox.clone()));
+    }
+    crate::ocr::wire::decode_response_value(Value::Object(image), path)
+}
+
+fn normalize_page(page: CoherePage, position: usize) -> Result<OcrPage, crate::ocr::Error> {
+    let index = page.index.map(Ok).unwrap_or_else(|| {
+        i64::try_from(position).map_err(|_| crate::ocr::Error::NumericRange("page index"))
+    })?;
+    let (markdown, images) = match page.markdown {
+        Some(markdown) => {
+            let images = markdown
+                .images
+                .filter(|images| !images.is_empty())
+                .map(|images| {
+                    images
+                        .into_iter()
+                        .enumerate()
+                        .map(|(image_index, image)| {
+                            page_image(
+                                image,
+                                &format!("pages[{position}].markdown.images[{image_index}]"),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?;
+            (markdown.content, images)
+        }
+        None => (String::new(), None),
+    };
+    let extra_fields = page
+        .blocks
+        .map(|blocks| {
+            (
+                "blocks".into(),
+                Value::Array(blocks.into_iter().map(Value::Object).collect()),
+            )
+        })
+        .into_iter()
+        .collect();
+    Ok(OcrPage {
+        index,
+        markdown,
+        images,
+        extra_fields,
+        ..Default::default()
+    })
+}
+
+fn billed_pages(response: &CohereResponse) -> Option<i64> {
+    response.meta.as_ref()?.billed_units.as_ref()?.pages
+}
+
+impl CohereParseConfig {
+    fn get_complete_url(&self, base: &str) -> Result<String, crate::ocr::Error> {
+        let parsed = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(invalid_api_base());
+        }
+        ApiUrl::parse(base)
+            .and_then(|url| url.complete_path(&["v2", "parse"]))
+            .map(|url| url.into_string())
+            .map_err(|_| invalid_api_base())
+    }
+
+    fn validate_environment(
+        &self,
+        connection: &OcrConnection,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Vec<(String, String)>, crate::ocr::Error> {
+        if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
+            return Ok(connection.extra_headers.clone());
+        }
+        let key = connection
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+            .or_else(|| env_lookup(COHERE_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
+            .ok_or_else(|| {
+                crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication(
+                    "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
+                ))
+            })?;
+        Ok(
+            std::iter::once(("Authorization".into(), format!("Bearer {key}")))
+                .chain(connection.extra_headers.clone())
+                .collect(),
+        )
+    }
 }
 
 fn invalid_api_base() -> crate::ocr::Error {
@@ -322,35 +357,126 @@ fn invalid_api_base() -> crate::ocr::Error {
     }
 }
 
-fn validate_environment(
-    connection: &OcrConnection,
-    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, crate::ocr::Error> {
-    if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
-        return Ok(connection.extra_headers.clone());
-    }
-    let key = connection
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .or_else(|| env_lookup(COHERE_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or_else(|| {
-            crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication(
-                "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
-            ))
-        })?;
-    Ok(
-        std::iter::once(("Authorization".into(), format!("Bearer {key}")))
-            .chain(connection.extra_headers.clone())
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn billed_pages_accept_integral_doubles_and_reject_fractional_counts() {
+        let response = serde_json::from_str::<CohereResponse>(
+            r#"{"pages":[],"meta":{"billed_units":{"pages":1.0}}}"#,
+        )
+        .unwrap();
+        let normalized = normalize_response("parse", response).unwrap();
+        assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(1));
+        assert!(
+            serde_json::from_str::<CohereResponse>(
+                r#"{"pages":[],"meta":{"billed_units":{"pages":1.5}}}"#,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn response_preserves_python_mapping_shapes_and_extensions() {
+        let blocks = json!([
+            {"type":"text", "text":"Total Due: $4.00"},
+            {"type":"future", "payload":{"nested":[null,false,0]}}
+        ]);
+        let response = serde_json::from_value(json!({
+            "pages":[{
+                "index":"2",
+                "markdown":{"content":"receipt", "images":[
+                    {"bounding_box":{"x":1}, "bbox":"replaced", "category":"future", "extension":null},
+                    {"image_base64":"encoded"}
+                ]},
+                "blocks":blocks
+            }],
+            "meta":{"billed_units":{"pages":0}}
+        })).unwrap();
+        let response = normalize_response("parse", response).unwrap();
+        assert_eq!(response.pages[0].index, 2);
+        assert_eq!(response.usage_info.unwrap().pages_processed, Some(0));
+        assert_eq!(response.pages[0].extra_fields["blocks"], blocks);
+        let images = response.pages[0].images.as_ref().unwrap();
+        assert_eq!(images[0].bbox.as_ref().unwrap()["x"], 1);
+        assert_eq!(images[0].extra_fields["category"], "future");
+        assert_eq!(images[0].extra_fields.get("extension"), Some(&Value::Null));
+        assert_eq!(images[1].image_base64.as_deref(), Some("encoded"));
+        assert!(images[1].bbox.is_none());
+    }
+
+    #[test]
+    fn malformed_normalized_image_fields_report_the_original_path() {
+        let response = serde_json::from_value(json!({
+            "pages":[{"markdown":{"images":[{"image_base64":42}]}}]
+        }))
+        .unwrap();
+        assert_eq!(
+            normalize_response("parse", response).unwrap_err(),
+            crate::ocr::Error::ResponseField {
+                path: "pages[0].markdown.images[0].image_base64".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parameter_mapping_merges_supplied_options_and_ignores_null_overrides() {
+        let supplied =
+            serde_json::from_value(json!({"output_format":"blocks", "extension":true})).unwrap();
+        let overrides = serde_json::from_value(
+            json!({"output_format":null,"req_format":"native","unknown":true}),
+        )
+        .unwrap();
+        let params = CohereParseConfig
+            .map_ocr_params(&overrides, &supplied, "parse")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&params).unwrap(),
+            json!({"output_format":"blocks","req_format":"native","extension":true})
+        );
+        let document = serde_json::from_value(
+            json!({"type":"image_url","image_url":"https://example.com/a.png","ignored":"field"}),
+        )
+        .unwrap();
+        let body = CohereParseConfig
+            .transform_ocr_request("parse", document, &params, &[])
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(body).unwrap(),
+            json!({
+                "model":"parse", "document":{"type":"image_url","image_url":"https://example.com/a.png"}, "output_format":"blocks"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_null_options_use_defaults_before_http() {
+        let request = crate::ocr::test_support::wire_request(
+            "cohere/parse",
+            "https://example.com",
+            json!({"output_format":null,"req_format":null}),
+        );
+        let request = crate::ocr::types::LiteLLMOcrRequest {
+            document: serde_json::from_value(
+                json!({"type":"image_url","image_url":"https://example.com/a.png"}),
+            )
+            .unwrap(),
+            ..request
+        };
+        assert_eq!(
+            request.response_format().unwrap(),
+            crate::ocr::types::OcrResponseFormat::Litellm
+        );
+        let http = CohereParseConfig
+            .prepare_request(&request, &crate::ocr::test_support::ocr_client())
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body["output_format"], "markdown");
+        assert!(body.get("req_format").is_none());
+    }
 
     #[test]
     fn response_normalizes_markdown_images_blocks_and_billed_pages() {
@@ -386,24 +512,25 @@ mod tests {
             "meta":{"api_version":{"version":"2"},"billed_units":{"pages":3}}
         }))
         .unwrap();
-        let normalized = transform_response("parse-v5.0", response).unwrap();
-        assert_eq!(normalized.pages[0]["index"], 4);
-        assert_eq!(normalized.pages[0]["markdown"], "receipt");
-        assert_eq!(normalized.pages[0]["images"][0]["bbox"]["top_left_x"], 1);
+        let normalized = normalize_response("parse-v5.0", response).unwrap();
+        assert_eq!(normalized.pages[0].index, 4);
+        assert_eq!(normalized.pages[0].markdown, "receipt");
+        let image = &normalized.pages[0].images.as_ref().unwrap()[0];
+        assert_eq!(image.bbox.as_ref().unwrap()["top_left_x"], 1);
         assert_eq!(
-            normalized.pages[0]["images"][0]["bounding_box_normalized"]["bottom_right_x"],
+            image.extra_fields["bounding_box_normalized"]["bottom_right_x"],
             0.15
         );
-        assert_eq!(normalized.pages[0]["images"][0]["description"], "scan");
-        assert_eq!(normalized.pages[0]["images"][0]["category"], "logo");
+        assert_eq!(image.extra_fields["description"], "scan");
+        assert_eq!(image.extra_fields["category"], "logo");
+        assert_eq!(image.extra_fields["provider_extension"], "preserved");
+        assert_eq!(normalized.pages[1].index, 1);
+        assert_eq!(normalized.pages[1].markdown, "");
         assert_eq!(
-            normalized.pages[0]["images"][0]["provider_extension"],
-            "preserved"
+            normalized.pages[1].extra_fields["blocks"][0]["text"]["content"],
+            "total"
         );
-        assert_eq!(normalized.pages[1]["index"], 1);
-        assert_eq!(normalized.pages[1]["markdown"], "");
-        assert_eq!(normalized.pages[1]["blocks"][0]["text"]["content"], "total");
-        assert_eq!(normalized.usage_info.unwrap()["pages_processed"], 3);
+        assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(3));
     }
 
     #[test]
@@ -414,9 +541,9 @@ mod tests {
             json!({"pages":[],"meta":{"billed_units":null}}),
         ] {
             let normalized =
-                transform_response("parse", serde_json::from_value(value).unwrap()).unwrap();
+                normalize_response("parse", serde_json::from_value(value).unwrap()).unwrap();
             assert!(normalized.pages.is_empty());
-            assert_eq!(normalized.usage_info.unwrap()["pages_processed"], 0);
+            assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(0));
         }
         for value in [
             json!({"pages":null}),
@@ -425,13 +552,13 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<CohereResponse>(value).is_err());
         }
-        let normalized = transform_response(
+        let normalized = normalize_response(
             "parse",
             serde_json::from_value(json!({"pages":[{"markdown":null}]})).unwrap(),
         )
         .unwrap();
-        assert_eq!(normalized.usage_info.unwrap()["pages_processed"], 1);
-        assert!(normalized.pages[0]["images"].is_null());
+        assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(1));
+        assert!(normalized.pages[0].images.is_none());
     }
 
     #[test]
@@ -486,8 +613,10 @@ mod tests {
             }]
         }))
         .unwrap();
-        let normalized = transform_response("parse-v5.0", response).unwrap();
-        let blocks = normalized.pages[0]["blocks"].as_array().unwrap();
+        let normalized = normalize_response("parse-v5.0", response).unwrap();
+        let blocks = normalized.pages[0].extra_fields["blocks"]
+            .as_array()
+            .unwrap();
         assert_eq!(blocks[0]["text"]["content"], "hello");
         assert_eq!(blocks[1]["image"]["category"], "logo");
         assert_eq!(blocks[2]["table"]["type"], "html");
@@ -520,7 +649,8 @@ mod tests {
                     "image_url":"https://example.com/image.png"
                 }))
                 .unwrap(),
-                serde_json::from_value(json!({})).unwrap(),
+                &serde_json::from_value(json!({})).unwrap(),
+                &[],
             )
             .unwrap();
         assert_eq!(
@@ -533,7 +663,9 @@ mod tests {
     fn completes_provider_urls_without_duplicate_paths_and_preserves_queries() {
         for suffix in ["", "/v2", "/v2/parse"] {
             assert_eq!(
-                complete_url(&format!("https://example.com{suffix}?tenant=a")).unwrap(),
+                CohereParseConfig
+                    .get_complete_url(&format!("https://example.com{suffix}?tenant=a"))
+                    .unwrap(),
                 "https://example.com/v2/parse?tenant=a"
             );
         }
@@ -541,10 +673,14 @@ mod tests {
 
     #[test]
     fn rejects_invalid_urls_and_blank_keys() {
-        assert!(complete_url("relative/path").is_err());
-        assert!(complete_url("ftp://example.com").is_err());
+        assert!(CohereParseConfig.get_complete_url("relative/path").is_err());
+        assert!(
+            CohereParseConfig
+                .get_complete_url("ftp://example.com")
+                .is_err()
+        );
         assert!(matches!(
-            validate_environment(
+            CohereParseConfig.validate_environment(
                 &OcrConnection {
                     api_key: Some("  ".into()),
                     ..Default::default()

@@ -26,7 +26,7 @@ async fn facade_executes_vertex_mistral_with_resolved_project_and_location() {
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "hello");
+    assert_eq!(response.pages[0].markdown, "hello");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with(
@@ -150,15 +150,18 @@ async fn configs_build_complete_requests_and_share_mistral_normalization() {
     }
     let payload = json!({"pages": [{"index": 0, "markdown": "hello"}], "extra": "preserved"});
     let direct_response = MistralOCRConfig
-        .transform_ocr_response(&direct, serde_json::from_value(payload.clone()).unwrap())
+        .normalize_response(
+            &direct.model,
+            serde_json::from_value(payload.clone()).unwrap(),
+        )
         .unwrap()
         .into_json();
     let vertex_response = VertexAIOCRConfig
-        .transform_ocr_response(&vertex, serde_json::from_value(payload).unwrap())
+        .normalize_response(&vertex.model, serde_json::from_value(payload).unwrap())
         .unwrap()
         .into_json();
     assert_eq!(direct_response, vertex_response);
     assert_eq!(direct_response["model"], "mistral-ocr-maas");
     assert_eq!(direct_response["object"], "ocr");
-    assert_eq!(direct_response["extra"], "preserved");
+    assert!(direct_response.get("extra").is_none());
 }

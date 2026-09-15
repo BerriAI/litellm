@@ -2,7 +2,6 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
-use serde_json::Map;
 
 use super::types::{OcrConnection, OcrDocument};
 use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
@@ -32,12 +31,12 @@ pub fn encode_file_document(
     Ok(if mime_type.starts_with("image/") {
         OcrDocument::ImageUrl {
             image_url: source,
-            extra_fields: Map::new(),
+            extra_fields: Default::default(),
         }
     } else {
         OcrDocument::DocumentUrl {
             document_url: source,
-            extra_fields: Map::new(),
+            extra_fields: Default::default(),
         }
     })
 }
@@ -182,12 +181,11 @@ fn map_media_error(error: crate::media::Error) -> crate::ocr::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Map;
 
     fn document(source: &str) -> OcrDocument {
         OcrDocument::DocumentUrl {
             document_url: source.into(),
-            extra_fields: Map::new(),
+            extra_fields: Default::default(),
         }
     }
 
@@ -197,7 +195,7 @@ mod tests {
             encode_file_document(b"abc", Some("scan.png"), None).unwrap(),
             OcrDocument::ImageUrl {
                 image_url: "data:image/png;base64,YWJj".into(),
-                extra_fields: Map::new(),
+                extra_fields: Default::default(),
             }
         );
         assert_eq!(
@@ -352,7 +350,7 @@ mod tests {
             client.document_fetcher(),
             OcrDocument::ImageUrl {
                 image_url: format!("http://{address}/image"),
-                extra_fields: Map::from_iter([("detail".into(), serde_json::json!("high"))]),
+                extra_fields: std::collections::BTreeMap::from([("detail".into(), "high".into())]),
             },
             &OcrConnection::default(),
         )
@@ -364,7 +362,7 @@ mod tests {
             converted,
             OcrDocument::ImageUrl {
                 image_url: "data:image/png;base64,YWJj".into(),
-                extra_fields: Map::from_iter([("detail".into(), serde_json::json!("high"))]),
+                extra_fields: std::collections::BTreeMap::from([("detail".into(), "high".into())]),
             }
         );
         assert!(!request.to_ascii_lowercase().contains("authorization"));

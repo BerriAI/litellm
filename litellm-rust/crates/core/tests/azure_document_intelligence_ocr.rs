@@ -118,13 +118,13 @@ async fn immediate_response_normalizes_pages_and_preserves_native() {
     .unwrap();
     server.await.unwrap();
 
-    assert_eq!(result.pages[0]["index"], 1);
-    assert_eq!(result.pages[0]["markdown"], "A\n\nB");
+    assert_eq!(result.pages[0].index, 1);
+    assert_eq!(result.pages[0].markdown, "A\n\nB");
     assert_eq!(
-        result.pages[0]["dimensions"],
+        serde_json::to_value(&result.pages[0].dimensions).unwrap(),
         json!({"width":816,"height":1056,"dpi":96})
     );
-    assert_eq!(result.usage_info, Some(json!({"pages_processed":1})));
+    assert_eq!(result.usage_info.as_ref().unwrap().pages_processed, Some(1));
     let serialized = result.clone().into_json();
     assert_eq!(serialized["content"], "A\n\nB");
     assert_eq!(serialized["tables"], json!([{"cells":[]}]));
@@ -133,7 +133,10 @@ async fn immediate_response_normalizes_pages_and_preserves_native() {
         json!([{"key":{"content":"A"}}])
     );
     assert!(serialized.get("key_value_pairs").is_none());
-    assert_eq!(result.provider_native_response, Some(operation));
+    assert_eq!(
+        result.provider_native_response.as_ref(),
+        operation.as_object()
+    );
 }
 
 #[tokio::test]
@@ -165,7 +168,10 @@ async fn accepted_response_polls_to_success_with_only_credentials() {
 
     let result = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(result.provider_native_response, Some(operation));
+    assert_eq!(
+        result.provider_native_response.as_ref(),
+        operation.as_object()
+    );
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert!(requests[0].to_ascii_lowercase().contains("x-trace:"));

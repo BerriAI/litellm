@@ -25,7 +25,7 @@ async fn facade_executes_azure_mistral_with_prepared_auth() {
 
     let result = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(result.pages[0]["markdown"], "hello");
+    assert_eq!(result.pages[0].markdown, "hello");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with("POST /providers/mistral/azure/ocr "));
