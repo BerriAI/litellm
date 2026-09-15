@@ -15,6 +15,7 @@ from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -25,6 +26,7 @@ from litellm.proxy.auth.auth_utils import (
     mark_invalid_virtual_key_error,
     normalize_request_route,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -73,6 +75,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         param=getattr(e, "param", "None"),
         code=status.HTTP_401_UNAUTHORIZED,
     )
+
+
+def _model_access_denied_internal_message(e: Exception) -> str | None:
+    if not litellm.model_access_denied_message:
+        return None
+    if not isinstance(e, (ModelAccessDeniedProxyException, ModelAccessDeniedHTTPException)):
+        return None
+    return e.internal_message.replace("\r", "").replace("\n", "")
 
 
 def _get_user_agent(request: Request) -> str | None:
@@ -166,6 +176,9 @@ class UserAPIKeyAuthExceptionHandler:
             # survives a raising callback pipeline. Classify and route malformed virtual-key
             # rejections to WARNING on stdout (suppressible via LITELLM_LOG=ERROR).
             log_extra: Final = {"requester_ip": requester_ip}
+            denied_internal_message: Final = _model_access_denied_internal_message(e)
+            if denied_internal_message is not None:
+                verbose_proxy_logger.warning(denied_internal_message, extra=log_extra)
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
             is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
