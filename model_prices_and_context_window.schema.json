@@ -251,8 +251,7 @@
         },
         "input_cost_per_audio_token_batches": {
           "type": "number",
-          "minimum": 0,
-          "description": "USD per audio prompt token via the provider's batch API."
+          "minimum": 0
         },
         "input_cost_per_audio_token_priority": {
           "type": "number",
@@ -283,8 +282,7 @@
         },
         "input_cost_per_image_token_batches": {
           "type": "number",
-          "minimum": 0,
-          "description": "USD per image prompt token via the provider's batch API."
+          "minimum": 0
         },
         "input_cost_per_pixel": {
           "type": "number",
@@ -391,8 +389,7 @@
         },
         "input_cost_per_video_token_batches": {
           "type": "number",
-          "minimum": 0,
-          "description": "USD per video prompt token via the provider's batch API."
+          "minimum": 0
         },
         "input_dbu_cost_per_token": {
           "type": "number",
