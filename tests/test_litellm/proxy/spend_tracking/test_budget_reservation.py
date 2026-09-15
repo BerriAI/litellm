@@ -270,18 +270,28 @@ async def test_release_budget_reservation_on_cancel_settles_each_entry_to_its_ow
 
 class _ParkingIncrementCache(DualCache):
     """A spend-counter cache whose increment of ``parked_key`` waits for ``release``, like a Redis INCR whose
-    reply is still on the wire, so a test can cancel the request while that increment is in flight."""
+    reply is still on the wire, so a test can cancel the request while that increment is in flight. The server
+    has already run the INCR by then, so a cancel that reaches the parked wait still lands the increment."""
 
     def __init__(self, parked_key: str) -> None:
         super().__init__()
         self.parked_key: Final = parked_key
         self.parked: Final = asyncio.Event()
         self.release: Final = asyncio.Event()
+        self.landed: Final[list[tuple[str, float]]] = []  # mutable-ok: the test reads which increments the server ran
 
     async def async_increment_cache(self, key: str, value: float, **kwargs: object) -> float | None:
         if key == self.parked_key:
             self.parked.set()
-            await self.release.wait()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                await self._land(key=key, value=value, **kwargs)
+                raise
+        return await self._land(key=key, value=value, **kwargs)
+
+    async def _land(self, key: str, value: float, **kwargs: object) -> float | None:
+        self.landed.append((key, value))  # rebind-ok: the test reads this list
         return await super().async_increment_cache(key=key, value=value, **kwargs)
 
 
@@ -309,6 +319,8 @@ async def test_reserve_budget_for_added_tags_releases_every_counter_it_took_when
     with pytest.raises(asyncio.CancelledError):
         await reserving
 
+    acquired: Final = [key for key, value in cache.landed if value > 0]
+    assert acquired == [f"spend:tag:{HOOK_TAG}", f"spend:tag:{SECOND_HOOK_TAG}"]
     assert cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") == pytest.approx(0.0)
     assert cache.in_memory_cache.get_cache(key=f"spend:tag:{SECOND_HOOK_TAG}") == pytest.approx(0.3)
 
