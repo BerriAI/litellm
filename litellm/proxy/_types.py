@@ -286,6 +286,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team's `team_member_permissions`, non-admin members of that team may set
     # `access_group_ids` on keys they create/update. Default-deny.
     KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
+    AUTO_ROUTER_MANAGE = "/auto_router/manage"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -652,15 +653,18 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
+        KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
 
     management_routes = (
         [
             # user
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/update",
             "/user/bulk_update",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/info",
             "/user/list",
             "/user/daily/activity",
@@ -840,6 +844,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -866,6 +871,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
+        "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -4710,6 +4716,7 @@ class JWTAuthBuilderResult(TypedDict):
     org_id: str | None
     team_membership: LiteLLM_TeamMembership | None
     jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
+    agent_id: ReadOnly[str | None]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
@@ -4948,6 +4955,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: list[str] | None = None
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
+    agent_id_jwt_field: str | None = Field(
+        default=None,
+        description=(
+            "The field in the JWT token that identifies the calling agent (e.g. 'azp' for a Microsoft Entra ID "
+            "app token). Supports dot notation. The value is matched against a registered agent's agent_id, "
+            "then agent_name, and the request is rejected when it matches neither."
+        ),
+    )
     public_key_ttl: float = 600
     public_key_stale_ttl: float = Field(
         default=DEFAULT_JWKS_STALE_TTL,

@@ -1856,9 +1856,9 @@ def validate_team_org_change(
 
     # Check if the team's budget is less than the org's max_budget
     if (
-        team.max_budget
-        and organization.litellm_budget_table
-        and organization.litellm_budget_table.max_budget
+        team.max_budget is not None
+        and organization.litellm_budget_table is not None
+        and organization.litellm_budget_table.max_budget is not None
         and team.max_budget > organization.litellm_budget_table.max_budget
     ):
         raise HTTPException(
@@ -3325,7 +3325,8 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3462,6 +3463,25 @@ async def team_member_delete(
                     "team_id": data.team_id,
                 }
             )
+
+    await delete_cache_team_object(
+        team_id=data.team_id,
+        team_alias=existing_team_row.team_alias,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(key.token for key in keys_to_delete),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await evict_and_broadcast(cache_keys=tuple(sorted(user_ids_to_delete)), user_api_key_cache=user_api_key_cache)
+    for user_id in sorted(user_ids_to_delete):
+        await invalidate_team_member_spend_state(
+            user_id=user_id,
+            team_id=data.team_id,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     _emit_team_members_metric(existing_team_row)
 
@@ -5684,6 +5704,21 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
+    return await append_team_models(
+        data=data,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def append_team_models(
+    *,
+    data: TeamModelAddRequest,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> "prisma_models.LiteLLM_TeamTable":
     # Atomic array append with dedup at the database level so concurrent
     # BYOK model creates don't overwrite each other's team.models entries.
     # When the team currently has models=[] (unrestricted access), the
