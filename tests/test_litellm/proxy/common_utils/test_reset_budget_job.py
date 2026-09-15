@@ -403,7 +403,7 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
         {
             "table": "enduser",
             "op": "update_many",
-            "where": {"user_id": {"in": ["test-enduser-1"]}},
+            "where": {"budget_id": {"in": ["test-budget-1"]}, "spend": {"gt": 0}},
             "data": {"spend": 0},
         }
     ]
@@ -504,7 +504,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         {
             "table": "enduser",
             "op": "update_many",
-            "where": {"user_id": {"in": ["test-enduser-1"]}},
+            "where": {"budget_id": {"in": ["test-budget-1"]}, "spend": {"gt": 0}},
             "data": {"spend": 0},
         }
     ]
@@ -524,6 +524,7 @@ _LINKED_TABLE_CASES = [
     ("org", {"budget_id": {"in": ["7d-budget-tier"]}, "spend": {"gt": 0}}),
     ("tag", {"budget_id": {"in": ["7d-budget-tier"]}, "spend": {"gt": 0}}),
     ("model_access_group", {"budget_id": {"in": ["7d-budget-tier"]}, "spend": {"gt": 0}}),
+    ("enduser", {"budget_id": {"in": ["7d-budget-tier"]}, "spend": {"gt": 0}}),
 ]
 
 
@@ -551,6 +552,48 @@ def test_budget_table_reset_zeroes_spend_on_every_linked_table(
     assert len(writes) == 1, f"expected exactly 1 {table} write, got {writes}"
     assert writes[0]["where"] == expected_where
     assert writes[0]["data"] == {"spend": 0}
+
+
+_POSTGRES_MAX_BIND_VARIABLES: Final = 32767
+
+
+def _bind_count(where: Dict[str, Any]) -> int:
+    """Bind variables one prisma where-clause compiles to: each scalar is one
+    placeholder and an ``in`` list contributes one per element."""
+    return sum(len(value["in"]) if isinstance(value, dict) and "in" in value else 1 for value in where.values())
+
+
+@pytest.mark.parametrize("population", [3, 40_000], ids=["small", "over-pg-bind-ceiling"])
+def test_enduser_reset_bind_count_does_not_scale_with_population(reset_budget_job, mock_prisma_client, population):
+    """Regression for #40564.
+
+    Enumerating every dependent user id put one bind variable per customer into
+    a single prepared statement. Past PostgreSQL's ceiling the statement could
+    not be parsed at all, so the whole atomic cascade rolled back,
+    budget_reset_at never advanced, and the tier stayed due on every later tick
+    forever. Matching on the budget link keeps the statement the same size no
+    matter how many customers share a tier.
+    """
+    budget = _budget_row(budget_id="shared-tier", budget_duration="1d")
+    mock_prisma_client.data["budget"] = [budget]
+    mock_prisma_client.data["enduser"] = [
+        types.SimpleNamespace(
+            spend=1.0,
+            litellm_budget_table=budget,
+            user_id=f"cust-{index:08d}",
+            budget_id="shared-tier",
+        )
+        for index in range(population)
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    writes = _batch_writes(mock_prisma_client, "enduser")
+    assert [_bind_count(write["where"]) for write in writes] == [2], (
+        f"the cascade must not enumerate {population} user ids: past "
+        f"{_POSTGRES_MAX_BIND_VARIABLES} binds PostgreSQL refuses the statement, got {writes[:1]}"
+    )
+    assert _batch_writes(mock_prisma_client, "budget")[0]["data"]["budget_reset_at"] is not None
 
 
 def test_budget_table_reset_writes_nothing_when_no_budget_is_due(reset_budget_job, mock_prisma_client):
@@ -720,14 +763,22 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    # Both end users are zeroed by the same committed statement.
-    enduser_writes = _batch_writes(mock_prisma_client, "enduser")
-    assert len(enduser_writes) == 1, f"Expected a single enduser write, got {enduser_writes}"
-    assert set(enduser_writes[0]["where"]["user_id"]["in"]) == {
-        "enduser-explicit",
-        "enduser-implicit",
-    }
-    assert enduser_writes[0]["data"] == {"spend": 0}
+    # Both end users are zeroed: the linked rows on the tier's budget_id, the
+    # implicit ones on the NULL branch that stands in for the default tier.
+    assert _batch_writes(mock_prisma_client, "enduser") == [
+        {
+            "table": "enduser",
+            "op": "update_many",
+            "where": {"budget_id": {"in": [default_budget_id]}, "spend": {"gt": 0}},
+            "data": {"spend": 0},
+        },
+        {
+            "table": "enduser",
+            "op": "update_many",
+            "where": {"budget_id": None, "spend": {"gt": 0}},
+            "data": {"spend": 0},
+        },
+    ]
 
     # Verify find_many was called to fetch NULL-budget-id end users
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
@@ -3043,13 +3094,13 @@ def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
     assert {
         "table": "enduser",
         "op": "update_many",
-        "where": {"user_id": {"in": ["enduser-roll"]}, "spend": {"gt": 10.0}},
+        "where": {"budget_id": "budget-roll", "spend": {"gt": 10.0}},
         "data": {"spend": {"decrement": 10.0}},
     } in enduser_writes
     assert {
         "table": "enduser",
         "op": "update_many",
-        "where": {"user_id": {"in": ["enduser-roll"]}, "spend": {"lte": 10.0}},
+        "where": {"budget_id": "budget-roll", "spend": {"gt": 0, "lte": 10.0}},
         "data": {"spend": 0},
     } in enduser_writes
 

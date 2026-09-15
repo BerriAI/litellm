@@ -315,7 +315,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)
 
-        # Fallback: resolve call_type from logging_obj for pass-through endpoints
         if call_type is None:
             litellm_logging_obj: Final = data.get("litellm_logging_obj")
             logging_call_type: Final = (
@@ -324,6 +323,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             if logging_call_type in (
                 CallTypes.pass_through.value,
                 CallTypes.allm_passthrough_route.value,
+                CallTypes.ocr.value,
+                CallTypes.aocr.value,
             ):
                 call_type = logging_call_type
 

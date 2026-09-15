@@ -96,6 +96,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
+from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_access_group_membership,
     sync_key_regeneration_access_group_membership,
@@ -199,6 +200,10 @@ class _ModelRowWhere(TypedDict):
 class _KeyUpdateResult(TypedDict):
     token: ReadOnly[str]
     data: ReadOnly[Mapping[str, object]]
+
+
+class _StoredKeyRouterSettings(BaseModel):
+    router_settings: Mapping[str, object] | None = None
 
 
 class _KeyRowWhere(TypedDict):
@@ -1330,7 +1335,7 @@ async def _common_key_generation_helper(
                 prisma_client=prisma_client,
             )
 
-    response = await generate_key_helper_fn(request_type="key", **data_json, table_name="key")
+    response = await generate_key_helper_fn(request_type="key", **data_json, table_name="key", llm_router=llm_router)
 
     response["soft_budget"] = data.soft_budget  # include the user-input soft budget in the response
 
@@ -2234,7 +2239,26 @@ async def _update_key_row_with_soft_budget(
 async def prepare_key_update_data(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
+    *,
+    prisma_client: PrismaClient | None = None,
+    llm_router: Router | None = None,
 ):
+    if data.router_settings is not None or (
+        "router_settings" not in data.model_fields_set
+        and "team_id" in data.model_fields_set
+        and data.team_id != existing_key_row.team_id
+    ):
+        effective_settings: Final = (
+            data.router_settings
+            if data.router_settings is not None
+            else _StoredKeyRouterSettings.model_validate(existing_key_row, from_attributes=True).router_settings
+        )
+        await validate_router_settings_weights(
+            effective_settings,
+            team_id=data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+        )
     data_json: Final[dict] = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
@@ -2575,7 +2599,9 @@ async def _process_single_key_update(
         )
 
     # Prepare update data
-    non_default_values = await prepare_key_update_data(data=update_key_request, existing_key_row=existing_key_row)
+    non_default_values = await prepare_key_update_data(
+        data=update_key_request, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
+    )
 
     # Update key in database
     if prisma_client is None:
@@ -2718,6 +2744,12 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
+    if data.project_id is not None and data.project_id != existing_key_row.project_id:
+        raise HTTPException(
+            status_code=400, detail="Project reassignment is not supported. Use null to detach the key."
+        )
+    is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
+
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
@@ -2810,7 +2842,9 @@ async def _validate_update_key_data(
     # non-budget change means the caller was authorized — skip the redundant
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
-    can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not _is_budget_change
+    can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not (
+        _is_budget_change or is_project_change
+    )
     if (not _is_proxy_admin) and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
         await _check_key_admin_access(
@@ -2853,7 +2887,9 @@ async def _validate_update_key_data(
     )
 
     # Validate key against project limits if project_id is being set
-    _project_id_to_check: Final = getattr(data, "project_id", None) or getattr(existing_key_row, "project_id", None)
+    _project_id_to_check: Final = (
+        data.project_id if "project_id" in data.model_fields_set else existing_key_row.project_id
+    )
     if _project_id_to_check is not None and (data.models is not None or data.max_budget is not None):
         await _check_project_key_limits(
             project_id=_project_id_to_check,
@@ -2962,6 +2998,7 @@ async def update_key_fn(
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
+    - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
     - organization_id: Optional[str] - The organization id of the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
@@ -3082,7 +3119,9 @@ async def update_key_fn(
 
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        non_default_values: Final = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
+        non_default_values: Final = await prepare_key_update_data(
+            data=data, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
+        )
 
         # Only validate key_alias format if it's actually being changed
         new_key_alias: Final = non_default_values.get("key_alias", None)
@@ -3729,7 +3768,7 @@ async def delete_key_fn(
             )
 
         verbose_proxy_logger.debug(
-            "/keys/delete - cache after delete: %s", user_api_key_cache.in_memory_cache.cache_dict
+            "/keys/delete - cache after delete: %s", user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
         )
 
         asyncio.create_task(
@@ -4126,14 +4165,23 @@ async def generate_key_helper_fn(
     object_permission: LiteLLM_ObjectPermissionBase | None = None,
     auto_rotate: bool | None = None,
     rotation_interval: str | None = None,
-    router_settings: dict | None = None,
+    router_settings: dict[str, object] | None = None,
     access_group_ids: list[str] | None = None,
     budget_limits: list | None = None,  # multiple concurrent budget windows
+    *,
+    llm_router: Router | None = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
         raise Exception("Connect Proxy to database to generate keys - https://docs.litellm.ai/docs/proxy/virtual_keys ")
+
+    await validate_router_settings_weights(
+        router_settings,
+        team_id=team_id,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+    )
 
     if token is None:
         if key is not None:
@@ -4559,6 +4607,23 @@ async def delete_verification_tokens(
                 litellm_changed_by=litellm_changed_by,
             )
 
+            # Snapshot before the delete: the FK cascade drops the mapping rows, but their
+            # cached jwt_key_mapping entries still resolve to the now-dead token (LIT-5380).
+            jwt_mapping_cache_keys: Final[tuple[str, ...]] = tuple(
+                cache_key
+                for keys_for_token in await asyncio.gather(
+                    *(
+                        get_jwt_key_mapping_cache_keys_for_token(
+                            hashed_token=key.token,
+                            prisma_client=prisma_client,
+                        )
+                        for key in authorized_keys
+                        if key.token is not None
+                    )
+                )
+                for cache_key in keys_for_token
+            )
+
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
                 if deleted_tokens is not None and len(deleted_tokens) != len(tokens):
@@ -4570,6 +4635,8 @@ async def delete_verification_tokens(
                 deleted_tokens = [key.token for key in authorized_keys]
                 if len(deleted_tokens) != len(tokens):
                     failed_tokens = [token for token in tokens if token not in deleted_tokens]
+
+            await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
         else:
             raise Exception("DB not connected. prisma_client is None")
@@ -5040,6 +5107,7 @@ async def _insert_deprecated_key(
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
+    llm_router: Router | None = None,
     key_in_db: LiteLLM_VerificationToken,
     hashed_api_key: str,
     key: str,
@@ -5099,7 +5167,9 @@ async def _execute_virtual_key_regeneration(
     if data is not None:
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        non_default_values = await prepare_key_update_data(data=data, existing_key_row=key_in_db)
+        non_default_values = await prepare_key_update_data(
+            data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
+        )
         # Only validate key_alias format if it's actually being changed
         new_key_alias: Final = non_default_values.get("key_alias")
         if new_key_alias != key_in_db.key_alias:
@@ -5238,6 +5308,7 @@ async def regenerate_key_fn(
     try:
         from litellm.proxy.proxy_server import (
             hash_token,
+            llm_router,
             master_key,
             premium_user,
             prisma_client,
@@ -5426,6 +5497,7 @@ async def regenerate_key_fn(
 
         return await _execute_virtual_key_regeneration(
             prisma_client=prisma_client,
+            llm_router=llm_router,
             key_in_db=_key_in_db,
             hashed_api_key=hashed_api_key,
             key=key,
@@ -5941,7 +6013,7 @@ async def list_keys(
     key_hash: str | None = Query(None, description="Filter keys by key hash"),
     key_alias: str | None = Query(
         None,
-        description="Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
+        description="Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching.",
     ),
     search: str | None = Query(
         None,
@@ -5962,7 +6034,7 @@ async def list_keys(
     agent_id: str | None = Query(None, description="Filter keys by agent ID"),
     substring_matching: bool = Query(
         False,
-        description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
+        description="If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys.",
     ),
     expires: str | None = Query(
         None,
@@ -6056,13 +6128,14 @@ async def list_keys(
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ]
 
-        # Substring matching is opt-in (admin-only). /key/list matched user_id and
-        # key_alias exactly before substring search was added; auto-applying a
-        # substring match to every admin call broke that contract and let a caller
-        # passing an exact user_id (e.g. an integration scoping to one user with an
-        # admin key) receive other users' keys (user_id="alice" -> "alice2"). Exact
-        # by default restores the prior behavior; the dashboard opts in explicitly.
+        # Substring matching is opt-in. /key/list matched user_id and key_alias
+        # exactly before substring search was added; auto-applying a substring
+        # match to every admin call broke that contract and let a caller passing
+        # an exact user_id (e.g. an integration scoping to one user with an admin
+        # key) receive other users' keys (user_id="alice" -> "alice2"). Exact by
+        # default restores the prior behavior; the dashboard opts in explicitly.
         use_substring_matching: Final = substring_matching and is_proxy_admin
+        use_key_alias_substring_matching: Final = substring_matching
 
         # Admins may omit user_id to list all keys; non-admins are scoped to self.
         if not user_id and not is_proxy_admin:
@@ -6089,6 +6162,7 @@ async def list_keys(
             access_group_id=access_group_id,
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
+            use_key_alias_substring_matching=use_key_alias_substring_matching,
             expires_filter=expires if isinstance(expires, str) else None,
             search=search,
         )
@@ -6334,6 +6408,7 @@ def _build_key_filter_conditions(
     access_group_id: str | None = None,
     agent_id: str | None = None,
     use_substring_matching: bool = False,
+    use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
 ) -> Mapping[str, object]:
@@ -6429,7 +6504,7 @@ def _build_key_filter_conditions(
         *(
             (
                 {"key_alias": {"contains": key_alias, "mode": "insensitive"}}
-                if use_substring_matching
+                if use_key_alias_substring_matching
                 else {"key_alias": key_alias},
             )
             if key_alias and isinstance(key_alias, str)
@@ -6475,6 +6550,7 @@ async def _list_key_helper(
     access_group_id: str | None = None,
     agent_id: str | None = None,
     use_substring_matching: bool = False,
+    use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
 ) -> KeyListResponseObject:
@@ -6514,6 +6590,7 @@ async def _list_key_helper(
         access_group_id=access_group_id,
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
+        use_key_alias_substring_matching=use_key_alias_substring_matching,
         expires_filter=expires_filter,
         search=search,
     )
