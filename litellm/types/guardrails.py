@@ -1,10 +1,13 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
 
+from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
@@ -133,6 +136,8 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    ALICE = "alice"
+    CONDUCT = "conduct"
 
 
 class Role(Enum):
@@ -204,6 +209,15 @@ class PiiEntityCategory(str, Enum):
     AUSTRALIA = "Australia"
     INDIA = "India"
     FINLAND = "Finland"
+    GERMANY = "Germany"
+    KOREA = "Korea"
+    CANADA = "Canada"
+    SWEDEN = "Sweden"
+    THAILAND = "Thailand"
+    TURKEY = "Turkey"
+    NIGERIA = "Nigeria"
+    PHILIPPINES = "Philippines"
+    SOUTH_AFRICA = "South Africa"
 
 
 class PiiEntityType(str, Enum):
@@ -220,21 +234,27 @@ class PiiEntityType(str, Enum):
     PHONE_NUMBER = "PHONE_NUMBER"
     MEDICAL_LICENSE = "MEDICAL_LICENSE"
     URL = "URL"
+    MAC_ADDRESS = "MAC_ADDRESS"
+    UUID = "UUID"
     # USA
     US_BANK_NUMBER = "US_BANK_NUMBER"
     US_DRIVER_LICENSE = "US_DRIVER_LICENSE"
     US_ITIN = "US_ITIN"
     US_PASSPORT = "US_PASSPORT"
     US_SSN = "US_SSN"
+    US_MBI = "US_MBI"
+    US_NPI = "US_NPI"
     # UK
     UK_NHS = "UK_NHS"
     UK_NINO = "UK_NINO"
     UK_PASSPORT = "UK_PASSPORT"
     UK_POSTCODE = "UK_POSTCODE"
     UK_VEHICLE_REGISTRATION = "UK_VEHICLE_REGISTRATION"
+    UK_DRIVING_LICENCE = "UK_DRIVING_LICENCE"
     # Spain
     ES_NIF = "ES_NIF"
     ES_NIE = "ES_NIE"
+    ES_PASSPORT = "ES_PASSPORT"
     # Italy
     IT_FISCAL_CODE = "IT_FISCAL_CODE"
     IT_DRIVER_LICENSE = "IT_DRIVER_LICENSE"
@@ -257,13 +277,53 @@ class PiiEntityType(str, Enum):
     IN_VEHICLE_REGISTRATION = "IN_VEHICLE_REGISTRATION"
     IN_VOTER = "IN_VOTER"
     IN_PASSPORT = "IN_PASSPORT"
+    IN_GSTIN = "IN_GSTIN"
     # Finland
     FI_PERSONAL_IDENTITY_CODE = "FI_PERSONAL_IDENTITY_CODE"
+    # Germany
+    DE_TAX_ID = "DE_TAX_ID"
+    DE_TAX_NUMBER = "DE_TAX_NUMBER"
+    DE_VAT_ID = "DE_VAT_ID"
+    DE_PASSPORT = "DE_PASSPORT"
+    DE_ID_CARD = "DE_ID_CARD"
+    DE_FUEHRERSCHEIN = "DE_FUEHRERSCHEIN"
+    DE_SOCIAL_SECURITY = "DE_SOCIAL_SECURITY"
+    DE_HEALTH_INSURANCE = "DE_HEALTH_INSURANCE"
+    DE_LANR = "DE_LANR"
+    DE_BSNR = "DE_BSNR"
+    DE_KFZ = "DE_KFZ"
+    DE_HANDELSREGISTER = "DE_HANDELSREGISTER"
+    DE_PLZ = "DE_PLZ"
+    # Korea
+    KR_RRN = "KR_RRN"
+    KR_FRN = "KR_FRN"
+    KR_PASSPORT = "KR_PASSPORT"
+    KR_DRIVER_LICENSE = "KR_DRIVER_LICENSE"
+    KR_BRN = "KR_BRN"
+    # Canada
+    CA_SIN = "CA_SIN"
+    # Sweden
+    SE_PERSONNUMMER = "SE_PERSONNUMMER"
+    SE_ORGANISATIONSNUMMER = "SE_ORGANISATIONSNUMMER"
+    # Thailand
+    TH_TNIN = "TH_TNIN"
+    # Turkey
+    TR_NATIONAL_ID = "TR_NATIONAL_ID"
+    TR_LICENSE_PLATE = "TR_LICENSE_PLATE"
+    # Nigeria
+    NG_NIN = "NG_NIN"
+    NG_VEHICLE_REGISTRATION = "NG_VEHICLE_REGISTRATION"
+    # Philippines
+    PH_TIN = "PH_TIN"
+    PH_UMID = "PH_UMID"
+    PH_PASSPORT = "PH_PASSPORT"
+    # South Africa
+    ZA_ID_NUMBER = "ZA_ID_NUMBER"
 
 
 # Define mappings of PII entity types by category
 PII_ENTITY_CATEGORIES_MAP: Final = {
-    PiiEntityCategory.GENERAL: [
+    PiiEntityCategory.GENERAL: (
         PiiEntityType.DATE_TIME,
         PiiEntityType.EMAIL_ADDRESS,
         PiiEntityType.IP_ADDRESS,
@@ -273,50 +333,85 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.PHONE_NUMBER,
         PiiEntityType.MEDICAL_LICENSE,
         PiiEntityType.URL,
-    ],
-    PiiEntityCategory.FINANCE: [
+        PiiEntityType.MAC_ADDRESS,
+        PiiEntityType.UUID,
+    ),
+    PiiEntityCategory.FINANCE: (
         PiiEntityType.CREDIT_CARD,
         PiiEntityType.CRYPTO,
         PiiEntityType.IBAN_CODE,
-    ],
-    PiiEntityCategory.USA: [
+    ),
+    PiiEntityCategory.USA: (
         PiiEntityType.US_BANK_NUMBER,
         PiiEntityType.US_DRIVER_LICENSE,
         PiiEntityType.US_ITIN,
         PiiEntityType.US_PASSPORT,
         PiiEntityType.US_SSN,
-    ],
-    PiiEntityCategory.UK: [
+        PiiEntityType.US_MBI,
+        PiiEntityType.US_NPI,
+    ),
+    PiiEntityCategory.UK: (
         PiiEntityType.UK_NHS,
         PiiEntityType.UK_NINO,
         PiiEntityType.UK_PASSPORT,
         PiiEntityType.UK_POSTCODE,
         PiiEntityType.UK_VEHICLE_REGISTRATION,
-    ],
-    PiiEntityCategory.SPAIN: [PiiEntityType.ES_NIF, PiiEntityType.ES_NIE],
-    PiiEntityCategory.ITALY: [
+        PiiEntityType.UK_DRIVING_LICENCE,
+    ),
+    PiiEntityCategory.SPAIN: (PiiEntityType.ES_NIF, PiiEntityType.ES_NIE, PiiEntityType.ES_PASSPORT),
+    PiiEntityCategory.ITALY: (
         PiiEntityType.IT_FISCAL_CODE,
         PiiEntityType.IT_DRIVER_LICENSE,
         PiiEntityType.IT_VAT_CODE,
         PiiEntityType.IT_PASSPORT,
         PiiEntityType.IT_IDENTITY_CARD,
-    ],
-    PiiEntityCategory.POLAND: [PiiEntityType.PL_PESEL],
-    PiiEntityCategory.SINGAPORE: [PiiEntityType.SG_NRIC_FIN, PiiEntityType.SG_UEN],
-    PiiEntityCategory.AUSTRALIA: [
+    ),
+    PiiEntityCategory.POLAND: (PiiEntityType.PL_PESEL,),
+    PiiEntityCategory.SINGAPORE: (PiiEntityType.SG_NRIC_FIN, PiiEntityType.SG_UEN),
+    PiiEntityCategory.AUSTRALIA: (
         PiiEntityType.AU_ABN,
         PiiEntityType.AU_ACN,
         PiiEntityType.AU_TFN,
         PiiEntityType.AU_MEDICARE,
-    ],
-    PiiEntityCategory.INDIA: [
+    ),
+    PiiEntityCategory.INDIA: (
         PiiEntityType.IN_PAN,
         PiiEntityType.IN_AADHAAR,
         PiiEntityType.IN_VEHICLE_REGISTRATION,
         PiiEntityType.IN_VOTER,
         PiiEntityType.IN_PASSPORT,
-    ],
-    PiiEntityCategory.FINLAND: [PiiEntityType.FI_PERSONAL_IDENTITY_CODE],
+        PiiEntityType.IN_GSTIN,
+    ),
+    PiiEntityCategory.FINLAND: (PiiEntityType.FI_PERSONAL_IDENTITY_CODE,),
+    PiiEntityCategory.GERMANY: (
+        PiiEntityType.DE_TAX_ID,
+        PiiEntityType.DE_TAX_NUMBER,
+        PiiEntityType.DE_VAT_ID,
+        PiiEntityType.DE_PASSPORT,
+        PiiEntityType.DE_ID_CARD,
+        PiiEntityType.DE_FUEHRERSCHEIN,
+        PiiEntityType.DE_SOCIAL_SECURITY,
+        PiiEntityType.DE_HEALTH_INSURANCE,
+        PiiEntityType.DE_LANR,
+        PiiEntityType.DE_BSNR,
+        PiiEntityType.DE_KFZ,
+        PiiEntityType.DE_HANDELSREGISTER,
+        PiiEntityType.DE_PLZ,
+    ),
+    PiiEntityCategory.KOREA: (
+        PiiEntityType.KR_RRN,
+        PiiEntityType.KR_FRN,
+        PiiEntityType.KR_PASSPORT,
+        PiiEntityType.KR_DRIVER_LICENSE,
+        PiiEntityType.KR_BRN,
+    ),
+    PiiEntityCategory.CANADA: (PiiEntityType.CA_SIN,),
+    PiiEntityCategory.SWEDEN: (PiiEntityType.SE_PERSONNUMMER, PiiEntityType.SE_ORGANISATIONSNUMMER),
+    PiiEntityCategory.THAILAND: (PiiEntityType.TH_TNIN,),
+    PiiEntityCategory.TURKEY: (PiiEntityType.TR_NATIONAL_ID, PiiEntityType.TR_LICENSE_PLATE),
+    PiiEntityCategory.NIGERIA: (PiiEntityType.NG_NIN, PiiEntityType.NG_VEHICLE_REGISTRATION),
+    PiiEntityCategory.PHILIPPINES: (PiiEntityType.PH_TIN, PiiEntityType.PH_UMID, PiiEntityType.PH_PASSPORT),
+    PiiEntityCategory.SOUTH_AFRICA: (PiiEntityType.ZA_ID_NUMBER,),
 }
 
 
@@ -390,6 +485,16 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     presidio_ad_hoc_recognizers: str | None = Field(
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
+    )
+    presidio_analyze_chunk_size_bytes: int | None = Field(
+        default=None,
+        description=(
+            "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. "
+            "Longer texts are split into overlapping chunks of at most this size "
+            "and the merged results are remapped onto the original text. "
+            "Defaults to 500000; set it below your analyzer deployment's request "
+            "body limit, leaving headroom for the rest of the analyze payload."
+        ),
     )
     mock_redacted_text: dict | None = Field(default=None, description="Mock redacted text for testing")
 
@@ -495,6 +600,9 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_role_name: str | None = Field(default=None, description="AWS role name for assuming roles")
     aws_web_identity_token: str | None = Field(default=None, description="Web identity token for AWS role assumption")
     aws_sts_endpoint: str | None = Field(default=None, description="AWS STS endpoint URL")
+    aws_external_id: str | None = Field(
+        default=None, description="External ID required by the target role's trust policy on sts:AssumeRole"
+    )
     aws_bedrock_runtime_endpoint: str | None = Field(default=None, description="AWS Bedrock runtime endpoint URL")
     checks: BedrockChecksConfigModel | None = Field(
         default=None,
@@ -525,6 +633,59 @@ class BedrockGuardrailConfigModel(BaseModel):
         description="InvokeGuardrailChecks: block when any sensitiveInformation confidenceScore "
         ">= this value (scores are in [0,1]). Set to null to make PII detection detect-only.",
     )
+    chunk_budget_chars: int = Field(
+        default=BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
+        gt=0,
+        description="ApplyGuardrail: batch size, in characters, used to re-send content after AWS "
+        "has rejected a request as too large. Requests AWS accepts are always sent in a single "
+        "call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS "
+        "still rejects is bisected automatically, so this value only trades round trips against "
+        "batch size and cannot fail a request on its own.",
+    )
+    contextual_grounding_from_messages: bool = Field(
+        default=False,
+        description="ApplyGuardrail: when True, post-call scans of a request with no grounding_source / "
+        "query content parts send the system and developer messages as the grounding source and "
+        "the latest user message as the query, so the guardrail's contextual grounding policy can "
+        "score the response. Bedrock bills contextual grounding units for these scans and rejects "
+        "queries, sources and responses over its contextual grounding length limits, so leave this "
+        "off for guardrails without a contextual grounding policy. Default False: plain messages "
+        "are never sent as grounding context.",
+    )
+
+
+class BedrockGuardrailStreamingParams(BaseModel):
+    streaming_buffer_until_moderated: bool = Field(
+        default=True,
+        description="If True (default), withhold every streamed chunk until the end-of-stream "
+        "ApplyGuardrail scan passes, so no flagged content reaches the client before a block. "
+        "If False, chunks stream through unbuffered, so flagged content can reach the client "
+        "before the scan finishes; a flagged scan still ends the stream, with a block message "
+        "when disable_exception_on_block is true and an in-stream error frame otherwise.",
+    )
+    streaming_sampling_rate: int = Field(
+        default=5,
+        ge=1,
+        description="When not buffering and not end-of-stream-only, scan the accumulated response "
+        "every Nth streamed chunk. Each sampled scan is a full ApplyGuardrail call that delays "
+        "that chunk, so lower values add latency and AWS text-unit cost.",
+    )
+    streaming_end_of_stream_only: bool = Field(
+        default=False,
+        description="When not buffering, skip per-chunk sampling and run one ApplyGuardrail scan "
+        "on the assembled response at end of stream. Combined with "
+        "streaming_buffer_until_moderated=false the full response streams live before the scan "
+        "and the scan result lands in guardrail_information; a flagged response still ends the "
+        "stream with a block message (disable_exception_on_block=true) or an error frame.",
+    )
+
+    @classmethod
+    def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
+        if not extras:
+            return cls()
+        return cls.model_validate(
+            MappingProxyType({name: extras[name] for name in cls.model_fields if extras.get(name) is not None})
+        )
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
@@ -540,9 +701,15 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor"] | None = Field(
+    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+    )
+    advisory_system_message: str | None = Field(
+        default=None,
+        description="Custom advisory message template used when on_flagged='inject_system_message'. "
+        "Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
     )
 
 
@@ -712,6 +879,9 @@ class ContentFilterConfigModel(BaseModel):
     )
 
 
+MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -739,7 +909,10 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "When True, unified guardrails skip system-role messages when building "
             "evaluation inputs (texts and structured_messages). When False, system "
             "messages are included even if litellm_settings sets a global skip. When "
-            "None, use the global litellm.skip_system_message_in_guardrail setting."
+            "None, use the global litellm.skip_system_message_in_guardrail setting. "
+            "For Anthropic /v1/messages, the flag applies only to the trusted top-level "
+            "system prompt. In-sequence system entries are untrusted client input and remain "
+            "in texts and structured_messages."
         ),
     )
 
@@ -750,6 +923,25 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "evaluation inputs (texts and structured_messages). When False, tool "
             "messages are included even if litellm_settings sets a global skip. When "
             "None, use the global litellm.skip_tool_message_in_guardrail setting."
+        ),
+    )
+
+    scan_only_tool_results: bool | None = Field(
+        default=None,
+        description=(
+            "When True, unified guardrails only evaluate tool results, the untrusted data an "
+            "agent feeds back into the model, and skip system, user, and assistant content. "
+            "Intended for agent harnesses whose own prompt scaffolding is trusted but often "
+            "trips prompt-attack detectors."
+        ),
+    )
+
+    inspect_embeddings: bool | None = Field(
+        default=None,
+        description=(
+            "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as "
+            "user messages. Off by default because embedding input is documents being indexed, not a "
+            "conversation."
         ),
     )
 
@@ -798,9 +990,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
     )
-    on_violation: Literal["warn", "end_session"] | None = Field(
+    on_violation: Literal["warn", "end_session", "block", "alert"] | None = Field(
         default=None,
-        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+        description=(
+            "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
+            "'end_session' speaks the message and closes the connection. "
+            "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
+        ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
@@ -819,7 +1015,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=True,
         description=(
             "Whether to fail the request if the guardrail encounters an error. "
-            "Implemented by guardrail='model_armor' and 'generic_guardrail_api'. "
+            "Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. "
             "True (default) raises the error. False logs a critical error and lets the request proceed, "
             "so only a valid guardrail response can block or modify it."
         ),
@@ -915,6 +1111,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_raw_request: bool | None = Field(
+        default=None,
+        description=(
+            "When True, this pre_call guardrail always evaluates the request as it was before any "
+            "guardrail in this hook ran, regardless of its position in the guardrails list -- so the "
+            "YAML order of guardrails can never change whether this one blocks. Use only for "
+            "block-only guardrails: any data this guardrail returns is discarded, same contract as "
+            "run_in_parallel, since an earlier guardrail's masking must not be undone by this one."
+        ),
+    )
+
     @field_validator(
         "mode",
         "default_action",
@@ -947,7 +1154,7 @@ class Mode(BaseModel):
     default: str | list[str] | None = Field(default=None, description="Default mode when no tags match")
 
 
-class LitellmParams(
+class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # on_flagged literal diverges across mixins
     CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
@@ -993,6 +1200,15 @@ class LitellmParams(
             return float(v)
         except (TypeError, ValueError) as e:
             raise ValueError(f"timeout must be numeric, got {v!r}") from e
+
+    @model_validator(mode="after")
+    def validate_on_violation_for_guardrail(self) -> "LitellmParams":
+        if (
+            self.on_violation in MCP_SECURITY_ON_VIOLATION
+            and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
+        ):
+            raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
 
     def __init__(self, **kwargs) -> None:
         default_on: Final = kwargs.pop("default_on", None)

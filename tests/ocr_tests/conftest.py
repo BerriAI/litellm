@@ -5,12 +5,10 @@
 # Vertex AI OCR) are replayed for 24h. See tests/llm_translation/Readme.md
 # for the design overview.
 
-import os
-import sys
+from typing import Final
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
@@ -26,7 +24,12 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     vcr_config_dict,
 )
 
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: Final[tuple[str, ...]] = (
+    "test_rust_bridge.py::test_native_public_ocr_matches_python[mistral/mistral-ocr-latest-False]",
+    "test_rust_bridge.py::test_native_public_ocr_matches_python[mistral/mistral-ocr-latest-True]",
+    "test_rust_bridge.py::test_native_public_ocr_matches_python[azure_ai/doc-intelligence/prebuilt-read-False]",
+    "test_rust_bridge.py::test_native_public_ocr_matches_python[azure_ai/doc-intelligence/prebuilt-read-True]",
+)
 
 _verbose_state = VerboseReporterState()
 

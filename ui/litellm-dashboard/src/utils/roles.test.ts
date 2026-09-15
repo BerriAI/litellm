@@ -1,15 +1,24 @@
 import { describe, it, expect } from "vitest";
 import {
+  all_admin_roles,
   effectiveSessionRole,
+  hasProxyWideSpendView,
   isAdminRole,
+  spendScopeUserId,
+  isOrgAdminForAnyOrg,
+  isOrgAdminSessionRole,
   isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
   isUserTeamAdminForSingleTeam,
   isViewOnlySessionRole,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
+  teamListScopeUserId,
 } from "./roles";
-import { Team } from "@/components/networking";
+import { Organization, Team } from "@/components/networking";
+
+const orgWithMembers = (members: { user_id: string; user_role: string }[]): Organization =>
+  ({ organization_id: "org-1", members }) as unknown as Organization;
 
 describe("roles", () => {
   describe("isAdminRole", () => {
@@ -154,6 +163,55 @@ describe("roles", () => {
     });
   });
 
+  describe("isOrgAdminForAnyOrg", () => {
+    it("returns true when the user holds an org_admin membership in any organization", () => {
+      const organizations = [
+        orgWithMembers([{ user_id: "user-1", user_role: "internal_user" }]),
+        orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }]),
+      ];
+      expect(isOrgAdminForAnyOrg(organizations, "user-1")).toBe(true);
+    });
+
+    it("returns false when the user is only a plain member", () => {
+      const organizations = [orgWithMembers([{ user_id: "user-1", user_role: "internal_user" }])];
+      expect(isOrgAdminForAnyOrg(organizations, "user-1")).toBe(false);
+    });
+
+    it("does not credit one user with another user's org_admin membership", () => {
+      const organizations = [orgWithMembers([{ user_id: "user-2", user_role: "org_admin" }])];
+      expect(isOrgAdminForAnyOrg(organizations, "user-1")).toBe(false);
+    });
+
+    it("returns false for missing organizations, missing members, or a missing user id", () => {
+      expect(isOrgAdminForAnyOrg(null, "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg(undefined, "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg([], "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg([{ organization_id: "org-1" } as unknown as Organization], "user-1")).toBe(false);
+      expect(isOrgAdminForAnyOrg([orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }])], null)).toBe(false);
+      expect(isOrgAdminForAnyOrg([orgWithMembers([{ user_id: "user-1", user_role: "org_admin" }])], "")).toBe(false);
+    });
+  });
+
+  describe("isOrgAdminSessionRole", () => {
+    it("accepts both the raw and the formatted org admin role", () => {
+      expect(isOrgAdminSessionRole("org_admin")).toBe(true);
+      expect(isOrgAdminSessionRole(effectiveSessionRole("org_admin"))).toBe(true);
+    });
+
+    it("returns false for the role a membership-granted org admin actually carries", () => {
+      expect(isOrgAdminSessionRole("Internal User")).toBe(false);
+      expect(isOrgAdminSessionRole("internal_user")).toBe(false);
+    });
+
+    it("returns false for admin and missing roles", () => {
+      expect(isOrgAdminSessionRole("Admin")).toBe(false);
+      expect(isOrgAdminSessionRole("proxy_admin")).toBe(false);
+      expect(isOrgAdminSessionRole(null)).toBe(false);
+      expect(isOrgAdminSessionRole(undefined)).toBe(false);
+      expect(isOrgAdminSessionRole("")).toBe(false);
+    });
+  });
+
   describe("rolesAllowedToViewWriteScopedPages", () => {
     it("includes Admin Viewer (both display and stored forms)", () => {
       // Admin Viewer follows the read-parity rule — they must be able to
@@ -234,6 +292,84 @@ describe("roles", () => {
     it("stays true for proxy_admin_viewer even though its session role reads as Admin", () => {
       expect(effectiveSessionRole("proxy_admin_viewer")).toBe("Admin");
       expect(isViewOnlySessionRole("proxy_admin_viewer")).toBe(true);
+    });
+  });
+
+  describe("teamListScopeUserId", () => {
+    const SESSION_USER_ID = "user-1";
+
+    it.each(["proxy_admin", "proxy_admin_viewer", "org_admin"])(
+      "leaves %s unscoped so the endpoint keeps returning its broad list",
+      (rawRole) => {
+        expect(teamListScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBeNull();
+      },
+    );
+
+    it.each(["internal_user", "internal_user_viewer", "internal_viewer", "app_user"])(
+      "scopes %s to its own user id, which is what the endpoint authorizes on",
+      (rawRole) => {
+        expect(teamListScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      },
+    );
+
+    it("also accepts the Admin Viewer label that formatUserRole emits", () => {
+      expect(teamListScopeUserId("Admin Viewer", SESSION_USER_ID)).toBeNull();
+    });
+
+    it("scopes an unknown or absent role rather than assuming a broad list", () => {
+      expect(teamListScopeUserId(null, SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      expect(teamListScopeUserId("Undefined Role", SESSION_USER_ID)).toBe(SESSION_USER_ID);
+    });
+
+    it("keeps Org Admin broad even though all_admin_roles carries only the raw org_admin", () => {
+      expect(all_admin_roles).not.toContain(effectiveSessionRole("org_admin"));
+      expect(isAdminRole(effectiveSessionRole("org_admin"))).toBe(false);
+      expect(teamListScopeUserId(effectiveSessionRole("org_admin"), SESSION_USER_ID)).toBeNull();
+    });
+  });
+
+  describe("spendScopeUserId", () => {
+    const SESSION_USER_ID = "user-1234";
+
+    it.each(["proxy_admin", "proxy_admin_viewer"])(
+      "drops the user id for %s, whom the daily-activity endpoints let read every user's spend",
+      (rawRole) => {
+        expect(hasProxyWideSpendView(effectiveSessionRole(rawRole))).toBe(true);
+        expect(spendScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBeNull();
+      },
+    );
+
+    it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])(
+      "accepts %s in either the session-role or raw spelling, since all_admin_roles carries both",
+      (role) => {
+        expect(spendScopeUserId(role, SESSION_USER_ID)).toBeNull();
+      },
+    );
+
+    it.each(["internal_user", "internal_user_viewer", "internal_viewer", "app_user"])(
+      "scopes %s to its own user id, which is the only one the endpoint authorizes",
+      (rawRole) => {
+        expect(spendScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      },
+    );
+
+    it("scopes an unknown or absent role rather than asking for the whole proxy", () => {
+      expect(spendScopeUserId(null, SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      expect(spendScopeUserId("Undefined Role", SESSION_USER_ID)).toBe(SESSION_USER_ID);
+    });
+
+    // The backend's user_api_key_has_admin_view covers PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY only,
+    // so an org admin asking for the whole proxy is silently narrowed to its own rows and the
+    // figures would read as the key's total. Both spellings have to scope, unlike teamListScopeUserId.
+    it.each(["org_admin", "Org Admin"])("scopes %s, whom the backend does not grant an admin view", (role) => {
+      expect(hasProxyWideSpendView(role)).toBe(false);
+      expect(spendScopeUserId(role, SESSION_USER_ID)).toBe(SESSION_USER_ID);
+    });
+
+    it("differs from all_admin_roles by exactly org admin, which is the whole point of not reusing it", () => {
+      const scopedByAllAdminRoles = all_admin_roles.filter((role) => spendScopeUserId(role, SESSION_USER_ID) !== null);
+
+      expect(scopedByAllAdminRoles).toEqual(["org_admin"]);
     });
   });
 });

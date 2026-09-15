@@ -24,7 +24,7 @@ class WebSearchTransformation:
 
     @staticmethod
     def transform_request(
-        response: Any,
+        response: object,
         stream: bool,
         response_format: str = "anthropic",
     ) -> tuple[bool, list[dict]]:
@@ -66,7 +66,7 @@ class WebSearchTransformation:
 
     @staticmethod
     def _detect_from_responses_response(
-        response: Any,
+        response: object,
     ) -> tuple[bool, list[dict]]:
         """Parse a Responses API response for ``litellm_web_search`` function calls.
 
@@ -399,7 +399,7 @@ class WebSearchTransformation:
     def build_web_search_tool_result_block(
         tool_use_id: str,
         search_response: SearchResponse | None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Build an Anthropic-native ``web_search_tool_result`` content block.
 
@@ -411,6 +411,15 @@ class WebSearchTransformation:
         model needs readable evidence). This helper produces the *additional*
         block that should accompany the model's text reply when the original
         request used a native ``web_search_*`` tool.
+
+        The spec'd shape carries page text only in ``encrypted_content``, an
+        opaque server-issued blob that we cannot mint. Emitting the four spec
+        fields alone would drop the snippet entirely, leaving the client (and
+        the model, on any replayed follow-up turn) with URLs and titles but no
+        evidence to answer from, forcing a fetch per result. So the snippet is
+        carried in an additive ``snippet`` key alongside the spec fields.
+        ``encrypted_content`` stays empty rather than holding plaintext, which
+        would assert encryption semantics that do not hold.
 
         Spec reference:
         https://docs.anthropic.com/en/api/web-search-tool
@@ -424,7 +433,7 @@ class WebSearchTransformation:
                 emitted with an empty result list (signals "search ran, no
                 results" rather than "search did not run").
         """
-        items: Final[list[dict[str, Any]]] = []
+        items: Final[list[dict[str, object]]] = []
         if search_response is not None:
             results: Final = getattr(search_response, "results", None) or []
             for r in results:
@@ -438,6 +447,7 @@ class WebSearchTransformation:
                         "title": title,
                         "page_age": page_age,
                         "encrypted_content": "",
+                        "snippet": getattr(r, "snippet", "") or "",
                     }
                 )
         return {

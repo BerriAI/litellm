@@ -14,7 +14,6 @@ import aiohttp
 import os
 import dotenv
 from dotenv import load_dotenv
-import pytest
 from openai import AsyncOpenAI, APIConnectionError
 from openai.types.chat import ChatCompletion
 

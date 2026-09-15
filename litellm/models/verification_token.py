@@ -31,6 +31,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     metadata: dict = {}
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    tpd_limit: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
     allowed_cache_controls: list | None = []
@@ -49,6 +50,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     created_by: str | None = None
     updated_at: datetime | None = None
     updated_by: str | None = None
+    settings_updated_at: datetime | None = None
     last_active: datetime | None = None
     object_permission_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionTable | None = None

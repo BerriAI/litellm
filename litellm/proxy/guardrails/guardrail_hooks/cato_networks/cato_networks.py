@@ -9,11 +9,13 @@ import contextlib
 import json
 import os
 import ssl
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
+from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException
 from pydantic import BaseModel
+from typing_extensions import NotRequired, TypedDict
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
@@ -30,13 +32,15 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
+    is_non_conversational_call_type,
+    is_string_batch_input,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
-    EmbeddingResponse,
-    ImageResponse,
+    LLMResponseTypes,
+    Message,
     ModelResponse,
     ModelResponseStream,
     ResponsesAPIResponse,
@@ -50,6 +54,44 @@ class CatoNetworksGuardrailMissingSecrets(Exception):
     pass
 
 
+class _WsSslKwargs(TypedDict, total=False):
+    ssl: bool | str | SSLContext
+
+
+class _CatoRequiredAction(TypedDict, total=False):
+    action_type: str
+    detection_message: str
+
+
+class _CatoRedactedMessage(TypedDict):
+    role: NotRequired[str]
+    content: str | None
+
+
+class _CatoRedactedChat(TypedDict, total=False):
+    all_redacted_messages: Sequence[_CatoRedactedMessage]
+
+
+class _CatoAnalysisResult(TypedDict, total=False):
+    policy_drill_down: Mapping[str, object]
+
+
+class _CatoAnalyzeResponse(TypedDict):
+    required_action: NotRequired[_CatoRequiredAction | None]
+    analysis_result: NotRequired[_CatoAnalysisResult]
+    redacted_chat: NotRequired[_CatoRedactedChat]
+
+
+class _CatoOutputRedaction(TypedDict):
+    redacted_output: str
+
+
+class _CatoStreamMessage(TypedDict, total=False):
+    verified_chunk: Mapping[str, object]
+    done: bool
+    blocking_message: str
+
+
 class CatoNetworksGuardrail(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -59,8 +101,15 @@ class CatoNetworksGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        inspect_embeddings: bool | None = None,
+        **kwargs,
+    ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.inspect_embeddings: Final = inspect_embeddings is True
         ssl_verify: Final = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -80,7 +129,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def _build_ws_ssl_kwargs(ssl_verify: bool | str | None, ws_api_base: str) -> dict:
+    def _build_ws_ssl_kwargs(ssl_verify: bool | str | None, ws_api_base: str) -> _WsSslKwargs:
         """Resolve the ``ssl`` argument for ``websockets.connect``. Mirrors the
         ``ssl_verify`` handling applied to the HTTP handler so a custom Cato instance
         behind TLS honours the same verification settings for streaming."""
@@ -114,6 +163,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
+        # /embeddings carries documents being indexed, not a conversation to inspect.
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_cato_guardrail(
             data,
             hook="pre_call",
@@ -128,6 +181,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_cato_guardrail(
             data,
             hook="moderation",
@@ -156,7 +212,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return flattened
 
     @staticmethod
-    def _prompt_inspection_messages(prompt: Any) -> list:
+    def _prompt_inspection_messages(prompt: object) -> Sequence[Mapping[str, str]]:
         """Synthetic user messages for a legacy completion ``prompt`` (a string
         or a list of string prompts)."""
         if isinstance(prompt, str):
@@ -166,7 +222,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return []
 
     @staticmethod
-    def _iter_schema_string_refs(data: dict):
+    def _iter_schema_string_refs(data: Mapping[str, Any]):
         """Yield ``(container, key)`` for every non-empty schema string the proxy
         forwards to the model inside tool/function and structured-output schemas:
         each ``tools[].function`` and legacy ``functions[]`` entry plus the
@@ -208,7 +264,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 stack.extend(reversed(node))
 
     @classmethod
-    def _extra_inspection_sources(cls, data: dict) -> list:
+    def _extra_inspection_sources(cls, data: Mapping[str, Any]) -> Sequence[tuple[str, Sequence[Mapping[str, str]]]]:
         """Text the proxy forwards to the model outside chat ``messages``:
         Responses-API ``input`` and ``instructions``, legacy completion
         ``prompt`` and tool/function/``response_format`` schema strings. Returned
@@ -251,7 +307,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             json={"messages": self._inspection_messages(data)},
         )
         response.raise_for_status()
-        res: Final = response.json()
+        res: Final[_CatoAnalyzeResponse] = response.json()
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
         if action_type is None:
@@ -259,7 +315,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             return data
         if action_type == "monitor_action":
             verbose_proxy_logger.info("Cato: monitor action")
-        elif action_type == "block_action":
+        elif action_type == "block_action" and required_action is not None:
             self._handle_block_action(res.get("analysis_result", {}), required_action)
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
@@ -267,7 +323,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
             verbose_proxy_logger.error("Cato: %s action", action_type)
         return data
 
-    def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
+    def _handle_block_action(
+        self,
+        analysis_result: _CatoAnalysisResult,
+        required_action: _CatoRequiredAction,
+    ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Cato: Violation detected enabled policies: {policies}".format(
@@ -283,6 +343,16 @@ class CatoNetworksGuardrail(CustomGuardrail):
             return data
         redacted_messages: Final = redacted_chat.get("all_redacted_messages") or []
         original_messages: Final = data.get("messages")
+        sources: Final = self._extra_inspection_sources(data)
+        if is_string_batch_input(data) and len(redacted_messages) != sum(len(messages) for _, messages in sources):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cato: anonymize action returned a redacted batch of a different "
+                    "size than the inspected input, so the request cannot be rewritten "
+                    "without forwarding unredacted text."
+                ),
+            )
         offset = 0
         if original_messages:
             data["messages"] = [
@@ -294,26 +364,40 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 for idx, original in enumerate(original_messages)
             ]
             offset = len(original_messages)
-        for field, messages in self._extra_inspection_sources(data):
+        for field, messages in sources:
             redacted_slice = redacted_messages[offset : offset + len(messages)]
             offset += len(messages)
-            if redacted_slice:
-                self._apply_extra_redaction(data, field, redacted_slice)
+            if not self._apply_extra_redaction(data, field, redacted_slice):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Cato: anonymize action returned a redacted batch of a different "
+                        "size than the inspected input, so the request cannot be rewritten "
+                        "without forwarding unredacted text."
+                    ),
+                )
         return data
 
     @classmethod
-    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> None:
+    def _apply_extra_redaction(cls, data: dict, field: str, redacted: list) -> bool:
         if field == "input":
             input_only: Final = {"input": data["input"]}
-            apply_redacted_messages_back(input_only, redacted)
+            if not redacted:
+                return not is_string_batch_input(input_only)
+            if not apply_redacted_messages_back(input_only, redacted):
+                return False
             data["input"] = input_only["input"]
-        elif field == "instructions":
+            return True
+        if not redacted:
+            return True
+        if field == "instructions":
             if redacted[0].get("content") is not None:
                 data["instructions"] = redacted[0]["content"]
         elif field == "prompt":
             cls._apply_prompt_redaction(data, redacted)
         elif field == "schema_strings":
             cls._apply_schema_string_redaction(data, redacted)
+        return True
 
     @classmethod
     def _apply_schema_string_redaction(cls, data: dict, redacted: list) -> None:
@@ -348,7 +432,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         hook: str,
         key_alias: str | None,
         user_email: str | None = None,
-    ) -> dict | None:
+    ) -> _CatoOutputRedaction | None:
         call_id: Final = request_data.get("litellm_call_id")
         inspection_messages: Final = self._inspection_messages(request_data)
         assistant_index: Final = len(inspection_messages)
@@ -363,10 +447,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
             json={"messages": inspection_messages + [{"role": "assistant", "content": output}]},
         )
         response.raise_for_status()
-        res: Final = response.json()
+        res: Final[_CatoAnalyzeResponse] = response.json()
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
-        if action_type and action_type == "block_action":
+        if action_type == "block_action" and required_action is not None:
             self._handle_block_action_on_output(res.get("analysis_result", {}), required_action)
         redacted_chat: Final = res.get("redacted_chat", None)
 
@@ -378,7 +462,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
                     return {"redacted_output": redacted_output}
         return None
 
-    def _handle_block_action_on_output(self, analysis_result: Any, required_action: Any) -> None:
+    def _handle_block_action_on_output(
+        self,
+        analysis_result: _CatoAnalysisResult,
+        required_action: _CatoRequiredAction,
+    ) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Cato: detected: {detected}, enabled policies: {policies}".format(
@@ -422,7 +510,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _output_fragments(message: Any) -> list:
+    def _output_fragments(message: Message) -> Sequence[tuple[tuple[str, int | None], str]]:
         """Assistant text the proxy returns to the caller: ``content`` plus every
         ``tool_calls[].function.arguments`` string, each tagged with where a
         redaction must be written back. ``content`` is only included when present
@@ -439,7 +527,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return fragments
 
     @staticmethod
-    def _apply_output_fragment(message: Any, target: tuple, redacted: str) -> None:
+    def _apply_output_fragment(message: Any, target: tuple[str, int | None], redacted: str) -> None:
         kind, idx = target
         if kind == "content":
             message.content = redacted
@@ -447,11 +535,11 @@ class CatoNetworksGuardrail(CustomGuardrail):
             message.tool_calls[idx].function.arguments = redacted
 
     @staticmethod
-    def _responses_output_field(item: Any, key: str) -> Any:
+    def _responses_output_field(item: object, key: str) -> str | Sequence[object] | None:
         return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
 
     @classmethod
-    def _responses_output_fragments(cls, response: ResponsesAPIResponse) -> list:
+    def _responses_output_fragments(cls, response: ResponsesAPIResponse) -> Sequence[tuple[object, str, str]]:
         """Assistant text the Responses API returns to the caller: every
         ``output_text`` content block plus every function-call ``arguments``
         string, each paired with the ``(container, key)`` a Cato redaction is
@@ -474,7 +562,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return fragments
 
     @staticmethod
-    def _apply_responses_output_fragment(container: Any, key: str, redacted: str) -> None:
+    def _apply_responses_output_fragment(container: object, key: str, redacted: str) -> None:
         if isinstance(container, dict):
             container[key] = redacted
         else:
@@ -505,8 +593,8 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any | ModelResponse | EmbeddingResponse | ImageResponse,
-    ) -> Any:
+        response: LLMResponseTypes,
+    ) -> LLMResponseTypes:
         user_email: Final = self._resolve_cato_user_email(user_api_key_dict)
         if isinstance(response, ModelResponse) and response.choices:
             for choice in response.choices:
@@ -526,7 +614,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: AsyncIterable[object],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         from litellm.proxy.proxy_server import StreamingCallbackError
@@ -547,7 +635,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             try:
                 while True:
                     raw_message = await self._await_cato_message(websocket, sender)
-                    result = json.loads(raw_message)
+                    result: _CatoStreamMessage = json.loads(raw_message)
                     if verified_chunk := result.get("verified_chunk"):
                         yield ModelResponseStream.model_validate(verified_chunk)
                         continue
@@ -560,7 +648,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             finally:
                 await self._cancel_background_task(sender)
 
-    async def _await_cato_message(self, websocket: ClientConnection, sender: asyncio.Task) -> Any:
+    async def _await_cato_message(self, websocket: ClientConnection, sender: asyncio.Task[None]) -> str | bytes:
         """Wait for the next Cato message, surfacing a dead forwarding task instead of blocking."""
         from litellm.proxy.proxy_server import StreamingCallbackError
 
@@ -578,7 +666,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     async def forward_the_stream_to_cato(
         self,
         websocket: ClientConnection,
-        response_iter: AsyncGenerator[Any, None],
+        response_iter: AsyncIterable[object],
     ) -> None:
         async for chunk in response_iter:
             if isinstance(chunk, BaseModel):

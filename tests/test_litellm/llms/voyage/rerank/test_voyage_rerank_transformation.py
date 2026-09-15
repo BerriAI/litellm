@@ -3,6 +3,7 @@ Tests for Voyage AI rerank transformation functionality.
 """
 
 import json
+import uuid
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -227,7 +228,7 @@ class TestVoyageRerankTransform:
         mock_logging = MagicMock()
         model_response = RerankResponse()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Unauthorized') as exc_info:
             self.config.transform_rerank_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -248,7 +249,7 @@ class TestVoyageRerankTransform:
         mock_logging = MagicMock()
         model_response = RerankResponse()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Failed to parse response: Invalid JSON response') as exc_info:
             self.config.transform_rerank_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -257,6 +258,33 @@ class TestVoyageRerankTransform:
             )
 
         assert "Failed to parse response" in str(exc_info.value)
+
+    def test_transform_rerank_response_without_id_stamps_a_fresh_id_per_call(self):
+        response_data = {
+            "object": "list",
+            "data": [{"relevance_score": 0.5, "index": 0}],
+            "model": "rerank-2.5",
+            "usage": {"total_tokens": 10},
+        }
+
+        def transform() -> str:
+            mock_response = MagicMock(spec=httpx.Response)
+            mock_response.json.return_value = response_data
+            mock_response.status_code = 200
+            mock_response.text = json.dumps(response_data)
+            mock_response.headers = {}
+            return self.config.transform_rerank_response(
+                model=self.model,
+                raw_response=mock_response,
+                model_response=RerankResponse(),
+                logging_obj=MagicMock(),
+            ).id
+
+        first, second = transform(), transform()
+
+        assert uuid.UUID(first).version == 4
+        assert first != second
+        assert f"voyage-rerank-{self.model}" not in (first, second)
 
     def test_get_supported_cohere_rerank_params(self):
         """Test getting supported parameters for Voyage AI rerank."""

@@ -1,5 +1,5 @@
 from collections.abc import Coroutine
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
@@ -16,6 +16,9 @@ from litellm.utils import (
 from .azure import AzureChatCompletion
 from .common_utils import AzureOpenAIError
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 
 class AzureAudioTranscription(AzureChatCompletion):
     def audio_transcriptions(
@@ -23,7 +26,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
@@ -34,6 +37,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         azure_ad_token: str | None = None,
         atranscription: bool = False,
         litellm_params: dict | None = None,
+        custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
 
@@ -50,6 +54,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 logging_obj=logging_obj,
                 model=model,
                 litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
             )
 
         azure_client: Final = self.get_azure_openai_client(
@@ -96,7 +101,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params: Final = {"model": model, "custom_llm_provider": "azure"}
+        hidden_params: Final = {"model": model, "custom_llm_provider": custom_llm_provider}
         final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
@@ -112,13 +117,14 @@ class AzureAudioTranscription(AzureChatCompletion):
         data: dict,
         model_response: TranscriptionResponse,
         timeout: float,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         api_version: str | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
         max_retries=None,
         litellm_params: dict | None = None,
+        custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse:
         response = None
         try:
@@ -175,7 +181,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 },
                 original_response=stringified_response,
             )
-            hidden_params: Final = {"model": model, "custom_llm_provider": "azure"}
+            hidden_params: Final = {"model": model, "custom_llm_provider": custom_llm_provider}
             response = convert_to_model_response_object(
                 _response_headers=headers,
                 response_object=stringified_response,
