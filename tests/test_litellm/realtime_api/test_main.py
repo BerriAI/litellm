@@ -5,6 +5,8 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 import litellm
 from litellm.realtime_api import main as realtime_main
@@ -222,15 +224,18 @@ def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch
 
 
 class _CapturingConnect:
-    def __init__(self) -> None:
+    def __init__(self, connection: object | None = None) -> None:
         self.url: str | None = None
+        self.kwargs: dict[str, object] = {}
+        self._connection: Final = connection if connection is not None else MagicMock()
 
     def __call__(self, url: str, **kwargs: object) -> "_CapturingConnect":
         self.url = url
+        self.kwargs = kwargs
         return self
 
-    async def __aenter__(self) -> MagicMock:
-        return MagicMock()
+    async def __aenter__(self) -> object:
+        return self._connection
 
     async def __aexit__(
         self,
@@ -341,6 +346,121 @@ async def test_azure_health_check_honors_env_realtime_protocol(monkeypatch):
             api_version="2024-10-01-preview",
         )
     assert connect.url == _AZURE_BETA_HEALTH_URL
+
+
+class _ScriptedConnection:
+    def __init__(self, *frames: str) -> None:
+        self._frames: Final = iter(frames)
+
+    async def recv(self) -> str:
+        return next(self._frames)
+
+
+class _SilentConnection:
+    async def recv(self) -> str:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class _ConnectionClosedBeforeAnyEvent:
+    async def recv(self) -> str:
+        raise ConnectionClosedError(Close(3000, "invalid_api_key"), None)
+
+
+_OPENAI_INVALID_API_KEY_EVENT: Final = (
+    '{"type": "error", "event_id": "event_1", "error": {"type": "invalid_request_error", "code": "invalid_api_key", '
+    '"message": "Incorrect API key provided: sk-proj-****0000. You can find your API key at '
+    'https://platform.openai.com/account/api-keys.", "param": null, "event_id": null}}'
+)
+_OPENAI_MISSING_AUTH_EVENT: Final = (
+    '{"type": "error", "event_id": "event_2", "error": {"type": "invalid_request_error", "code": null, '
+    '"message": "Missing bearer or basic authentication in header", "param": null, "event_id": null}}'
+)
+_OPENAI_SERVER_ERROR_EVENT: Final = (
+    '{"type": "error", "event_id": "event_3", '
+    '"error": {"type": "server_error", "code": null, "message": "The server had an error", "param": null}}'
+)
+_OPENAI_SESSION_CREATED_EVENT: Final = (
+    '{"type": "session.created", "event_id": "event_4", "session": {"type": "realtime", "model": "gpt-realtime"}}'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_event", "expected_exception", "expected_status", "expected_message"),
+    [
+        (_OPENAI_INVALID_API_KEY_EVENT, litellm.AuthenticationError, 401, "Incorrect API key provided"),
+        (_OPENAI_MISSING_AUTH_EVENT, litellm.BadRequestError, 400, "Missing bearer or basic authentication"),
+        (_OPENAI_SERVER_ERROR_EVENT, litellm.InternalServerError, 500, "The server had an error"),
+    ],
+)
+async def test_openai_health_check_reports_the_first_error_event_as_unhealthy(
+    first_event: str, expected_exception: type[Exception], expected_status: int, expected_message: str
+):
+    connect: Final = _CapturingConnect(_ScriptedConnection(first_event))
+    with patch("websockets.connect", connect), pytest.raises(expected_exception) as raised:
+        await realtime_main._realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-wrong"
+        )
+    assert raised.value.status_code == expected_status
+    assert expected_message in str(raised.value)
+    assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_sends_the_api_key_as_a_bearer_token():
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_SESSION_CREATED_EVENT))
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real"
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-real"}
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_without_an_api_key_sends_no_auth_header_and_is_unhealthy():
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_MISSING_AUTH_EVENT))
+    with patch("websockets.connect", connect), pytest.raises(litellm.BadRequestError) as raised:
+        await realtime_main._realtime_health_check(model="gpt-realtime", custom_llm_provider="openai", api_key=None)
+    assert connect.kwargs["additional_headers"] == {}
+    assert "Missing bearer or basic authentication" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_is_healthy_once_session_created_arrives():
+    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_SESSION_CREATED_EVENT))
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real"
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_stays_healthy_when_no_first_event_arrives_in_time():
+    connect: Final = _CapturingConnect(_SilentConnection())
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real", first_event_timeout_seconds=0.01
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_health_check_is_unhealthy_when_the_socket_closes_before_any_event():
+    connect: Final = _CapturingConnect(_ConnectionClosedBeforeAnyEvent())
+    with patch("websockets.connect", connect), pytest.raises(ConnectionClosedError):
+        await realtime_main._realtime_health_check(
+            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-wrong"
+        )
+
+
+@pytest.mark.asyncio
+async def test_xai_health_check_trusts_the_handshake_without_reading_a_first_event():
+    connect: Final = _CapturingConnect(_ScriptedConnection())
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="grok-voice-latest", custom_llm_provider="xai", api_key="sk-wrong"
+        )
+    assert connect.url == "wss://api.x.ai/v1/realtime?model=grok-voice-latest"
 
 
 class _ConnectThatStopsAfterCapturingTheUrl:

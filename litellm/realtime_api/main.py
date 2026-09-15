@@ -6,10 +6,14 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from openai.types.realtime import RealtimeError, RealtimeErrorEvent
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
+    REALTIME_HEALTH_CHECK_FIRST_EVENT_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
 )
@@ -44,6 +48,7 @@ from ..utils import client as wrapper_client
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
+    from websockets.asyncio.client import ClientConnection
 
     from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 
@@ -54,6 +59,7 @@ xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
@@ -591,13 +597,48 @@ def _azure_realtime_health_protocol(
 
 def _realtime_health_check_auth_headers(
     custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, Any]
-) -> Mapping[str, str | None]:
-    if custom_llm_provider != "azure":
-        return MappingProxyType({"api-key": api_key})
-    return azure_realtime.get_auth_headers(
-        api_key=api_key,
-        azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
-    )
+) -> Mapping[str, str]:
+    if custom_llm_provider == "azure":
+        return azure_realtime.get_auth_headers(
+            api_key=api_key,
+            azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
+        )
+    if api_key is None:
+        return _EMPTY_AUTH_HEADERS
+    return MappingProxyType({"Authorization": f"Bearer {api_key}"})
+
+
+_REALTIME_SERVER_EVENT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _realtime_first_event_error(first_event: str | bytes) -> RealtimeError | None:
+    event: Final = _REALTIME_SERVER_EVENT_FIELDS.validate_json(first_event)
+    if event.get("type") != "error":
+        return None
+    return RealtimeErrorEvent.model_validate(event).error
+
+
+def _realtime_first_event_exception(error: RealtimeError, model: str) -> Exception:
+    match error:
+        case RealtimeError(code="invalid_api_key"):
+            return litellm.AuthenticationError(message=error.message, llm_provider="openai", model=model)
+        case RealtimeError(type="server_error"):
+            return litellm.InternalServerError(message=error.message, llm_provider="openai", model=model)
+        case _:
+            return litellm.BadRequestError(message=error.message, model=model, llm_provider="openai")
+
+
+async def _confirm_realtime_session_started(
+    connection: "ClientConnection", model: str, timeout_seconds: float
+) -> Literal[True]:
+    try:
+        first_event: Final = await asyncio.wait_for(connection.recv(), timeout_seconds)
+    except asyncio.TimeoutError:
+        return True
+    error: Final = _realtime_first_event_error(first_event)
+    if error is None:
+        return True
+    raise _realtime_first_event_exception(error, model)
 
 
 async def _realtime_health_check(
@@ -608,6 +649,7 @@ async def _realtime_health_check(
     api_version: str | None = None,
     realtime_protocol: str | None = None,
     model_params: dict | None = None,
+    first_event_timeout_seconds: float = REALTIME_HEALTH_CHECK_FIRST_EVENT_TIMEOUT_SECONDS,
 ):
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -623,9 +665,11 @@ async def _realtime_health_check(
             without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
-        bool - True if connection is successful, False otherwise
+        bool - True once the connection is open, and for OpenAI once the first server event is not an error,
+            since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
+            the failure in its first server event
     Raises:
-        Exception - if the connection is not successful
+        Exception - if the connection is not successful, or if OpenAI's first server event is an error
     """
     import websockets
 
@@ -693,5 +737,7 @@ async def _realtime_health_check(
         additional_headers=auth_headers,
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=ssl_context,
-    ):
-        return True
+    ) as connection:
+        if custom_llm_provider != "openai":
+            return True
+        return await _confirm_realtime_session_started(connection, model, first_event_timeout_seconds)
