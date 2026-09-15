@@ -262,6 +262,19 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
     return tool_call_dict
 
 
+def _is_silent_output(output_items: Sequence[object]) -> bool:
+    """True when a completed response carries no message and no tool call.
+
+    Covers an empty ``output`` list and a reasoning-only list. Both are legal
+    ``status: completed`` responses that convert to zero chat choices.
+    """
+    for item in output_items:
+        item_type = item.get("type") if isinstance(item, Mapping) else getattr(item, "type", None)
+        if item_type != "reasoning":
+            return False
+    return True
+
+
 def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFunctionParam | ToolChoiceCustomParam:
     if choice_type == "custom":
         return ToolChoiceCustomParam(type="custom", name=name)
@@ -784,7 +797,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     @staticmethod
     def _build_empty_incomplete_choice(
         output_items: Sequence[object],
-        finish_reason: Literal["length", "content_filter"],
+        finish_reason: Literal["length", "content_filter", "stop"],
     ) -> "Choices":
         from litellm.types.utils import Choices, Message
 
@@ -913,7 +926,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         if len(choices) == 0 and not response_is_incomplete:
-            raise ValueError(f"Unknown items in responses API response: {output_items}")
+            if raw_response.status == "completed" and _is_silent_output(output_items):
+                # A completed turn with nothing to say: no message and no tool
+                # call (empty output, or reasoning only). Chat Completions
+                # returns an empty assistant message with finish_reason "stop"
+                # for this case; mirror it instead of failing a successful
+                # request with a 500.
+                choices.append(self._build_empty_incomplete_choice(output_items, "stop"))
+            else:
+                raise ValueError(f"Unknown items in responses API response: {output_items}")
 
         if response_is_incomplete:
             incomplete_finish_reason: Final = _map_incomplete_reason_to_finish_reason(
