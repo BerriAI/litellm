@@ -6,7 +6,7 @@ from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from typing_extensions import assert_never
 
-from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.bindings import NativeBinding, NativeLoader
 from litellm.rust_bridge.configuration import (
     CapabilityContext,
     CapabilitySpec,
@@ -102,7 +102,13 @@ class NativeComponent:
             ),
         )
 
-    def bind(self, export: str, *, validate: Callable[[object], BindingT | None]) -> ComponentBinding[BindingT]:
+    def bind(
+        self,
+        export: str,
+        *,
+        validate: Callable[[object], BindingT | None],
+        loader: NativeLoader | None = None,
+    ) -> ComponentBinding[BindingT]:
         if export not in self.exports:
             raise ValueError(f"native export {export!r} is not declared for {self.name.value}")
-        return ComponentBinding(component=self.name, native=NativeBinding(export, validate=validate))
+        return ComponentBinding(component=self.name, native=NativeBinding(export, validate=validate, loader=loader))

@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge import configuration
 from litellm.rust_bridge.configuration import (
     CapabilityContext,
     CapabilityDefinition,
@@ -55,9 +55,14 @@ def _component(name: ComponentName) -> NativeComponent:
     return NativeComponent(name=name, capability=OPT_IN, exports=("route",))
 
 
-def _binding(monkeypatch: pytest.MonkeyPatch, name: ComponentName, native: object | None) -> ComponentBinding[object]:
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    return _component(name).bind("route", validate=lambda value: value)
+def _binding(name: ComponentName, native: object | None) -> ComponentBinding[object]:
+    return _component(name).bind("route", validate=lambda value: value, loader=lambda: native)
+
+
+def _unloadable_binding(name: ComponentName) -> ComponentBinding[object]:
+    return _component(name).bind(
+        "route", validate=lambda value: value, loader=lambda: pytest.fail("native must not be loaded")
+    )
 
 
 def _failure(route: PythonRoute | NativeRoute[object] | RouteFailure) -> RouteFailure:
@@ -88,72 +93,65 @@ def test_resolve_passes_context_to_capability_resolver() -> None:
     )
 
 
-def test_select_returns_python_route_without_loading_native(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_returns_python_route_without_loading_native() -> None:
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=ExecutionDecision.PYTHON)
-    binding: Final = _binding(monkeypatch, ComponentName.OCR, None)
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: pytest.fail("native must not be loaded"))
 
-    assert execution.select(binding) == PythonRoute()
+    assert execution.select(_unloadable_binding(ComponentName.OCR)) == PythonRoute()
 
 
 @pytest.mark.parametrize("decision", [ExecutionDecision.RUST_WITH_FALLBACK, ExecutionDecision.RUST_REQUIRED])
-def test_select_returns_native_route(monkeypatch: pytest.MonkeyPatch, decision: ExecutionDecision) -> None:
+def test_select_returns_native_route(decision: ExecutionDecision) -> None:
     export: Final = object()
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=decision)
 
-    assert execution.select(_binding(monkeypatch, ComponentName.OCR, SimpleNamespace(route=export))) == NativeRoute(
-        export
-    )
+    assert execution.select(_binding(ComponentName.OCR, SimpleNamespace(route=export))) == NativeRoute(export)
 
 
-def test_select_falls_back_to_python_when_native_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_falls_back_to_python_when_native_is_missing() -> None:
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=ExecutionDecision.RUST_WITH_FALLBACK)
 
-    assert execution.select(_binding(monkeypatch, ComponentName.OCR, None)) == PythonRoute()
+    assert execution.select(_binding(ComponentName.OCR, None)) == PythonRoute()
 
 
-def test_select_reports_unavailable_when_required_native_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_reports_unavailable_when_required_native_is_missing() -> None:
     execution: Final = ComponentExecution(
         component=ComponentName.TRANSCRIPTION, decision=ExecutionDecision.RUST_REQUIRED
     )
 
-    failure: Final = execution.select(_binding(monkeypatch, ComponentName.TRANSCRIPTION, None))
+    failure: Final = execution.select(_binding(ComponentName.TRANSCRIPTION, None))
 
     assert failure == RouteUnavailable(ComponentName.TRANSCRIPTION)
     with pytest.raises(RustRouteUnavailableError, match="transcription"):
         raise_route_failure(_failure(failure))
 
 
-def test_select_rejects_a_binding_owned_by_another_component(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_rejects_a_binding_owned_by_another_component() -> None:
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=ExecutionDecision.RUST_WITH_FALLBACK)
-    binding: Final = _binding(monkeypatch, ComponentName.MESSAGES, SimpleNamespace(route=object()))
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: pytest.fail("native must not be loaded"))
 
-    failure: Final = execution.select(binding)
+    failure: Final = execution.select(_unloadable_binding(ComponentName.MESSAGES))
 
     assert failure == RouteMismatch(component=ComponentName.OCR, binding=ComponentName.MESSAGES)
     with pytest.raises(ValueError, match=r"messages.*ocr"):
         raise_route_failure(_failure(failure))
 
 
-def test_select_reports_unsupported_without_loading_native(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_reports_unsupported_without_loading_native() -> None:
     execution: Final = ComponentExecution(component=ComponentName.RESPONSES, decision=ExecutionDecision.UNSUPPORTED)
-    binding: Final = _binding(monkeypatch, ComponentName.RESPONSES, None)
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: pytest.fail("native must not be loaded"))
 
-    failure: Final = execution.select(binding)
+    failure: Final = execution.select(_unloadable_binding(ComponentName.RESPONSES))
 
     assert failure == RouteUnsupported(ComponentName.RESPONSES)
     with pytest.raises(RustRouteUnsupportedError, match="responses"):
         raise_route_failure(_failure(failure))
 
 
-def test_bind_only_allows_declared_exports(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bind_only_allows_declared_exports() -> None:
     native: Final = SimpleNamespace(route=3)
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     component: Final = _component(ComponentName.TOKEN_COUNTER)
 
-    binding: Final = component.bind("route", validate=lambda value: value if isinstance(value, int) else None)
+    binding: Final = component.bind(
+        "route", validate=lambda value: value if isinstance(value, int) else None, loader=lambda: native
+    )
     assert binding.component is ComponentName.TOKEN_COUNTER
     assert binding.native.load() == 3
     with pytest.raises(ValueError, match=r"'other'.*token_counter"):
