@@ -3,7 +3,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -317,18 +317,18 @@ def _vertex_prompt_tokens_details(
     if not isinstance(raw_details, list):
         return None
 
-    raw_list: Final = cast(list[object], raw_details)
-    if not all(isinstance(detail, Mapping) for detail in raw_list):
-        return None
+    def _normalize(detail: object) -> tuple[str, int] | None:
+        if not isinstance(detail, Mapping):
+            return None
+        modality: Final = detail.get("modality")
+        token_count: Final = detail.get("tokenCount")
+        if not isinstance(modality, str) or not isinstance(token_count, int):
+            return None
+        return modality.upper(), token_count
 
-    details: Final = tuple(cast(Mapping[str, object], detail) for detail in raw_list)
-    normalized: Final = tuple(
-        (modality.upper(), token_count)
-        for detail in details
-        if isinstance(modality := detail.get("modality"), str)
-        and isinstance(token_count := detail.get("tokenCount"), int)
-    )
-    if len(normalized) != len(details):
+    parsed_details: Final = tuple(_normalize(detail) for detail in raw_details)
+    normalized: Final = tuple(detail for detail in parsed_details if detail is not None)
+    if len(normalized) != len(parsed_details):
         return None
 
     return PromptTokensDetailsWrapper(
@@ -385,7 +385,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             prompt_tokens=_prompt,
             completion_tokens=_completion,
             total_tokens=_total,
-            prompt_tokens_details=_vertex_prompt_tokens_details(cast(Mapping[str, object], usage_metadata)),
+            prompt_tokens_details=_vertex_prompt_tokens_details(usage_metadata),
         )
 
         try:
