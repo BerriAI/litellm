@@ -54,8 +54,13 @@ class OpenMeterLogger(CustomLogger):
         cost: Final = kwargs.get("response_cost", None)
         model: Final = kwargs.get("model")
         usage = {}
-        if (
-            isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
+        if isinstance(
+            response_obj,
+            (
+                litellm.ModelResponse,
+                litellm.EmbeddingResponse,
+                litellm.ResponsesAPIResponse,
+            ),
         ) and hasattr(response_obj, "usage"):
             usage = {
                 "prompt_tokens": response_obj["usage"].get("prompt_tokens", 0),
