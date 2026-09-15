@@ -317,11 +317,26 @@ describe("AllModelsTab", () => {
       expect(screen.queryByText(/To access these models/)).not.toBeInTheDocument();
     });
 
-    it("falls back to the first page and default size when the URL carries values the server rejects", () => {
-      renderWithProviders(<AllModelsTab {...defaultProps} />, { searchParams: { page: "0", page_size: "-5" } });
+    it("clamps a hand-edited page and page size into the range the table supports", () => {
+      renderWithProviders(<AllModelsTab {...defaultProps} />, { searchParams: { page: "0", page_size: "5000" } });
 
       expect(lastModelsInfoCall().page).toBe(1);
+      expect(lastModelsInfoCall().size).toBe(100);
+    });
+
+    it("keeps the default page size when the URL value is not a number", () => {
+      renderWithProviders(<AllModelsTab {...defaultProps} />, { searchParams: { page_size: "lots" } });
+
       expect(lastModelsInfoCall().size).toBe(50);
+    });
+
+    it("ignores a sort_by the table cannot sort by instead of forwarding it to the server", () => {
+      renderWithProviders(<AllModelsTab {...defaultProps} />, {
+        searchParams: { sort_by: "litellm_credential_name", sort_order: "desc" },
+      });
+
+      expect(lastModelsInfoCall().sortBy).toBeUndefined();
+      expect(lastModelsInfoCall().sortOrder).toBeUndefined();
     });
 
     it("writes sort changes to the URL with the page cleared", async () => {

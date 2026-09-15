@@ -13,7 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, functionalUpdate, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
-import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
+import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback, useMemo, useState } from "react";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
@@ -25,22 +25,39 @@ import {
   PERSONAL_TEAM_VALUE,
   WILDCARD_MODEL_GROUP_VALUE,
 } from "./AllModelsTable";
-import { ACCESS_GROUPS_COLUMN_ID, MODEL_NAME_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
+import {
+  ACCESS_GROUPS_COLUMN_ID,
+  isModelTableSortColumnId,
+  MODEL_NAME_COLUMN_ID,
+  MODEL_TABLE_SORT_COLUMN_IDS,
+  toServerSortField,
+} from "./ModelsTableColumns";
 
 const SEARCH_DEBOUNCE_WAIT_MS = 200;
 const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 100;
+const MAX_PAGE = 100_000;
 
 const MODEL_VIEW_MODES = ["current_team", "all"] as const satisfies readonly ModelViewMode[];
+
+const boundedInteger = (min: number, max: number, fallback: number) =>
+  createParser({
+    parse: (value: string) => {
+      const parsed = parseAsInteger.parse(value);
+      return parsed === null ? null : Math.min(Math.max(parsed, min), max);
+    },
+    serialize: String,
+  }).withDefault(fallback);
 
 const TABLE_STATE = {
   model_search: parseAsString.withDefault(""),
   view_mode: parseAsStringLiteral(MODEL_VIEW_MODES).withDefault("current_team"),
   filter_team: parseAsString.withDefault(PERSONAL_TEAM_VALUE),
   access_group: parseAsString.withDefault(""),
-  sort_by: parseAsString.withDefault(""),
+  sort_by: parseAsStringLiteral(MODEL_TABLE_SORT_COLUMN_IDS),
   sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault("asc"),
-  page: parseAsInteger.withDefault(1),
-  page_size: parseAsInteger.withDefault(DEFAULT_PAGE_SIZE),
+  page: boundedInteger(1, MAX_PAGE, 1),
+  page_size: boundedInteger(1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE),
 };
 
 interface AllModelsTabProps {
@@ -72,10 +89,7 @@ const AllModelsTab = ({
   const selectedTeamValue = tableState.filter_team;
   const selectedModelAccessGroupFilter = tableState.access_group || null;
   const pagination = useMemo<PaginationState>(
-    () => ({
-      pageIndex: Math.max(tableState.page, 1) - 1,
-      pageSize: tableState.page_size >= 1 ? tableState.page_size : DEFAULT_PAGE_SIZE,
-    }),
+    () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
     [tableState.page, tableState.page_size],
   );
   const sorting = useMemo<SortingState>(
@@ -177,7 +191,7 @@ const AllModelsTab = ({
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
     const active = functionalUpdate(updater, sorting)[0];
     void setTableState({
-      sort_by: active?.id ?? null,
+      sort_by: active && isModelTableSortColumnId(active.id) ? active.id : null,
       sort_order: active?.desc ? "desc" : null,
       page: null,
     });
