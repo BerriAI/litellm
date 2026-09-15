@@ -10,9 +10,13 @@ from litellm.proxy.management_endpoints.management_v1.budgets import (
 from litellm.proxy.management_endpoints.management_v1.spend_logs import (
     router as spend_logs_router,
 )
+from litellm.proxy.management_endpoints.management_v1.users import (
+    router as users_router,
+)
 
 router: Final = APIRouter()
 router.include_router(budgets_router)
 router.include_router(spend_logs_router)
+router.include_router(users_router)
 
 __all__ = ["router"]
