@@ -1120,3 +1120,196 @@ async def test_memory_lookup_failure_leaves_inference_unchanged_but_never_leaks_
         assert exc.value.status_code == 404
     prisma_edge.db.litellm_memorytable.find_many.assert_not_awaited()
     prisma_edge.db.litellm_memorytable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("acompletion", "aresponses", "anthropic_messages"))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_structured_output_hides_preparation_and_restores_final_constraints(
+    prisma_edge: MagicMock, route: str, stream: bool
+) -> None:
+    from starlette.responses import StreamingResponse
+
+    from litellm.litellm_core_utils.prompt_templates.server_tool_stream import sse_bytes
+
+    provider = FastAPI()
+    observed = []
+    prisma_edge.db.litellm_memorytable.find_first.return_value = row()
+    schema = {"type": "object", "properties": {"port": {"type": "integer"}}, "required": ["port"]}
+    formatting = (
+        {"response_format": {"type": "json_schema", "json_schema": {"name": "port", "schema": schema}}}
+        if route == "acompletion"
+        else {"text": {"format": {"type": "json_schema", "name": "port", "schema": schema}}}
+        if route == "aresponses"
+        else {"output_config": {"format": {"type": "json_schema", "schema": schema}, "effort": "low"}}
+    )
+    function = {"name": "client_tool", "description": "Client tool", "parameters": {"type": "object"}}
+    client_tool = (
+        {"type": "function", "function": function}
+        if route == "acompletion"
+        else {"type": "function", **function}
+        if route == "aresponses"
+        else {"name": "client_tool", "input_schema": {"type": "object"}}
+    )
+    original = {
+        "model": "test",
+        "stream": stream,
+        "tools": [client_tool],
+        **formatting,
+        **({"input": "My port?"} if route == "aresponses" else {"messages": [{"role": "user", "content": "My port?"}]}),
+    }
+    endpoint = {
+        "acompletion": "/v1/chat/completions",
+        "aresponses": "/v1/responses",
+        "anthropic_messages": "/v1/messages",
+    }[route]
+
+    @provider.post(endpoint)
+    async def model(incoming: Request):
+        body = await incoming.json()
+        observed.append(body)
+        index = len(observed)
+        final = index == 4
+        if final:
+            assert body["tools"] == [client_tool] and "tool_choice" not in body
+            assert all(body[key] == value for key, value in formatting.items())
+            assert body["stream"] is stream
+            assert "8347" in json.dumps(body)
+        else:
+            assert body["stream"] is False
+            assert "client_tool" not in json.dumps(body["tools"])
+            assert "json_schema" not in json.dumps({key: body.get(key) for key in formatting})
+            if route == "anthropic_messages":
+                assert body["output_config"] == {"effort": "low"}
+        name = "litellm_memory_read" if index == 1 else "litellm_memory_capture"
+        arguments = {"id": "entry"} if index == 1 else {"observations": [], "checkpoint": loop.checkpoint}
+        text = '{"port":8347}' if final else "Hidden preparation draft"
+        call = index <= 2
+        usage = (
+            {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+            if route == "acompletion"
+            else {"input_tokens": 10, "output_tokens": 1}
+        )
+        if route == "acompletion":
+            message = {
+                "role": "assistant",
+                **(
+                    {
+                        "tool_calls": [
+                            {
+                                "id": "call",
+                                "type": "function",
+                                "function": {"name": name, "arguments": json.dumps(arguments)},
+                            }
+                        ]
+                    }
+                    if call
+                    else {"content": text}
+                ),
+            }
+            response = {
+                "id": f"chat_{index}",
+                "model": "test",
+                "created": 1,
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if call else "stop"}],
+                "usage": usage,
+            }
+            events = (
+                {
+                    **response,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}],
+                    "usage": None,
+                },
+                {
+                    **response,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            )
+        elif route == "aresponses":
+            item = (
+                {
+                    "type": "function_call",
+                    "id": f"fc_{index}",
+                    "call_id": f"call_{index}",
+                    "name": name,
+                    "arguments": json.dumps(arguments),
+                }
+                if call
+                else {
+                    "id": f"item_{index}",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
+                }
+            )
+            response = {
+                "id": f"resp_{index}",
+                "object": "response",
+                "status": "completed",
+                "output": [item],
+                "usage": usage,
+            }
+            events = (
+                {"type": "response.created", "response": {**response, "output": []}},
+                {"type": "response.output_item.added", "output_index": 0, "item": item},
+                {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": text},
+                {"type": "response.completed", "response": response},
+            )
+        else:
+            response = {
+                "id": f"msg_{index}",
+                "type": "message",
+                "role": "assistant",
+                "model": "test",
+                "stop_reason": "tool_use" if call else "end_turn",
+                "content": [{"type": "tool_use", "id": f"call_{index}", "name": name, "input": arguments}]
+                if call
+                else [{"type": "text", "text": text}],
+                "usage": usage,
+            }
+            events = (
+                {
+                    "type": "message_start",
+                    "message": {**response, "content": [], "usage": {"input_tokens": 10, "output_tokens": 0}},
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+                {"type": "message_stop"},
+            )
+        if final and stream:
+            return StreamingResponse(iter(sse_bytes(event) for event in events), media_type="text/event-stream")
+        return response
+
+    loop = GatewayMemoryLoop(
+        provider, Request({**request().scope, "path": endpoint}), original, route, store(prisma_edge)
+    )
+    chunks = [chunk async for chunk in loop.run()]
+    public = loop.stream.response()
+    actual = (
+        public["choices"][0]["message"]["content"]
+        if route == "acompletion"
+        else public["output"][0]["content"][0]["text"]
+        if route == "aresponses"
+        else public["content"][0]["text"]
+    )
+    assert json.loads(actual) == {"port": 8347}
+    assert "Hidden preparation draft" not in json.dumps(public) and b"Hidden preparation draft" not in b"".join(chunks)
+    assert len(observed) == len(loop.upstream_ids) == 4
+    assert public["usage"]["prompt_tokens" if route == "acompletion" else "input_tokens"] == 40
+    assert public["usage"]["completion_tokens" if route == "acompletion" else "output_tokens"] == 4
+    assert original["tools"] == [client_tool]
+    if stream:
+        wire = b"".join(chunks)
+        assert b"litellm_memory_read" not in wire and b"litellm_memory_capture" not in wire
+        if route == "aresponses":
+            assert wire.count(b'"type": "response.created"') == 1
+            assert wire.count(b'"type": "response.completed"') == 1
+        elif route == "anthropic_messages":
+            assert wire.count(b'"type": "message_start"') == 1
+            assert wire.count(b'"type": "message_stop"') == 1

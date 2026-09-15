@@ -9,6 +9,42 @@ from litellm.litellm_core_utils.prompt_templates.factory import NormalizedToolCa
 ServerToolRoute: TypeAlias = Literal["acompletion", "aresponses", "anthropic_messages"]
 _LIST: Final = TypeAdapter(tuple[object, ...])
 _OBJECT: Final = TypeAdapter(dict[str, object])
+_OUTPUT_FIELDS: Final = frozenset(("response_format", "text", "output_format", "output_config"))
+_FINAL_FIELDS: Final = _OUTPUT_FIELDS | frozenset(("tools", "tool_choice", "stream_options"))
+
+
+def has_server_output_constraint(data: Mapping[str, object]) -> bool:
+    return any(
+        isinstance(value := data.get(field), dict)
+        and isinstance(
+            nested := _OBJECT.validate_python(value).get("format") if field in ("text", "output_config") else value,
+            dict,
+        )
+        and _OBJECT.validate_python(nested).get("type") in ("json_schema", "json_object")
+        for field in _OUTPUT_FIELDS
+    )
+
+
+def prepare_server_tool_context(data: Mapping[str, object], server_names: frozenset[str]) -> Mapping[str, object]:
+    return {  # mutable-ok: Provider wire format requires native JSON containers.
+        **{key: value for key, value in data.items() if key not in _OUTPUT_FIELDS and key != "stream_options"},
+        **{
+            key: remainder
+            for key in ("text", "output_config")
+            if isinstance(value := data.get(key), dict)
+            and (remainder := {name: item for name, item in _OBJECT.validate_python(value).items() if name != "format"})
+        },
+        "tools": [
+            tool for tool in _items(data.get("tools")) if _tool_name(tool) in server_names
+        ],  # mutable-ok: Native tool schema JSON.
+    }
+
+
+def restore_client_output(data: Mapping[str, object], original: Mapping[str, object]) -> Mapping[str, object]:
+    return {  # mutable-ok: Provider wire format requires native JSON containers.
+        **{key: value for key, value in data.items() if key not in _FINAL_FIELDS},
+        **{key: value for key, value in original.items() if key in _FINAL_FIELDS},
+    }
 
 
 def _items(value: object) -> tuple[object, ...]:

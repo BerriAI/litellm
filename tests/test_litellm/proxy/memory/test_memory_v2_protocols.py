@@ -8,6 +8,8 @@ from litellm.litellm_core_utils.prompt_templates.server_tools import (
     append_server_reference,
     continue_server_tools,
     inject_server_tools,
+    prepare_server_tool_context,
+    restore_client_output,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.memory.policy import MemoryIdentity
@@ -15,7 +17,7 @@ from litellm.utils import get_optional_params
 
 
 @pytest.mark.parametrize("choice", [None, "auto", "none"])
-def test_structured_output_keeps_memory_tools_selectable(choice: str | None) -> None:
+def test_structured_output_restores_provider_json_enforcement_after_memory_preparation(choice: str | None) -> None:
     original: Final = {
         "response_format": {
             "type": "json_schema",
@@ -26,21 +28,34 @@ def test_structured_output_keeps_memory_tools_selectable(choice: str | None) -> 
         },
         **({"tool_choice": choice} if choice is not None else {}),
     }
-    prepared: Final = inject_server_tools(
-        original,
-        "acompletion",
-        ({"name": "memory_search", "description": "Search", "parameters": {"type": "object"}},),
-        "Search memory before answering",
+    prepared: Final = prepare_server_tool_context(
+        inject_server_tools(
+            original,
+            "acompletion",
+            ({"name": "memory_search", "description": "Search", "parameters": {"type": "object"}},),
+            "Search memory before answering",
+        ),
+        frozenset(("memory_search",)),
     )
     provider: Final = get_optional_params(
         model="claude-sonnet-5",
         custom_llm_provider="vertex_ai",
-        response_format=prepared["response_format"],
+        response_format=prepared.get("response_format"),
         tools=prepared["tools"],
         tool_choice=prepared.get("tool_choice"),
     )
     assert provider["tool_choice"] == {"type": choice or "auto"}
-    assert {tool["name"] for tool in provider["tools"]} == {"memory_search", "json_tool_call"}
+    assert {tool["name"] for tool in provider["tools"]} == {"memory_search"}
+    final: Final = restore_client_output(prepared, original)
+    enforced: Final = get_optional_params(
+        model="claude-sonnet-5",
+        custom_llm_provider="vertex_ai",
+        response_format=final["response_format"],
+        tool_choice=final.get("tool_choice"),
+    )
+    assert enforced["tool_choice"] == (
+        {"type": "tool", "name": "json_tool_call"} if choice is None else {"type": choice}
+    )
     assert original.get("tool_choice") == choice
 
 
