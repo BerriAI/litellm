@@ -1402,6 +1402,51 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-key-spend" in headers_7
         assert float(headers_7["x-litellm-key-spend"]) == 0.001  # Should use original spend on error
 
+    @pytest.mark.parametrize(
+        ("hidden_params", "request_data", "expected_call_id"),
+        [
+            (
+                {"litellm_call_id": "call-from-hidden-params"},
+                {"litellm_call_id": "call-from-request"},
+                "call-from-hidden-params",
+            ),
+            ({}, {"litellm_call_id": "call-from-request"}, "call-from-request"),
+            ({"model_id": "m-1"}, {"litellm_call_id": "call-from-request"}, "call-from-request"),
+        ],
+    )
+    def test_get_custom_headers_call_id_falls_back_to_hidden_params_then_request_data(
+        self, hidden_params, request_data, expected_call_id
+    ):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            hidden_params=hidden_params,
+            request_data=request_data,
+        )
+
+        assert headers["x-litellm-call-id"] == expected_call_id
+
+    def test_get_custom_headers_explicit_call_id_wins_over_fallbacks(self):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="explicit-call-id",
+            hidden_params={"litellm_call_id": "call-from-hidden-params"},
+            request_data={"litellm_call_id": "call-from-request"},
+        )
+
+        assert headers["x-litellm-call-id"] == "explicit-call-id"
+
     @pytest.mark.asyncio
     async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
         """
@@ -6915,6 +6960,45 @@ class TestModelDeploymentsSupportStreamOptions:
 
     def test_non_string_model_is_not_injected(self):
         assert self._support(None, None) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_settings, expected", [
+    (None, {"group": {"team": 100}}),
+    ({"weights": {"group": {"key": 100}}}, {"group": {"key": 100}}),
+    ({"timeout": 30}, None),
+    ({"weights": {"group": {"key": "legacy"}}}, None),
+])
+async def test_saved_weights_override_caller_input_and_preserve_key_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    key_settings: dict[str, int | dict[str, dict[str, int | str]]] | None,
+    expected: dict[str, dict[str, int]] | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "get_team_object", AsyncMock(
+        return_value=SimpleNamespace(router_settings={"weights": {"group": {"team": 100}}})
+    ))
+    forged = {"group": {"caller": 100}}
+    processor = ProxyBaseLLMRequestProcessing(data={
+        "model": "group", "weights": forged, "_router_weights": forged,
+        "router_settings_override": {"weights": forged},
+    })
+    logging = MagicMock(spec=ProxyLogging)
+    logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    data, _ = await processor.common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", team_id="team-a", router_settings=key_settings),
+        proxy_logging_obj=logging,
+        proxy_config=proxy_server.ProxyConfig(),
+        route_type="acompletion",
+        llm_router=litellm.Router(model_list=[]),
+    )
+    assert "weights" not in data
+    assert data.get("_router_weights") == expected
+    assert logging.pre_call_hook.call_args.kwargs["data"].get("_router_weights") == expected
 
 
 class TestPerRequestModelGroupAlias:

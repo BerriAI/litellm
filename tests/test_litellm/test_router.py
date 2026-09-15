@@ -3695,6 +3695,111 @@ async def test_aresponses_streaming_iterator_fallback():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_streaming_content_policy_error_event_routes_to_content_policy_fallback():
+    """Regression: a mid-stream content_policy_violation error event never reached
+    content_policy_fallbacks. The iterator raised a bare APIError the wrapper does not
+    catch, and even once wrapped, the MidStreamFallbackError envelope was handed to the
+    fallback dispatch, whose isinstance branch on ContentPolicyViolationError never matched.
+    The stream below is the customer's shape: a raw OpenAI error event with code
+    content_policy_violation, transformed by the real OpenAI config, and the router must
+    call the content_policy_fallbacks target, not the general fallbacks one."""
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k1"}},
+            {
+                "model_name": "content-fallback",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "k2"},
+            },
+            {"model_name": "general-fallback", "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k3"}},
+        ],
+        fallbacks=[{"primary": ["general-fallback"]}],
+        content_policy_fallbacks=[{"primary": ["content-fallback"]}],
+    )
+    error_event = {
+        "type": "error",
+        "sequence_number": 2,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "content_policy_violation",
+            "message": "This content was flagged for possible cybersecurity risk. The response was halted mid-stream.",
+            "param": None,
+        },
+    }
+
+    async def aiter_bytes():
+        yield f"data: {json.dumps(error_event)}\n\n".encode()
+
+    raw_response = MagicMock()
+    raw_response.headers = {}
+    raw_response.aiter_bytes = aiter_bytes
+    logging_obj = MagicMock(spec=LiteLLMLogging)
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.completion_start_time = None
+    source = ResponsesAPIStreamingIterator(
+        response=raw_response,
+        model="gpt-5.4",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    fallback_chunks = [MagicMock(type="response.output_text.delta"), MagicMock(type="response.completed")]
+    fallback_call = AsyncMock(return_value=_AsyncList(fallback_chunks))
+
+    wrapped = await router._aresponses_streaming_iterator(
+        response=source,
+        initial_kwargs={
+            "model": "primary",
+            "stream": True,
+            "input": "Hi",
+            "original_generic_function": fallback_call,
+        },
+    )
+    collected = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+    fallback_call.assert_awaited_once()
+    assert fallback_call.await_args.kwargs["model"] == "gemini/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_unwraps_content_policy_trigger_for_fallback_dispatch():
+    """The fallback dispatch matches on the trigger's own type, so the wrapper must hand it the
+    ContentPolicyViolationError carried inside MidStreamFallbackError, not the envelope."""
+    router = _make_router_with_fallback("openai/gpt-5.4", "openai/gpt-5-mini")
+    content_policy_error = litellm.ContentPolicyViolationError(
+        message="flagged mid-stream", llm_provider="openai", model="openai/gpt-5.4"
+    )
+    src = _make_responses_iterator(
+        chunks=[MagicMock(type="response.created")],
+        error=MidStreamFallbackError(
+            message=str(content_policy_error),
+            model="openai/gpt-5.4",
+            llm_provider="openai",
+            original_exception=content_policy_error,
+            is_pre_first_chunk=True,
+        ),
+        model="openai/gpt-5.4",
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_AsyncList([MagicMock(type="response.completed")])),
+    ) as mock_fallback_utils:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={"model": "openai/gpt-5.4", "stream": True, "input": "Hi"},
+        )
+        [chunk async for chunk in wrapped]
+
+    mock_fallback_utils.assert_awaited_once()
+    assert mock_fallback_utils.await_args.kwargs["e"] is content_policy_error
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fallback_headers",
     [
@@ -10959,6 +11064,66 @@ async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypa
         True,
         True,
     ]
+
+
+def _failing_group_with_healthy_fallback_router(num_retries: int) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "broken-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "healthy-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake", "mock_response": "ok"},
+            },
+        ],
+        fallbacks=[{"broken-group": ["healthy-group"]}],
+        num_retries=num_retries,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cap, planted_count, hop_refused",
+    [(2, None, True), (4, None, False), (2, -100, True)],
+    ids=["cap-spent-before-the-hop", "cap-not-reached-by-the-hop", "planted-negative-count-does-not-lift-the-cap"],
+)
+async def test_num_retries_per_request_counts_retries_across_fallback_hops(
+    monkeypatch: pytest.MonkeyPatch, cap: int, planted_count: int | None, hop_refused: bool
+) -> None:
+    """num_retries_per_request caps the retries of one request, fallback hops included. Each hop starts a
+    fresh per-hop attempted_retries at zero, so a cap read from that counter let every hop retry from zero
+    and a request could spend far more retries than the cap allows. A caller who plants a negative count
+    in the request metadata must not push the cap further away either."""
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    router = _failing_group_with_healthy_fallback_router(num_retries=1)
+    recorder = _FallbackAttemptRecorder()
+    litellm.callbacks.append(recorder)
+    try:
+        metadata = {} if planted_count is None else {"request_retry_count": planted_count}
+        request = router.acompletion(
+            model="broken-group", messages=[{"role": "user", "content": "hi"}], metadata=metadata
+        )
+        if not hop_refused:
+            assert (await request).choices[0].message.content == "ok"
+            return
+        with pytest.raises(litellm.InternalServerError):
+            await request
+    finally:
+        litellm.callbacks.remove(recorder)
+
+    assert recorder.failed_targets == ["healthy-group"]
+    hop_refusals = [
+        record["attempted_retries"]
+        for record in recorder.breadcrumbs_per_target[0]
+        if record["model_group"] == "healthy-group" and "Max retries per request hit!" in record["exception_string"]
+    ]
+    assert hop_refusals == [0, 1]
 
 
 @pytest.mark.asyncio
