@@ -112,6 +112,11 @@ GOV_ROW_SOURCES = {
 }
 
 
+BEDROCK_PRICE_LIST_URL = (
+    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+)
+
+
 def _non_pricing_fields(info):
     return {k: v for k, v in info.items() if "cost" not in k and k not in ("litellm_provider", "source")}
 
@@ -121,8 +126,10 @@ def test_usgov_rows_keep_commercial_limits_and_capabilities(model_data, gov_key)
     """A gov row differs from the commercial row it mirrors only in price and
     provider: context limits, mode, and capability flags stay identical, so a
     hand-copied row cannot silently drop tool calling or shrink the context window.
+    The only source a gov row may cite is the AWS price list, which prices the
+    us-gov regions itself; a commercial doc URL copied along with the row is not.
     """
     gov = model_data[gov_key]
     assert _non_pricing_fields(gov) == _non_pricing_fields(model_data[GOV_ROW_SOURCES[gov_key]])
     assert "search_context_cost_per_query" not in gov
-    assert "source" not in gov
+    assert gov.get("source", BEDROCK_PRICE_LIST_URL) == BEDROCK_PRICE_LIST_URL

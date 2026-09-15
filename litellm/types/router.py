@@ -182,6 +182,7 @@ class ModelInfo(MirroredPricingParams):
 
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: str | None = None
+    member_auto_router: bool = False
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
