@@ -10,7 +10,7 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, Final
 
 import httpx
@@ -226,7 +226,6 @@ class BadRequestError(openai.BadRequestError):
         max_retries: int | None = None,
         num_retries: int | None = None,
         body: dict | None = None,
-        headers: Mapping[str, str] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.BadRequestError: {message}"
@@ -235,9 +234,6 @@ class BadRequestError(openai.BadRequestError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.headers = (
-            {k: str(v) for k, v in headers.items()} if headers else None  # mutable-ok: the proxy updates it in place
-        )
         # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
         # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
         if (
@@ -628,7 +624,6 @@ class ContentPolicyViolationError(BadRequestError):
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
         body: dict | None = None,
-        headers: Mapping[str, str] | None = None,
     ):
         self.status_code = 400
         self.message = f"litellm.ContentPolicyViolationError: {message}"
@@ -643,7 +638,6 @@ class ContentPolicyViolationError(BadRequestError):
             response=response,
             litellm_debug_info=self.litellm_debug_info,
             body=body,
-            headers=headers,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
