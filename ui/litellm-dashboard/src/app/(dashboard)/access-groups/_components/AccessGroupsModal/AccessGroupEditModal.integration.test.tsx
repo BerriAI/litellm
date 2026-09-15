@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../../tests/test-utils";
 import { AccessGroupEditModal } from "./AccessGroupEditModal";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
@@ -162,6 +162,23 @@ describe("AccessGroupEditModal submit payload", () => {
     await user.type(nameInput, "{Enter}");
 
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("renders each selected MCP server as its own removable chip and drops one on remove", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /MCP Servers/ }));
+    const chip = await screen.findByLabelText("Files");
+    expect(chip).toHaveAttribute("data-slot", "combobox-chip");
+    expect(screen.queryByText("srv-1")).not.toBeInTheDocument();
+
+    await user.click(within(chip).getByRole("button"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_mcp_server_ids).toStrictEqual([]);
   });
 
   it("sends models chosen on the Models tab", async () => {
