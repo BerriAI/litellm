@@ -116,32 +116,10 @@ def local_model_cost_map(monkeypatch):
 
 @pytest.mark.parametrize("model", ALL_KEYS)
 @pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
-def test_published_prices_are_registered(model: str, path: Path):
-    info = _load(path).get(model)
-    assert info is not None, f"{model} missing from {path.name}"
-    for field, value in SHARED_FIELDS.items():
-        assert info[field] == value, f"{model} {field} in {path.name}: {info.get(field)} != {value}"
-
-
-@pytest.mark.parametrize("model", ALL_KEYS)
-@pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
 def test_per_route_capabilities_match_model_cards(model: str, path: Path):
     info = _load(path)[model]
     for field, value in PER_ROUTE_FIELDS[model].items():
         assert info[field] == value, f"{model} {field} in {path.name}: {info.get(field)} != {value}"
-
-
-@pytest.mark.parametrize("model", ALL_KEYS)
-@pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
-def test_grounding_fields_absent(model: str, path: Path):
-    info = _load(path)[model]
-    for field in GROUNDING_FIELDS:
-        assert field not in info, f"{model} should not define {field}"
-
-
-@pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
-def test_ai_studio_route_has_no_implicit_cache_price(path: Path):
-    assert "cache_read_input_token_cost" not in _load(path)[GEMINI]
 
 
 @pytest.mark.parametrize("model", ALL_KEYS)

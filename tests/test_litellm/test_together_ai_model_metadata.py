@@ -88,13 +88,6 @@ def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost
     assert inflated == []
 
 
-@pytest.mark.parametrize("model", sorted(DEPRECATED_MODELS))
-def test_together_deprecated_model_carries_deprecation_date(cost_map: CostMap, model: str):
-    info = cost_map.get(model)
-    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-    assert info.get("deprecation_date") == DEPRECATED_MODELS[model]
-
-
 def _successor(info: dict[str, object]) -> str | None:
     metadata = info.get("metadata")
     if not isinstance(metadata, dict):

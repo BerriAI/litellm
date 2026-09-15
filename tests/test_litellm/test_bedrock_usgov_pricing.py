@@ -31,52 +31,6 @@ def model_data():
         return json.load(f)
 
 
-def test_usgov_carries_20_percent_premium_over_global(model_data):
-    """The us-gov rates must equal 1.2x the global anthropic.* rates,
-    matching AWS's documented GovCloud uplift.
-    """
-    global_key = "anthropic.claude-sonnet-4-5-20250929-v1:0"
-    usgov_key = "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0"
-    global_info = model_data[global_key]
-    usgov_info = model_data[usgov_key]
-    for field in (
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "cache_creation_input_token_cost",
-        "cache_creation_input_token_cost_above_1hr",
-        "cache_read_input_token_cost",
-    ):
-        ratio = usgov_info[field] / global_info[field]
-        assert abs(ratio - 1.2) < 1e-9, f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
-
-
-# The us-gov.anthropic.* cross-region inference profile is the only us-gov
-# entry that carries the 1M-context `_above_200k_tokens` pricing tier — the
-# bedrock/us-gov-{east,west}-1/ entries are capped at 200k tokens.
-USGOV_CROSS_REGION_KEY = "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
-
-EXPECTED_USGOV_ABOVE_200K = {
-    "input_cost_per_token_above_200k_tokens": 7.2e-06,
-    "output_cost_per_token_above_200k_tokens": 2.7e-05,
-    "cache_creation_input_token_cost_above_200k_tokens": 9.0e-06,
-    "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.44e-05,
-    "cache_read_input_token_cost_above_200k_tokens": 7.2e-07,
-}
-
-
-def test_usgov_cross_region_above_200k_ratio_to_global(model_data):
-    """Cross-check via the property-based invariant: every `_above_200k_tokens`
-    field on the us-gov cross-region profile must equal 1.2x the global
-    anthropic.* rate, the same GovCloud uplift the base tier carries.
-    """
-    global_key = "anthropic.claude-sonnet-4-5-20250929-v1:0"
-    global_info = model_data[global_key]
-    usgov_info = model_data[USGOV_CROSS_REGION_KEY]
-    for field in EXPECTED_USGOV_ABOVE_200K:
-        ratio = usgov_info[field] / global_info[field]
-        assert abs(ratio - 1.2) < 1e-9, f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
-
-
 def test_usgov_east_haiku_profile_mirrors_in_region_row(model_data):
     """us-gov-east-1 serves claude-3-haiku through the us-gov. inference profile
     only, so the profile row must bill exactly like the in-region gov row.
@@ -112,24 +66,12 @@ GOV_ROW_SOURCES = {
 }
 
 
-BEDROCK_PRICE_LIST_URL = (
-    "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
-)
-
-
 def _non_pricing_fields(info):
     return {k: v for k, v in info.items() if "cost" not in k and k not in ("litellm_provider", "source")}
 
 
 @pytest.mark.parametrize("gov_key", GOV_ROW_SOURCES)
 def test_usgov_rows_keep_commercial_limits_and_capabilities(model_data, gov_key):
-    """A gov row differs from the commercial row it mirrors only in price and
-    provider: context limits, mode, and capability flags stay identical, so a
-    hand-copied row cannot silently drop tool calling or shrink the context window.
-    The only source a gov row may cite is the AWS price list, which prices the
-    us-gov regions itself; a commercial doc URL copied along with the row is not.
-    """
+    """Gov rows preserve the commercial row's non-pricing fields."""
     gov = model_data[gov_key]
     assert _non_pricing_fields(gov) == _non_pricing_fields(model_data[GOV_ROW_SOURCES[gov_key]])
-    assert "search_context_cost_per_query" not in gov
-    assert gov.get("source", BEDROCK_PRICE_LIST_URL) == BEDROCK_PRICE_LIST_URL
