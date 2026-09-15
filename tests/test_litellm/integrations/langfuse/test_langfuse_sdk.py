@@ -955,7 +955,8 @@ def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_pa
     import litellm
     from litellm.integrations.langfuse.langfuse_sdk import _build_verified_span_exporter
 
-    monkeypatch.delenv("SSL_CERTIFICATE", raising=False)
+    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(litellm, "ssl_verify", True)
     monkeypatch.setattr(litellm, "ssl_certificate", None)
     assert (
@@ -971,6 +972,38 @@ def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_pa
     assert exporter._certificate_file == str(ca_path)
     assert exporter._headers["x-langfuse-public-key"] == "pk"
     assert exporter._headers["x-langfuse-sdk-version"] == installed_langfuse_version()
+
+
+@pytest.mark.parametrize("switch", ["attribute", "env"])
+def test_ssl_exporter_disables_verification_when_litellm_does(monkeypatch, switch):
+    """v2 exported through the httpx client, so ``ssl_verify=False`` reached ingestion; v4's exporter must match."""
+    import litellm
+    from litellm.integrations.langfuse.langfuse_sdk import _build_verified_span_exporter
+
+    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_certificate", None)
+    if switch == "attribute":
+        monkeypatch.setattr(litellm, "ssl_verify", False)
+    else:
+        monkeypatch.setattr(litellm, "ssl_verify", True)
+        monkeypatch.setenv("SSL_VERIFY", "False")
+
+    exporter = _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    assert exporter is not None
+    assert exporter._certificate_file is False
+    assert exporter._client_cert is None
+
+    posted = []
+
+    def post(self, url, **kwargs):
+        posted.append((url, kwargs["verify"]))
+        raise ConnectionError("stop before the network")
+
+    monkeypatch.setattr("requests.Session.post", post)
+    with pytest.raises(ConnectionError):
+        exporter._export(b"payload")
+    assert posted[0] == ("https://lf.internal.example/api/public/otel/v1/traces", False)
 
 
 def test_second_client_on_the_same_key_does_not_build_another_provider():
