@@ -25,28 +25,40 @@ SpendRow = Mapping[str, object]
 
 @dataclass(frozen=True, slots=True)
 class DailySpendTable:
-    """The physical table behind one entity's daily rollup."""
+    """A daily rollup table and the unique constraint its upserts arbitrate on."""
 
     name: str
-    entity_id_column: str
+    key_columns: tuple[str, ...]
     carries_request_id: bool = False
 
-
-DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
-    {
-        "user": DailySpendTable(name="LiteLLM_DailyUserSpend", entity_id_column="user_id"),
-        "team": DailySpendTable(name="LiteLLM_DailyTeamSpend", entity_id_column="team_id"),
-        "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
-        "end_user": DailySpendTable(name="LiteLLM_DailyEndUserSpend", entity_id_column="end_user_id"),
-        "agent": DailySpendTable(name="LiteLLM_DailyAgentSpend", entity_id_column="agent_id"),
-        "tag": DailySpendTable(name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True),
-    }
-)
 
 # The unique constraint's columns after the entity id, in constraint order. A NULL can
 # never match itself in a unique index, so every one of these is normalized to '': the
 # conflict target has to be NULL-free or the row is re-inserted on every single flush.
 _KEY_COLUMNS: Final = ("date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
+
+
+def _entity_table(name: str, entity_id_column: str, carries_request_id: bool = False) -> DailySpendTable:
+    return DailySpendTable(
+        name=name, key_columns=(entity_id_column, *_KEY_COLUMNS), carries_request_id=carries_request_id
+    )
+
+
+DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
+    {
+        "user": _entity_table("LiteLLM_DailyUserSpend", "user_id"),
+        "team": _entity_table("LiteLLM_DailyTeamSpend", "team_id"),
+        "org": _entity_table("LiteLLM_DailyOrganizationSpend", "organization_id"),
+        "end_user": _entity_table("LiteLLM_DailyEndUserSpend", "end_user_id"),
+        "agent": _entity_table("LiteLLM_DailyAgentSpend", "agent_id"),
+        "tag": _entity_table("LiteLLM_DailyTagSpend", "tag", carries_request_id=True),
+    }
+)
+
+GLOBAL_SPEND_TABLE: Final = DailySpendTable(
+    name="LiteLLM_DailyGlobalSpend",
+    key_columns=("date", "model", "model_group", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"),
+)
 
 _COUNTER_COLUMNS: Final = (
     "prompt_tokens",
@@ -92,7 +104,7 @@ def _as_float(value: object) -> float:
 
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
-    return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
+    return tuple(_as_text(transaction.get(column)) for column in table.key_columns)
 
 
 def _merge(group: Sequence[SpendRow]) -> SpendRow:
@@ -130,7 +142,11 @@ def _row_params(
     return (
         str(uuid.uuid4()),
         *key,
-        None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
+        *(
+            ()
+            if "model_group" in table.key_columns
+            else (None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),)
+        ),
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
@@ -140,26 +156,25 @@ def _row_params(
 def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
     return (
         "id",
-        table.entity_id_column,
-        *_KEY_COLUMNS,
-        "model_group",
+        *table.key_columns,
+        *(() if "model_group" in table.key_columns else ("model_group",)),
         *_COUNTER_COLUMNS,
         *_SPEND_COLUMNS,
         *(("request_id",) if table.carries_request_id else ()),
     )
 
 
-def build_bulk_upsert(
+def _upsert_statement(
     table: DailySpendTable,
     batch: Sequence[tuple[tuple[str, ...], SpendRow]],
-) -> tuple[str, tuple[SqlValue, ...]]:
-    """The single statement writing one merged batch, plus its positional arguments."""
+    first_param: int,
+) -> str:
     columns: Final = _insert_columns(table)
     quoted_table: Final = f'"{table.name}"'
     rows: Final = ", ".join(
         "("
         + ", ".join(
-            f"${row_index * len(columns) + offset + 1}::{_CASTS.get(column, 'text')}"
+            f"${first_param + row_index * len(columns) + offset}::{_CASTS.get(column, 'text')}"
             for offset, column in enumerate(columns)
         )
         + ", (NOW() AT TIME ZONE 'UTC'))"
@@ -176,11 +191,44 @@ def build_bulk_upsert(
         if table.carries_request_id
         else ""
     )
-    sql: Final = (
+    return (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"ON CONFLICT ({_quoted(table.key_columns)}) DO UPDATE SET\n"
         f"  {increments}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )
-    return sql, tuple(value for key, transaction in batch for value in _row_params(table, key, transaction))
+
+
+def _params(table: DailySpendTable, batch: Sequence[tuple[tuple[str, ...], SpendRow]]) -> tuple[SqlValue, ...]:
+    return tuple(value for key, transaction in batch for value in _row_params(table, key, transaction))
+
+
+def build_bulk_upsert(
+    table: DailySpendTable,
+    batch: Sequence[tuple[tuple[str, ...], SpendRow]],
+) -> tuple[str, tuple[SqlValue, ...]]:
+    """The single statement writing one merged batch, plus its positional arguments."""
+    return _upsert_statement(table, batch, first_param=1), _params(table, batch)
+
+
+def build_bulk_upsert_with_global_rollup(
+    table: DailySpendTable,
+    batch: Sequence[tuple[tuple[str, ...], SpendRow]],
+) -> tuple[str, tuple[SqlValue, ...]]:
+    """One statement writing a batch to its table and, atomically, its key-free rollup
+    to ``LiteLLM_DailyGlobalSpend``.
+
+    A data-modifying CTE runs both inserts in the same snapshot and transaction, so a
+    batch that lands in one table lands in both and a retried deadlock replays both.
+    Postgres does not order the CTE against the main statement, so two writers can still
+    deadlock across the tables; the caller's deadlock retry covers that, and each insert
+    takes its own rows in key order so same-table lock order stays deterministic.
+    """
+    global_batch: Final = merge_by_conflict_key(GLOBAL_SPEND_TABLE, tuple(row for _, row in batch))
+    entity_params: Final = _params(table, batch)
+    sql: Final = (
+        f"WITH entity_rows AS (\n{_upsert_statement(table, batch, first_param=1)}\nRETURNING 1)\n"
+        f"{_upsert_statement(GLOBAL_SPEND_TABLE, global_batch, first_param=len(entity_params) + 1)}"
+    )
+    return sql, (*entity_params, *_params(GLOBAL_SPEND_TABLE, global_batch))

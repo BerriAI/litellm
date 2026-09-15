@@ -11,6 +11,8 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY, USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.db.daily_spend_bulk_upsert import GLOBAL_SPEND_TABLE
+from litellm.proxy.spend_tracking.daily_global_spend_rollup import reconciled_through
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_emails,
     recover_double_hashed_key_metadata,
@@ -734,6 +736,30 @@ def _rollup_metric_select(table_name: str) -> str:
 _MODEL_GROUP_EXPR: Final = "COALESCE(NULLIF(model_group, ''), model)"
 
 
+async def key_free_source_table(prisma_client: PrismaClient, query: _AggregatedQueryKwargs) -> str | None:
+    """The table the key-free arm reads from, when the global rollup can answer instead of the per-key table.
+
+    Only an unfiltered read of the user table has the same rows as ``LiteLLM_DailyGlobalSpend``,
+    and only through the day the reconcile marker has reached: the writer keeps that day
+    current, later days are covered once the next run advances the marker.
+    """
+    if query["table_name"] != "litellm_dailyuserspend":
+        return None
+    if query["entity_id"] is not None or query["api_key"] is not None or query["exclude_entity_ids"]:
+        return None
+    _, adjusted_end = _adjust_dates_for_timezone(
+        query["start_date"], query["end_date"], query["timezone_offset_minutes"], query["include_current_utc_day"]
+    )
+    try:
+        marker: Final = await reconciled_through(prisma_client)
+    except Exception as exc:  # noqa: BLE001  # the per-key table is always a correct answer, so never fail the read
+        verbose_proxy_logger.warning("Could not read the daily global spend marker, using the per-key table: %s", exc)
+        return None
+    if marker is None or adjusted_end > marker:
+        return None
+    return GLOBAL_SPEND_TABLE.name
+
+
 def _build_aggregated_sql_query(
     *,
     table_name: str,
@@ -746,13 +772,16 @@ def _build_aggregated_sql_query(
     exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
     timezone_offset_minutes: int | None = None,
     include_current_utc_day: bool = False,
+    key_free_table: str | None = None,
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
     """Build the GROUPING SETS query for aggregated daily activity.
 
     One statement, two UNION ALL arms over the same WHERE clause. The first arm is
     key-free: grand total, per-date totals and the (date, model / model_group /
     provider / mcp / endpoint) rollups, so its row count never grows with the number
-    of keys. The second arm emits the (date, <dimension>, api_key) rollups for the
+    of keys; it reads ``key_free_table`` when given (the global rollup, whose row count
+    never grew with the number of keys to begin with) and the entity table otherwise.
+    The second arm emits the (date, <dimension>, api_key) rollups for the
     USAGE_TOP_API_KEYS_LIMIT highest-spend keys only. Both arms share the 7-bit
     group_level bitmask (date, api_key, model, model_group, provider, mcp, endpoint).
 
@@ -778,6 +807,7 @@ def _build_aggregated_sql_query(
     )
     sentinel_param: Final = f"${len(where_params) + 1}"
     metric_select: Final = _rollup_metric_select(table_name)
+    key_free_source: Final = key_free_table or pg_table
 
     # TODO: drop the successful_requests/failed_requests aggregates (and the
     # total_successful_requests metadata they feed) once the admin UI reads SGR
@@ -796,7 +826,7 @@ def _build_aggregated_sql_query(
                 | GROUPING(model, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
                            endpoint) AS group_level,{metric_select}
-        FROM "{pg_table}"
+        FROM "{key_free_source}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date),
@@ -1387,7 +1417,9 @@ async def get_daily_activity_aggregated(
             timezone_offset_minutes=timezone_offset_minutes,
             include_current_utc_day=include_current_utc_day,
         )
-        sql_query, sql_params = _build_aggregated_sql_query(**query_kwargs)
+        sql_query, sql_params = _build_aggregated_sql_query(
+            **query_kwargs, key_free_table=await key_free_source_table(prisma_client, query_kwargs)
+        )
         entity_query: Final = _build_entity_rollup_sql_query(**query_kwargs) if include_entity_breakdown else None
 
         raw_rows, raw_entity_rows = await asyncio.gather(

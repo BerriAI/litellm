@@ -254,14 +254,19 @@ class _RecordingPrisma:
 
 
 def _row_values(statement: Statement, column: str) -> list[object]:
-    """Every row's value for one column, read out of the flat parameter tuple."""
+    """Every row's value for one column of the first INSERT, read out of the flat parameter tuple.
+
+    The user-table statement chains a global rollup INSERT after its own, so the row count
+    comes from the first INSERT's VALUES rather than from the parameter count.
+    """
     sql, params = statement
     header = re.search(r"INSERT INTO \"[A-Za-z_]+\" \(([^)]*)\)", sql)
     assert header is not None, sql
     columns = header.group(1).split(", ")
     stride = len(columns) - 1  # updated_at is inlined, not bound
     offset = columns.index(f'"{column}"')
-    return [params[row * stride + offset] for row in range(len(params) // stride)]
+    rows = sql.split("ON CONFLICT", 1)[0].count("(NOW() AT TIME ZONE 'UTC'))")
+    return [params[row * stride + offset] for row in range(rows)]
 
 
 @pytest.mark.asyncio
@@ -1461,6 +1466,98 @@ async def test_update_daily_spend_keeps_failed_transactions_for_retry():
         )
 
     assert daily_spend_transactions == expected
+
+
+def _entity_txn(entity_field: str, entity_id: str, api_key: str) -> dict[str, object]:
+    txn = _daily_txn()
+    del txn["user_id"]
+    return {**txn, entity_field: entity_id, "api_key": api_key}
+
+
+@pytest.mark.asyncio
+async def test_user_flush_writes_the_global_rollup_in_the_same_statement():
+    """The user flush is the one place per-key spend becomes key-free spend, so a batch spread
+    over many keys must land in LiteLLM_DailyGlobalSpend as one row in the same statement.
+    A separate statement would let a crash between the two leave the tables out of sync."""
+    prisma_client = _RecordingPrisma()
+    txns = {f"k{i}": _entity_txn("user_id", f"user-{i}", f"sk-{i}") for i in range(4)}
+
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=0,
+        prisma_client=prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=txns,
+        entity_type="user",
+        entity_id_field="user_id",
+    )
+
+    assert len(prisma_client.db.statements) == 1
+    sql, params = prisma_client.db.statements[0]
+    assert sql.count('INSERT INTO "LiteLLM_DailyUserSpend"') == 1
+    assert sql.count('INSERT INTO "LiteLLM_DailyGlobalSpend"') == 1
+    assert sql.index('"LiteLLM_DailyUserSpend"') < sql.index('"LiteLLM_DailyGlobalSpend"')
+    global_insert = sql.split('INSERT INTO "LiteLLM_DailyGlobalSpend"', 1)[1]
+    assert global_insert.split("ON CONFLICT", 1)[0].count("(NOW() AT TIME ZONE 'UTC'))") == 1
+    assert "api_key" not in global_insert
+    assert params.count(0.4) == 1
+    assert txns == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_type", "entity_field"),
+    [
+        ("team", "team_id"),
+        ("org", "organization_id"),
+        ("tag", "tag"),
+        ("end_user", "end_user_id"),
+        ("agent", "agent_id"),
+    ],
+)
+async def test_other_entity_flushes_leave_the_global_table_alone(entity_type, entity_field):
+    """Every entity table sees the same request, so writing the rollup from more than one of
+    them would count each request once per entity type."""
+    prisma_client = _RecordingPrisma()
+    txn = _entity_txn(entity_field, "e-1", "sk-1")
+    if entity_type == "tag":
+        txn["request_id"] = "req-1"
+
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=0,
+        prisma_client=prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions={"k": txn},
+        entity_type=entity_type,
+        entity_id_field=entity_field,
+    )
+
+    (sql, _params) = prisma_client.db.statements[0]
+    assert "LiteLLM_DailyGlobalSpend" not in sql
+
+
+@pytest.mark.asyncio
+async def test_a_failed_chained_user_flush_keeps_every_transaction_for_retry():
+    def raise_outage():
+        raise ValueError("simulated database outage")
+
+    prisma_client = _RecordingPrisma(execute_raw=raise_outage)
+    txns = {f"k{i}": _entity_txn("user_id", f"user-{i}", f"sk-{i}") for i in range(3)}
+    expected = dict(txns)
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(ValueError, match="simulated database outage"):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=0,
+            prisma_client=prisma_client,
+            proxy_logging_obj=mock_proxy_logging,
+            daily_spend_transactions=txns,
+            entity_type="user",
+            entity_id_field="user_id",
+        )
+
+    assert txns == expected
+    assert 'INSERT INTO "LiteLLM_DailyGlobalSpend"' in prisma_client.db.statements[0][0]
 
 
 @pytest.mark.asyncio
