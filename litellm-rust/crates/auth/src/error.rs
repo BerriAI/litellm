@@ -81,9 +81,12 @@ pub enum Error {
     #[error("credential acquisition failed: Azure OIDC reference did not resolve to a value")]
     UnresolvedOidcReference,
     #[error(
-        "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
+        "Missing {provider} API Key - Set `api_key` or the {environment_variable} environment variable"
     )]
-    MissingApiKey { provider: &'static str },
+    MissingApiKey {
+        provider: &'static str,
+        environment_variable: &'static str,
+    },
     #[error(
         "Missing {provider} API Base - Set {environment_variable} environment variable or pass api_base parameter"
     )]
@@ -92,23 +95,26 @@ pub enum Error {
         environment_variable: &'static str,
     },
     #[error(
-        "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY environment variable"
-    )]
-    MissingAnthropicApiKey,
-    #[error("Missing Azure API Key - Set `api_key` or the AZURE_API_KEY environment variable")]
-    MissingAzureApiKey,
-    #[error(
         "Missing Azure API Base - Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
     )]
     MissingAzureApiBase,
-    #[error(
-        "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable"
-    )]
-    MissingOpenAiRealtimeApiKey,
-    #[error(
-        "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable"
-    )]
-    MissingOpenAiResponsesApiKey,
     #[error("invalid authentication header")]
     InvalidHeader,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn missing_api_key_names_provider_and_environment_variable() {
+        assert_eq!(
+            Error::MissingApiKey {
+                provider: "Anthropic",
+                environment_variable: "ANTHROPIC_API_KEY",
+            }
+            .to_string(),
+            "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY environment variable"
+        );
+    }
 }

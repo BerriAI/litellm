@@ -21,7 +21,12 @@ pub fn resolve_anthropic_api_key(
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::from(crate::AuthError::MissingAnthropicApiKey))
+        .ok_or_else(|| {
+            Error::from(crate::AuthError::MissingApiKey {
+                provider: "Anthropic",
+                environment_variable: ANTHROPIC_API_KEY_ENV,
+            })
+        })
 }
 
 pub fn complete_anthropic_url(
@@ -113,10 +118,12 @@ mod tests {
             resolve_anthropic_api_key(Some("  "), &with_env).unwrap(),
             "sk-env"
         );
-        assert!(matches!(
-            resolve_anthropic_api_key(None, &|_| None).expect_err("missing key"),
-            Error::Auth(_)
-        ));
+        assert_eq!(
+            resolve_anthropic_api_key(None, &|_| None)
+                .expect_err("missing key")
+                .to_string(),
+            "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY environment variable"
+        );
     }
 
     #[test]
