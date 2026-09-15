@@ -379,6 +379,58 @@ def test_v2_p3009_empty_ledger_logs_rolls_back_and_retries(monkeypatch, tmp_path
     assert rolled_back == ["20260415120000_health_check_latest_per_model_index"]
 
 
+def test_v2_p3009_idempotent_ledger_logs_marks_applied_and_retries(monkeypatch, tmp_path):
+    """v2: Prisma's P3009 stderr never carries the SQL error, only the ledger row does.
+    A ledger row whose logs show an idempotent error is marked applied, not fatal."""
+    _stub_v2_env(monkeypatch, tmp_path)
+
+    stderr = (
+        "Error: P3009\n"
+        "migrate found failed migrations in the target database\n"
+        "The `20250327180120_add_api_requests_to_daily_user_table` migration "
+        "started at 2026-09-01 18:46:13 UTC failed"
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_failed_migration_logs",
+        lambda name: 'ERROR: column "api_requests" of relation "LiteLLM_DailyUserSpend" already exists',
+    )
+    marked_applied = []
+    monkeypatch.setattr(ProxyExtrasDBManager, "_roll_back_migration", lambda name: None)
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_resolve_specific_migration",
+        lambda name: marked_applied.append(name),
+    )
+    monkeypatch.setattr("litellm_proxy_extras.prisma_toolchain.run_prisma", _succeed_after(1, stderr))
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+    assert marked_applied == ["20250327180120_add_api_requests_to_daily_user_table"]
+
+
+def test_v2_p3009_non_recoverable_ledger_logs_surface_in_error(monkeypatch, tmp_path):
+    """v2: when P3009 cannot be auto-recovered, the SQL error from the ledger row is
+    included so the operator sees why the migration failed, not just that it did."""
+    _stub_v2_env(monkeypatch, tmp_path)
+
+    stderr = (
+        "Error: P3009\n"
+        "migrate found failed migrations in the target database\n"
+        "The `20250327180120_add_api_requests_to_daily_user_table` migration "
+        "started at 2026-09-01 18:46:13 UTC failed"
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_failed_migration_logs",
+        lambda name: "ERROR: canceling statement due to lock timeout",
+    )
+    monkeypatch.setattr("litellm_proxy_extras.prisma_toolchain.run_prisma", _succeed_after(1, stderr))
+
+    with pytest.raises(RuntimeError, match="canceling statement due to lock timeout"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+
 def test_v2_p3009_unreadable_ledger_still_raises(monkeypatch, tmp_path):
     """v2: an unreadable ledger cannot establish that P3009 was a deadlock."""
     _stub_v2_env(monkeypatch, tmp_path)
