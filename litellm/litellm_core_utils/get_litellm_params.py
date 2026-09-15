@@ -42,6 +42,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "azure_password",
             "azure_scope",
             "timeout",
+            "client_side_timeout",
             "gcs_bucket_name",
             "bucket_name",
             "vertex_credentials",

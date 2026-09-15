@@ -2,7 +2,9 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -19,6 +21,7 @@ from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_timeout_408,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -35,12 +38,14 @@ else:
 # Status codes a generic API call's caller-supplied resource id can trigger on its own
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
 _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
+_NO_MODEL_CALL_DETAILS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _trigger_cooldown_for_failed_deployment(
     litellm_router: LitellmRouter,
     kwargs: Mapping[str, Any],
     exception: Exception,
+    model_call_details: Mapping[str, object] = _NO_MODEL_CALL_DETAILS,
 ) -> None:
     """
     Trigger cooldown for a failed fallback deployment.
@@ -79,7 +84,11 @@ def _trigger_cooldown_for_failed_deployment(
         # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
         # actual health. Left unguarded, a caller could force a 408 on every deployment in
         # the fallback chain from a single request with a near-zero timeout.
-        if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
+        if is_caller_timeout_408(
+            model_call_details,
+            exception_status,
+            ended=datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
+        ):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: a caller-supplied "
                 "x-litellm-timeout caused this 408, not deployment health."
@@ -412,6 +421,7 @@ async def run_async_fallback(
                     litellm_router=litellm_router,
                     kwargs=kwargs,
                     exception=e,
+                    model_call_details=logging_obj.model_call_details,
                 )
     raise error_from_fallbacks
 

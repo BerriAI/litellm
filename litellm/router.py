@@ -137,6 +137,7 @@ from litellm.router_utils.cooldown_handlers import (
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
+    is_caller_timeout_408,
 )
 from litellm.router_utils.fallback_event_handlers import (
     _check_non_standard_fallback_format,
@@ -7221,6 +7222,13 @@ class Router:
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
+
+            if is_caller_timeout_408(kwargs, exception_status):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "A timeout the caller set caused this 408, not the deployment's health."
+                )
+                return False
 
             exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
                 original_exception=exception
