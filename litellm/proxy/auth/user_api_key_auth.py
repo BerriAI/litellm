@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
+    auth_skips_common_checks,
     can_key_call_model,
     common_checks,
     get_end_user_object,
@@ -2520,39 +2521,12 @@ async def _run_centralized_common_checks(
         user_custom_auth,
     )
 
-    # Public routes (e.g. /health/liveness) are exempt from
-    # auth in the builder — the wrapper must not retroactively apply
-    # authz on top, or k8s readiness probes and other unauthenticated
-    # callers get 401.
-    if route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route):
-        return
-
-    # User-configured pass-through endpoints with ``auth: false`` are
-    # explicitly unauthenticated — the builder returns an empty
-    # UserAPIKeyAuth() and the request is forwarded as-is. Running
-    # common_checks on the empty token would reject the request as
-    # admin-only. The "auth" flag on the endpoint config is the
-    # contract; honor it.
-    pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
-    if pass_through_endpoints is not None:
-        for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
-                return
-
-    # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
-    # configured. The builder returns an INTERNAL_USER token for any
-    # api_key; the proxy is unauthenticated by configuration.
-    # Running common_checks would block every admin route on these
-    # deployments where that was previously not the contract. If any
-    # authn is enabled (JWT, OAuth2, OAuth2-proxy), authz must run.
-    if master_key is None and not (
-        general_settings.get("enable_jwt_auth", False)
-        or general_settings.get("enable_oauth2_auth", False)
-        or general_settings.get("enable_oauth2_proxy_auth", False)
+    if auth_skips_common_checks(
+        route=route,
+        general_settings=general_settings,
+        master_key=master_key,
+        custom_auth_configured=user_custom_auth is not None,
     ):
-        return
-
-    if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
         return
 
     parent_otel_span: Final = user_api_key_auth_obj.parent_otel_span

@@ -2094,14 +2094,14 @@ def _tag_registry_row(tag_name: str):
     return SimpleNamespace(tag_name=tag_name)
 
 
-def _tag_db_row(tag_name: str, max_budget=None):
+def _tag_db_row(tag_name: str, max_budget=None, spend: float = 0.0):
     row = MagicMock()
     row.tag_name = tag_name
     budget = None if max_budget is None else {"max_budget": max_budget}
     row.dict = MagicMock(
         return_value={
             "tag_name": tag_name,
-            "spend": 0.0,
+            "spend": spend,
             "models": [],
             "litellm_budget_table": budget,
         }
@@ -2376,6 +2376,171 @@ async def test_tag_max_budget_check_still_enforces_registered_tag_over_budget():
     # The unregistered tag alongside it never reached the DB.
     batch_calls = _batch_calls(mock_prisma.db.litellm_tagtable.find_many)
     assert [call.kwargs["where"]["tag_name"]["in"] for call in batch_calls] == [["paid-tag"]]
+
+
+def _over_budget_tag_prisma(tag_name: str, max_budget: float, spend: float):
+    """A tag row whose recorded spend (the counter's authoritative fallback) is already over budget."""
+
+    async def fake_find_many(**kwargs):
+        if "where" not in kwargs:
+            return [_tag_registry_row(tag_name)]
+        return [_tag_db_row(name, max_budget=max_budget, spend=spend) for name in kwargs["where"]["tag_name"]["in"]]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=fake_find_many)
+    return mock_prisma
+
+
+def _zero_cost_router(model_name: str) -> "Router":
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-test"},
+                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_tag_max_budget_check_for_tags_rejects_over_budget_hook_added_tag():
+    """A tag a pre-call hook added after auth is enforced like a tag auth saw in the body, with the provider filled in."""
+    from litellm.proxy.auth.auth_checks import tag_max_budget_check_for_tags
+    from litellm.proxy.utils import ProxyLogging
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await tag_max_budget_check_for_tags(
+            tags=("guardrail-added-over-budget-tag",),
+            prisma_client=_over_budget_tag_prisma("guardrail-added-over-budget-tag", max_budget=1.0, spend=2.5),
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            model="gpt-4.1-mini",
+            llm_router=None,
+        )
+    assert exc_info.value.entity_id == "guardrail-added-over-budget-tag"
+    assert exc_info.value.current_cost == 2.5
+    assert exc_info.value.max_budget == 1.0
+    assert exc_info.value.llm_provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_tag_max_budget_check_for_tags_without_model_leaves_provider_for_auth_to_resolve():
+    """Auth resolves the provider for its own budget errors later, so the auth-path call must not pre-fill one."""
+    from litellm.proxy.auth.auth_checks import tag_max_budget_check_for_tags
+    from litellm.proxy.utils import ProxyLogging
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await tag_max_budget_check_for_tags(
+            tags=("guardrail-added-over-budget-tag",),
+            prisma_client=_over_budget_tag_prisma("guardrail-added-over-budget-tag", max_budget=1.0, spend=2.5),
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+        )
+    assert exc_info.value.llm_provider == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["free-model", ["free-model", "free-model"]], ids=["str", "list"])
+async def test_tag_max_budget_check_for_tags_skips_zero_cost_model_like_auth(model):
+    """Auth skips every budget check for a zero-cost model; the post-hook tag check must agree."""
+    from litellm.proxy.auth.auth_checks import tag_max_budget_check_for_tags
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma = _over_budget_tag_prisma("guardrail-added-over-budget-tag", max_budget=1.0, spend=2.5)
+
+    await tag_max_budget_check_for_tags(
+        tags=("guardrail-added-over-budget-tag",),
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+        model=model,
+        llm_router=_zero_cost_router("free-model"),
+    )
+
+    mock_prisma.db.litellm_tagtable.find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "route, expected",
+    [
+        ("/v1/chat/completions", False),
+        ("/v1/messages", False),
+        ("/v1/batches", False),
+        ("/guardrails/apply_guardrail", True),
+        ("/prompts/test", True),
+        ("/health", False),
+        ("/v1/models", True),
+    ],
+)
+def test_route_skips_budget_checks_matches_auth_scope(route, expected):
+    from litellm.proxy.auth.auth_checks import route_skips_budget_checks
+
+    assert route_skips_budget_checks(route=route) is expected
+
+
+@pytest.mark.parametrize(
+    ("route", "general_settings", "master_key", "custom_auth_configured", "expected"),
+    [
+        ("/v1/chat/completions", {}, None, False, True),
+        ("/v1/chat/completions", {"enable_jwt_auth": True}, None, False, False),
+        ("/v1/chat/completions", {"enable_oauth2_auth": True}, None, False, False),
+        ("/v1/chat/completions", {"enable_oauth2_proxy_auth": True}, None, False, False),
+        ("/v1/chat/completions", {}, "sk-master", False, False),
+        ("/v1/chat/completions", {}, "sk-master", True, True),
+        ("/v1/chat/completions", {"custom_auth_run_common_checks": True}, "sk-master", True, False),
+        ("/v1/chat/completions", {"custom_auth_run_common_checks": False}, "sk-master", True, True),
+        ("/health/liveliness", {}, "sk-master", False, True),
+        ("/v1/chat/completions", {"public_routes": ["/v1/chat/completions"]}, "sk-master", False, True),
+        ("/v1/chat/completions", {"public_routes": ["/v1/embeddings"]}, "sk-master", False, False),
+        ("/bria", {"pass_through_endpoints": [{"path": "/bria", "target": "https://x"}]}, "sk-master", False, True),
+        (
+            "/bria",
+            {"pass_through_endpoints": [{"path": "/bria", "target": "https://x", "auth": False}]},
+            "sk-master",
+            False,
+            True,
+        ),
+        (
+            "/bria",
+            {"pass_through_endpoints": [{"path": "/bria", "target": "https://x", "auth": True}]},
+            "sk-master",
+            False,
+            False,
+        ),
+        (
+            "/other",
+            {"pass_through_endpoints": [{"path": "/bria", "target": "https://x", "auth": False}]},
+            "sk-master",
+            False,
+            False,
+        ),
+        ("/bria", {"pass_through_endpoints": "not-a-list"}, "sk-master", False, False),
+        ("/bria", {"pass_through_endpoints": [{"path": "/bria", "auth": False}, "junk"]}, "sk-master", False, False),
+    ],
+)
+def test_auth_skips_common_checks_names_the_requests_that_never_run_them(
+    monkeypatch, route, general_settings, master_key, custom_auth_configured, expected
+):
+    """Public routes, pass-through endpoints without auth, no-auth dev mode and a custom auth hook without
+    the opt-in run no common_checks, so no budget checks."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import auth_skips_common_checks
+
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    assert (
+        auth_skips_common_checks(
+            route=route,
+            general_settings=general_settings,
+            master_key=master_key,
+            custom_auth_configured=custom_auth_configured,
+        )
+        is expected
+    )
 
 
 @pytest.mark.asyncio

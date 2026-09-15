@@ -14,7 +14,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -50,12 +50,18 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
+from litellm.proxy.auth.auth_checks import (
+    auth_skips_common_checks,
+    can_key_call_resolved_model,
+    route_skips_budget_checks,
+    tag_max_budget_check_for_tags,
+)
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -71,6 +77,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.spend_tracking.budget_reservation import merge_budget_reservation, reserve_budget_for_added_tags
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
@@ -640,6 +647,69 @@ async def _resolve_per_request_model_group_alias(
         llm_router=llm_router,
     )
     return target
+
+
+_REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+
+
+def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
+    """The request's model name or names, or None when the field is missing or malformed."""
+    try:
+        return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
+    except ValidationError:
+        return None
+
+
+def _tags_on_request(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Every tag on the request under either metadata key, since spend attribution reads both."""
+    without_litellm_metadata: Final = MappingProxyType(
+        {key: value for key, value in data.items() if key != "litellm_metadata"}
+    )
+    return tuple(
+        dict.fromkeys(
+            (
+                *get_tags_from_request_body(request_body=data),
+                *get_tags_from_request_body(request_body=without_litellm_metadata),
+            )
+        )
+    )
+
+
+async def _enforce_tag_budgets_for_added_tags(
+    data: Mapping[str, object],
+    tags_before_pre_call_hook: frozenset[str],
+    route: str,
+    llm_router: Router | None,
+    proxy_logging_obj: ProxyLogging,
+    general_settings: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Budget-check the tags that ``pre_call_hook`` added to the request and return them.
+
+    Tag budgets are enforced in auth against the tags in the request body, and
+    guardrails run after auth, so a tag a guardrail sets is only checked here,
+    on the same routes auth checks and only when auth ran its checks at all.
+    """
+    added_tags: Final = tuple(tag for tag in _tags_on_request(data) if tag not in tags_before_pre_call_hook)
+    if not added_tags or route_skips_budget_checks(route=route):
+        return ()
+    from litellm.proxy.proxy_server import master_key, prisma_client, user_api_key_cache, user_custom_auth
+
+    if auth_skips_common_checks(
+        route=route,
+        general_settings=general_settings,
+        master_key=master_key,
+        custom_auth_configured=user_custom_auth is not None,
+    ):
+        return ()
+    await tag_max_budget_check_for_tags(
+        tags=added_tags,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        model=_request_model(data),
+        llm_router=llm_router,
+    )
+    return added_tags
 
 
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
@@ -1522,6 +1592,7 @@ def _timing_values(
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+        self._tags_before_pre_call_hook: frozenset[str] | None = None
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
@@ -2011,6 +2082,8 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        if self._tags_before_pre_call_hook is None:
+            self._tags_before_pre_call_hook = frozenset(_tags_on_request(self.data))
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -2032,7 +2105,62 @@ class ProxyBaseLLMRequestProcessing:
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
 
+        request_route: Final = get_request_route(request=request)
+        added_tags: Final = await _enforce_tag_budgets_for_added_tags(
+            data=self.data,
+            tags_before_pre_call_hook=self._tags_before_pre_call_hook,
+            route=request_route,
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+        )
+        if added_tags and general_settings.get("disable_budget_reservation") is not True:
+            await self._reserve_budget_for_added_tags(
+                added_tags=added_tags,
+                route=request_route,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
+            )
         return self.data, logging_obj
+
+    async def _reserve_budget_for_added_tags(
+        self,
+        added_tags: Sequence[str],
+        route: str,
+        llm_router: Router | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        fail_closed_budget_enforcement: bool,
+    ) -> None:
+        """Reserve the added tags' budgets the way auth reserved the body tags, so a burst cannot overshoot them.
+
+        The entries join the request's reservation, on the auth object and in the
+        request metadata, so the success, failure and cancel paths settle them together.
+        """
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        reservation: Final = await reserve_budget_for_added_tags(
+            tags=added_tags,
+            request_body=self.data,
+            route=route,
+            llm_router=llm_router,
+            valid_token=user_api_key_dict,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+        )
+        if reservation is None:
+            return
+        existing: Final = user_api_key_dict.budget_reservation
+        if existing is not None:
+            merge_budget_reservation(existing=existing, added=reservation)
+            return
+        user_api_key_dict.budget_reservation = reservation  # rebind-ok: the failure and cancel paths read it here
+        _, metadata_bucket = get_or_create_metadata_bucket(self.data)
+        metadata_bucket["user_api_key_budget_reservation"] = reservation
 
     async def _pre_call_with_fallbacks(
         self,

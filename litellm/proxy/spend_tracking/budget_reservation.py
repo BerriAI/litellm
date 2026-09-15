@@ -235,7 +235,68 @@ async def reserve_budget_for_request(
     )
     if not counters:
         return None
+    return await _reserve_counters(
+        counters=counters,
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        valid_token=valid_token,
+        fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+        raw_body=raw_body,
+    )
 
+
+async def reserve_budget_for_added_tags(
+    tags: Sequence[str],
+    request_body: dict[str, object],  # mutable-ok: the request payload the proxy threads through the pipeline
+    route: str,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    fail_closed_budget_enforcement: bool = False,
+) -> dict[str, object] | None:  # mutable-ok: the reservation dict the settlement paths stamp in place
+    """
+    Reserve the request's estimated cost against ``tags`` a pre-call hook added.
+
+    Auth reserved the body tags before the hook ran, so without this a burst of
+    requests all read the same spend for a hook-added tag and all get through.
+    Same route and model guards as ``reserve_budget_for_request``; the caller
+    folds the result into the request's reservation so one settlement covers both.
+    """
+    if not RouteChecks.is_llm_api_route(route=route) or _is_unbilled_route(route):
+        return None
+    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
+        return None
+    counters: Final = await _tag_budget_counters(
+        tag_names=_dedupe_tags(list(tags)),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if not counters:
+        return None
+    return await _reserve_counters(
+        counters=counters,
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        valid_token=valid_token,
+        fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+        raw_body=None,
+    )
+
+
+async def _reserve_counters(
+    counters: Sequence[_BudgetCounter],
+    request_body: dict[str, object],  # mutable-ok: the request payload the proxy threads through the pipeline
+    route: str,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+    fail_closed_budget_enforcement: bool,
+    raw_body: bytes | None,
+) -> dict[str, object] | None:  # mutable-ok: the reservation dict the settlement paths stamp in place
     input_token_counts: Final = await count_request_input_tokens(
         request_body=request_body,
         route=route,
@@ -264,11 +325,12 @@ async def reserve_budget_for_request(
                     counter=counter,
                     reserved_cost=reservation_cost,
                 )
-                applied_entries.append(entry)
                 try:
-                    reserved_value = await _reserve_counter(
+                    reserved_value = await _acquire_counter(
                         counter=counter,
                         reservation_cost=reservation_cost,
+                        entry=entry,
+                        applied_entries=applied_entries,
                     )
                 except _CounterReservationUnavailable as exc:
                     if exc.touched_counter and not exc.counter_invalidated:
@@ -276,7 +338,6 @@ async def reserve_budget_for_request(
                             entries=[entry],
                             default_reserved_cost=reservation_cost,
                         )
-                    applied_entries.remove(entry)
                     if fail_closed_budget_enforcement:
                         _raise_reservation_unavailable(counter_key=counter.counter_key)
                     continue
@@ -299,10 +360,9 @@ async def reserve_budget_for_request(
                         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
                     )
                     continue
-    except Exception:
-        await _release_applied_entries_best_effort(
-            entries=applied_entries,
-            default_reserved_cost=reservation_cost,
+    except BaseException:
+        await asyncio.shield(
+            _release_applied_entries_best_effort(entries=applied_entries, default_reserved_cost=reservation_cost)
         )
         raise
 
@@ -374,13 +434,45 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
     try:
-        await asyncio.shield(
-            reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
-        )
+        await asyncio.shield(_reconcile_entries_to_their_input_cost(budget_reservation=budget_reservation))
     except (asyncio.CancelledError, Exception):
         pass
+
+
+async def _reconcile_entries_to_their_input_cost(
+    budget_reservation: dict[str, object],  # mutable-ok: the reservation is stamped finalized in place
+) -> None:
+    """Entries folded in by ``merge_budget_reservation`` carry the input cost of the request that
+    went upstream; the rest were priced at auth and settle to the reservation's own input cost."""
+    shared_input_cost: Final = float(cast(SupportsFloat, budget_reservation.get("input_cost") or 0.0))
+    reserved_cost: Final = float(cast(SupportsFloat, budget_reservation.get("reserved_cost") or 0.0))
+    entries: Final = cast(list[dict[str, float | str]], budget_reservation.get("entries") or [])
+    for input_cost in dict.fromkeys(_entry_input_cost(entry, shared_input_cost) for entry in entries):
+        await _set_reserved_entries_actual_cost(
+            entries=[entry for entry in entries if _entry_input_cost(entry, shared_input_cost) == input_cost],
+            actual_cost=input_cost,
+            default_reserved_cost=reserved_cost,
+        )
+    budget_reservation["finalized"] = True  # rebind-ok: the settlement paths share this one dict
+
+
+def _entry_input_cost(entry: Mapping[str, float | str], shared_input_cost: float) -> float:
+    return float(entry.get("input_cost", shared_input_cost))
+
+
+def merge_budget_reservation(
+    existing: dict[str, object],  # mutable-ok: the request's reservation, extended in place
+    added: Mapping[str, object],
+) -> None:
+    """Fold a later reservation's entries into the request's reservation so every settlement path sees one.
+    Each added entry keeps the input cost it was priced with, since a pre-call hook may have rewritten the
+    request between the two estimates and a cancellation settles each entry to that cost."""
+    added_entries: Final = cast(list[dict[str, float | str]], added.get("entries") or [])
+    added_input_cost: Final = float(cast(SupportsFloat, added.get("input_cost") or 0.0))
+    for entry in added_entries:
+        entry["input_cost"] = added_input_cost  # rebind-ok: the entry settles to the cost it was priced with
+    cast(list[dict[str, float | str]], existing["entries"]).extend(added_entries)  # rebind-ok: one dict for all paths
 
 
 async def invalidate_budget_reservation_counters(
@@ -582,10 +674,24 @@ async def _get_tag_budget_counters(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> list[_BudgetCounter]:
-    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
-    tag_names: Final = _dedupe_tags(get_tags_from_request_body(request_body=request_body))
+    return await _tag_budget_counters(
+        tag_names=_dedupe_tags(get_tags_from_request_body(request_body=request_body)),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _tag_budget_counters(
+    tag_names: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> list[_BudgetCounter]:
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
     if not tag_names:
         return []
 
@@ -806,6 +912,40 @@ def _coerce_window(window: object) -> Mapping[str, object]:
         return {}
     dumped: Final[object] = model_dump()
     return dumped if isinstance(dumped, Mapping) else {}
+
+
+async def _acquire_counter(
+    counter: _BudgetCounter,
+    reservation_cost: float,
+    entry: dict[str, float | str],
+    applied_entries: list[dict[str, float | str]],  # mutable-ok: the caller's rollback list
+) -> float | None:
+    """Increment the counter and record ``entry`` as applied once the increment went through.
+
+    A cancellation delivered while the increment is in flight leaves the request unable to tell whether
+    Redis applied it, so the increment keeps running shielded and the entry is recorded if it lands,
+    letting the caller's rollback release exactly what was reserved.
+    """
+    increment: Final = asyncio.ensure_future(_reserve_counter(counter=counter, reservation_cost=reservation_cost))
+    try:
+        reserved_value: Final = await asyncio.shield(increment)
+    except asyncio.CancelledError:
+        if await _increment_landed(increment):
+            applied_entries.append(entry)  # rebind-ok: the rollback list must see the landed increment
+        raise
+    applied_entries.append(entry)  # rebind-ok: the caller settles and rolls back through this list
+    return reserved_value
+
+
+async def _increment_landed(increment: asyncio.Future[float | None]) -> bool:
+    """Wait for the in-flight increment to settle, through any further cancellation, so the caller can tell
+    whether the counter holds a reservation it must release."""
+    while not increment.done():
+        try:
+            await asyncio.wait((increment,))
+        except asyncio.CancelledError:
+            continue
+    return not increment.cancelled() and increment.exception() is None
 
 
 async def _reserve_counter(
