@@ -58151,35 +58151,17 @@
                 }
             },
             {
-                "name": "vertex-gemini-ids",
-                "pattern": "^gemini-(?:2\\.[5-9]|[3-9](?:[.-]\\d{1,2})?)-(?:pro|flash)(?:-lite)?(?:-(?:preview|exp|latest))?(?:-\\d{2}-\\d{2,4})?$",
-                "description": "A bare Gemini text-chat id at 2.5 or higher, anchored to the whole name: gemini-<major>[.minor]-(pro|flash)[-lite] with an optional preview/exp/latest tag and an optional MM-YYYY or MM-DD date. Bare Gemini ids in this map already infer vertex_ai (gemini-2.5-pro is filed under vertex_ai-language-models), so an unmapped id such as gemini-4-pro follows the same convention instead of raising 'LLM Provider NOT provided'. Anchored so a namespaced or non-chat id (gemini/..., -image, -tts) stays on its own path.",
-                "model_info": {
-                    "litellm_provider": "vertex_ai"
-                }
-            },
-            {
                 "name": "gemini-family-baseline",
                 "pattern": "gemini-(?!.*(?:-tts|-image|-live|-audio|-embedding|-computer-use|-robotics))(?:2\\.[5-9]|[3-9](?:[.-]\\d{1,2})?)-(?:pro|flash)(?:-lite)?(?![a-z])",
-                "description": "Any Gemini text-chat id at 2.5 or higher under any provider namespace (bare, gemini/, vertex_ai/, databricks-gemini-3-1-pro, ...): gemini-<major>[.minor]-(pro|flash)[-lite] with any trailing preview, date or variant tag. The lookahead excludes the tts, image, live, audio, embedding, computer-use and robotics lines, which are not text-chat models and carry different limits and modes. 2.5 is the floor because every Gemini from 2.5 onward is a thinking model with a 1M context and 64K output; 1.5 and 2.0 are not and are fully mapped. Carries the model-family facts every such Gemini shares, so an unmapped gemini-4-pro keeps reasoning params and tool calling instead of having them dropped; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
+                "description": "Any Gemini text-chat id at 2.5 or higher under any provider namespace (bare, gemini/, vertex_ai/, databricks-gemini-3-1-pro, ...): gemini-<major>[.minor]-(pro|flash)[-lite] with any trailing preview, date or variant tag. The lookahead excludes the tts, image, live, audio, embedding, computer-use and robotics lines, which are not text-chat models and carry different limits and modes. 2.5 is the floor because every Gemini from 2.5 onward is a thinking model with tool calling and multimodal input; 1.5 and 2.0 are not and are fully mapped. Carries the model-family facts every such Gemini shares, so an unmapped gemini-4-pro keeps reasoning params and tool calling instead of having them dropped; it carries no token limits or pricing, so those stay on the standard unmapped behavior rather than a guessed number.",
                 "model_info": {
                     "mode": "chat",
-                    "max_input_tokens": 1048576,
-                    "max_output_tokens": 65536,
-                    "max_tokens": 65536,
                     "supports_function_calling": true,
-                    "supports_parallel_function_calling": true,
-                    "supports_vision": true,
-                    "supports_pdf_input": true,
-                    "supports_audio_input": true,
-                    "supports_video_input": true,
                     "supports_tool_choice": true,
                     "supports_system_messages": true,
+                    "supports_vision": true,
                     "supports_response_schema": true,
-                    "supports_prompt_caching": true,
-                    "supports_reasoning": true,
-                    "supports_web_search": true,
-                    "supports_url_context": true
+                    "supports_reasoning": true
                 }
             }
         ]
