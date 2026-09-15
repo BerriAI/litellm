@@ -2361,6 +2361,19 @@ class TestResponseScanCarriesRequestConversation:
         assert "tools" not in inputs
 
     @pytest.mark.asyncio
+    async def test_scan_only_tool_results_without_tool_turns_still_carries_the_reply(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = InputsRecordingGuardrail()
+        guardrail.scan_only_tool_results = True
+        request = {**self._request(), "messages": [{"role": "user", "content": "Delete everything"}]}
+
+        await handler.process_output_response(self._tool_call_response(), guardrail, request_data=request)
+
+        [(_, inputs)] = guardrail.seen
+        assert [m["role"] for m in inputs["structured_messages"]] == ["assistant"]
+        assert inputs["structured_messages"][0]["tool_calls"][0]["function"]["name"] == "run_shell"
+
+    @pytest.mark.asyncio
     async def test_response_scan_without_request_data_stays_response_only(self):
         guardrail = InputsRecordingGuardrail()
 
