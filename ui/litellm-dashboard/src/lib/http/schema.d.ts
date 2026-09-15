@@ -27297,6 +27297,8 @@ export interface components {
             jwt_claim_name: string;
             /** Jwt Claim Value */
             jwt_claim_value: string;
+            /** Jwt Issuer */
+            jwt_issuer?: string | null;
             /** Key */
             key: string;
         };
@@ -28910,6 +28912,8 @@ export interface components {
             jwt_claim_name: string;
             /** Jwt Claim Value */
             jwt_claim_value: string;
+            /** Jwt Issuer */
+            jwt_issuer?: string | null;
             /**
              * Updated At
              * Format: date-time
@@ -38643,6 +38647,8 @@ export interface components {
             id: string;
             /** Is Active */
             is_active?: boolean | null;
+            /** Jwt Issuer */
+            jwt_issuer?: string | null;
             /** Key */
             key?: string | null;
         };
