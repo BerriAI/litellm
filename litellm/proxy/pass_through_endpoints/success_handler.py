@@ -27,6 +27,10 @@ from .llm_provider_handlers.cursor_passthrough_logging_handler import (
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
+    TinyFishPassthroughLoggingHandler,
+    is_tinyfish_agent_url,
+)
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -256,6 +260,21 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = comprehend_medical_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = comprehend_medical_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_tinyfish_route(url_route, custom_llm_provider):
+            tinyfish_handler_result: Final = TinyFishPassthroughLoggingHandler.tinyfish_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body if isinstance(response_body, dict) else None,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = tinyfish_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = tinyfish_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif self.is_vertex_ai_live_route(url_route):
             from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
                 VertexAILivePassthroughLoggingHandler,
@@ -300,6 +319,21 @@ class PassThroughEndpointLogging:
     ):
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
+        if self.is_tinyfish_route(url_route, custom_llm_provider):
+            # GET /v1/runs* polling and cancels never write spend rows; run-async bills once,
+            # from a background poller that re-enters _handle_logging at run completion.
+            if not TinyFishPassthroughLoggingHandler.should_log_request(httpx_response.request.method, url_route):
+                return
+            if TinyFishPassthroughLoggingHandler.is_run_async_route(url_route):
+                TinyFishPassthroughLoggingHandler.start_async_run_billing(
+                    response_body=response_body if isinstance(response_body, dict) else None,
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    cache_hit=cache_hit,
+                    **kwargs,
+                )
+                return
         if self.is_assemblyai_route(url_route):
             if AssemblyAIPassthroughLoggingHandler._should_log_request(httpx_response.request.method) is not True:
                 return
@@ -386,6 +420,9 @@ class PassThroughEndpointLogging:
 
     def is_comprehend_medical_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "comprehendmedical"
+
+    def is_tinyfish_route(self, url_route: str, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "tinyfish" or is_tinyfish_agent_url(url_route)
 
     def is_langfuse_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)

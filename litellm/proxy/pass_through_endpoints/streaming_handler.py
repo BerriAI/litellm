@@ -26,6 +26,9 @@ from .llm_provider_handlers.gemini_passthrough_logging_handler import (
 from .llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
+    TinyFishPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -290,6 +293,27 @@ class PassThroughStreamingHandler:
             and not _is_provider_error_chunk(complete_frames)
         )
         try:
+            # TinyFish is dispatched before the sync builder: its SSE events carry no
+            # num_of_steps, so pricing needs an async GET /v1/runs/{id} after the stream.
+            if endpoint_type == EndpointType.TINYFISH:
+                tinyfish_payload: Final = (
+                    await TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(
+                        litellm_logging_obj=litellm_logging_obj,
+                        url_route=url_route,
+                        start_time=start_time,
+                        all_chunks=PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes),
+                        end_time=end_time,
+                    )
+                )
+                await litellm_logging_obj.dispatch_success_handlers(
+                    result=tinyfish_payload["result"],
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
+                    prefer_async_handlers=True,
+                    **tinyfish_payload["kwargs"],
+                )
+                return
             (
                 standard_logging_response_object,
                 kwargs,
