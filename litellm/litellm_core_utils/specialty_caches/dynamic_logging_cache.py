@@ -43,9 +43,12 @@ class LangfuseInMemoryCache(InMemoryCache):
             #########################################################
             # Clean up Langfuse initialized clients
             #########################################################
+            from litellm.integrations.langfuse.langfuse_sdk import (
+                shutdown_langfuse_client,
+            )
+
             litellm.initialized_langfuse_clients -= 1
-            _created_langfuse_logger.Langfuse.flush()
-            _created_langfuse_logger.Langfuse.shutdown()
+            shutdown_langfuse_client(_created_langfuse_logger.Langfuse)
 
         # Loggers with a periodic flush task (e.g. NewRelicMetricsLogger) expose
         # stop() so eviction actually ends the task instead of leaking it.
