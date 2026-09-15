@@ -2990,6 +2990,12 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_p_solve: float  # writable-ok: added only when a capability verdict is available
     classifier_calibrated_p_solve: ReadOnly[float]
     classifier_calibration_version: ReadOnly[str]
+    classifier_efficient_p_solve: ReadOnly[float]
+    classifier_capable_p_solve: ReadOnly[float]
+    classifier_calibrated_efficient_p_solve: ReadOnly[float]
+    classifier_calibrated_capable_p_solve: ReadOnly[float]
+    classifier_max_quality_gap: ReadOnly[float]
+    classifier_prompt_version: ReadOnly[str]
     classifier_threshold: float  # writable-ok: added only when a capability verdict is available
     escalated: bool
     context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
@@ -3026,6 +3032,12 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_p_solve",
         "classifier_calibrated_p_solve",
         "classifier_calibration_version",
+        "classifier_efficient_p_solve",
+        "classifier_capable_p_solve",
+        "classifier_calibrated_efficient_p_solve",
+        "classifier_calibrated_capable_p_solve",
+        "classifier_max_quality_gap",
+        "classifier_prompt_version",
         "classifier_threshold",
         "escalated",
         "context_escalated",

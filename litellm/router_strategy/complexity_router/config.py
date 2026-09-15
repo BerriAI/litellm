@@ -970,9 +970,8 @@ class ComplexityRouterConfig(BaseModel):
         default="heuristic",
         description=(
             "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
-            "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint task-demand and "
-            "capability forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only "
-            "pays for the LLM classifier when the "
+            "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, "
+            "a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
             "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
             "everywhere except when its score lands near a tier boundary"
         ),
@@ -1594,6 +1593,8 @@ class ComplexityRouterConfig(BaseModel):
             return self
         if v2 is None:
             raise ValueError("llm_v2_config is required when classifier_type is llm_v2")
+        if self.classifier_fallback != "heuristic":
+            raise ValueError("llm_v2 always fails closed to capable_tier; classifier_fallback cannot override it")
         llm: Final = self.classifier_llm_config
         if self.adaptive or self.tier_definitions is not None or self.enable_non_reasoning_tier:
             raise ValueError("llm_v2 requires two built-in tiers and adaptive=false")

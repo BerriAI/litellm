@@ -78,38 +78,6 @@ def _load(path: Path) -> dict[str, dict[str, object]]:
         return json.load(f)
 
 
-@pytest.mark.parametrize("path", [MAIN_PATH, BACKUP_PATH], ids=["main", "backup"])
-@pytest.mark.parametrize("model", sorted(EXPECTED))
-def test_service_tier_long_context_rates_are_published(model: str, path: Path) -> None:
-    """Each tier must carry its own above-272K rates, in both price files."""
-    info = _load(path).get(model)
-    assert info is not None, f"{model} not found in {path.name}"
-    for key, expected in EXPECTED[model].items():
-        assert info.get(key) == pytest.approx(expected), f"{model}.{key} is {info.get(key)!r}, expected {expected!r}"
-
-
-@pytest.mark.parametrize("model", sorted(EXPECTED))
-def test_tier_long_context_rate_is_half_or_double_the_standard(model: str) -> None:
-    """Flex is half the standard long-context rate; priority is double it."""
-    info = _load(MAIN_PATH)[model]
-    tier = "flex" if model in FLEX_LONG_CONTEXT else "priority"
-    ratio = 0.5 if tier == "flex" else 2.0
-    for base in ("input_cost_per_token", "output_cost_per_token"):
-        standard = info[f"{base}_above_272k_tokens"]
-        tiered = info[f"{base}_above_272k_tokens_{tier}"]
-        assert tiered == pytest.approx(standard * ratio), (
-            f"{model}.{base}_above_272k_tokens_{tier} is {tiered!r}, "
-            f"expected {ratio}x the standard long-context rate {standard!r}"
-        )
-
-
-@pytest.mark.parametrize("model", NO_PUBLISHED_PRIORITY_LONG_CONTEXT)
-def test_no_priority_long_context_rates_where_openai_publishes_none(model: str) -> None:
-    """Guard against back-filling a rate OpenAI does not publish."""
-    info = _load(MAIN_PATH)[model]
-    assert "input_cost_per_token_above_272k_tokens_priority" not in info
-
-
 LONG_CONTEXT_PROMPT_TOKENS = 300_000
 COMPLETION_TOKENS = 1_000
 

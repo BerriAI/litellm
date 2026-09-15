@@ -4,6 +4,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import litellm
 from pydantic import ValidationError
 
 from litellm import ModelResponse, Router
@@ -11,6 +12,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, ComplexityTier
 from litellm.router_strategy.complexity_router.llm_v2 import (
+    LLM_V2_PROMPT_VERSION,
     LLMV2Calibration,
     LLMV2Config,
     LLMV2ProbabilityCalibration,
@@ -37,6 +39,31 @@ def test_learned_policy_overrides_raw_gap_without_rewriting_raw_probabilities() 
     assert not decision.use_efficient
     assert decision.efficient == 0.9
     assert "selective:target=rescue" in decision.signals
+
+
+@pytest.mark.asyncio
+async def test_learned_policy_metadata_does_not_claim_unused_raw_gap_threshold() -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    policy: Final = SelectivePolicy(
+        version="test-rescue",
+        feature_schema="v2-v1",
+        target="rescue",
+        threshold=0.05,
+        heads=(SelectiveHead(constant=1),),
+    )
+    config: Final = _config(llm_v2_config={**base.model_dump(), "selective_policy": policy.model_dump()})
+    router, _ = _router(_verdict().model_dump_json(), config)
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router", messages=[{"role": "user", "content": "Fix nested behavior"}], request_kwargs={}
+    )
+    assert result is not None and result.model == "capable"
+    decision: Final = result.routing_decision
+    assert decision is not None
+    assert decision["classifier_efficient_p_solve"] == 0.9
+    assert decision["classifier_capable_p_solve"] == 0.92
+    assert "classifier_max_quality_gap" not in decision
+    assert "selective:target=rescue" in decision["signals"]
 
 
 def test_learned_policy_rejects_another_classifier_feature_schema() -> None:
@@ -220,6 +247,7 @@ def test_verdict_rejects_invalid_probabilities(probability: object) -> None:
         ({"classifier_type": "heuristic"}, "requires classifier_type llm_v2"),
         ({"classifier_llm_config": None}, "classifier_llm_config is required"),
         ({"adaptive": True}, "adaptive=false"),
+        ({"classifier_fallback": "default_model", "default_model": "efficient"}, "fails closed"),
         ({"tiers": {"SIMPLE": ["same"], "REASONING": ["same"]}}, "distinct model"),
         ({"tiers": {"SIMPLE": ["a", "b"], "REASONING": ["c"]}}, "one distinct model"),
         ({"tiers": {"SIMPLE": ["a"], "MEDIUM": ["b"], "REASONING": ["c"]}}, "exactly"),
@@ -300,13 +328,100 @@ async def test_json_object_mode_supplies_schema_in_prompt() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("content", ["", "not json", '{"tier":"SIMPLE"}', '{"forecasts":{}}'])
+@pytest.mark.parametrize("mode", ("json_schema", "json_object"))
+@pytest.mark.parametrize("fence", ("```json", "```"))
+async def test_fenced_forecast_routes_by_validated_probabilities(mode: str, fence: str) -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    config: Final = _config(llm_v2_config={**base.model_dump(), "response_format": mode})
+    content: Final = f"  {fence}\n{_verdict().model_dump_json()}\n```  "
+    router, client = _router(content, config)
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router", messages=[{"role": "user", "content": "Fix nested behavior"}], request_kwargs={}
+    )
+    assert result is not None and result.model == "efficient"
+    assert result.routing_decision is not None
+    assert result.routing_decision["cause"] == "llm_v2_classifier"
+    assert result.routing_decision["classifier_efficient_p_solve"] == 0.9
+    assert result.routing_decision["classifier_capable_p_solve"] == 0.92
+    assert result.routing_decision["classifier_cost"] == 0.001
+    client.acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_agent", ("claude-cli/2.1.233", "curl/8.7.1"))
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+async def test_caller_constraints_respect_claude_code_prompt_policy(user_agent: str, metadata_key: str) -> None:
+    router, client = _router(_verdict().model_dump_json())
+    outcome: Final = await router.aclassify(
+        "Fix nested behavior", "Caller system context", request_kwargs={metadata_key: {"user_agent": user_agent}}
+    )
+    assert outcome.cause == "llm_v2_classifier"
+    call: Final = client.acompletion.call_args.kwargs
+    payload: Final = json.loads(call["messages"][1]["content"])
+    assert payload["caller_constraints"] == (None if user_agent.startswith("claude") else "Caller system context")
+    assert payload["task_and_follow_ups"] == ["Fix nested behavior"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("calibrated", (False, True))
+async def test_routing_metadata_preserves_exact_forecasts_and_redaction(
+    calibrated: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    calibration: Final = LLMV2Calibration(
+        version="test-pair-v1",
+        prompt_version=LLM_V2_PROMPT_VERSION,
+        efficient=LLMV2ProbabilityCalibration(slope=0.2, intercept=-1.0),
+        capable=LLMV2ProbabilityCalibration(slope=1.0, intercept=0.0),
+    )
+    policy: Final = base.model_copy(update={"calibration": calibration if calibrated else None})
+    verdict: Final = _verdict(0.900000123, 0.920000321)
+    router, _ = _router(verdict.model_dump_json(), _config(llm_v2_config=policy.model_dump()))
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router", messages=[{"role": "user", "content": "Fix nested behavior"}], request_kwargs={}
+    )
+    assert result is not None
+    assert result.model == ("capable" if calibrated else "efficient")
+    decision: Final = result.routing_decision
+    assert decision is not None
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    redacted: Final = Router._redact_prompt_text_if_needed(request_kwargs={}, routing_decision=decision)
+    assert redacted is not None
+    assert "signals" not in redacted
+    for record in (decision, redacted):
+        assert record["classifier_efficient_p_solve"] == 0.900000123
+        assert record["classifier_capable_p_solve"] == 0.920000321
+        assert record["classifier_max_quality_gap"] == 0.05
+        assert record["classifier_prompt_version"] == LLM_V2_PROMPT_VERSION
+        if calibrated:
+            assert record["classifier_calibration_version"] == "test-pair-v1"
+            assert record["classifier_calibrated_efficient_p_solve"] == calibration.efficient.calibrate(0.900000123)
+            assert record["classifier_calibrated_capable_p_solve"] == calibration.capable.calibrate(0.920000321)
+        else:
+            assert "classifier_calibration_version" not in record
+            assert "classifier_calibrated_efficient_p_solve" not in record
+            assert "classifier_calibrated_capable_p_solve" not in record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content", ["", "not json", '{"tier":"SIMPLE"}', '{"forecasts":{}}', '```json\n{"forecasts":{}}\n```']
+)
 async def test_invalid_output_falls_back_to_capable_and_preserves_paid_call_cost(content: str) -> None:
     router, client = _router(content)
-    outcome: Final = await router.aclassify("hi")
-    assert outcome.tier == ComplexityTier.REASONING
-    assert outcome.cause == "llm_v2_fallback"
-    assert outcome.classifier_cost == 0.001
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router", messages=[{"role": "user", "content": "hi"}], request_kwargs={}
+    )
+    assert result is not None and result.model == "capable"
+    decision: Final = result.routing_decision
+    assert decision is not None
+    assert decision["cause"] == "llm_v2_fallback"
+    assert decision["classifier_cost"] == 0.001
+    assert "classifier_efficient_p_solve" not in decision
+    assert "classifier_capable_p_solve" not in decision
+    assert "classifier_prompt_version" not in decision
     client.acompletion.assert_awaited_once()
 
 
@@ -321,6 +436,17 @@ async def test_timeout_falls_back_to_capable_and_opens_shared_breaker() -> None:
     assert first.cause == second.cause == "llm_v2_fallback"
     assert "classifier-circuit-open" in second.signals
     client.acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_redacts_prompt_text_from_warning(caplog: pytest.LogCaptureFixture) -> None:
+    router, client = _router("")
+    client.acompletion.side_effect = ValueError("private task text from provider")
+    outcome: Final = await router.aclassify("hi", request_kwargs={"turn_off_message_logging": True})
+    assert outcome.tier == ComplexityTier.REASONING
+    assert outcome.cause == "llm_v2_fallback"
+    assert "LLM classifier failed (ValueError)" in caplog.text
+    assert "private task text" not in caplog.text
 
 
 def test_response_schema_requires_both_model_forecasts() -> None:
@@ -383,8 +509,8 @@ async def test_encrypted_task_uses_native_responses_and_preserves_logging_contro
             {"type": "encrypted_content", "encrypted_content": "opaque-task"},
         ],
     }
-    outcome: Final = await router.aclassify(
-        "",
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router",
         request_kwargs={
             "input": [task],
             "turn_off_message_logging": True,
@@ -392,13 +518,16 @@ async def test_encrypted_task_uses_native_responses_and_preserves_logging_contro
             "litellm_trace_id": "trace",
         },
     )
-    assert outcome.tier == ComplexityTier.REASONING
-    assert outcome.cause == "llm_v2_classifier"
+    assert result is not None and result.model == "capable"
+    assert result.routing_decision is not None
+    assert result.routing_decision["cause"] == "llm_v2_classifier"
     client.acompletion.assert_not_called()
     client.aresponses.assert_awaited_once()
     call: Final = client.aresponses.call_args.kwargs
     assert call["input"][-1] == task
     assert "opaque-task" not in json.dumps(call["input"][:-1])
+    assert "Task: fix a bug" not in json.dumps(call["input"][:-1])
+    assert "The delegated task in the following agent_message." in json.dumps(call["input"][:-1])
     assert call["max_output_tokens"] == 1024
     assert call["text"]["format"]["schema"]["required"] == ["crux", "demands", "verification", "forecasts"]
     assert call["turn_off_message_logging"] is True
