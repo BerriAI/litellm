@@ -4,11 +4,17 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
+import asyncio
 import ssl
-from typing import Any, Final, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
+
+from openai.types.realtime import RealtimeError, RealtimeErrorEvent
+from pydantic import TypeAdapter
 
 from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import AuthenticationError, BadRequestError, InternalServerError, Timeout
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -19,6 +25,43 @@ from ....litellm_core_utils.realtime_streaming import (
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..openai import OpenAIChatCompletion
+
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
+
+_SERVER_EVENT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def first_event_error(first_event: str | bytes) -> RealtimeError | None:
+    event: Final = _SERVER_EVENT_FIELDS.validate_json(first_event)
+    if event.get("type") != "error":
+        return None
+    return RealtimeErrorEvent.model_validate(event).error
+
+
+def first_event_exception(error: RealtimeError, model: str) -> Exception:
+    match error:
+        case RealtimeError(code="invalid_api_key"):
+            return AuthenticationError(message=error.message, llm_provider="openai", model=model)
+        case RealtimeError(type="server_error"):
+            return InternalServerError(message=error.message, llm_provider="openai", model=model)
+        case _:
+            return BadRequestError(message=error.message, model=model, llm_provider="openai")
+
+
+async def confirm_session_started(connection: "ClientConnection", model: str, timeout_seconds: float) -> Literal[True]:
+    try:
+        first_event: Final = await asyncio.wait_for(connection.recv(), timeout_seconds)
+    except asyncio.TimeoutError:
+        raise Timeout(
+            message=f"OpenAI realtime sent no server event within {timeout_seconds} seconds of the handshake",
+            model=model,
+            llm_provider="openai",
+        ) from None
+    error: Final = first_event_error(first_event)
+    if error is None:
+        return True
+    raise first_event_exception(error, model)
 
 
 class OpenAIRealtime(OpenAIChatCompletion):

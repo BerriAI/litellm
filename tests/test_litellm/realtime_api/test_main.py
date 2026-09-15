@@ -493,12 +493,14 @@ async def test_openai_health_check_is_healthy_once_session_created_arrives():
 
 
 @pytest.mark.asyncio
-async def test_openai_health_check_stays_healthy_when_no_first_event_arrives_in_time():
+async def test_openai_health_check_is_unhealthy_when_no_first_event_arrives_in_time():
     connect: Final = _CapturingConnect(_SilentConnection())
-    with patch("websockets.connect", connect):
-        assert await realtime_main._realtime_health_check(
+    with patch("websockets.connect", connect), pytest.raises(litellm.Timeout) as raised:
+        await realtime_main._realtime_health_check(
             model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real", first_event_timeout_seconds=0.01
         )
+    assert raised.value.status_code == 408
+    assert "no server event within 0.01 seconds" in str(raised.value)
 
 
 @pytest.mark.asyncio
