@@ -16,7 +16,7 @@ import {
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
-import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
+import type { LogEntry } from "@/components/GuardrailsMonitor/types";
 import { PolicySelect } from "@/components/ToolPolicies/PolicySelect";
 import {
   deleteToolPolicyOverride,

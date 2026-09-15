@@ -7,7 +7,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
 import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
 import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
-import type { LogEntry } from "./mockData";
+import type { LogEntry } from "./types";
 
 const actionConfig: Record<
   "blocked" | "passed" | "flagged",
@@ -190,7 +190,7 @@ export function LogViewer({
                       <span className="min-w-0 text-xs break-words text-muted-foreground">{log.model}</span>
                     )}
                   </div>
-                  <p className="text-sm text-foreground truncate">{log.input_snippet ?? log.input ?? "—"}</p>
+                  <p className="text-sm text-foreground truncate">{log.input_snippet ?? "—"}</p>
                 </div>
                 <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-1" />
               </button>

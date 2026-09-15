@@ -12,7 +12,7 @@ import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { GuardrailUsageBreakdown } from "./GuardrailUsageBreakdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
-import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
+import type { LogEntry } from "@/components/GuardrailsMonitor/types";
 
 interface GuardrailDetailProps {
   guardrailId: string;
@@ -58,11 +58,8 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
       id: l.id as string,
       timestamp: l.timestamp as string,
       action: l.action as "blocked" | "passed" | "flagged",
-      score: l.score as number | undefined,
       model: l.model as string | undefined,
       input_snippet: l.input_snippet as string | undefined,
-      output_snippet: l.output_snippet as string | undefined,
-      reason: l.reason as string | undefined,
     }));
   }, [logsData?.logs]);
 
