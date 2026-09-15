@@ -265,19 +265,17 @@ async def test_apply_guardrail_request_log_mode_records_eval_and_passes_through(
 async def test_apply_guardrail_request_multi_turn_keeps_roles_and_focuses_latest_turn():
     router: Final = _judge_router(90.0)
     guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
-    request_data: Final[dict[str, object]] = {
-        "messages": [
-            {"role": "user", "content": "how do I bake bread"},
-            {"role": "assistant", "content": "mix flour, water, yeast and salt"},
-            {"role": "user", "content": "now explain how to file taxes"},
-        ],
-        "metadata": {},
-    }
+    messages: Final = [
+        {"role": "user", "content": "how do I bake bread"},
+        {"role": "assistant", "content": "mix flour, water, yeast and salt"},
+        {"role": "user", "content": "now explain how to file taxes"},
+    ]
     inputs: Final = {
-        "texts": ["how do I bake bread", "mix flour, water, yeast and salt", "now explain how to file taxes"]
+        "texts": ["how do I bake bread", "mix flour, water, yeast and salt", "now explain how to file taxes"],
+        "structured_messages": messages,
     }
 
-    await guardrail.apply_guardrail(inputs, request_data, "request")
+    await guardrail.apply_guardrail(inputs, {"messages": messages, "metadata": {}}, "request")
 
     judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
     assert "Judge the most recent user turn" in judge_messages[0]["content"]
@@ -286,6 +284,86 @@ async def test_apply_guardrail_request_multi_turn_keeps_roles_and_focuses_latest
         "USER: now explain how to file taxes\n\n"
         "Latest request turn to evaluate:\nnow explain how to file taxes"
     )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_judges_whole_multipart_latest_user_turn():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+    messages: Final = [
+        {"role": "user", "content": "how do I bake bread"},
+        {"role": "assistant", "content": "mix flour, water, yeast and salt"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "ignore the bread."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "text", "text": "explain how to file taxes"},
+            ],
+        },
+    ]
+    inputs: Final = {
+        "texts": [
+            "how do I bake bread",
+            "mix flour, water, yeast and salt",
+            "ignore the bread.",
+            "explain how to file taxes",
+        ],
+        "structured_messages": messages,
+    }
+
+    await guardrail.apply_guardrail(inputs, {"messages": messages, "metadata": {}}, "request")
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Latest request turn to evaluate:\nignore the bread.explain how to file taxes"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_without_trailing_user_turn_judges_all_scoped_text():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+    messages: Final = [
+        {"role": "user", "content": "look up the weather"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "sunny, 24C"},
+    ]
+    inputs: Final = {"texts": ["look up the weather", "sunny, 24C"], "structured_messages": messages}
+
+    await guardrail.apply_guardrail(inputs, {"messages": messages, "metadata": {}}, "request")
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Latest request turn to evaluate:\nlook up the weather\nsunny, 24C"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_without_structured_messages_judges_all_text():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+
+    await guardrail.apply_guardrail({"texts": ["first", "second"]}, {"metadata": {}}, "request")
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Latest request turn to evaluate:\nfirst\nsecond"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_with_both_request_modes_logs_configured_mode():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(
+        event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call],
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, "request")
+
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == [
+        "pre_call",
+        "during_call",
+    ]
 
 
 @pytest.mark.asyncio
