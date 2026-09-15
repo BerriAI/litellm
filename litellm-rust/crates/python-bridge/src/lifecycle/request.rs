@@ -1,10 +1,60 @@
 use litellm_core::call_lifecycle::provider::ProviderOptions;
 use litellm_python_interop::from_py_preserving_errors as from_py;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString};
 use serde_json::{Map, Value};
 
 use super::contract::RequestField;
+
+pub(crate) fn exact_json(value: &Bound<'_, PyAny>) -> bool {
+    let py = value.py();
+    let value_type = value.get_type();
+    if value.is_none()
+        || value_type.is(py.get_type::<PyBool>())
+        || value_type.is(py.get_type::<PyInt>())
+        || value_type.is(py.get_type::<PyFloat>())
+        || value_type.is(py.get_type::<PyString>())
+    {
+        return true;
+    }
+    if value_type.is(py.get_type::<PyList>()) {
+        let Ok(values) = value.cast::<PyList>() else {
+            return false;
+        };
+        return values.iter().all(|item| exact_json(&item));
+    }
+    if value_type.is(py.get_type::<PyDict>()) {
+        let Ok(values) = value.cast::<PyDict>() else {
+            return false;
+        };
+        return values
+            .iter()
+            .all(|(key, item)| key.get_type().is(py.get_type::<PyString>()) && exact_json(&item));
+    }
+    false
+}
+
+pub(crate) fn exact_optional_string(value: Option<&Bound<'_, PyAny>>) -> bool {
+    value.is_none_or(|value| {
+        value.is_none() || value.get_type().is(value.py().get_type::<PyString>())
+    })
+}
+
+pub(crate) fn exact_list(value: &Bound<'_, PyAny>) -> bool {
+    value.get_type().is(value.py().get_type::<PyList>()) && exact_json(value)
+}
+
+pub(crate) fn exact_optional_object(value: Option<&Bound<'_, PyAny>>) -> bool {
+    value.is_none_or(|value| {
+        value.is_none()
+            || (value.get_type().is(value.py().get_type::<PyDict>()) && exact_json(value))
+    })
+}
+
+pub(crate) fn exact_optional_bool(value: Option<&Bound<'_, PyAny>>) -> bool {
+    value
+        .is_none_or(|value| value.is_none() || value.get_type().is(value.py().get_type::<PyBool>()))
+}
 
 pub(crate) fn required<'py>(
     request: &Bound<'py, PyDict>,

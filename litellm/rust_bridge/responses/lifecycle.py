@@ -1,5 +1,1 @@
-from typing import Final
-
-from litellm.rust_bridge.responses.definition import COMPONENT
-
-LIFECYCLE: Final = COMPONENT.lifecycle()
+"""Completed Responses remains Python-only; WebSocket transport is separate."""

@@ -8,7 +8,6 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge import _native
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -79,19 +78,17 @@ def test_native_ocr_with_compiled_rust_extension(
     host: Final = str(address[0])
     port: Final = int(address[1])
 
-    response: Final = _native.ocr(
-        "mistral-ocr-latest",
-        {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+    response: Final = litellm.ocr(
+        model="mistral-ocr-latest",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
         api_key="test-key",
         api_base=f"http://{host}:{port}",
         custom_llm_provider="mistral",
         extra_headers=None,
-        optional_params={},
-        timeout_seconds=None,
     )
 
     assert response is not None
-    assert response["pages"][0]["markdown"] == "native OCR response"
+    assert response.pages[0].markdown == "native OCR response"
     assert len(requests) == 1
     assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
     assert requests[0]["body"] == {
@@ -219,13 +216,14 @@ async def test_native_ocr_failures_do_not_retry_on_python(ocr_server, asynchrono
     assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
 
 
-@pytest.mark.parametrize("custom_provider", ["mistral", "not-a-provider"])
-def test_native_ocr_rejects_invalid_input_before_network(ocr_server, custom_provider):
-    from litellm.rust_bridge import _native
-
+@pytest.mark.parametrize(
+    ("custom_provider", "message"),
+    [("mistral", "Document URL is required"), ("not-a-provider", "invalid provider")],
+)
+def test_native_ocr_rejects_invalid_input_before_network(ocr_server, custom_provider, message):
     server, requests = ocr_server
-    with pytest.raises(ValueError, match="Document URL is required"):
-        _native.ocr(
+    with pytest.raises(Exception, match=message):
+        litellm.ocr(
             model="mistral-ocr-latest",
             custom_llm_provider=custom_provider,
             document={"type": "document_url"},

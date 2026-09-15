@@ -152,6 +152,13 @@ pub trait CompletedRoute: Send + Sync + 'static {
     fn run(request: Self::Request, hooks: Arc<dyn ProviderHooks>)
     -> WorkflowFuture<Self::Response>;
     fn context(request: &Self::Request) -> CallLifecycleContext;
+
+    fn operation(asynchronous: bool) -> CompletedCall<Self>
+    where
+        Self: Sized,
+    {
+        CompletedCall::new(CompletedWorkflow::default(), asynchronous)
+    }
 }
 
 pub struct CompletedWorkflow<R: CompletedRoute> {
@@ -349,7 +356,15 @@ impl<Q: Send + 'static, T: Send + Sync + 'static> ProviderHooks for ExchangeHook
 pub type CompletedCall<R> = LifecycleCall<CompletedWorkflow<R>>;
 
 pub async fn run_completed<R: CompletedRoute>(request: R::Request) -> Result<R::Response, Error> {
-    run_completed_with_hooks::<R>(request, Arc::new(NoopProviderHooks)).await
+    let mut call = R::operation(false);
+    drive(
+        &mut call,
+        &CompletedBackend::<R> {
+            request: Mutex::new(Some(request)),
+            route: PhantomData,
+        },
+    )
+    .await
 }
 
 pub async fn run_completed_with_hooks<R: CompletedRoute>(

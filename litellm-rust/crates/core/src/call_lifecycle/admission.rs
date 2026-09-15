@@ -25,6 +25,8 @@ pub enum AdmissionDecline {
     Provider,
     #[strum(to_string = "required host operations are not supported")]
     HostOperations,
+    #[strum(to_string = "request contains values that cannot be inspected without Python effects")]
+    Uninspectable,
     #[strum(to_string = "{0}")]
     Feature(&'static str),
 }

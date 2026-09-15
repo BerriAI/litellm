@@ -596,7 +596,7 @@ def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_serv
         kwargs: Final = {"model": "mistral/mistral-ocr-latest", "document": {"type": "file", "file": file}}
         from litellm.rust_bridge.ocr.host import HOST
 
-        coroutine: Final = _native._ocr_lifecycle(_public_request("aocr", (), kwargs), (), kwargs, True, HOST)
+        coroutine: Final = _native.aocr(_public_request("aocr", (), kwargs), (), kwargs, HOST)
         file.owner = coroutine
         coroutine.close()
         return weakref.ref(file)

@@ -260,16 +260,18 @@ impl<R: PythonRoute> ExecutionBody for PythonLifecycle<R> {
         let result = Python::attach(|py| self.drive(py, result));
         match result {
             Ok(ExecutionStep::Await(value)) => Ok(ExecutionStep::Await(value)),
-            result => result.map_err(|error| {
-                Python::attach(|py| {
-                    self.route
-                        .state_mut()
-                        .error
-                        .take()
-                        .map(|value| PyErr::from_value(value.into_bound(py).into_any()))
-                        .unwrap_or(error)
+            result => result
+                .map_err(|error| {
+                    Python::attach(|py| {
+                        self.route
+                            .state_mut()
+                            .error
+                            .take()
+                            .map(|value| PyErr::from_value(value.into_bound(py).into_any()))
+                            .unwrap_or(error)
+                    })
                 })
-            }),
+                .map_err(crate::errors::terminal_pyerr),
         }
     }
 

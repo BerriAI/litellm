@@ -64,10 +64,9 @@ def test_public_binding_keeps_positional_fields_and_defaults_out_of_native_hook_
         request: LiteLLMOcrRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
-        asynchronous: bool,
         host: object,
     ) -> OCRResponse:
-        captured.append((request, args, kwargs, asynchronous))
+        captured.append((request, args, kwargs))
         return OCRResponse(pages=[], model=request.model)
 
     litellm.rust(True)
@@ -78,13 +77,12 @@ def test_public_binding_keeps_positional_fields_and_defaults_out_of_native_hook_
         NATIVE_OCR_LIFECYCLE.reset()
         configuration.reset_rust_configuration()
 
-    request, call_args, hook_kwargs, asynchronous = captured[0]
+    request, call_args, hook_kwargs = captured[0]
     assert response.model == "mistral/mistral-ocr-latest"
     assert request.model == "mistral/mistral-ocr-latest"
     assert request.document is document
     assert call_args == ("mistral/mistral-ocr-latest", document)
     assert hook_kwargs == {}
-    assert asynchronous is False
 
 
 def test_public_binding_keeps_keyword_model_and_document_in_native_hook_kwargs() -> None:
@@ -95,7 +93,6 @@ def test_public_binding_keeps_keyword_model_and_document_in_native_hook_kwargs()
         request: LiteLLMOcrRequest,
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
-        asynchronous: bool,
         host: object,
     ) -> OCRResponse:
         assert args == ()
@@ -211,7 +208,7 @@ async def test_only_native_declines_replay_on_legacy(
     monkeypatch: pytest.MonkeyPatch, asynchronous: bool, declined: bool
 ) -> None:
     failure: Final = Declined("unsupported") if declined else RuntimeError("provider already called")
-    native: Final = AsyncMock(side_effect=failure) if asynchronous else Mock(side_effect=failure)
+    native: Final = AsyncMock(side_effect=failure) if asynchronous and not declined else Mock(side_effect=failure)
     NATIVE_OCR_LIFECYCLE.override(native)
     monkeypatch.setattr(
         bindings,

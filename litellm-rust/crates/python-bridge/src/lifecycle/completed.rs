@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use litellm_core::call_lifecycle::host::{HostPhase, HostStep};
 use litellm_core::call_lifecycle::provider::{
-    CompletedCall, CompletedOperation, CompletedReply, CompletedRoute, CompletedWorkflow,
-    ProviderRequest, ProviderResponse,
+    CompletedCall, CompletedOperation, CompletedReply, CompletedRoute, ProviderRequest,
+    ProviderResponse,
 };
 use litellm_core::call_lifecycle::workflow::LifecycleOperation;
 use litellm_python_interop::{
@@ -251,7 +251,8 @@ where
             R::SYNC_CALL_TYPE.as_str()
         },
         &request,
-    )?;
+    )
+    .map_err(crate::errors::terminal_pyerr)?;
     crate::errors::admit(
         litellm_core::call_lifecycle::cache::ResponseCachePlan {
             controls,
@@ -259,7 +260,7 @@ where
         }
         .admit(),
     )?;
-    let call = CompletedCall::<R>::new(CompletedWorkflow::default(), asynchronous);
+    let call = R::operation(asynchronous);
     let host = PythonCompletedHost::<R> {
         state: PythonCallState::new(
             py,
@@ -277,5 +278,5 @@ where
         pending: None,
         route: PhantomData,
     };
-    run_call(py, call, host)
+    run_call(py, call, host).map_err(crate::errors::terminal_pyerr)
 }

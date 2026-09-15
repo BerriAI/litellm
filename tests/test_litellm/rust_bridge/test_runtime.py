@@ -9,7 +9,7 @@ import pytest
 
 from litellm.exceptions import APIError
 from litellm.rust_bridge import bindings, runtime
-from litellm.rust_bridge.configuration import ExecutionDecision, ComponentName
+from litellm.rust_bridge.configuration import ComponentName, ExecutionDecision
 from litellm.rust_bridge.errors import RustRouteDeclinedError, RustRouteUnavailableError, RustRouteUnsupportedError
 from litellm.rust_bridge.route import ComponentExecution
 
@@ -258,6 +258,45 @@ async def test_host_callback_failure_preserves_its_cause(asynchronous: bool) -> 
     with pytest.raises(RustBridgeDeclined) as caught:
         await _invoke(asynchronous, ExecutionDecision.RUST_WITH_FALLBACK, fail, str)
     assert caught.value is callback_error
+
+
+def test_lifecycle_unavailable_during_execution_never_falls_back() -> None:
+    fallback_calls: Final[list[None]] = []
+
+    with pytest.raises(RustBridgeUnavailable):
+        runtime.invoke_lifecycle(
+            execution=ComponentExecution(
+                route_name=ComponentName.MESSAGES,
+                decision=ExecutionDecision.RUST_WITH_FALLBACK,
+            ),
+            native_call=lambda: (_ for _ in ()).throw(RustBridgeUnavailable()),
+            python_fallback=lambda: fallback_calls.append(None),
+        )
+
+    assert fallback_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", (RustBridgeDeclined("resume"), RustBridgeUnavailable()))
+async def test_async_lifecycle_reserved_error_after_admission_never_falls_back(error: Exception) -> None:
+    fallback_calls: Final[list[None]] = []
+
+    async def fail_after_admission() -> object:
+        await asyncio.sleep(0)
+        raise error
+
+    with pytest.raises(type(error)) as caught:
+        await runtime.ainvoke_lifecycle(
+            execution=ComponentExecution(
+                route_name=ComponentName.MESSAGES,
+                decision=ExecutionDecision.RUST_WITH_FALLBACK,
+            ),
+            native_call=fail_after_admission,
+            python_fallback=lambda: asyncio.sleep(0, result=fallback_calls.append(None)),
+        )
+
+    assert caught.value is error
+    assert fallback_calls == []
 
 
 @pytest.mark.asyncio

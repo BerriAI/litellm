@@ -1,5 +1,1 @@
-from typing import Final
-
-from litellm.rust_bridge.embeddings.definition import COMPONENT
-
-LIFECYCLE: Final = COMPONENT.lifecycle()
+"""Embeddings remains Python-only; no native lifecycle binding is selected."""

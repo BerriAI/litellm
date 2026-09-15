@@ -71,6 +71,23 @@ pub(crate) fn host_callback_error(py: Python<'_>, error: PyErr) -> PyErr {
     wrapped
 }
 
+pub(crate) fn terminal_pyerr(error: PyErr) -> PyErr {
+    Python::attach(|py| {
+        if error.is_instance_of::<RustBridgeDeclined>(py)
+            || error.is_instance_of::<RustBridgeUnavailable>(py)
+        {
+            return host_callback_error(py, error);
+        }
+        error
+    })
+}
+
+pub(crate) fn admit(
+    result: Result<(), litellm_core::call_lifecycle::admission::AdmissionDecline>,
+) -> PyResult<()> {
+    result.map_err(|reason| RustBridgeDeclined::new_err(reason.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,10 +161,21 @@ mod tests {
             }
         });
     }
-}
 
-pub(crate) fn admit(
-    result: Result<(), litellm_core::call_lifecycle::admission::AdmissionDecline>,
-) -> PyResult<()> {
-    result.map_err(|reason| RustBridgeDeclined::new_err(reason.to_string()))
+    #[test]
+    fn terminal_reserved_errors_are_wrapped_with_the_original_cause() {
+        Python::initialize();
+        Python::attach(|py| {
+            for error in [
+                RustBridgeDeclined::new_err("callback decline"),
+                RustBridgeUnavailable::new_err("callback unavailable"),
+            ] {
+                let original = error.value(py).clone().unbind();
+                let wrapped = terminal_pyerr(error);
+                assert!(wrapped.is_instance_of::<RustHostCallbackError>(py));
+                let cause = wrapped.value(py).getattr("__cause__").unwrap();
+                assert!(cause.is(original.bind(py)));
+            }
+        });
+    }
 }

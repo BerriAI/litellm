@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Callable, Coroutine
-from typing import Literal, Protocol, TypedDict, final, overload
+from typing import Literal, Protocol, TypedDict, final
 
 from typing_extensions import Never, NotRequired, Required
 
@@ -53,179 +53,68 @@ class RustBridgeUnavailable(Exception): ...
 class RustHostCallbackError(Exception): ...
 class RustUpstreamError(Exception): ...
 
-@overload
-def _ocr_lifecycle(
+def ocr(
     request: LiteLLMOcrRequest,
     args: tuple[object, ...],
     kwargs: dict[str, object],
-    asynchronous: Literal[False],
     host: object,
 ) -> OCRResponse: ...
-@overload
-def _ocr_lifecycle(
+def aocr(
     request: LiteLLMOcrRequest,
     args: tuple[object, ...],
     kwargs: dict[str, object],
-    asynchronous: Literal[True],
     host: object,
 ) -> Coroutine[object, object, OCRResponse]: ...
-@overload
-def _messages_lifecycle(
-    request: _MessagesLifecycleRequest,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-    asynchronous: Literal[False],
-    host: _CompletedLifecycleHost,
-) -> object: ...
-@overload
-def _messages_lifecycle(
-    request: _MessagesLifecycleRequest,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-    asynchronous: Literal[True],
-    host: _CompletedLifecycleHost,
-) -> Coroutine[object, object, object]: ...
-@overload
-def _chat_completions_lifecycle(
-    request: _ChatCompletionsLifecycleRequest,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-    asynchronous: Literal[False],
-    host: _CompletedLifecycleHost,
-) -> object: ...
-@overload
-def _chat_completions_lifecycle(
-    request: _ChatCompletionsLifecycleRequest,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-    asynchronous: Literal[True],
-    host: _CompletedLifecycleHost,
-) -> Coroutine[object, object, object]: ...
-@overload
-def _transcription_lifecycle(
-    request: _TranscriptionLifecycleRequest,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-    asynchronous: Literal[False],
-    host: _CompletedLifecycleHost,
-) -> object: ...
-@overload
-def _transcription_lifecycle(
-    request: _TranscriptionLifecycleRequest,
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
-    asynchronous: Literal[True],
-    host: _CompletedLifecycleHost,
-) -> Coroutine[object, object, object]: ...
-def _embeddings_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
-def _rerank_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
-def _image_generation_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
-def _image_edit_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
-def _speech_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
-def _moderation_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
-def _responses_lifecycle(
-    request: object, args: tuple[object, ...], kwargs: dict[str, object], asynchronous: bool, host: object
-) -> Never: ...
-def ocr(
-    model: str,
-    document: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    optional_params: object = None,
-    input_sources: object = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
-def aocr(
-    model: str,
-    document: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    optional_params: object = None,
-    input_sources: object = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
 def transcription(
-    model: str,
-    audio: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    optional_params: object = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
+    request: _TranscriptionLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    host: _CompletedLifecycleHost,
+) -> object: ...
 def atranscription(
-    model: str,
-    audio: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    optional_params: object = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
+    request: _TranscriptionLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    host: _CompletedLifecycleHost,
+) -> Coroutine[object, object, object]: ...
+def embedding(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def aembedding(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def rerank(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def arerank(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def image_generation(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def aimage_generation(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def image_edit(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def aimage_edit(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def speech(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def aspeech(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def moderation(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def amoderation(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def responses(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
+def aresponses(request: object, args: tuple[object, ...], kwargs: dict[str, object], host: object) -> Never: ...
 def messages(
-    model: str,
-    body: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    timeout_seconds: float | None = None,
-    has_agentic_hook: bool | None = None,
-    on_request: Callable[[], None] | None = None,
-) -> dict[str, object]: ...
+    request: _MessagesLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    host: _CompletedLifecycleHost,
+) -> object: ...
 def amessages(
-    model: str,
-    body: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    timeout_seconds: float | None = None,
-    has_agentic_hook: bool | None = None,
-    on_request: Callable[[], None] | None = None,
-) -> Future[dict[str, object]]: ...
+    request: _MessagesLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    host: _CompletedLifecycleHost,
+) -> Coroutine[object, object, object]: ...
 def chat_completions(
-    model: str,
-    messages: object,
-    optional_params: object = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    timeout_seconds: float | None = None,
-    host_facts: object = None,
-    on_request: Callable[[], None] | None = None,
-) -> dict[str, object]: ...
+    request: _ChatCompletionsLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    host: _CompletedLifecycleHost,
+) -> object: ...
 def achat_completions(
-    model: str,
-    messages: object,
-    optional_params: object = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: object = None,
-    timeout_seconds: float | None = None,
-    host_facts: object = None,
-    on_request: Callable[[], None] | None = None,
-) -> Future[dict[str, object]]: ...
+    request: _ChatCompletionsLifecycleRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    host: _CompletedLifecycleHost,
+) -> Coroutine[object, object, object]: ...
 
 _OCR_MAX_FILE_BYTES: int
 
@@ -234,7 +123,6 @@ def _ocr_mime_type(file_name: str) -> str: ...
 def _ocr_upload_document(
     file_content: bytes, file_name: str | None = None, content_type: str | None = None
 ) -> dict[str, object]: ...
-
 @final
 class ResponsesWebSocketConnection:
     @classmethod
@@ -261,33 +149,36 @@ def gil_stats() -> dict[str, int]: ...
 
 __all__ = [
     "_OCR_MAX_FILE_BYTES",
-    "_chat_completions_lifecycle",
-    "_embeddings_lifecycle",
-    "_image_edit_lifecycle",
-    "_image_generation_lifecycle",
-    "_messages_lifecycle",
-    "_moderation_lifecycle",
-    "_ocr_file_document",
-    "_ocr_lifecycle",
-    "_ocr_mime_type",
-    "_ocr_upload_document",
-    "_rerank_lifecycle",
-    "_responses_lifecycle",
-    "_speech_lifecycle",
-    "_transcription_lifecycle",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
     "RustBridgeUnavailable",
     "RustHostCallbackError",
     "RustUpstreamError",
+    "_ocr_file_document",
+    "_ocr_mime_type",
+    "_ocr_upload_document",
     "achat_completions",
+    "aembedding",
+    "aimage_edit",
+    "aimage_generation",
     "amessages",
+    "amoderation",
     "aocr",
+    "arerank",
+    "aresponses",
+    "aspeech",
     "atranscription",
     "chat_completions",
     "count_input_tokens",
+    "embedding",
     "gil_stats",
+    "image_edit",
+    "image_generation",
     "messages",
+    "moderation",
     "ocr",
+    "rerank",
+    "responses",
+    "speech",
     "transcription",
 ]

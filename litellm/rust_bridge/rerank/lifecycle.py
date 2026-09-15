@@ -1,5 +1,1 @@
-from typing import Final
-
-from litellm.rust_bridge.rerank.definition import COMPONENT
-
-LIFECYCLE: Final = COMPONENT.lifecycle()
+"""Reranking remains Python-only; no native lifecycle binding is selected."""

@@ -3,19 +3,18 @@ mod document;
 mod errors;
 mod lifecycle;
 mod project;
-mod value;
 
 use pyo3::prelude::*;
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    value::register(module)?;
     document::register(module)?;
     lifecycle::register(module)
 }
 
 #[cfg(feature = "trace-parity")]
 pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    value::register_trace(module)
+    document::register(module)?;
+    lifecycle::register(module)
 }
 
 #[cfg(test)]
@@ -27,7 +26,8 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             for name in [
-                "_ocr_lifecycle",
+                "ocr",
+                "aocr",
                 "_ocr_upload_document",
                 "_ocr_file_document",
                 "_ocr_mime_type",

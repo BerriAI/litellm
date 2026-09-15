@@ -1,2 +1,2 @@
 // TODO: implement image_edit lifecycle checkpoints before replacing the Python lifecycle
-unimplemented_lifecycle_route!(ImageEdit, _image_edit_lifecycle);
+unimplemented_lifecycle_route!(ImageEdit, image_edit, aimage_edit);

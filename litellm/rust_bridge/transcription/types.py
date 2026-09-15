@@ -7,28 +7,18 @@ from typing import Protocol
 class RustTranscription(Protocol):
     def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
-        raise NotImplementedError
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> object: ...
 
 
 class RustAtranscription(Protocol):
     def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]:
-        raise NotImplementedError
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> Awaitable[object]: ...

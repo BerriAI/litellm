@@ -95,6 +95,64 @@ async def ainvoke(
     return await adapt(value)
 
 
+def invoke_lifecycle(
+    *,
+    native_call: Callable[[], NativeT] | None,
+    python_fallback: Callable[[], ResultT] | None,
+    execution: ComponentExecution,
+) -> NativeT | ResultT:
+    execution.require_supported()
+    _validate_fallback(execution, python_fallback)
+    if execution.decision is ExecutionDecision.PYTHON:
+        assert python_fallback is not None
+        return python_fallback()
+    if native_call is None:
+        return _unavailable_or_fallback(execution, python_fallback)
+
+    exceptions: Final = native_exception_types()
+    if exceptions is None:
+        return native_call()
+    declined, _ = exceptions
+    host_callback: Final = native_host_callback_exception()
+    try:
+        return native_call()
+    except host_callback as error:
+        _raise_host_callback(error)
+    except declined as error:
+        return _declined_or_fallback(execution, python_fallback, error)
+
+
+async def ainvoke_lifecycle(
+    *,
+    native_call: Callable[[], Awaitable[NativeT]] | None,
+    python_fallback: Callable[[], Awaitable[ResultT]] | None,
+    execution: ComponentExecution,
+) -> NativeT | ResultT:
+    execution.require_supported()
+    _validate_fallback(execution, python_fallback)
+    if execution.decision is ExecutionDecision.PYTHON:
+        assert python_fallback is not None
+        return await python_fallback()
+    if native_call is None:
+        return await _aunavailable_or_fallback(execution, python_fallback)
+
+    exceptions: Final = native_exception_types()
+    if exceptions is None:
+        return await native_call()
+    declined, _ = exceptions
+    host_callback: Final = native_host_callback_exception()
+    try:
+        pending: Final = native_call()
+    except host_callback as error:
+        _raise_host_callback(error)
+    except declined as error:
+        return await _adeclined_or_fallback(execution, python_fallback, error)
+    try:
+        return await pending
+    except host_callback as error:
+        _raise_host_callback(error)
+
+
 def _unavailable_or_fallback(
     execution: ComponentExecution,
     python_fallback: Callable[[], ResultT] | None,

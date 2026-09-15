@@ -168,7 +168,7 @@ fn cache_options<'py>(value: Option<Bound<'py, PyAny>>) -> PyResult<CacheOptions
 fn is_true(values: &Bound<'_, PyDict>, name: &str) -> PyResult<bool> {
     Ok(values
         .get_item(name)?
-        .is_some_and(|value| value.is(&PyBool::new(values.py(), true))))
+        .is_some_and(|value| value.is(PyBool::new(values.py(), true))))
 }
 
 fn optional_text(value: Option<Bound<'_, PyAny>>) -> PyResult<Option<String>> {

@@ -103,36 +103,39 @@ COMPONENTS: Final[Mapping[ComponentName, NativeComponent]] = MappingProxyType(
                 "_ocr_upload_document",
                 "_OCR_MAX_FILE_BYTES",
                 "_ocr_mime_type",
-                "_ocr_lifecycle",
             ),
         ),
         ComponentName.MESSAGES: _component(
             ComponentName.MESSAGES,
             _experimental_completed,
-            ("messages", "amessages", "_messages_lifecycle"),
+            ("messages", "amessages"),
         ),
         ComponentName.CHAT_COMPLETIONS: _component(
             ComponentName.CHAT_COMPLETIONS,
             _experimental(),
-            ("chat_completions", "achat_completions", "_chat_completions_lifecycle"),
+            ("chat_completions", "achat_completions"),
         ),
         ComponentName.TRANSCRIPTION: _component(
             ComponentName.TRANSCRIPTION,
             _transcription_capability,
-            ("transcription", "atranscription", "_transcription_lifecycle"),
+            ("transcription", "atranscription"),
         ),
-        ComponentName.EMBEDDINGS: _component(ComponentName.EMBEDDINGS, _python_completed, ("_embeddings_lifecycle",)),
-        ComponentName.RERANK: _component(ComponentName.RERANK, _python_completed, ("_rerank_lifecycle",)),
+        ComponentName.EMBEDDINGS: _component(ComponentName.EMBEDDINGS, _python_completed, ("embedding", "aembedding")),
+        ComponentName.RERANK: _component(ComponentName.RERANK, _python_completed, ("rerank", "arerank")),
         ComponentName.IMAGE_GENERATION: _component(
-            ComponentName.IMAGE_GENERATION, _python_completed, ("_image_generation_lifecycle",)
+            ComponentName.IMAGE_GENERATION, _python_completed, ("image_generation", "aimage_generation")
         ),
-        ComponentName.IMAGE_EDIT: _component(ComponentName.IMAGE_EDIT, _python_completed, ("_image_edit_lifecycle",)),
-        ComponentName.SPEECH: _component(ComponentName.SPEECH, _python_completed, ("_speech_lifecycle",)),
-        ComponentName.MODERATION: _component(ComponentName.MODERATION, _python_completed, ("_moderation_lifecycle",)),
+        ComponentName.IMAGE_EDIT: _component(
+            ComponentName.IMAGE_EDIT, _python_completed, ("image_edit", "aimage_edit")
+        ),
+        ComponentName.SPEECH: _component(ComponentName.SPEECH, _python_completed, ("speech", "aspeech")),
+        ComponentName.MODERATION: _component(
+            ComponentName.MODERATION, _python_completed, ("moderation", "amoderation")
+        ),
         ComponentName.RESPONSES: _component(
             ComponentName.RESPONSES,
             _responses_capability,
-            ("ResponsesWebSocketConnection", "_responses_lifecycle"),
+            ("ResponsesWebSocketConnection", "responses", "aresponses"),
         ),
         ComponentName.TOKEN_COUNTER: _component(
             ComponentName.TOKEN_COUNTER,

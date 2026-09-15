@@ -284,8 +284,7 @@ impl litellm_core::ocr::hooks::OcrHooks for BridgeOcrHooks {
     }
 }
 
-#[pyfunction]
-fn _ocr_lifecycle(
+fn run(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
@@ -321,6 +320,29 @@ fn _ocr_lifecycle(
     run_call(py, call, host)
 }
 
+#[pyfunction]
+fn ocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    host: Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    run(py, request, args, kwargs, false, host)
+}
+
+#[pyfunction]
+fn aocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    host: Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    run(py, request, args, kwargs, true, host)
+}
+
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    crate::routes::definition::add_function(module, wrap_pyfunction!(_ocr_lifecycle, module)?)
+    crate::routes::definition::add_function(module, wrap_pyfunction!(ocr, module)?)?;
+    crate::routes::definition::add_function(module, wrap_pyfunction!(aocr, module)?)
 }

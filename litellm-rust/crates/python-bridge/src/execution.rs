@@ -12,6 +12,7 @@ use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
+#[cfg(test)]
 pub(crate) fn run_sync<T, E, F>(
     py: Python<'_>,
     future: F,
@@ -51,6 +52,7 @@ where
     release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?
 }
 
+#[cfg(test)]
 fn run_sync_on<T, E, F>(
     py: Python<'_>,
     runtime: &Runtime,

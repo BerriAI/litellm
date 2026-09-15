@@ -6,18 +6,37 @@ use litellm_python_interop::from_py_preserving_errors as from_py;
 
 use crate::lifecycle::completed::{self, PythonCompletedRoute};
 use crate::lifecycle::contract::{PythonCallType, RequestField};
-use crate::lifecycle::request::{optional_string, options, required};
+use crate::lifecycle::request::{
+    exact_optional_bool, exact_optional_object, exact_optional_string, options, required,
+};
 
 impl PythonCompletedRoute for MessagesRoute {
     const SYNC_CALL_TYPE: PythonCallType = PythonCallType::AnthropicMessages;
     const ASYNC_CALL_TYPE: PythonCallType = PythonCallType::AnthropicMessages;
 
     fn admit(request: &Bound<'_, PyDict>) -> PyResult<()> {
+        let model = required(request, RequestField::Model)?;
+        let provider = request.get_item(RequestField::CustomLlmProvider.key(request.py()))?;
+        let body = request.get_item(RequestField::Body.key(request.py()))?;
+        let host_hook = request.get_item(RequestField::HasAgenticHook.key(request.py()))?;
+        if !exact_optional_string(Some(&model))
+            || !exact_optional_string(provider.as_ref())
+            || !exact_optional_object(body.as_ref())
+            || !exact_optional_bool(host_hook.as_ref())
+        {
+            return crate::errors::admit(Err(
+                litellm_core::call_lifecycle::admission::AdmissionDecline::Uninspectable,
+            ));
+        }
+        let provider: Option<String> = provider
+            .as_ref()
+            .map(|value| value.extract::<Option<String>>())
+            .transpose()?
+            .flatten();
         crate::errors::admit(litellm_core::messages::admit(
-            &required(request, RequestField::Model)?.extract::<String>()?,
-            optional_string(request, RequestField::CustomLlmProvider)?.as_deref(),
-            request
-                .get_item(RequestField::HasAgenticHook.key(request.py()))?
+            &model.extract::<String>()?,
+            provider.as_deref(),
+            host_hook
                 .map(|value| value.extract())
                 .transpose()?
                 .unwrap_or(false),
@@ -33,17 +52,28 @@ impl PythonCompletedRoute for MessagesRoute {
 }
 
 #[pyfunction]
-fn _messages_lifecycle(
+fn messages(
     py: Python<'_>,
     request: Bound<'_, PyDict>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
-    asynchronous: bool,
     host: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    completed::run::<MessagesRoute>(py, request, args, kwargs, asynchronous, host)
+    completed::run::<MessagesRoute>(py, request, args, kwargs, false, host)
+}
+
+#[pyfunction]
+fn amessages(
+    py: Python<'_>,
+    request: Bound<'_, PyDict>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    host: Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    completed::run::<MessagesRoute>(py, request, args, kwargs, true, host)
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    crate::routes::definition::add_function(module, wrap_pyfunction!(_messages_lifecycle, module)?)
+    crate::routes::definition::add_function(module, wrap_pyfunction!(messages, module)?)?;
+    crate::routes::definition::add_function(module, wrap_pyfunction!(amessages, module)?)
 }

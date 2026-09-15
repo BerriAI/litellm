@@ -25,7 +25,6 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -380,7 +379,7 @@ class AnthropicChatCompletion(BaseLLM):
             logging_obj.pre_call(
                 input=messages,
                 api_key=api_key,
-                additional_args={
+                additional_args={  # mutable-ok: logging owns this request snapshot
                     "complete_input_dict": data,
                     "api_base": api_base,
                     "headers": request_headers,
@@ -487,7 +486,9 @@ class AnthropicChatCompletion(BaseLLM):
                 )
 
             sync_client: Final = (
-                client if isinstance(client, HTTPHandler) else _get_httpx_client(params={"timeout": timeout})
+                client
+                if isinstance(client, HTTPHandler)
+                else _get_httpx_client(params={"timeout": timeout})  # mutable-ok: client factory owns parameters
             )
             try:
                 response: Final = sync_client.post(
@@ -526,62 +527,9 @@ class AnthropicChatCompletion(BaseLLM):
                 json_mode=json_mode,
             )
 
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
-            **AnthropicConfig.get_config(model=model),
-            **optional_params,
-        }
-        rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-            "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
-                "model": model,
-                "messages": messages,
-                **rust_optional_params,
-            },
-            "api_base": api_base,
-            "headers": headers,
-        }
-
-        def log_rust_pre_call() -> None:
-            logging_obj.pre_call(input=messages, api_key=api_key, additional_args=rust_logging_args)
-
-        log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-            logging_obj=logging_obj,
-            messages=messages,
-            api_key=api_key,
-            additional_args=rust_logging_args,
-        )
         if acompletion is True:
-            return rust_chat_completions_bridge.achat_completions(
-                model=model,
-                messages=messages,
-                optional_params=rust_optional_params,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-                stream=stream,
-                litellm_params=litellm_params,
-                on_request=log_rust_pre_call,
-                on_response=log_rust_post_call,
-                python_fallback=acompletion_dispatch,
-            )
-        return rust_chat_completions_bridge.chat_completions(
-            model=model,
-            messages=messages,
-            optional_params=rust_optional_params,
-            model_response=model_response,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=headers,
-            timeout=timeout,
-            stream=stream,
-            litellm_params=litellm_params,
-            on_request=log_rust_pre_call,
-            on_response=log_rust_post_call,
-            python_fallback=completion_dispatch,
-        )
+            return acompletion_dispatch()
+        return completion_dispatch()
 
     def embedding(self):
         # logic for parsing in - calling - parsing out model embedding calls

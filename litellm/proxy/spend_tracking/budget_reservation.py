@@ -1418,7 +1418,10 @@ async def count_request_input_tokens(
         tokenizers=tokenizers,
         python_fallback=python_fallback,
     )
-    verbose_proxy_logger.debug("input token counts: %s", dict(counts))
+    verbose_proxy_logger.debug(
+        "input token counts: %s",
+        dict(counts),  # mutable-ok: temporary logging projection is not retained
+    )
     return counts
 
 

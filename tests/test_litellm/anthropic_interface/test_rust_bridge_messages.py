@@ -1,429 +1,154 @@
-"""Tests for the optional Rust-backed Anthropic Messages path."""
+from __future__ import annotations
 
-import importlib
-from typing import cast
+import asyncio
+import inspect
+from collections.abc import Awaitable
+from types import SimpleNamespace
+from typing import Final
 
-import httpx
 import pytest
 
-import litellm
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge import configuration
-from litellm.types.llms.anthropic_messages.anthropic_response import (
-    AnthropicMessagesResponse,
+from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge.messages import lifecycle
+
+
+class RustBridgeDeclined(Exception):
+    pass
+
+
+class RustBridgeUnavailable(Exception):
+    pass
+
+
+class RustHostCallbackError(Exception):
+    pass
+
+
+class RustUpstreamError(Exception):
+    pass
+
+
+NATIVE_EXCEPTIONS: Final = SimpleNamespace(
+    RustBridgeDeclined=RustBridgeDeclined,
+    RustBridgeUnavailable=RustBridgeUnavailable,
+    RustHostCallbackError=RustHostCallbackError,
+    RustUpstreamError=RustUpstreamError,
 )
 
-rust_messages = importlib.import_module("litellm.rust_bridge.messages")
-rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
 
-FAKE_MESSAGES_RESPONSE: dict[str, object] = {
-    "id": "msg_123",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-sonnet-4-5-20250929",
-    "content": [{"type": "text", "text": "hello world"}],
-    "stop_reason": "end_turn",
-    "usage": {"input_tokens": 5, "output_tokens": 3},
-}
-
-REQUEST_BODY: dict[str, object] = {
-    "model": "claude-sonnet-4-5",
-    "max_tokens": 64,
-    "messages": [{"role": "user", "content": "hi"}],
-}
-PYTHON_MESSAGES_RESPONSE: dict[str, object] = {"id": "python_fallback"}
-
-
-class RecordingMessages:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
+class RecordingSync:
+    def __init__(self, error: BaseException | None = None) -> None:
+        self.error: Final = error
+        self.calls: Final[list[tuple[dict[str, object], tuple[object, ...], dict[str, object], object]]] = []
 
     def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
-        has_agentic_hook: bool = False,
-        on_request=None,
-    ) -> dict[str, object]:
-        self.calls.append(
-            {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
-        if on_request is not None:
-            on_request()
-        return dict(FAKE_MESSAGES_RESPONSE)
-
-
-class RecordingAsyncMessages:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    async def __call__(
-        self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
-        has_agentic_hook: bool = False,
-        on_request=None,
-    ) -> dict[str, object]:
-        self.calls.append(
-            {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
-        if on_request is not None:
-            on_request()
-        return dict(FAKE_MESSAGES_RESPONSE)
-
-
-class ExplodingAsyncMessages:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
-        self.calls += 1
-        raise AssertionError("bridge must not be called")
-
-
-class RaisingAsyncMessages:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
-        self.calls += 1
-        raise RuntimeError("upstream request failed with status 400: bad request")
-
-
-class DecliningAsyncMessages:
-    async def __call__(self, **kwargs: object) -> dict[str, object]:
-        native = pytest.importorskip("litellm.rust_bridge._native")
-        raise native.RustBridgeDeclined("unsupported request")
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> object:
+        self.calls.append((request, args, kwargs, host))
+        if self.error is not None:
+            raise self.error
+        return "native"
 
 
 @pytest.fixture(autouse=True)
-def _reset_rust_flag():
-    rust_messages.set_rust_messages(messages=None, amessages=None)
+def reset_bridge(monkeypatch: pytest.MonkeyPatch):
+    lifecycle.set_rust_messages(messages=None, amessages=None)
     configuration.reset_rust_configuration()
-    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-    yield
-    rust_messages.set_rust_messages(messages=None, amessages=None)
-    configuration.reset_rust_configuration()
-    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-
-
-def test_load_rust_messages_returns_injected_impl():
-    bridge = RecordingMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(messages=bridge)
-    assert rust_messages.load_rust_messages() is bridge
-
-
-def test_load_rust_amessages_returns_injected_impl():
-    bridge = RecordingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-    assert rust_messages.load_rust_amessages() is bridge
-
-
-def test_messages_wrapper_returns_fallback_when_bridge_absent(monkeypatch):
-    monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge.bindings"),
-        "get_native_bridge",
-        lambda: None,
-    )
-    litellm.rust(True)
-    assert rust_messages.load_rust_messages() is None
-    result = rust_messages.messages(
-        model="claude",
-        body=REQUEST_BODY,
-        api_key="k",
-        api_base="b",
-        custom_llm_provider="azure_ai",
-        extra_headers={},
-        timeout=30.0,
-        python_fallback=lambda: dict(PYTHON_MESSAGES_RESPONSE),
-        adapt=lambda response: response,
-    )
-    assert result == PYTHON_MESSAGES_RESPONSE
-
-
-def test_messages_wrapper_forwards_args_and_converts_timeout():
-    bridge = RecordingMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(messages=bridge)
-
-    response = rust_messages.messages(
-        model="claude-sonnet-4-5",
-        body=REQUEST_BODY,
-        api_key="sk-azure",
-        api_base="https://resource.services.ai.azure.com/anthropic",
-        custom_llm_provider="azure_ai",
-        extra_headers={"anthropic-beta": "token-efficient-tools-2025-02-19"},
-        timeout=httpx.Timeout(600.0, read=42.0),
-        python_fallback=lambda: pytest.fail("native request should not fall back"),
-        adapt=lambda response: response,
-    )
-
-    assert response == FAKE_MESSAGES_RESPONSE
-    assert bridge.calls[0] == {
-        "model": "claude-sonnet-4-5",
-        "body": REQUEST_BODY,
-        "api_key": "sk-azure",
-        "api_base": "https://resource.services.ai.azure.com/anthropic",
-        "custom_llm_provider": "azure_ai",
-        "extra_headers": {"anthropic-beta": "token-efficient-tools-2025-02-19"},
-        "timeout_seconds": 42.0,
-    }
-
-
-@pytest.mark.asyncio
-async def test_amessages_wrapper_forwards_args():
-    bridge = RecordingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    async def python_fallback() -> dict[str, object]:
-        pytest.fail("native request should not fall back")
-
-    async def adapt(response: dict[str, object]) -> dict[str, object]:
-        return response
-
-    response = await rust_messages.amessages(
-        model="claude-sonnet-4-5",
-        body=REQUEST_BODY,
-        api_key="sk-azure",
-        api_base="https://resource.services.ai.azure.com/anthropic",
-        custom_llm_provider="azure_ai",
-        extra_headers=None,
-        timeout=12.5,
-        python_fallback=python_fallback,
-        adapt=adapt,
-    )
-
-    assert response == FAKE_MESSAGES_RESPONSE
-    assert bridge.calls[0]["model"] == "claude-sonnet-4-5"
-    assert bridge.calls[0]["timeout_seconds"] == 12.5
-
-
-async def _gate(**overrides):
-    kwargs = {
-        "custom_llm_provider": "azure_ai",
-        "has_agentic_hook": False,
-        "model": "claude-sonnet-4-5",
-        "api_key": "sk-azure",
-        "api_base": "https://resource.services.ai.azure.com/anthropic",
-        "headers": {"x-api-key": "sk-azure", "anthropic-version": "2023-06-01"},
-        "request_body": dict(REQUEST_BODY),
-        "timeout": 30.0,
-    }
-    kwargs.update(overrides)
-    request_body = kwargs.pop("request_body")
-
-    async def python_fallback() -> dict[str, object]:
-        return dict(PYTHON_MESSAGES_RESPONSE)
-
-    async def adapt(response: dict[str, object]) -> dict[str, object]:
-        adapted = dict(response)
-        adapted["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
-        return adapted
-
-    return await rust_messages.amessages(
-        model=kwargs["model"],
-        body={key: value for key, value in request_body.items() if key != "stream"},
-        has_agentic_hook=kwargs["has_agentic_hook"],
-        api_key=kwargs["api_key"],
-        api_base=kwargs["api_base"],
-        custom_llm_provider=kwargs["custom_llm_provider"],
-        extra_headers=kwargs["headers"],
-        timeout=kwargs["timeout"],
-        python_fallback=python_fallback,
-        adapt=adapt,
-    )
-
-
-@pytest.mark.asyncio
-async def test_gate_invokes_rust_and_marks_response_header():
-    bridge = RecordingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    response = await _gate()
-
-    assert response is not None
-    assert response["id"] == "msg_123"
-    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
-    call = bridge.calls[0]
-    assert call["model"] == "claude-sonnet-4-5"
-    assert call["body"] == REQUEST_BODY
-    assert call["api_key"] == "sk-azure"
-    assert call["api_base"] == "https://resource.services.ai.azure.com/anthropic"
-    assert call["extra_headers"] == {"x-api-key": "sk-azure", "anthropic-version": "2023-06-01"}
-    assert call["timeout_seconds"] == 30.0
-
-
-@pytest.mark.asyncio
-async def test_gate_propagates_unclassified_bridge_failure():
-    bridge = RaisingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    with pytest.raises(RuntimeError, match="upstream request failed"):
-        await _gate()
-    assert bridge.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_gate_skips_rust_when_flag_absent(monkeypatch):
-    monkeypatch.delenv("LITELLM_RUST", raising=False)
-    bridge = ExplodingAsyncMessages()
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    response = await _gate()
-
-    assert response == PYTHON_MESSAGES_RESPONSE
-    assert bridge.calls == 0
-
-
-@pytest.mark.asyncio
-async def test_gate_uses_process_enable_without_request_override():
-    bridge = RecordingAsyncMessages()
-    rust_messages.set_rust_messages(amessages=bridge)
-    litellm.rust(True)
-
-    response = await _gate()
-
-    assert response is not None
-    assert bridge.calls[0]["custom_llm_provider"] == "azure_ai"
-
-
-@pytest.mark.asyncio
-async def test_gate_invokes_rust_for_native_anthropic_provider():
-    bridge = RecordingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    response = await _gate(
-        custom_llm_provider="anthropic",
-        api_key="sk-ant",
-        api_base="https://api.anthropic.com",
-        headers={"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
-    )
-
-    assert response is not None
-    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
-    assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
-    assert bridge.calls[0]["api_key"] == "sk-ant"
-
-
-@pytest.mark.asyncio
-async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
-    bridge = RecordingAsyncMessages()
-    rust_messages.set_rust_messages(amessages=bridge)
     monkeypatch.setenv("LITELLM_RUST", "1")
-
-    response = await _gate(
-        custom_llm_provider="anthropic",
-    )
-
-    assert response is not None
-    assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: NATIVE_EXCEPTIONS)
+    yield
+    lifecycle.set_rust_messages(messages=None, amessages=None)
+    configuration.reset_rust_configuration()
 
 
-@pytest.mark.asyncio
-async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
-    bridge = ExplodingAsyncMessages()
-    rust_messages.set_rust_messages(amessages=bridge)
-    monkeypatch.setenv("LITELLM_RUST", "0")
-
-    response = await _gate(
-        custom_llm_provider="anthropic",
-    )
-
-    assert response == PYTHON_MESSAGES_RESPONSE
-    assert bridge.calls == 0
+def sync_python(max_tokens: int, messages: list[object], model: str, **kwargs: object) -> object:
+    return max_tokens, messages, model, kwargs
 
 
-@pytest.mark.asyncio
-async def test_gate_falls_back_for_unsupported_provider():
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=DecliningAsyncMessages())
-    response = await _gate(custom_llm_provider="openai", api_base="http://127.0.0.1:1")
-    assert response == PYTHON_MESSAGES_RESPONSE
+async def async_python(max_tokens: int, messages: list[object], model: str, **kwargs: object) -> object:
+    return max_tokens, messages, model, kwargs
 
 
-@pytest.mark.asyncio
-async def test_gate_falls_back_for_agentic_hook():
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=DecliningAsyncMessages())
-    response = await _gate(has_agentic_hook=True, api_base="http://127.0.0.1:1")
-    assert response == PYTHON_MESSAGES_RESPONSE
+def test_sync_boundary_enters_native_once_and_preserves_call_shape() -> None:
+    rust: Final = RecordingSync()
+    lifecycle.set_rust_messages(messages=rust)
+    wrapped: Final = lifecycle.wrap_sync(sync_python)
+    messages: Final[list[object]] = [{"role": "user", "content": "hi"}]
+
+    assert wrapped(64, messages, "anthropic/model", temperature=0.2) == "native"
+    assert len(rust.calls) == 1
+    request, args, kwargs, _ = rust.calls[0]
+    assert args == (64, messages, "anthropic/model")
+    assert kwargs == {"temperature": 0.2}
+    assert request["model"] == "anthropic/model"
+    assert request["body"] == {"max_tokens": 64, "messages": messages, "temperature": 0.2}
+    assert inspect.signature(wrapped) == inspect.signature(sync_python)
 
 
-@pytest.mark.asyncio
-async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
-    bridge = RecordingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
+def test_advisor_interceptor_request_declines_native_host_ownership() -> None:
+    rust: Final = RecordingSync(RustBridgeDeclined("host operations"))
+    lifecycle.set_rust_messages(messages=rust)
+    wrapped: Final = lifecycle.wrap_sync(sync_python)
+    tools: Final[list[object]] = [{"type": "advisor_20260301", "model": "advisor-model"}]
 
-    streaming_body = {**REQUEST_BODY, "stream": True}
-    response = await _gate(
-        has_agentic_hook=False,
-        request_body=streaming_body,
-    )
+    wrapped(64, [], "anthropic/model", tools=tools)
 
-    assert response is not None
-    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
-    assert "stream" not in bridge.calls[0]["body"]
-    assert bridge.calls[0]["body"] == REQUEST_BODY
+    request, _, _, _ = rust.calls[0]
+    assert request["has_agentic_hook"] is True
 
 
-@pytest.mark.asyncio
-async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
-    response = cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE))
-    stream = BaseLLMHTTPHandler._rust_anthropic_messages_fake_stream(response)
+def test_decline_calls_captured_python_implementation_once() -> None:
+    rust: Final = RecordingSync(RustBridgeDeclined("unsupported"))
+    lifecycle.set_rust_messages(messages=rust)
+    calls: Final[list[None]] = []
 
-    assert stream._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+    def python(max_tokens: int, messages: list[object], model: str) -> str:
+        calls.append(None)
+        return model
 
-    chunks = [chunk async for chunk in stream]
-    joined = b"".join(chunks)
-
-    assert b"event: message_start" in joined
-    assert b"event: content_block_delta" in joined
-    assert b"hello world" in joined
-    assert b"event: message_stop" in joined
+    assert lifecycle.wrap_sync(python)(1, [], "anthropic/model") == "anthropic/model"
+    assert len(rust.calls) == 1
+    assert calls == [None]
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
-    monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge.bindings"),
-        "get_native_bridge",
-        lambda: None,
-    )
-    litellm.rust(True)
+async def test_async_decline_is_caught_only_during_admission() -> None:
+    def decline(
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> Awaitable[object]:
+        raise RustBridgeDeclined("admission")
 
-    response = await _gate()
+    lifecycle.set_rust_messages(amessages=decline)
+    wrapped: Final = lifecycle.wrap_async(async_python)
+    assert await wrapped(1, [], "anthropic/model") == (1, [], "anthropic/model", {})
 
-    assert response == PYTHON_MESSAGES_RESPONSE
+    error: Final = RustBridgeDeclined("resume")
+
+    def fail(
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> Awaitable[object]:
+        async def result() -> object:
+            await asyncio.sleep(0)
+            raise error
+
+        return result()
+
+    lifecycle.set_rust_messages(amessages=fail)
+    with pytest.raises(RustBridgeDeclined) as caught:
+        await wrapped(1, [], "anthropic/model")
+    assert caught.value is error
+
+
+def test_missing_binding_calls_python_without_native_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
+    assert lifecycle.wrap_sync(sync_python)(1, [], "anthropic/model") == (1, [], "anthropic/model", {})
