@@ -1,4 +1,4 @@
-import { renderWithProviders, screen, within } from "../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, within } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GeneralSettings from "./general_settings";
@@ -53,6 +53,14 @@ const SETTINGS_FIXTURE = [
     stored_in_db: true,
     field_default_value: 1.0,
   },
+  {
+    field_name: "model_access_denied_message",
+    field_type: "String",
+    field_value: null,
+    field_description: "client-facing denial message",
+    stored_in_db: null,
+    field_default_value: null,
+  },
 ];
 
 const settingsRow = async (fieldName: string) => {
@@ -98,6 +106,29 @@ describe("GeneralSettings General tab", () => {
 
     expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "max_ui_session_budget");
     expect(numericValueIn(row)).toBe(1);
+  });
+
+  it("saves a typed model_access_denied_message and resets it when cleared", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+
+    await user.click(screen.getByText("General"));
+    const row = await settingsRow("model_access_denied_message");
+    const input = within(row).getByRole("textbox") as HTMLInputElement;
+    expect(input.value).toBe("");
+
+    fireEvent.change(input, { target: { value: "Model `{model}` is unavailable for this key." } });
+    await user.click(within(row).getByRole("button", { name: /update/i }));
+    expect(updateConfigFieldSetting).toHaveBeenCalledWith(
+      "token",
+      "model_access_denied_message",
+      "Model `{model}` is unavailable for this key.",
+    );
+
+    fireEvent.change(input, { target: { value: "" } });
+    await user.click(within(row).getByRole("button", { name: /update/i }));
+    expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "model_access_denied_message");
+    expect(vi.mocked(updateConfigFieldSetting).mock.calls).toHaveLength(1);
   });
 });
 

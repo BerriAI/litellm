@@ -1679,6 +1679,100 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
     assert "my-fake-gpt" in str(exc_info.value.message)
 
 
+_DENIED_MESSAGE_TEMPLATE: Final = "The model `{model}` is unavailable for this API key or does not exist."
+
+
+def test_can_object_call_model_denial_uses_configured_message_and_logs_detail(monkeypatch, caplog):
+    """LIT-5283: with model_access_denied_message set, the client sees only the template with
+    {model} filled in, while the allowed models / access groups stay in the proxy log."""
+    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException) as exc_info:
+            _can_object_call_model(
+                model="anthropic-sonnet-4-5",
+                llm_router=None,
+                models=["internal-models"],
+                object_type="key",
+            )
+
+    assert (
+        exc_info.value.message == "The model `anthropic-sonnet-4-5` is unavailable for this API key or does not exist."
+    )
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc_info.value.param == "model"
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    assert "internal-models" in caplog.text
+    assert "anthropic-sonnet-4-5" in caplog.text
+
+
+@pytest.mark.parametrize("unset_value", [None, ""])
+def test_can_object_call_model_denial_unchanged_when_message_not_configured(monkeypatch, unset_value):
+    monkeypatch.setattr(litellm, "model_access_denied_message", unset_value)
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="anthropic-sonnet-4-5",
+            llm_router=None,
+            models=["internal-models"],
+            object_type="team",
+        )
+
+    assert exc_info.value.message == (
+        "team not allowed to access model. This team can only access models=['internal-models']. "
+        "Tried to access anthropic-sonnet-4-5"
+    )
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model_no_default_models_uses_configured_message(monkeypatch):
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+
+    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
+    user_object = LiteLLM_UserTable(user_id="test-user", models=[SpecialModelNames.no_default_models.value])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_user_call_model(model="restricted-model", llm_router=None, user_object=user_object)
+
+    assert exc_info.value.message == "The model `restricted-model` is unavailable for this API key or does not exist."
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_denied_uses_configured_message(monkeypatch):
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["fast-models"]),
+    )
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="alice", team_id="team-a"),
+        value=membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_team_member_model_access(
+            model="mock-vision",
+            team_object=LiteLLM_TeamTable(team_id="team-a"),
+            valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+            llm_router=_make_team_scoped_router(),
+            prisma_client=None,
+            user_api_key_cache=cache,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.message == "The model `mock-vision` is unavailable for this API key or does not exist."
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
 # -- Team-member access-group resolution with team-scoped DB models -----------
 
 

@@ -219,6 +219,7 @@ redact_user_api_key_info: Optional[bool] = False
 # major release; opt in early with `litellm.expose_router_debug_in_errors
 # = False`.
 expose_router_debug_in_errors: bool = True
+model_access_denied_message: str | None = None
 filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
