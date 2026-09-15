@@ -433,3 +433,38 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def _msgs_with_trailing_system():
+    return [
+        {"role": "system", "content": "You are a classifier."},
+        {"role": "user", "content": "build me a plan"},
+        {"role": "system", "content": "Respond with ONLY JSON matching the schema."},
+    ]
+
+
+def test_hosted_vllm_midturn_system_untouched_by_default(monkeypatch):
+    """Without the opt-in flag, hosted_vllm leaves a trailing system row in place."""
+    monkeypatch.delenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", raising=False)
+    config = HostedVLLMChatConfig()
+    out = config._transform_messages(_msgs_with_trailing_system(), "hosted_vllm/qwen", is_async=False)
+    assert [m["role"] for m in out] == ["system", "user", "system"]
+
+
+def test_hosted_vllm_midturn_system_demoted_when_enabled(monkeypatch):
+    """LITELLM_DEMOTE_MIDTURN_SYSTEM=true rewrites the trailing system row as a
+    user row on the OpenAI /chat path (parity with the Anthropic bridge), so a
+    strict vLLM template no longer 400s on a non-leading system message."""
+    monkeypatch.setenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", "true")
+    config = HostedVLLMChatConfig()
+    out = config._transform_messages(_msgs_with_trailing_system(), "hosted_vllm/qwen", is_async=False)
+    assert [m["role"] for m in out] == ["system", "user", "user"]
+    assert out[2]["content"] == "Respond with ONLY JSON matching the schema."
+
+
+def test_hosted_vllm_midturn_system_dropped_when_requested(monkeypatch):
+    monkeypatch.setenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", "drop")
+    config = HostedVLLMChatConfig()
+    out = config._transform_messages(_msgs_with_trailing_system(), "hosted_vllm/qwen", is_async=False)
+    assert [m["role"] for m in out] == ["system", "user"]
+    assert out[0]["content"] == "You are a classifier."
