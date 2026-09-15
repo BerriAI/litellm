@@ -9,6 +9,7 @@ from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
 
 import litellm
+from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 
@@ -247,6 +248,72 @@ class _CapturingConnect:
 
 
 @pytest.mark.asyncio
+async def test_azure_health_check_resolves_stored_credentials(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="azure-rt",
+                credential_values={
+                    "api_key": "sk-from-credential",
+                    "api_base": "https://example.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                },
+                credential_info={},
+            )
+        ],
+    )
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="azure",
+            api_key=None,
+            realtime_protocol="beta",
+            model_params={"model": "azure/gpt-realtime", "litellm_credential_name": "azure-rt"},
+        )
+    assert connect.kwargs["additional_headers"] == {"api-key": "sk-from-credential"}
+    assert connect.url is not None
+    assert connect.url.startswith("wss://example.openai.azure.com")
+    assert "api-version=2025-04-01-preview" in connect.url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected_url"),
+    [
+        ("xai", "grok-voice-latest", "wss://api.x.ai/v1/realtime?model=grok-voice-latest"),
+        ("openai", "gpt-realtime", "wss://api.openai.com/v1/realtime?model=gpt-realtime"),
+    ],
+)
+async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
+    monkeypatch, custom_llm_provider: str, model: str, expected_url: str
+):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="voice-key",
+                credential_values={"api_key": "sk-from-credential"},
+                credential_info={},
+            )
+        ],
+    )
+    connect = _CapturingConnect(_ScriptedConnection(_OPENAI_SESSION_CREATED_EVENT))
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_key=None,
+            model_params={"model": f"{custom_llm_provider}/{model}", "litellm_credential_name": "voice-key"},
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-credential"}
+    assert connect.url == expected_url
+
+
+@pytest.mark.asyncio
 async def test_azure_health_check_probes_ga_transcription_url_for_transcription_model(local_model_cost_map):
     """Regression for LIT-6240: transcription-only models (mode audio_transcription
     in the cost map) are GA-only and 400 on the beta path, so the health probe
@@ -405,16 +472,6 @@ async def test_openai_health_check_reports_the_first_error_event_as_unhealthy(
     assert raised.value.status_code == expected_status
     assert expected_message in str(raised.value)
     assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime"
-
-
-@pytest.mark.asyncio
-async def test_openai_health_check_sends_the_api_key_as_a_bearer_token():
-    connect: Final = _CapturingConnect(_ScriptedConnection(_OPENAI_SESSION_CREATED_EVENT))
-    with patch("websockets.connect", connect):
-        assert await realtime_main._realtime_health_check(
-            model="gpt-realtime", custom_llm_provider="openai", api_key="sk-real"
-        )
-    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-real"}
 
 
 @pytest.mark.asyncio
