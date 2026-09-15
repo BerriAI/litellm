@@ -1119,6 +1119,64 @@ def test_resolve_llm_passthrough_timeout_precedence():
         assert resolve_llm_passthrough_timeout() == 6.0
 
 
+def test_resolve_llm_passthrough_timeout_stream_timeout_precedence():
+    # streaming: stream_timeout wins at each level, then falls through to the non-stream keys
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True, "stream_timeout": 1800, "timeout": 45},
+        )
+        == 1800.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True},
+            litellm_params={"stream_timeout": 1800, "timeout": 90},
+        )
+        == 1800.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True},
+            litellm_params={"timeout": 90},
+            router_stream_timeout=1800,
+        )
+        == 90.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True},
+            router_timeout=120,
+            router_stream_timeout=1800,
+        )
+        == 1800.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True},
+            router_timeout=120,
+        )
+        == 120.0
+    )
+
+    # non-streaming: stream_timeout is ignored everywhere
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": False, "stream_timeout": 1800},
+            litellm_params={"stream_timeout": 1800, "timeout": 90},
+            router_stream_timeout=1800,
+        )
+        == 90.0
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert (
+            resolve_llm_passthrough_timeout(
+                litellm_params={"stream_timeout": 1800},
+                router_stream_timeout=1800,
+            )
+            == DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS
+        )
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_uses_resolved_timeout():
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:

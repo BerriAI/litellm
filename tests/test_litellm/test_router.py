@@ -5480,6 +5480,64 @@ def test_update_kwargs_with_deployment_uses_pass_through_request_timeout():
     assert kwargs["timeout"] == 6.0
 
 
+def test_update_kwargs_with_deployment_passthrough_honors_stream_timeout():
+    """
+    The SDK-native passthrough route (anthropic /v1/messages, bedrock /converse) resolves
+    its upstream timeout separately from the completion route. A streaming call must get
+    stream_timeout (deployment litellm_params first, then router_settings), while a
+    non-streaming call on the same deployment keeps the non-stream resolution.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic-with-stream-timeout",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "fake-key",
+                    "stream_timeout": 1800,
+                },
+            },
+            {
+                "model_name": "anthropic-router-default",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        stream_timeout=900,
+    )
+    per_deployment, router_default = router.model_list
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"pass_through_request_timeout": 6},
+    ):
+        kwargs: dict = {"stream": True}
+        router._update_kwargs_with_deployment(
+            deployment=per_deployment,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+        assert kwargs["timeout"] == 1800.0
+
+        kwargs = {"stream": True}
+        router._update_kwargs_with_deployment(
+            deployment=router_default,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+        assert kwargs["timeout"] == 900.0
+
+        kwargs = {"stream": False}
+        router._update_kwargs_with_deployment(
+            deployment=per_deployment,
+            kwargs=kwargs,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+        assert kwargs["timeout"] == 6.0
+
+
 @pytest.mark.asyncio
 async def test_router_acompletion_with_unknown_model_and_default_fallback():
     """
