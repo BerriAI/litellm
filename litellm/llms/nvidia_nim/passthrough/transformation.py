@@ -27,14 +27,26 @@ if TYPE_CHECKING:
 
 API_VERSION_SEGMENT: Final = re.compile(r"^v\d+$")
 NVIDIA_NIM_MODEL_PREFIX: Final = f"{LlmProviders.NVIDIA_NIM.value}/"
+NVIDIA_NIM_ROUTE_PREFIX: Final = re.compile(rf"^/{LlmProviders.NVIDIA_NIM.value}/", re.IGNORECASE)
+
+
+def is_nvidia_nim_deployment(deployment: DeploymentTypedDict) -> bool:
+    litellm_params: Final = deployment["litellm_params"]
+    return litellm_params.get("custom_llm_provider") == LlmProviders.NVIDIA_NIM.value or litellm_params.get(
+        "model", ""
+    ).startswith(NVIDIA_NIM_MODEL_PREFIX)
 
 
 def nvidia_nim_model_groups(deployments: Iterable[DeploymentTypedDict] | None) -> frozenset[str]:
-    return frozenset(
-        deployment["model_name"]
-        for deployment in deployments or ()
-        if deployment["litellm_params"].get("custom_llm_provider") == LlmProviders.NVIDIA_NIM.value
-        or deployment["litellm_params"].get("model", "").startswith(NVIDIA_NIM_MODEL_PREFIX)
+    listed: Final = tuple(deployments or ())
+    nim_groups: Final = frozenset(d["model_name"] for d in listed if is_nvidia_nim_deployment(d))
+    other_groups: Final = frozenset(d["model_name"] for d in listed if not is_nvidia_nim_deployment(d))
+    return nim_groups - other_groups
+
+
+def nvidia_nim_model_group_in_path(path: str, deployments: Iterable[DeploymentTypedDict] | None) -> str | None:
+    return nvidia_nim_router_model_in_endpoint(
+        NVIDIA_NIM_ROUTE_PREFIX.sub("", path), nvidia_nim_model_groups(deployments)
     )
 
 
@@ -79,7 +91,7 @@ class NvidiaNimPassthroughConfig(BasePassthroughConfig):
         base_target_url: Final = self.get_api_base(api_base)
         if base_target_url is None:
             raise ValueError("NVIDIA NIM api base not found: set `api_base` on the deployment or NVIDIA_NIM_API_BASE")
-        native_endpoint: Final = strip_leading_model_segment(endpoint, (model_group_from(litellm_params), model))
+        native_endpoint: Final = strip_leading_model_segment(endpoint, (model, model_group_from(litellm_params)))
         root: Final = without_repeated_version_prefix(base_target_url, native_endpoint)
         return (self.format_url(native_endpoint, root, request_query_params), root)
 

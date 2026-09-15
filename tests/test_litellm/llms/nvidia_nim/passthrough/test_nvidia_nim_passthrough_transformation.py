@@ -8,6 +8,8 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.nvidia_nim.passthrough.transformation import (
     NvidiaNimPassthroughConfig,
+    nvidia_nim_model_group_in_path,
+    nvidia_nim_model_groups,
     nvidia_nim_router_model_in_endpoint,
 )
 from litellm.types.utils import LlmProviders
@@ -53,6 +55,12 @@ def test_provider_config_manager_resolves_nvidia_nim_passthrough_config():
         (f"{NIM_BASE}/v2", "v1/infer", {}, f"{NIM_BASE}/v2/v1/infer"),
         (f"{NIM_BASE}/infer", "infer", {}, f"{NIM_BASE}/infer/infer"),
         (NIM_BASE, "nvidia/nemoretriever-page-elements-v2/v1/infer", {}, f"{NIM_BASE}/v1/infer"),
+        (
+            NIM_BASE,
+            "nvidia/nemoretriever-page-elements-v2/v1/infer",
+            {"litellm_metadata": {"model_group": "nvidia"}},
+            f"{NIM_BASE}/v1/infer",
+        ),
     ],
 )
 def test_relay_url_strips_the_model_group_and_never_doubles_the_api_version(
@@ -161,6 +169,45 @@ def test_router_model_in_endpoint_takes_the_longest_leading_model_group(endpoint
     assert nvidia_nim_router_model_in_endpoint(endpoint, frozenset(router_models)) == expected
 
 
+def _deployment(model_name: str, model: str, custom_llm_provider: str | None = None):
+    litellm_params = (
+        {"model": model}
+        if custom_llm_provider is None
+        else {"model": model, "custom_llm_provider": custom_llm_provider}
+    )
+    return {"model_name": model_name, "litellm_params": litellm_params}
+
+
+MIXED_DEPLOYMENTS = (
+    _deployment("nim-page", "nvidia_nim/nvidia/nemoretriever-page-elements-v2"),
+    _deployment("nim-table", "nvidia/nemoretriever-table-structure-v1", custom_llm_provider="nvidia_nim"),
+    _deployment("mixed", "nvidia_nim/nvidia/nemoretriever-page-elements-v2"),
+    _deployment("mixed", "openai/gpt-4o"),
+    _deployment("gpt-4o", "openai/gpt-4o"),
+)
+
+
+def test_model_groups_only_admit_groups_whose_every_deployment_is_nim_backed():
+    assert nvidia_nim_model_groups(MIXED_DEPLOYMENTS) == frozenset({"nim-page", "nim-table"})
+    assert nvidia_nim_model_groups(None) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        ("/nvidia_nim/nim-page/v1/infer", "nim-page"),
+        ("/NVIDIA_NIM/nim-table/v1/infer", "nim-table"),
+        ("nim-page/v1/infer", "nim-page"),
+        ("/nvidia_nim/mixed/v1/infer", None),
+        ("mixed/v1/infer", None),
+        ("/nvidia_nim/gpt-4o/v1/infer", None),
+        ("/nvidia_nim/v1/infer", None),
+    ],
+)
+def test_model_group_in_path_resolves_the_same_nim_only_groups_for_routes_and_endpoints(path, expected):
+    assert nvidia_nim_model_group_in_path(path, MIXED_DEPLOYMENTS) == expected
+
+
 @pytest.mark.parametrize("request_data, expected", [({"stream": True}, True), ({"stream": False}, False), ({}, False)])
 def test_is_streaming_request_reads_the_stream_flag(request_data, expected):
     assert NvidiaNimPassthroughConfig().is_streaming_request("v1/infer", request_data) is expected
@@ -214,3 +261,36 @@ async def test_object_detection_relay_sends_the_native_body_unchanged_to_v1_infe
     assert response.status_code == 200
     assert response.headers["x-nim"] == "1"
     assert response.json() == {"data": [{"index": 0}, {"index": 1}]}
+
+
+@pytest.mark.asyncio
+async def test_router_relay_reaches_v1_infer_when_the_group_name_is_a_leading_segment_of_the_model_id():
+    upstream_requests: list[httpx.Request] = []
+
+    def nim(request: httpx.Request) -> httpx.Response:
+        upstream_requests.append(request)
+        return httpx.Response(200, json={"data": [{"index": 0}]})
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(nim))
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "nvidia",
+                "litellm_params": {
+                    "model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2",
+                    "api_base": NIM_BASE,
+                    "api_key": "nvapi-secret",
+                },
+            }
+        ]
+    )
+
+    response = await router.allm_passthrough_route(
+        model="nvidia", endpoint="nvidia/v1/infer", method="POST", json=dict(INFER_BODY), client=client
+    )
+
+    (sent,) = upstream_requests
+    assert str(sent.url) == f"{NIM_BASE}/v1/infer"
+    assert json.loads(sent.content) == INFER_BODY
+    assert response.status_code == 200

@@ -5499,6 +5499,32 @@ class TestNvidiaNimProxyRoute:
         assert captured == []
 
     @pytest.mark.asyncio
+    async def test_a_group_mixing_nim_and_other_deployments_is_rejected_before_any_upstream_call(self):
+        from fastapi import HTTPException
+
+        captured: list[dict] = []
+
+        class MixedRouter:
+            def get_model_list(self):
+                return [
+                    {
+                        "model_name": "detect",
+                        "litellm_params": {"model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2"},
+                    },
+                    {"model_name": "detect", "litellm_params": {"model": "openai/gpt-4o"}},
+                ]
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"data": []})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._relay(MixedRouter(), "detect/v1/infer", NIM_INFER_BODY)
+
+        assert exc_info.value.status_code == 400
+        assert captured == []
+
+    @pytest.mark.asyncio
     async def test_no_router_is_rejected_before_any_upstream_call(self):
         from fastapi import HTTPException
 

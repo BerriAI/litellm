@@ -36,10 +36,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.nvidia_nim.passthrough.transformation import (
-    nvidia_nim_model_groups,
-    nvidia_nim_router_model_in_endpoint,
-)
+from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
@@ -1654,15 +1651,11 @@ async def relay_nvidia_nim_request(
     request_body: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
-    model_group: Final = (
-        nvidia_nim_router_model_in_endpoint(endpoint, nvidia_nim_model_groups(llm_router.get_model_list()))
-        if llm_router
-        else None
-    )
+    model_group: Final = nvidia_nim_model_group_in_path(endpoint, llm_router.get_model_list()) if llm_router else None
     if llm_router is None or model_group is None:
         rejection: Final[RelayRejection] = {
             "error": "no NVIDIA NIM model group in the path; call /nvidia_nim/{model_group}/v1/infer with a model "
-            "from your `model_list` whose `model` starts with `nvidia_nim/`"
+            "group from your `model_list` whose deployments all use `nvidia_nim/` models"
         }
         raise HTTPException(status_code=400, detail=rejection)
 

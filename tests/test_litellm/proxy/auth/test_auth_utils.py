@@ -848,6 +848,18 @@ def _nvidia_nim_relay_router():
                 "model_name": "gpt-4o",
                 "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
             },
+            {
+                "model_name": "detect",
+                "litellm_params": {
+                    "model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2",
+                    "api_base": "http://nim-a.internal:8000",
+                    "api_key": "k",
+                },
+            },
+            {
+                "model_name": "detect",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+            },
         ]
     )
 
@@ -873,6 +885,7 @@ NIM_INFER_BODY = {"input": [{"type": "image_url", "url": "data:image/png;base64,
         ("/nvidia_nim/unknown-group/v1/infer", NIM_INFER_BODY, None),
         ("/nvidia_nim/nim-page-elements-v2/v1/infer", NIM_INFER_BODY, None),
         ("/nvidia_nim/gpt-4o/v1/infer", NIM_INFER_BODY, None),
+        ("/nvidia_nim/detect/v1/infer", NIM_INFER_BODY, None),
     ],
 )
 def test_get_model_from_request_nvidia_nim_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):

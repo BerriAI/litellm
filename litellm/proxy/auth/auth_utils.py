@@ -28,10 +28,7 @@ from litellm.litellm_core_utils.url_utils import (
     validate_url,
 )
 from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
-from litellm.llms.nvidia_nim.passthrough.transformation import (
-    nvidia_nim_model_groups,
-    nvidia_nim_router_model_in_endpoint,
-)
+from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -2045,17 +2042,12 @@ def get_model_from_request(
         return model if azure_model is None else azure_model
 
     if route.lower().startswith("/nvidia_nim/"):
-        nvidia_nim_model: Final = _router_model_from_nvidia_nim_route(route, llm_router)
+        nvidia_nim_model: Final = (
+            nvidia_nim_model_group_in_path(route, llm_router.get_model_list()) if llm_router else None
+        )
         return model if nvidia_nim_model is None else nvidia_nim_model
 
     return model
-
-
-def _router_model_from_nvidia_nim_route(route: str, llm_router: Router | None) -> str | None:
-    if llm_router is None:
-        return None
-    endpoint: Final = re.sub(r"^/nvidia_nim/", "", route, flags=re.IGNORECASE)
-    return nvidia_nim_router_model_in_endpoint(endpoint, nvidia_nim_model_groups(llm_router.get_model_list()))
 
 
 def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
