@@ -6,14 +6,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-azure_core.workspace = true
-azure_identity.workspace = true
 litellm-auth.workspace = true
+
 moka.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 strum.workspace = true
 url.workspace = true
+
+azure_core = "1.0.0"
+azure_identity = { version = "1.0.0", features = ["tokio"] }
 
 [dev-dependencies]
 tokio.workspace = true
