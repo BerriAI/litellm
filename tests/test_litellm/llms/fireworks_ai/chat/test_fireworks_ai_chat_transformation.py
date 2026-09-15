@@ -1813,3 +1813,15 @@ def test_streaming_preserves_selected_model_for_private_accounting():
         completion_response=assembled,
         custom_llm_provider="fireworks_ai",
     ) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+        ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+    ],
+)
+def test_get_model_cost_key_resolves_short_names_to_long_keys(model: str, expected: str) -> None:
+    assert FireworksAIConfig().get_model_cost_key(model) == expected

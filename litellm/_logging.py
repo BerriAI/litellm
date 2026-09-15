@@ -252,6 +252,35 @@ class AccessLogRedactionFilter(logging.Filter):
 _access_log_filter: Final = AccessLogRedactionFilter()
 
 
+@functools.lru_cache(maxsize=1)
+def _parse_disabled_access_log_paths(raw: str) -> frozenset[str]:
+    return frozenset(stripped for path in raw.split(",") if (stripped := path.strip()))
+
+
+def _disabled_access_log_paths() -> frozenset[str]:
+    """Read the variable per record so a value loaded later via proxy config
+    environment_variables or dotenv is honored."""
+    return _parse_disabled_access_log_paths(os.getenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", ""))
+
+
+class AccessLogPathFilter(logging.Filter):
+    """Drops uvicorn.access records for request paths listed in LITELLM_DISABLE_ACCESS_LOG_PATHS.
+
+    uvicorn passes record.args as (client_addr, method, full_path, http_version, status_code).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not isinstance(record.args, tuple) or len(record.args) < 3:
+            return True
+        full_path: Final = record.args[2]
+        if not isinstance(full_path, str):
+            return True
+        return full_path.partition("?")[0] not in _disabled_access_log_paths()
+
+
+_access_log_path_filter: Final = AccessLogPathFilter()
+
+
 def _get_max_string_length_stdout_log() -> int:
     """Read the limit per record so a value loaded later via proxy config
     environment_variables is honored."""
@@ -743,6 +772,7 @@ def _redact_third_party_loggers() -> None:
     for name in _REDACTED_THIRD_PARTY_LOGGERS:
         logging.getLogger(name).addFilter(_secret_filter)
     for name in _REDACTED_ACCESS_LOGGERS:
+        logging.getLogger(name).addFilter(_access_log_path_filter)
         logging.getLogger(name).addFilter(_access_log_filter)
 
 
