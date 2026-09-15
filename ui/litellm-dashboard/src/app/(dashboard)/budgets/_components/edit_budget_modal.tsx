@@ -15,13 +15,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 
 type EditBudgetFormValues = Pick<
   budgetItem,
-  "budget_id" | "tpm_limit" | "rpm_limit" | "max_budget" | "budget_duration"
+  "budget_id" | "tpm_limit" | "rpm_limit" | "tpd_limit" | "max_budget" | "budget_duration"
 >;
 
 const toFormValues = (budget: budgetItem): EditBudgetFormValues => ({
   budget_id: budget.budget_id,
   tpm_limit: budget.tpm_limit,
   rpm_limit: budget.rpm_limit,
+  tpd_limit: budget.tpd_limit,
   max_budget: budget.max_budget,
   budget_duration: budget.budget_duration,
 });
@@ -106,6 +107,23 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
               name="rpm_limit"
               label="Max Requests per minute"
               description="Leave blank for no LiteLLM limit. Provider rate limits still apply."
+            >
+              {({ ref, value, onChange, ...field }) => (
+                <Input
+                  {...field}
+                  ref={ref}
+                  type="number"
+                  step={1}
+                  value={value ?? ""}
+                  onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                />
+              )}
+            </FormField>
+            <FormField
+              control={form.control}
+              name="tpd_limit"
+              label="Max Tokens per day (batch)"
+              description="Daily token budget for batch submissions. When set, batches are charged against this instead of TPM/RPM."
             >
               {({ ref, value, onChange, ...field }) => (
                 <Input

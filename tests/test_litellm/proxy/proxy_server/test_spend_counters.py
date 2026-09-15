@@ -921,6 +921,30 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
     assert fake_invalidate.called is True
 
 
+@pytest.mark.asyncio
+async def test_reconcile_budget_reservation_for_counter_update_finalized_reservation_falls_back_to_direct_increment(
+    monkeypatch,
+):
+    """A reservation already finalized before the counter update (the pre-persist
+    reconcile failed and dropped its counters) must not shield its keys from the
+    direct increment, or the settled cost is never added back after the drop."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    fake_reconcile = AsyncMock()
+    monkeypatch.setattr(br, "reconcile_budget_reservation", fake_reconcile)
+
+    result = await ps._reconcile_budget_reservation_for_counter_update(
+        budget_reservation={
+            "finalized": True,
+            "entries": [{"counter_key": "spend:key:abc"}],
+        },
+        response_cost=1.0,
+    )
+
+    assert result == set()
+    fake_reconcile.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # _prepare_end_user_and_tag_spend_increments
 # ---------------------------------------------------------------------------

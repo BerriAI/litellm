@@ -675,6 +675,7 @@ ignored_keys = [
     "metadata.user_api_key_team_alias",
     "metadata.spend_logs_metadata",
     "metadata.requester_ip_address",
+    "metadata.user_agent",
     "metadata.status",
     "metadata.proxy_server_request",
     "metadata.error_information",
