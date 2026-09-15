@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Final, cast
+from typing import Final
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
@@ -51,6 +51,23 @@ ASYNC_MAPPINGS: Final = (
         rust_span="transform_ocr_response",
         python_frame=r"MistralOCRConfig\.transform_ocr_response$",
     ),
+)
+
+PUBLIC_RUST_DISPATCH_MAPPINGS: Final = (
+    mapping(span="public_sdk_entrypoint", python_frame=r"ocr/main\.py:\d+ a?ocr$"),
+    mapping(span="public_request", python_frame=r"ocr/main\.py:\d+ _public_request$"),
+    mapping(span="bind_request", python_frame=r"ocr/main\.py:\d+ _bind_request$"),
+    mapping(span="rust_ocr_enabled", python_frame=r"rust_bridge/configuration\.py:\d+ rust_ocr_enabled$"),
+    mapping(span="select_native_ocr", python_frame=r"rust_bridge/ocr_lifecycle\.py:\d+ select$"),
+    mapping(span="load_native_bridge", python_frame=r"rust_bridge/bindings\.py:\d+ NativeBinding\.load$"),
+    mapping(span="native_call_setup", python_frame=r"rust_bridge/lifecycle\.py:\d+ setup$"),
+    mapping(span="native_response", python_frame=r"rust_bridge/ocr\.py:\d+ _response$"),
+    mapping(span="native_call_finalize", python_frame=r"rust_bridge/lifecycle\.py:\d+ finalize$"),
+    mapping(
+        span="native_success_bookkeeping",
+        python_frame=r"rust_bridge/lifecycle\.py:\d+ success_bookkeeping$",
+    ),
+    *(mapping(rust_span=item.rust) for item in SYNC_MAPPINGS if item.rust is not None),
 )
 
 CALLBACK_SUCCESS_SYNC_MAPPINGS: Final = (*SYNC_MAPPINGS, SUCCESS_CALLBACK_SYNC_MAPPING)
@@ -164,23 +181,6 @@ def _azure_fixture(engine: Engine, _base_url: str) -> RouteFixture:
     )
 
 
-def _vertex_fixture(engine: Engine, _base_url: str) -> RouteFixture:
-    fixture: Final = _fixture(
-        engine,
-        "vertex_ai/mistral-ocr-maas",
-        {"type": "image_url", "image_url": "data:image/png;base64,aGVsbG8="},
-    )
-    vertex: Final = {"vertex_project": "trace-project", "vertex_location": "us-central1"}
-    optional_params: Final = cast(dict[str, object], fixture.kwargs.get("optional_params", {}))
-    return RouteFixture(
-        kwargs={
-            **fixture.kwargs,
-            **({"optional_params": {**optional_params, **vertex}} if engine == "rust" else vertex),
-        },
-        provider_responses=fixture.provider_responses,
-    )
-
-
 def _vertex_deepseek_fixture(engine: Engine, _base_url: str) -> RouteFixture:
     vertex: Final = {"vertex_project": "trace-project", "vertex_location": "us-central1"}
     return RouteFixture(
@@ -197,6 +197,62 @@ def _vertex_deepseek_fixture(engine: Engine, _base_url: str) -> RouteFixture:
                     {
                         "choices": [{"message": {"role": "assistant", "content": "hello"}}],
                         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    }
+                ).encode(),
+            ),
+        ),
+    )
+
+
+def _vertex_deepseek_credentials_fixture(engine: Engine, base_url: str) -> RouteFixture:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    fixture: Final = _vertex_deepseek_fixture(engine, base_url)
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    credentials: Final = json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "trace-project",
+            "private_key_id": "trace-key",
+            "private_key": private_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ).decode(),
+            "client_email": "trace@trace-project.iam.gserviceaccount.com",
+            "token_uri": f"{base_url}/token",
+        }
+    )
+    return RouteFixture(
+        kwargs={**fixture.kwargs, "api_key": None},
+        environment=(("VERTEXAI_CREDENTIALS", credentials), ("VERTEX_AI_API_KEY", "")),
+        provider_responses=(
+            RecordedHttpResponse.from_bytes(
+                200,
+                (HttpHeader(name="content-type", value="application/json"),),
+                b'{"access_token":"trace-token","token_type":"Bearer","expires_in":3600}',
+            ),
+            *fixture.provider_responses,
+        ),
+    )
+
+
+def _cohere_fixture(engine: Engine, _base_url: str) -> RouteFixture:
+    return RouteFixture(
+        kwargs={
+            "model": "cohere/parse-v5.0",
+            "document": {"type": "image_url", "image_url": "data:image/png;base64,aGVsbG8="},
+            **({"optional_params": {"output_format": "blocks"}} if engine == "rust" else {"output_format": "blocks"}),
+        },
+        provider_responses=(
+            RecordedHttpResponse.from_bytes(
+                200,
+                (HttpHeader(name="content-type", value="application/json"),),
+                json.dumps(
+                    {
+                        "pages": [{"index": 0, "blocks": [{"type": "text", "text": {"content": "hello"}}]}],
+                        "meta": {"billed_units": {"pages": 1}},
                     }
                 ).encode(),
             ),
@@ -248,30 +304,6 @@ def _azure_document_intelligence_fixture(engine: Engine, base_url: str) -> Route
         ),
     )
 
-
-VERTEX_COMMON_MAPPINGS: Final = (
-    *COMMON_MAPPINGS[:7],
-    mapping(
-        rust_span="transform_ocr_request",
-        python_frame=(
-            r"VertexAIOCRConfig\.(?:async_)?transform_ocr_request$"
-            r"|MistralOCRConfig\.transform_ocr_request$"
-        ),
-    ),
-    COMMON_MAPPINGS[-1],
-)
-VERTEX_SYNC_MAPPINGS: Final = (
-    *VERTEX_COMMON_MAPPINGS,
-    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
-    mapping(span="python_transform_ocr_response_wrapper", python_frame=r"BaseLLMHTTPHandler\._transform_ocr_response$"),
-    mapping(rust_span="transform_ocr_response", python_frame=r"MistralOCRConfig\.transform_ocr_response$"),
-)
-VERTEX_ASYNC_MAPPINGS: Final = (
-    *VERTEX_COMMON_MAPPINGS,
-    mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
-    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
-    mapping(rust_span="transform_ocr_response", python_frame=r"MistralOCRConfig\.transform_ocr_response$"),
-)
 
 DEEPSEEK_COMMON_MAPPINGS: Final = (
     mapping(rust_span="ocr", python_frame=r"ocr/main\.py:\d+ a?ocr$"),
@@ -352,59 +384,126 @@ DOCUMENT_INTELLIGENCE_ASYNC_MAPPINGS: Final = (
     mapping(span="python_poll_http_request", python_frame=r"AsyncHTTPHandler\.get$"),
 )
 
+COHERE_COMMON_MAPPINGS: Final = (
+    *COMMON_MAPPINGS[:7],
+    mapping(
+        rust_span="transform_ocr_request",
+        python_frame=r"CohereParseConfig\.(?:async_)?transform_ocr_request$",
+    ),
+    COMMON_MAPPINGS[-1],
+    mapping(rust_span="transform_ocr_response", python_frame=r"CohereParseConfig\.transform_ocr_response$"),
+)
+COHERE_ASYNC_MAPPINGS: Final = (
+    *COHERE_COMMON_MAPPINGS,
+    mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
+)
 
 SPEC: Final = RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _mistral_fixture)
 TRACE_SUITE: Final = TraceSuite(
     route=SPEC,
     scenarios=(
         TraceScenario(
-            name="mistral",
+            name="sync-mistral",
             fixture=_mistral_fixture,
-            mappings=COMMON_MAPPINGS,
-            sync_mappings=(*SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
-            async_mappings=(*ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            mappings=(*SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=False,
         ),
         TraceScenario(
-            name="mistral-callback-success",
+            name="async-mistral",
+            fixture=_mistral_fixture,
+            mappings=(*ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-mistral-callback-success",
             fixture=_mistral_callback_success_fixture,
-            mappings=COMMON_MAPPINGS,
-            sync_mappings=CALLBACK_SUCCESS_SYNC_MAPPINGS,
-            async_mappings=CALLBACK_SUCCESS_ASYNC_MAPPINGS,
+            mappings=CALLBACK_SUCCESS_SYNC_MAPPINGS,
+            asynchronous=False,
         ),
         TraceScenario(
-            name="mistral-callback-failure",
+            name="async-mistral-callback-success",
+            fixture=_mistral_callback_success_fixture,
+            mappings=CALLBACK_SUCCESS_ASYNC_MAPPINGS,
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-mistral-callback-failure",
             fixture=_mistral_callback_failure_fixture,
-            mappings=(*COMMON_MAPPINGS, FAILURE_CALLBACK_MAPPING),
-            sync_mappings=CALLBACK_FAILURE_SYNC_MAPPINGS,
-            async_mappings=CALLBACK_FAILURE_ASYNC_MAPPINGS,
+            mappings=CALLBACK_FAILURE_SYNC_MAPPINGS,
+            asynchronous=False,
         ),
         TraceScenario(
-            name="azure-ai",
+            name="async-mistral-callback-failure",
+            fixture=_mistral_callback_failure_fixture,
+            mappings=CALLBACK_FAILURE_ASYNC_MAPPINGS,
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-azure-ai",
             fixture=_azure_fixture,
-            mappings=AZURE_COMMON_MAPPINGS,
-            sync_mappings=(*AZURE_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
-            async_mappings=(*AZURE_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            mappings=(*AZURE_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=False,
         ),
         TraceScenario(
-            name="azure-document-intelligence",
+            name="async-azure-ai",
+            fixture=_azure_fixture,
+            mappings=(*AZURE_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-azure-document-intelligence",
             fixture=_azure_document_intelligence_fixture,
-            mappings=DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS,
-            sync_mappings=(*DOCUMENT_INTELLIGENCE_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
-            async_mappings=(*DOCUMENT_INTELLIGENCE_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            mappings=(*DOCUMENT_INTELLIGENCE_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=False,
         ),
         TraceScenario(
-            name="vertex-ai",
-            fixture=_vertex_fixture,
-            mappings=VERTEX_COMMON_MAPPINGS,
-            sync_mappings=(*VERTEX_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
-            async_mappings=(*VERTEX_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            name="async-azure-document-intelligence",
+            fixture=_azure_document_intelligence_fixture,
+            mappings=(*DOCUMENT_INTELLIGENCE_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=True,
         ),
         TraceScenario(
-            name="vertex-deepseek",
+            name="sync-vertex-deepseek",
             fixture=_vertex_deepseek_fixture,
-            mappings=DEEPSEEK_COMMON_MAPPINGS,
-            sync_mappings=(*DEEPSEEK_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
-            async_mappings=(*DEEPSEEK_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            mappings=(*DEEPSEEK_SYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-vertex-deepseek",
+            fixture=_vertex_deepseek_fixture,
+            mappings=(*DEEPSEEK_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-vertex-deepseek-credentials",
+            fixture=_vertex_deepseek_credentials_fixture,
+            mappings=DEEPSEEK_SYNC_MAPPINGS,
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-vertex-deepseek-credentials",
+            fixture=_vertex_deepseek_credentials_fixture,
+            mappings=DEEPSEEK_ASYNC_MAPPINGS,
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="async-cohere",
+            fixture=_cohere_fixture,
+            mappings=(*COHERE_ASYNC_MAPPINGS, IGNORED_SUCCESS_CALLBACK_MAPPING),
+            asynchronous=True,
+        ),
+        TraceScenario(
+            name="sync-public-rust-dispatch",
+            fixture=_mistral_fixture,
+            mappings=PUBLIC_RUST_DISPATCH_MAPPINGS,
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-public-rust-dispatch",
+            fixture=_mistral_fixture,
+            mappings=PUBLIC_RUST_DISPATCH_MAPPINGS,
+            asynchronous=True,
         ),
     ),
 )
