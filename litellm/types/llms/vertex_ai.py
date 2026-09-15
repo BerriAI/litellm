@@ -1,7 +1,9 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -226,8 +228,18 @@ class VoiceConfig(TypedDict):
     prebuiltVoiceConfig: PrebuiltVoiceConfig
 
 
+class SpeakerVoiceConfig(TypedDict):
+    speaker: ReadOnly[str]
+    voiceConfig: ReadOnly[VoiceConfig]
+
+
+class MultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: ReadOnly[Sequence[SpeakerVoiceConfig]]
+
+
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    multiSpeakerVoiceConfig: ReadOnly[MultiSpeakerVoiceConfig]
     languageCode: str
 
 
