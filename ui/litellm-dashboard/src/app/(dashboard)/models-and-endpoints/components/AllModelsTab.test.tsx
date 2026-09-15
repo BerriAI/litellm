@@ -1,8 +1,10 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { beforeEach, describe, expect, it, Mock, vi } from "vitest";
 
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import AllModelsTab from "./AllModelsTab";
 import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
 
@@ -111,6 +113,9 @@ const setModelsInfo = (rows: Record<string, unknown>[], totalCount = rows.length
 
 const lastModelsInfoCall = (): ModelsInfoArgs => modelsInfoCalls[modelsInfoCalls.length - 1];
 
+const lastUrlParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>): URLSearchParams | undefined =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
 const SEARCH_SETTLE_MS = 400;
 
 const MOCK_AUTHORIZED = {
@@ -121,6 +126,8 @@ const MOCK_AUTHORIZED = {
   userId: "user-123",
   userEmail: "test@example.com",
   userRole: "Admin",
+  userRoleLabel: "Admin",
+  isViewOnly: false,
   premiumUser: true,
   disabledPersonalKeyCreation: false,
   showSSOBanner: false,
@@ -149,14 +156,14 @@ describe("AllModelsTab", () => {
 
   it("renders the fetched models and the server row count", async () => {
     setModelsInfo([makeRow()], 137);
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 137");
   });
 
   it("does not re-query after the mount-time debounced search settles unchanged", async () => {
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
     const callsAfterMount = modelsInfoCalls.length;
 
     await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
@@ -166,14 +173,14 @@ describe("AllModelsTab", () => {
 
   it("shows the empty state when the proxy returns no models", () => {
     setModelsInfo([], 0);
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     expect(screen.getByText("No models found")).toBeInTheDocument();
   });
 
   it("shows the loading skeleton while the first page is in flight", () => {
     setModelsInfo([], 0, true);
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
     expect(screen.queryByText("No models found")).not.toBeInTheDocument();
@@ -197,7 +204,7 @@ describe("AllModelsTab", () => {
 
     it.each(cases)("sorts %s using the server field %s", async (_label, columnId, serverField, firstDirection) => {
       const user = userEvent.setup();
-      render(<AllModelsTab {...defaultProps} />);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       await user.click(sortHeader(columnId));
       await expectIndicator(columnId, firstDirection);
@@ -212,7 +219,7 @@ describe("AllModelsTab", () => {
 
     it("cycles a sorted column back to unsorted", async () => {
       const user = userEvent.setup();
-      render(<AllModelsTab {...defaultProps} />);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       await user.click(sortHeader("model_info_updated_at"));
       await expectIndicator("model_info_updated_at", "asc");
@@ -230,7 +237,7 @@ describe("AllModelsTab", () => {
 
   it("queries the selected team and resets to the first page", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     expect(lastModelsInfoCall().teamId).toBeUndefined();
 
@@ -244,8 +251,7 @@ describe("AllModelsTab", () => {
   });
 
   it("debounces the model name search into the server query", async () => {
-    const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "claude" } });
 
@@ -254,9 +260,123 @@ describe("AllModelsTab", () => {
     });
   });
 
+  describe("URL persistence", () => {
+    it("writes the typed search to the URL and drops the page so a reload keeps the search", async () => {
+      setModelsInfo([makeRow()], 200);
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AllModelsTab {...defaultProps} />, { searchParams: { page: "3" }, onUrlUpdate });
+      expect(lastModelsInfoCall().page).toBe(3);
+
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "claude" } });
+
+      await waitFor(() => {
+        expect(lastUrlParams(onUrlUpdate)?.get("model_search")).toBe("claude");
+      });
+      expect(lastUrlParams(onUrlUpdate)?.get("page")).toBeNull();
+      await waitFor(() => {
+        expect(lastModelsInfoCall().page).toBe(1);
+      });
+    });
+
+    it("restores the search box and server query from ?model_search= on mount", () => {
+      renderWithProviders(<AllModelsTab {...defaultProps} />, { searchParams: { model_search: "haiku" } });
+
+      expect(screen.getByTestId("datatable-search")).toHaveValue("haiku");
+      expect(lastModelsInfoCall().search).toBe("haiku");
+    });
+
+    it("restores team, sort, page and page size from the URL into the server query", () => {
+      setModelsInfo([makeRow()], 200);
+      renderWithProviders(<AllModelsTab {...defaultProps} />, {
+        searchParams: {
+          filter_team: "team-1",
+          sort_by: "model_info_updated_at",
+          sort_order: "desc",
+          page: "2",
+          page_size: "25",
+        },
+      });
+
+      const expectedQuery: ModelsInfoArgs = {
+        teamId: "team-1",
+        sortBy: "updated_at",
+        sortOrder: "desc",
+        page: 2,
+        size: 25,
+      };
+      expect(lastModelsInfoCall()).toMatchObject(expectedQuery);
+      expect(screen.getByTestId("models-team-select")).toHaveTextContent("Engineering");
+    });
+
+    it("restores the access group and view mode from the URL", () => {
+      renderWithProviders(<AllModelsTab {...defaultProps} />, {
+        searchParams: { access_group: "sales-team", view_mode: "all" },
+      });
+
+      expect(lastModelsInfoCall().accessGroup).toBe("sales-team");
+      expect(screen.queryByText(/To access these models/)).not.toBeInTheDocument();
+    });
+
+    it("falls back to the first page and default size when the URL carries values the server rejects", () => {
+      renderWithProviders(<AllModelsTab {...defaultProps} />, { searchParams: { page: "0", page_size: "-5" } });
+
+      expect(lastModelsInfoCall().page).toBe(1);
+      expect(lastModelsInfoCall().size).toBe(50);
+    });
+
+    it("writes sort changes to the URL with the page cleared", async () => {
+      setModelsInfo([makeRow()], 200);
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AllModelsTab {...defaultProps} />, { searchParams: { page: "2" }, onUrlUpdate });
+
+      await user.click(screen.getByTestId("sort-header-model_info_updated_at"));
+
+      await waitFor(() => {
+        expect(lastUrlParams(onUrlUpdate)?.get("sort_by")).toBe("model_info_updated_at");
+      });
+      expect(lastUrlParams(onUrlUpdate)?.get("sort_order")).toBeNull();
+      expect(lastUrlParams(onUrlUpdate)?.get("page")).toBeNull();
+
+      await user.click(screen.getByTestId("sort-header-model_info_updated_at"));
+
+      await waitFor(() => {
+        expect(lastUrlParams(onUrlUpdate)?.get("sort_order")).toBe("desc");
+      });
+    });
+
+    it("clears every table param from the URL on drawer reset", async () => {
+      setModelsInfo([makeRow()], 200);
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AllModelsTab {...defaultProps} />, {
+        searchParams: {
+          model_search: "haiku",
+          filter_team: "team-1",
+          sort_by: "model_name",
+          page: "2",
+          view_mode: "all",
+        },
+        onUrlUpdate,
+      });
+
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      await user.click(await screen.findByTestId("filter-drawer-reset"));
+
+      await waitFor(() => {
+        expect(lastUrlParams(onUrlUpdate)?.toString()).toBe("");
+      });
+      expect(screen.getByTestId("datatable-search")).toHaveValue("");
+      const defaultQuery: ModelsInfoArgs = { search: undefined, teamId: undefined, sortBy: undefined, page: 1 };
+      await waitFor(() => {
+        expect(lastModelsInfoCall()).toMatchObject(defaultQuery);
+      });
+    });
+  });
+
   it("applies a public model name filter through the drawer", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
     await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
@@ -270,7 +390,7 @@ describe("AllModelsTab", () => {
 
   it("renders every row the server returned for the selected model group so rows match the footer total", () => {
     setModelsInfo([makeRow(), { ...makeRow({ model_info: { id: "model-2" } }), model_name: "claude-opus" }], 2);
-    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
     const table = screen.getByRole("table");
     expect(within(table).getByText("claude-opus")).toBeInTheDocument();
@@ -280,7 +400,7 @@ describe("AllModelsTab", () => {
 
   it("asks the server for wildcard deployments instead of hiding rows client-side", () => {
     setModelsInfo([makeRow(), { ...makeRow({ model_info: { id: "model-2" } }), model_name: "openai/*" }], 2);
-    render(<AllModelsTab {...defaultProps} selectedModelGroup="wildcard" />);
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="wildcard" />);
 
     expect(lastModelsInfoCall().wildcardOnly).toBe(true);
     expect(within(screen.getByRole("table")).getByText("gpt-4")).toBeInTheDocument();
@@ -289,7 +409,7 @@ describe("AllModelsTab", () => {
 
   it("asks the server for the selected access group instead of hiding rows client-side", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
     expect(lastModelsInfoCall().wildcardOnly).toBe(false);
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
@@ -303,20 +423,20 @@ describe("AllModelsTab", () => {
   });
 
   it("asks the server for the exact selected model group so deployments beyond the first page are found", () => {
-    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
     expect(lastModelsInfoCall().modelName).toBe("claude-opus");
     expect(lastModelsInfoCall().search).toBeUndefined();
   });
 
   it.each(["all", "wildcard"])("sends no exact model name for the %s pseudo group", (group) => {
-    render(<AllModelsTab {...defaultProps} selectedModelGroup={group} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup={group} />);
 
     expect(lastModelsInfoCall().modelName).toBeUndefined();
   });
 
   it("keeps the exact model group alongside a typed search", async () => {
-    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
     fireEvent.change(screen.getByPlaceholderText("Search model names…"), { target: { value: "opus" } });
 
@@ -326,7 +446,7 @@ describe("AllModelsTab", () => {
 
   it("resets search, filters, team and sorting from the drawer reset button", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} selectedModelGroup="gpt-4" />);
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="gpt-4" />);
 
     await user.click(screen.getByTestId("models-team-select"));
     await user.click(await screen.findByRole("option", { name: "Engineering" }));
@@ -343,7 +463,7 @@ describe("AllModelsTab", () => {
 
   it("opens the delete modal from the row and deletes the model", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await user.click(await screen.findByTestId("model-delete-model-1"));
     expect(await screen.findByText("Delete Model")).toBeInTheDocument();
@@ -357,7 +477,7 @@ describe("AllModelsTab", () => {
 
   it("pauses a model through the row toggle", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await user.click(await screen.findByTestId("model-pause-toggle-model-1"));
 
@@ -368,7 +488,7 @@ describe("AllModelsTab", () => {
 
   it("opens the model settings modal from the toolbar", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     expect(screen.queryByTestId("model-settings-modal")).not.toBeInTheDocument();
     await user.click(screen.getByTestId("models-settings-trigger"));
@@ -377,7 +497,7 @@ describe("AllModelsTab", () => {
 
   it("opens the model detail view from the model ID cell", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await user.click(await screen.findByTestId("model-id-model-1"));
 
@@ -386,7 +506,7 @@ describe("AllModelsTab", () => {
 
   it("opens the team detail view from the team ID cell", async () => {
     const user = userEvent.setup();
-    render(<AllModelsTab {...defaultProps} />);
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
 
     await user.click(await screen.findByTestId("model-team-id-model-1"));
 
@@ -395,20 +515,20 @@ describe("AllModelsTab", () => {
 
   describe("virtual key hint", () => {
     it("explains personal key creation while viewing current team models", () => {
-      render(<AllModelsTab {...defaultProps} />);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
     });
 
     it("links the Virtual Keys page through the migrated /ui route", () => {
-      render(<AllModelsTab {...defaultProps} />);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       expect(screen.getByRole("link", { name: "Virtual Keys page" })).toHaveAttribute("href", "/ui/api-keys");
     });
 
     it("links the team hint's Virtual Keys page through the migrated /ui route", async () => {
       const user = userEvent.setup();
-      render(<AllModelsTab {...defaultProps} />);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       await user.click(screen.getByTestId("models-team-select"));
       await user.click(await screen.findByRole("option", { name: "Engineering" }));
@@ -419,7 +539,7 @@ describe("AllModelsTab", () => {
 
     it("names the selected team in the hint", async () => {
       const user = userEvent.setup();
-      render(<AllModelsTab {...defaultProps} />);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       await user.click(screen.getByTestId("models-team-select"));
       await user.click(await screen.findByRole("option", { name: "Engineering" }));
@@ -429,7 +549,7 @@ describe("AllModelsTab", () => {
 
     it("hides the hint when viewing all available models", async () => {
       const user = userEvent.setup();
-      render(<AllModelsTab {...defaultProps} />);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       await user.click(screen.getByTestId("models-view-select"));
       await user.click(await screen.findByRole("option", { name: "All Available Models" }));
