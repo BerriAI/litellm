@@ -314,15 +314,15 @@ async def _extract_user_id_from_request(request: Request) -> str | None:
 
     token: Final = _litellm_key_from_request(request)
     if token is not None and JWTHandler.is_jwt(token):
-        return await _extract_jwt_user_id(token)
+        return await _extract_jwt_user_id(request, token)
     resolved: Final = await _resolve_active_litellm_key(request)
     if not isinstance(resolved, _ResolvedKey):
         return None
     return _active_key_user_id(resolved.key)
 
 
-async def _extract_jwt_user_id(token: str) -> str | None:
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+async def _extract_jwt_user_id(request: Request, token: str) -> str | None:
+    from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
         _resolve_jwt_to_virtual_key,  # pyright: ignore[reportPrivateUsage]  # reuse admission mapping policy without provisioning a new key
@@ -339,11 +339,11 @@ async def _extract_jwt_user_id(token: str) -> str | None:
     if general_settings.get("enable_jwt_auth") is not True or premium_user is not True:
         return None
     try:
-        claims: Final = await jwt_handler.auth_jwt(token=token)
-        validate: Final = jwt_handler.litellm_jwtauth.custom_validate
-        if validate is not None and not validate(claims):
-            return None
         if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
+            claims: Final = await jwt_handler.auth_jwt(token=token)
+            validate: Final = jwt_handler.litellm_jwtauth.custom_validate
+            if validate is not None and not validate(claims):
+                return None
             mapped: Final = await _resolve_jwt_to_virtual_key(
                 jwt_claims=claims,
                 jwt_handler=jwt_handler,
@@ -356,16 +356,24 @@ async def _extract_jwt_user_id(token: str) -> str | None:
                 return None if await _key_owner_scim_deactivated(mapped) else _active_key_user_id(mapped)
             if mapped is not None:
                 return None
-        user_id, user_email, valid_email = await JWTAuthManager.get_user_info(jwt_handler, claims)
-        object_id: Final = jwt_handler.get_object_id(token=claims, default_value=None)
-        owner_id: Final = (
-            object_id
-            if jwt_handler.get_rbac_role(token=claims) == LitellmUserRoles.INTERNAL_USER and object_id
-            else user_id
+        identity: Final = await JWTAuthManager.auth_builder(
+            api_key=token,
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings=general_settings,
+            route=request.url.path,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            request_headers=dict(request.headers),
+            request_method=request.method,
         )
-        if not owner_id or valid_email is False:
+        owner_id: Final = identity["user_id"]
+        if not owner_id:
             return None
-        owner: Final = await load_active_user_by_id(owner_id, sso_user_id=owner_id, user_email=user_email)
+        # Admin JWTs can return before auth_builder loads the canonical database user.
+        owner: Final = await load_active_user_by_id(owner_id, sso_user_id=owner_id, user_email=identity["user_email"])
         return None if isinstance(owner, str) else owner.user_id
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
