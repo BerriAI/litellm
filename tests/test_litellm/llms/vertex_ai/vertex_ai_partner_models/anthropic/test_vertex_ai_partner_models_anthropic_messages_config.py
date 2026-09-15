@@ -1,4 +1,6 @@
 import copy
+import json
+import os
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
@@ -542,3 +544,30 @@ class TestVertexAnthropicMidConversationSystem:
             {"type": "text", "text": "You are terse."},
             {"type": "text", "text": "Cite sources."},
         ]
+
+
+def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
+    import re
+
+    import litellm
+
+    cost_map_path = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
+    with open(cost_map_path) as f:
+        cost_map = json.load(f)
+    rules = cost_map["fallback_generalizations"]["rules"]
+    rule_pattern = next(
+        (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
+        None,
+    )
+    assert rule_pattern is not None, "claude-mid-conversation-system rule not found in fallback_generalizations"
+    pattern = re.compile(rule_pattern, re.IGNORECASE)
+    missing = [
+        key
+        for key, info in cost_map.items()
+        if isinstance(info, dict)
+        and str(info.get("litellm_provider", "")).startswith("vertex_ai")
+        and "claude" in key
+        and pattern.search(key)
+        and info.get("supports_mid_conversation_system") is not True
+    ]
+    assert missing == []
