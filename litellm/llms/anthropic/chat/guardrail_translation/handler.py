@@ -44,6 +44,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
+    unappliable_request_rewrite,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -570,6 +571,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                     preserve_system_messages=has_midturn_system_message,
                 )
             else:
+                if guardrailed_texts and len(guardrailed_texts) != len(scanned):
+                    raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
                 # Step 3: Map guardrail responses back to original message structure
                 await self._apply_guardrail_responses_to_input(
                     messages=messages,

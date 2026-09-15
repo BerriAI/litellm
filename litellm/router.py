@@ -3268,8 +3268,15 @@ class Router:
                         kwargs=initial_kwargs,
                         metadata_variable_name="litellm_metadata",
                     )
+                    # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
+                    # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
+                    fallback_trigger: Final[Exception] = (
+                        e.original_exception
+                        if isinstance(e.original_exception, litellm.ContentPolicyViolationError)
+                        else e
+                    )
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=fallback_trigger,
                         disable_fallbacks=False,
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -4842,6 +4849,7 @@ class Router:
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
 
             data: Final = deployment["litellm_params"].copy()
@@ -5156,13 +5164,11 @@ class Router:
             return healthy_deployments[0]
 
         # Use simple_shuffle for weighted selection
-        return cast(
-            GuardrailTypedDict,
-            simple_shuffle(
-                llm_router_instance=self,
-                healthy_deployments=healthy_deployments,
-                model=guardrail_name,
-            ),
+        return simple_shuffle(
+            resolve_model_alias=self._get_model_from_alias,
+            healthy_deployments=healthy_deployments,
+            model=guardrail_name,
+            request_kwargs=None,
         )
 
     async def _ageneric_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
@@ -13038,9 +13044,10 @@ class Router:
             start_time: Final = time.time()
             if strategy == "simple-shuffle":
                 return simple_shuffle(
-                    llm_router_instance=self,
+                    resolve_model_alias=self._get_model_from_alias,
                     healthy_deployments=healthy_deployments,
                     model=model,
+                    request_kwargs=request_kwargs,
                 )
             deployment: Final = await self._select_deployment_async(
                 strategy=strategy,
@@ -13183,9 +13190,10 @@ class Router:
             start_time: Final = time.perf_counter()
             if strategy == "simple-shuffle":
                 return simple_shuffle(
-                    llm_router_instance=self,
+                    resolve_model_alias=self._get_model_from_alias,
                     healthy_deployments=pass_through_deployments,
                     model=model,
+                    request_kwargs=request_kwargs,
                 )
             deployment: Final = await self._select_deployment_async(
                 strategy=strategy,
@@ -13881,9 +13889,10 @@ class Router:
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
             return simple_shuffle(
-                llm_router_instance=self,
+                resolve_model_alias=self._get_model_from_alias,
                 healthy_deployments=healthy_deployments,
                 model=model,
+                request_kwargs=request_kwargs,
             )
         deployment: Final = self._select_deployment_sync(
             strategy=strategy,
@@ -13951,6 +13960,7 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
         )
 
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
@@ -14033,9 +14043,10 @@ class Router:
         # 6. Apply load balancing strategy
         if strategy == "simple-shuffle":
             return simple_shuffle(
-                llm_router_instance=self,
+                resolve_model_alias=self._get_model_from_alias,
                 healthy_deployments=pass_through_deployments,
                 model=model,
+                request_kwargs=request_kwargs,
             )
         deployment: Final = self._select_deployment_sync(
             strategy=strategy,

@@ -892,7 +892,10 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_video_per_second_above_8s_interval",
         "input_cost_per_video_per_second_above_15s_interval",
         "input_cost_per_video_per_second_above_128k_tokens",
+        "input_cost_per_audio_token_batches",
+        "input_cost_per_image_token_batches",
         "input_cost_per_token_batches",
+        "input_cost_per_video_token_batches",
         "output_cost_per_token_batches",
         "input_cost_per_token_cache_hit",
         "cache_creation_input_token_cost",
@@ -1041,7 +1044,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
+                "input_cost_per_audio_token_batches": {"type": "number"},
+                "input_cost_per_image_token_batches": {"type": "number"},
                 "input_cost_per_token_batches": {"type": "number"},
+                "input_cost_per_video_token_batches": {"type": "number"},
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
                 "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
@@ -2946,7 +2952,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
 
 def test_gemini_embedding_2_ga_in_cost_map():
-    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
+    """GA and Vertex preview gemini-embedding-2 entries align with multimodal token pricing."""
     import json
     from pathlib import Path
 
@@ -2968,9 +2974,15 @@ def test_gemini_embedding_2_ga_in_cost_map():
         assert info.get("mode") == "embedding"
         assert info.get("supports_multimodal") is True
         assert info.get("input_cost_per_token") == 2e-07
-        assert info.get("input_cost_per_image") == 0.00012
-        assert info.get("input_cost_per_audio_per_second") == 0.00016
-        assert info.get("input_cost_per_video_per_second") == 0.00079
+        assert info.get("input_cost_per_audio_token") == 6.5e-06
+        assert info.get("input_cost_per_image_token") == 4.5e-07
+        assert info.get("input_cost_per_video_token") == 1.2e-05
+        assert info.get("input_cost_per_audio_token_batches") == 3.25e-06
+        assert info.get("input_cost_per_image_token_batches") == 2.25e-07
+        assert info.get("input_cost_per_video_token_batches") == 6e-06
+        assert "input_cost_per_image" not in info
+        assert "input_cost_per_audio_per_second" not in info
+        assert "input_cost_per_video_per_second" not in info
         if provider in ("vertex_ai-embedding-models", "vertex_ai"):
             assert (
                 info.get("uses_embed_content") is True
@@ -4629,6 +4641,16 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
 
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
+
+
+@pytest.mark.parametrize("filter_name", [
+    "get_non_default_completion_params", "get_non_default_transcription_params", "filter_out_litellm_params",
+])
+def test_scoped_weights_are_excluded_from_provider_params(filter_name: str) -> None:
+    filtered = getattr(litellm.utils, filter_name)(
+        {"provider_option": "kept", "_router_weights": {"group": {"deployment": 100}}}
+    )
+    assert filtered == {"provider_option": "kept"}
 
 
 class TestGetOptionalParamsTencent:
