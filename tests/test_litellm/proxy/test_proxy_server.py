@@ -29,6 +29,7 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.constants import REDIS_SOCKET_TIMEOUT
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
@@ -11935,6 +11936,155 @@ def test_init_coordination_redis_absent_leaves_usage_cache_unset():
 
     assert usage_cache is None
     assert spend_redis is None
+
+
+def _run_init_rate_limit_remote_replicas(config, env=None):
+    """Run ProxyConfig._init_rate_limit_remote_replicas against a stubbed module
+    state, returning (replicas, spend_counter redis, config-cache redis)."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+
+    with (
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
+        mock.patch.dict(os.environ, env or {}, clear=False),
+    ):
+        built = proxy_server_module.ProxyConfig()._init_rate_limit_remote_replicas(config=config)
+        return (
+            built,
+            fresh_spend_cache.redis_cache,
+            fresh_config_cache.redis_cache,
+        )
+
+
+def test_init_rate_limit_remote_replicas_builds_one_client_per_entry():
+    """Each entry names one other region's Redis, so an active-active pair with
+    three regions gets two replica clients, each with its own connection target."""
+    replicas, _, _ = _run_init_rate_limit_remote_replicas(
+        config={
+            "general_settings": {
+                "rate_limit_remote_replicas": [
+                    {"host": "us-west-replica", "port": 6379},
+                    {"host": "eu-central-replica", "port": 6380},
+                ]
+            }
+        },
+    )
+
+    assert [replica.init_kwargs["host"] for replica in replicas] == [
+        "us-west-replica",
+        "eu-central-replica",
+    ]
+    assert [replica.init_kwargs["port"] for replica in replicas] == [6379, 6380]
+
+
+def test_init_rate_limit_remote_replicas_builds_a_cluster_client_for_startup_nodes():
+    """The customer's Redis is cluster-mode; the replica client has to be a cluster
+    client so the counter read uses the slot-safe non-atomic MGET."""
+    replicas, _, _ = _run_init_rate_limit_remote_replicas(
+        config={
+            "general_settings": {
+                "rate_limit_remote_replicas": [{"startup_nodes": [{"host": "replica-node-1", "port": 7000}]}]
+            }
+        },
+    )
+
+    assert isinstance(replicas[0], _EnvBuiltClusterCache)
+    assert replicas[0].init_kwargs["startup_nodes"] == [{"host": "replica-node-1", "port": 7000}]
+
+
+def test_init_rate_limit_remote_replicas_refuse_ambiguous_cluster_env():
+    """REDIS_CLUSTER_NODES names THIS region's cluster, and litellm._redis applies it to any
+    client built without an explicit startup_nodes -- deeper than _build_redis_usage_cache, so
+    suppressing the fallback there is not enough on its own. A host-only replica entry would
+    therefore connect to the local Redis and the limiter would add this region's counters to
+    themselves, halving every limit silently. Startup must refuse instead."""
+    with pytest.raises(ValueError, match="REDIS_CLUSTER_NODES is set"):
+        _run_init_rate_limit_remote_replicas(
+            config={"general_settings": {"rate_limit_remote_replicas": [{"host": "us-west-replica"}]}},
+            env={"REDIS_CLUSTER_NODES": '[{"host": "local-cluster-node", "port": 7000}]'},
+        )
+
+
+def test_init_rate_limit_remote_replicas_allow_cluster_env_when_entry_names_its_nodes():
+    """An entry that names its own startup_nodes is unambiguous: litellm._redis prefers an
+    explicit startup_nodes over the env var, so the client reaches the remote region's cluster.
+    That is the supported way to run this feature on cluster-mode Redis."""
+    replicas, _, _ = _run_init_rate_limit_remote_replicas(
+        config={
+            "general_settings": {
+                "rate_limit_remote_replicas": [{"startup_nodes": [{"host": "replica-node-1", "port": 7000}]}]
+            }
+        },
+        env={"REDIS_CLUSTER_NODES": '[{"host": "local-cluster-node", "port": 7000}]'},
+    )
+
+    assert replicas[0].init_kwargs["startup_nodes"] == [{"host": "replica-node-1", "port": 7000}]
+
+
+def test_init_rate_limit_remote_replicas_resolves_os_environ_references():
+    """os.environ/ values must be resolved per entry, as in coordination_redis."""
+    replicas, _, _ = _run_init_rate_limit_remote_replicas(
+        config={"general_settings": {"rate_limit_remote_replicas": [{"host": "os.environ/WEST_REPLICA_HOST"}]}},
+        env={"WEST_REPLICA_HOST": "resolved-replica-host"},
+    )
+
+    assert replicas[0].init_kwargs["host"] == "resolved-replica-host"
+
+
+def test_init_rate_limit_remote_replicas_defaults_a_short_socket_timeout():
+    """A degraded replica must not add RedisCache's 5s default to every request;
+    an entry that sets its own socket_timeout still wins."""
+    replicas, _, _ = _run_init_rate_limit_remote_replicas(
+        config={
+            "general_settings": {
+                "rate_limit_remote_replicas": [
+                    {"host": "default-timeout-replica"},
+                    {"host": "tuned-replica", "socket_timeout": 0.5},
+                ]
+            }
+        },
+    )
+
+    assert replicas[0].init_kwargs["socket_timeout"] == REDIS_SOCKET_TIMEOUT
+    assert replicas[1].init_kwargs["socket_timeout"] == 0.5
+
+
+def test_init_rate_limit_remote_replicas_absent_builds_nothing():
+    """The feature is opt-in: without the field the limiter gets no replicas and
+    enforcement is exactly what it is today."""
+    replicas, _, _ = _run_init_rate_limit_remote_replicas(config={"general_settings": {}})
+
+    assert replicas == ()
+
+
+def test_init_rate_limit_remote_replicas_without_a_connection_target_raises():
+    """An entry with no host, url, startup_nodes, or sentinel_nodes is a config
+    error and must fail startup loudly rather than silently skip a region."""
+    with pytest.raises(ValueError, match="connection target"):
+        _run_init_rate_limit_remote_replicas(
+            config={"general_settings": {"rate_limit_remote_replicas": [{"ssl": True}]}},
+        )
+
+
+def test_init_rate_limit_remote_replicas_non_list_raises():
+    """A single mapping instead of a list is a config error."""
+    with pytest.raises(TypeError, match="must be a list"):
+        _run_init_rate_limit_remote_replicas(
+            config={"general_settings": {"rate_limit_remote_replicas": {"host": "west"}}},
+        )
+
+
+def test_init_rate_limit_remote_replicas_are_not_attached_to_the_spend_caches():
+    """A replica is another region's Redis, read-only to us. Attaching it to the
+    spend counter, config, or auth caches would have this region writing into it."""
+    replicas, spend_redis, config_redis = _run_init_rate_limit_remote_replicas(
+        config={"general_settings": {"rate_limit_remote_replicas": [{"host": "us-west-replica"}]}},
+    )
+
+    assert len(replicas) == 1
+    assert spend_redis is None
+    assert config_redis is None
+    assert proxy_server_module.redis_usage_cache is None
 
 
 def test_explicit_coordination_redis_takes_precedence_over_cache_backend():

@@ -1723,6 +1723,7 @@ async def test_atomic_lua_response_carries_redis_window_identity(rate_limiter):
             "current_limit": 100,
             "rate_limit_type": "tokens",
             "counter_key": counter_key,
+            "remote_offset": 0,
         }
     ]
 

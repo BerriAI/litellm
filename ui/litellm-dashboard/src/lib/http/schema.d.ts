@@ -26280,6 +26280,11 @@ export interface components {
              */
             proxy_config_reload_interval_seconds: number;
             /**
+             * Rate Limit Remote Replicas
+             * @description read-only Redis replicas of OTHER regions' coordination Redis, used only to read rate-limit counters. The limiter adds each replica's counter to the local one before comparing against the limit, so an active-active deployment enforces one shared limit instead of one per region. Never written to, and never used for spend, locks, or caching
+             */
+            rate_limit_remote_replicas?: components["schemas"]["CoordinationRedisParams"][] | null;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
