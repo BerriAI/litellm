@@ -74,7 +74,6 @@ class TrendAIGuardrail(CustomGuardrail):
         api_base: str | None = None,
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
-        mask_pii: bool = True,
         timeout: float = 5.0,
         stream_batch_size: int = 2048,
         stream_overlap_size: int = 256,
@@ -114,7 +113,6 @@ class TrendAIGuardrail(CustomGuardrail):
         self.api_url: str = _build_apply_guardrails_url(resolved_api_base)
         self.app_name: str = app_name or os.environ.get("TMV1_APPLICATION_NAME", "litellm")
         self.fallback_on_error: Literal["block", "allow"] = fallback_on_error
-        self.mask_pii: bool = mask_pii
         self.timeout: float = timeout
         self.stream_batch_size: int = stream_batch_size
         self.stream_overlap_size: int = stream_overlap_size
@@ -129,8 +127,8 @@ class TrendAIGuardrail(CustomGuardrail):
             event_hook=event_hook,
             default_on=default_on,
             supported_event_hooks=self.get_supported_event_hooks(),
-            mask_request_content=mask_pii,
-            mask_response_content=mask_pii,
+            mask_request_content=True,
+            mask_response_content=True,
         )
 
     @classmethod
@@ -369,7 +367,7 @@ class TrendAIGuardrail(CustomGuardrail):
             ("TMV1-Client-Name", TMV1_CLIENT_NAME),
             ("TMV1-Client-Version", litellm_version),
             ("TMV1-Plugin-Version", PLUGIN_VERSION),
-            *_optional_header("prefer", "redact-pii,return=representation" if self.mask_pii else None),
+            ("prefer", "redact-pii,return=representation"),
             *_optional_header("TMV1-Request-Type", request_type),
         )
         return MappingProxyType(dict(headers))

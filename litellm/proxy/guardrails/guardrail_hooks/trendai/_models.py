@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class TrendAISettings(BaseModel):
     app_name: str | None = None
     fallback_on_error: Literal["block", "allow"] = "block"
-    mask_pii: bool = True
     timeout: float = 5.0
     stream_batch_size: int = 2048
     stream_overlap_size: int = 256
