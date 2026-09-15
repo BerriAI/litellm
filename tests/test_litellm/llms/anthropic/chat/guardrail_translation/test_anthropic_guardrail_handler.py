@@ -2328,16 +2328,20 @@ class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
         assert data["messages"][2]["content"][0]["tool_use_id"] == "toolu_01"
 
     @pytest.mark.asyncio
-    async def test_non_json_rewritten_arguments_keep_the_tool_use_input(self):
+    async def test_non_json_rewritten_arguments_are_rejected_by_name(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
         handler = AnthropicMessagesHandler()
         guardrail = ToolCallArgumentsMaskingGuardrail(replacement_arguments="[REDACTED]")
         data = self._tool_use_conversation(system="You are a careful agent harness.")
+        original = json.loads(json.dumps(data))
 
-        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert data["messages"][1]["content"][0]["input"] == {
-            "cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"
-        }
+        assert excinfo.value.guardrail_name == "scan-only-capture"
+        assert data["system"] == original["system"], "a rejected rewrite must leave the request untouched"
+        assert data["messages"] == original["messages"], "a rejected rewrite must leave the request untouched"
 
     @pytest.mark.asyncio
     async def test_scan_only_tool_results_keeps_system_and_tool_use_out(self):
