@@ -270,7 +270,6 @@ fn rejects_non_string_extra_headers() {
     );
 }
 
-#[cfg(feature = "bedrock-auth")]
 #[test]
 fn prepares_a_bedrock_call_without_resolving_credentials() {
     let mut call = request(
@@ -302,7 +301,6 @@ fn prepares_a_bedrock_call_without_resolving_credentials() {
     assert_eq!(prepared.body["inferenceConfig"], json!({"maxTokens": 16}));
 }
 
-#[cfg(feature = "bedrock-auth")]
 #[tokio::test]
 async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
     // Python signs only the AWS header set and reattaches the rest, so a header
@@ -351,7 +349,6 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
     );
 }
 
-#[cfg(feature = "bedrock-auth")]
 #[tokio::test]
 async fn a_forwarded_header_the_signer_computes_declines_to_python() {
     // Reattaching the caller's copy next to the computed one puts the name on
@@ -386,7 +383,6 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
     }
 }
 
-#[cfg(feature = "bedrock-auth")]
 #[test]
 fn a_bedrock_deployment_bearer_outranks_a_forwarded_authorization() {
     // `get_request_headers` assigns `headers["Authorization"]` unconditionally
@@ -453,7 +449,6 @@ fn an_anthropic_forwarded_oauth_bearer_still_outranks_the_resolved_key() {
     );
 }
 
-#[cfg(feature = "bedrock-auth")]
 #[test]
 fn a_bedrock_api_key_is_sent_as_a_bearer_token_instead_of_being_signed() {
     // The configured bearer identity has its own account and quota boundary,

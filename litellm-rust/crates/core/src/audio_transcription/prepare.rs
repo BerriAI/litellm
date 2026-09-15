@@ -1,6 +1,5 @@
 use crate::error::Error;
 use crate::http_utils::{has_header, string_headers};
-#[cfg(feature = "bedrock-auth")]
 use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
 
@@ -8,12 +7,10 @@ use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderCo
 use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
 fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
-    #[cfg(feature = "bedrock-auth")]
-    if provider == "bedrock" {
-        return Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG);
+    match provider {
+        "bedrock" => Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG),
+        _ => None,
     }
-    let _ = provider;
-    None
 }
 
 pub fn prepare_audio_transcription_provider_call(
@@ -65,7 +62,6 @@ pub fn prepare_audio_transcription_provider_call(
         body: transformed.body,
         upstream_headers: headers,
         auth,
-        #[cfg(feature = "bedrock-auth")]
         optional_params: request.optional_params,
         timeout: request.timeout,
     })

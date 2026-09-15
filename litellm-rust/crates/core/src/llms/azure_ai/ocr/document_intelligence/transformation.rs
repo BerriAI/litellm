@@ -614,7 +614,6 @@ mod polling {
 }
 
 use crate::Error;
-use crate::auth::{InputSource, Sourced};
 use crate::constants::{AZURE_DI_API_VERSION, AZURE_DI_SUBSCRIPTION_HEADER};
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::ocr::OcrClient;
@@ -622,6 +621,7 @@ use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrResponseFormat};
 use crate::url_utils::ApiUrl;
+use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
 
 const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";

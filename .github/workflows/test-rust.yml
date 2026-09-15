@@ -95,7 +95,7 @@ jobs:
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - run: cargo clippy -p litellm-core --all-targets --features bedrock-auth --locked -- -D warnings
+      - run: cargo clippy -p litellm-core --all-targets --no-default-features --locked -- -D warnings
 
   rust-test:
     runs-on: ubuntu-latest
@@ -129,7 +129,7 @@ jobs:
       - run: cargo test --workspace --locked
         working-directory: litellm-rust
 
-      - run: cargo test -p litellm-core --features bedrock-auth --locked
+      - run: cargo test -p litellm-core --no-default-features --locked
         working-directory: litellm-rust
 
       - run: uv build --wheel --out-dir dist

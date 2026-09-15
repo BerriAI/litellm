@@ -26,7 +26,6 @@ pub struct ProviderAudioTranscriptionRequest {
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: AudioTranscriptionAuth,
-    #[cfg(feature = "bedrock-auth")]
     pub(super) optional_params: OpaqueParams,
     pub(super) timeout: Option<Duration>,
 }
