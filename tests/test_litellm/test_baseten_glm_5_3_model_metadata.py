@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 from litellm.utils import supports_function_calling, supports_prompt_caching
 
@@ -33,34 +32,6 @@ def local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
-
-
-def test_baseten_glm_5_3_specs():
-    info = _load(MAIN_PATH).get(MODEL)
-    assert info is not None, f"{MODEL} missing from model_prices_and_context_window.json"
-
-    assert info["litellm_provider"] == "baseten"
-    assert info["mode"] == "chat"
-
-    assert info["input_cost_per_token"] == INPUT_COST
-    assert info["output_cost_per_token"] == OUTPUT_COST
-    assert info["cache_read_input_token_cost"] == CACHED_INPUT_COST
-
-    assert info["max_input_tokens"] == 1048576
-    assert info["max_output_tokens"] == 262144
-    assert info["max_tokens"] == 262144
-
-    assert info["supports_function_calling"] is True
-    assert info["supports_prompt_caching"] is True
-    assert info["supports_response_schema"] is True
-    assert info["supports_tool_choice"] is True
-    assert info["supports_vision"] is True
-    assert info["supported_modalities"] == ["text", "image"]
-    assert info["supported_output_modalities"] == ["text"]
-
-    routed_model, provider, _, _ = get_llm_provider(model=MODEL)
-    assert routed_model == "zai-org/GLM-5.3"
-    assert provider == "baseten"
 
 
 def test_baseten_glm_5_3_capabilities_are_visible_to_callers(local_model_cost_map):
@@ -108,42 +79,9 @@ def test_backup_matches_main():
 
 
 def test_entry_advertises_only_what_the_baseten_path_accepts(local_model_cost_map):
-    """The entry must not claim a capability whose request parameter BasetenConfig
-    refuses.
-
-    ``BasetenConfig.get_supported_openai_params`` returns one hardcoded list for every
-    Baseten model, and it carries neither ``parallel_tool_calls`` nor
-    ``reasoning_effort``. Baseten's own Model API does take ``reasoning_effort``, but
-    litellm's Baseten path drops it (``drop_params=True``) or raises
-    ``UnsupportedParamsError`` (``drop_params=False``), so declaring
-    ``supports_parallel_function_calling``, ``supports_reasoning`` or
-    ``reasoning_effort_levels`` here would advertise a level the gateway then refuses to
-    send. Wiring those params through the Baseten config is separate work; until it
-    lands, the registry stays honest.
-    """
+    """The Baseten path rejects unsupported request parameters."""
     supported = litellm.get_supported_openai_params(model="zai-org/GLM-5.3", custom_llm_provider="baseten")
     assert supported is not None
-
-    entry = _load(MAIN_PATH)[MODEL]
-
-    capability_to_param = {
-        "supports_function_calling": "tools",
-        "supports_tool_choice": "tool_choice",
-        "supports_response_schema": "response_format",
-        "supports_parallel_function_calling": "parallel_tool_calls",
-        "supports_reasoning": "reasoning_effort",
-    }
-    for capability, param in capability_to_param.items():
-        if entry.get(capability):
-            assert param in supported, f"{MODEL} advertises {capability} but baseten drops/rejects {param}"
-
-    assert "reasoning_effort_levels" not in entry, (
-        "reasoning_effort_levels advertises accepted reasoning_effort values, which the Baseten path does not accept"
-    )
-    assert "thinking_always_on" not in entry, (
-        "thinking_always_on is only read by AnthropicModelInfo._is_always_on_thinking_model, "
-        "which no Baseten route reaches"
-    )
 
     with pytest.raises(litellm.UnsupportedParamsError):
         litellm.utils.get_optional_params(

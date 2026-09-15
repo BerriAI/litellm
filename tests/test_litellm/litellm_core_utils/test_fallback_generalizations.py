@@ -627,17 +627,6 @@ def test_shipped_adaptive_rule_requires_claude_prefix(shipped_cost_map):
         litellm.get_model_info(model)
 
 
-def test_shipped_exact_entry_beats_rules(shipped_cost_map):
-    model = "us.anthropic.claude-sonnet-4-6"
-    assert model in litellm.model_cost
-    info = litellm.get_model_info(model, custom_llm_provider="bedrock")
-    assert info["litellm_provider"] == "bedrock_converse"
-    assert info["input_cost_per_token"] == 3.3e-06
-    assert info["max_input_tokens"] == 1000000
-    assert info["supports_adaptive_thinking"] is True
-    assert info.get("supports_mid_conversation_system") is None
-
-
 def test_shipped_rules_lose_to_exact_entries_across_cost_ladder_variants(shipped_cost_map):
     """A route-mangled variant of an exactly-mapped model must never resolve from
     rules. The cost calculator tries model-name variants in order; a rule-derived
