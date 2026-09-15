@@ -7268,15 +7268,35 @@ _RESPONSE_ID_KEYED_SPEND_LOG_CALL_TYPES: Final = frozenset(
         CallTypes.aocr.value,
         CallTypes.vector_store_search.value,
         CallTypes.avector_store_search.value,
+        CallTypes.create_interaction.value,
+        CallTypes.acreate_interaction.value,
+        CallTypes.create_video.value,
+        CallTypes.acreate_video.value,
+        CallTypes.video_remix.value,
+        CallTypes.avideo_remix.value,
+        CallTypes.video_edit.value,
+        CallTypes.avideo_edit.value,
+        CallTypes.video_extension.value,
+        CallTypes.avideo_extension.value,
+        CallTypes.create_container.value,
+        CallTypes.acreate_container.value,
+        CallTypes.run_code.value,
+        CallTypes.arun_code.value,
+        CallTypes.code_interpreter_tool.value,
+        CallTypes.acode_interpreter_tool.value,
+        CallTypes.call_mcp_tool.value,
+        CallTypes.send_message.value,
+        CallTypes.asend_message.value,
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
     }
 )
-"""The inference calls, whose provider mints a response id per call: a stored row with the same
-``request_id`` is another request the provider gave the same id. Every other call type (object
-creates, reads, polls and management calls, batch cost claims) is keyed on the id of the object
-it addressed, and a second row for one of those collapses on purpose."""
+"""The inference and create calls, whose provider mints a response id per call: a stored row
+with the same ``request_id`` is another request the provider gave the same id. Every other call
+type (object reads, polls, cancels, lists and deletes, batch cost claims) is keyed on the id of the
+object it addressed, and a second row for one of those collapses on purpose. Realtime and
+Responses websocket sessions carry no provider id and are keyed on the call id already."""
 
 
 def _is_transient_spend_log_write_error(e: Exception) -> bool:

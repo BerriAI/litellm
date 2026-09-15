@@ -987,7 +987,17 @@ async def test_update_spend_logs_rekeys_the_rows_a_reused_provider_response_id_w
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "call_type",
-    ["acompletion", "atext_completion", "aembedding", "aresponses", "aanthropic_messages", "allm_passthrough_route"],
+    [
+        "acompletion",
+        "atext_completion",
+        "aembedding",
+        "aresponses",
+        "aanthropic_messages",
+        "acreate_interaction",
+        "acreate_video",
+        "call_mcp_tool",
+        "allm_passthrough_route",
+    ],
 )
 async def test_update_spend_logs_rekeys_every_inference_call_type(
     mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, call_type: str
