@@ -2793,3 +2793,19 @@ class TestAnthropicResponseScanCarriesRequestConversation:
         ]
         assert inputs["structured_messages"][-1] == {"role": "assistant", "content": "Paris is the capital"}
         assert inputs["tools"][0]["function"]["name"] == "run_shell"
+
+    @pytest.mark.asyncio
+    async def test_streaming_response_scan_survives_a_request_without_a_model(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = TypedInputsRecordingGuardrail()
+        request = {key: value for key, value in self._request().items() if key != "model"}
+
+        await handler.process_output_streaming_response(
+            responses_so_far=self._sse_chunks(ended=True),
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=MagicMock(),
+            request_data=request,
+        )
+
+        [(_, inputs)] = guardrail.seen
+        assert [m["role"] for m in inputs["structured_messages"]] == ["system", "user", "assistant", "tool", "assistant"]
