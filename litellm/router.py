@@ -8403,8 +8403,8 @@ class Router:
             else ()
         )
         breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
-        earlier_retry_count: Final = request_metadata.get("request_retry_count")
-        request_retry_count: Final = (earlier_retry_count if type(earlier_retry_count) is int else 0) + 1
+        earlier: Final = request_metadata.get("request_retry_count")
+        request_retry_count: Final = (earlier if type(earlier) is int and 0 <= earlier else 0) + 1
         kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
         kwargs[_metadata_var]["request_retry_count"] = request_retry_count  # rebind-ok: same dict, read by the cap
         return kwargs
