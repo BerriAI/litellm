@@ -25,3 +25,14 @@ export const buildPlaygroundHeaders = (
   ...(tags && tags.length > 0 ? { "x-litellm-tags": tags.join(",") } : {}),
   ...customHeaders,
 });
+
+export const withRequiredHeaders = (
+  headers: Readonly<Record<string, string>>,
+  required: Readonly<Record<string, string>>,
+): Record<string, string> => {
+  const reserved = new Set(Object.keys(required).map((name) => name.toLowerCase()));
+  return {
+    ...Object.fromEntries(Object.entries(headers).filter(([name]) => !reserved.has(name.toLowerCase()))),
+    ...required,
+  };
+};

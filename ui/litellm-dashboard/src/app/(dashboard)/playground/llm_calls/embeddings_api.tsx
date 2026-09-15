@@ -1,6 +1,10 @@
 import { toast } from "@/lib/toast";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
+import {
+  buildPlaygroundHeaders,
+  type CustomHeaders,
+  withRequiredHeaders,
+} from "@/components/llm_calls/request_headers";
 
 export async function makeOpenAIEmbeddingsRequest(
   input: string,
@@ -22,7 +26,10 @@ export async function makeOpenAIEmbeddingsRequest(
   }
 
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  const headers = buildPlaygroundHeaders(tags, customHeaders);
+  const headers = withRequiredHeaders(buildPlaygroundHeaders(tags, customHeaders), {
+    "Content-Type": "application/json",
+    [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+  });
 
   try {
     const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
@@ -30,11 +37,7 @@ export async function makeOpenAIEmbeddingsRequest(
 
     const response = await fetch(requestUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
-        ...headers,
-      },
+      headers,
       body: JSON.stringify({
         model: selectedModel,
         input,
