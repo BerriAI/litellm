@@ -10750,6 +10750,7 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
     monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", "1h")
+    monkeypatch.setattr(litellm, "openai_system_messages_first", False)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
     )
@@ -10771,6 +10772,10 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
         assert fields["enable_anthropic_prompt_caching"]["field_tab"] == "prompt_caching"
         assert fields["anthropic_prompt_caching_ttl"]["field_tab"] == "prompt_caching"
         assert fields["budget_exceeded_throttle_percentage"]["field_tab"] is None
+
+        assert fields["openai_system_messages_first"]["field_type"] == "Boolean"
+        assert fields["openai_system_messages_first"]["field_value"] is False
+        assert fields["openai_system_messages_first"]["field_tab"] == "prompt_caching"
     finally:
         app.dependency_overrides.clear()
 
@@ -10975,6 +10980,7 @@ def test_general_settings_ui_defaults_unchanged_for_existing_fields():
     [
         ("enable_anthropic_prompt_caching", True),
         ("anthropic_prompt_caching_ttl", "1h"),
+        ("openai_system_messages_first", True),
     ],
 )
 def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_name, db_value):
@@ -11033,6 +11039,8 @@ def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypa
         ("enable_anthropic_prompt_caching", False),
         ("anthropic_prompt_caching_ttl", "5m"),
         ("anthropic_prompt_caching_ttl", "1h"),
+        ("openai_system_messages_first", True),
+        ("openai_system_messages_first", False),
     ],
 )
 @pytest.mark.asyncio
@@ -11081,6 +11089,8 @@ async def test_update_config_field_prompt_caching_persists_to_litellm_settings(m
         ("anthropic_prompt_caching_ttl", "10m"),
         ("anthropic_prompt_caching_ttl", "1H"),
         ("anthropic_prompt_caching_ttl", 3600),
+        ("openai_system_messages_first", "yes"),
+        ("openai_system_messages_first", 1),
     ],
 )
 @pytest.mark.asyncio
@@ -11120,6 +11130,7 @@ async def test_update_config_field_prompt_caching_rejects_invalid(monkeypatch, f
     [
         ("enable_anthropic_prompt_caching", False),
         ("anthropic_prompt_caching_ttl", None),
+        ("openai_system_messages_first", False),
         ("budget_exceeded_throttle_percentage", None),
     ],
 )

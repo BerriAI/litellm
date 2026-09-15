@@ -18,6 +18,9 @@ import RoutingGroups from "@/components/routing_groups";
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
+const OPENAI_SYSTEM_MESSAGES_FIRST = "openai_system_messages_first";
+
+const isOn = (value: unknown) => value === true || value === "true";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -129,14 +132,15 @@ export const PromptCachingPanel: React.FC<{
 }> = ({ accessToken, settings, onChange }) => {
   const enableSetting = settings.find((s) => s.field_name === ENABLE_ANTHROPIC_PROMPT_CACHING);
   const ttlSetting = settings.find((s) => s.field_name === ANTHROPIC_PROMPT_CACHING_TTL);
+  const systemFirstSetting = settings.find((s) => s.field_name === OPENAI_SYSTEM_MESSAGES_FIRST);
 
-  // The two rows come from the same registry the General tab reads; if they
+  // The rows come from the same registry the General tab reads; if they
   // are not loaded yet there is nothing to render.
   if (!enableSetting) {
     return null;
   }
 
-  const enabled = enableSetting.field_value === true || enableSetting.field_value === "true";
+  const enabled = isOn(enableSetting.field_value);
 
   // Apply immediately: a toggle and a dropdown are direct controls, so there is
   // no separate Update button. Clearing the ttl resets it to the provider default.
@@ -185,6 +189,20 @@ export const PromptCachingPanel: React.FC<{
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        )}
+
+        {systemFirstSetting && (
+          <div className="mt-6 flex items-start justify-between gap-8">
+            <div className="min-w-0 max-w-2xl">
+              <p className="font-medium">System messages first for OpenAI</p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">{systemFirstSetting.field_description}</p>
+            </div>
+            <Switch
+              aria-label="System messages first for OpenAI"
+              checked={isOn(systemFirstSetting.field_value)}
+              onCheckedChange={(checked) => persist(OPENAI_SYSTEM_MESSAGES_FIRST, checked)}
+            />
           </div>
         )}
       </CardContent>
