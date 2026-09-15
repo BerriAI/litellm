@@ -644,10 +644,21 @@ class LLMCachingHandler:
 
         idx = 0
         final_data_list: Final = []
-        for item in _caching_handler_response.final_embedding_cached_response.data:
+        for final_idx, item in enumerate(_caching_handler_response.final_embedding_cached_response.data):
             if item is None and embedding_response.data is not None:
-                final_data_list.append(embedding_response.data[idx])
+                api_item = embedding_response.data[idx]
+                if isinstance(api_item, dict):
+                    api_item["index"] = final_idx
+                elif hasattr(api_item, "index"):
+                    api_item.index = final_idx
+                final_data_list.append(api_item)
                 idx += 1
+            elif item is not None:
+                if isinstance(item, dict):
+                    item["index"] = final_idx
+                elif hasattr(item, "index"):
+                    item.index = final_idx
+                final_data_list.append(item)
             else:
                 final_data_list.append(item)
 

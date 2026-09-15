@@ -286,6 +286,7 @@ def test_combine_cached_embedding_response_with_api_result():
     assert result.data[0].embedding == [0.1, 0.2, 0.3]
     assert result.data[1].embedding == [0.4, 0.5, 0.6]
     assert result.data[2].embedding == [0.7, 0.8, 0.9]
+    assert [item.index for item in result.data] == [0, 1, 2]
     assert result._hidden_params["cache_hit"] == True
     assert isinstance(result._response_ms, float)
     assert result._response_ms > 0
@@ -344,6 +345,178 @@ def test_combine_cached_embedding_response_multiple_missing_values():
     assert result.data[1].embedding == [0.4, 0.5, 0.6]
     assert result.data[2].embedding == [0.4, 0.5, 0.6]
     assert result.data[3].embedding == [0.7, 0.8, 0.9]
+    assert [item.index for item in result.data] == [0, 1, 2, 3, 4]
+
+
+def test_combine_cached_embedding_response_reindexes_api_items_from_zero():
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1], index=0, object="embedding"),
+            Embedding(embedding=[0.2], index=1, object="embedding"),
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    api_response = EmbeddingResponse(
+        data=[Embedding(embedding=[0.3], index=0, object="embedding")]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 3
+    assert [item.index for item in result.data] == [0, 1, 2]
+    assert result.data[2].embedding == [0.3]
+
+
+def test_combine_cached_embedding_response_interleaved_no_duplicate_indices():
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1], index=0, object="embedding"),
+            None,
+            Embedding(embedding=[0.3], index=2, object="embedding"),
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    api_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.2], index=0, object="embedding"),
+            Embedding(embedding=[0.4], index=1, object="embedding"),
+        ]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 4
+    assert [item.index for item in result.data] == [0, 1, 2, 3]
+    assert result.data[0].embedding == [0.1]
+    assert result.data[1].embedding == [0.2]
+    assert result.data[2].embedding == [0.3]
+    assert result.data[3].embedding == [0.4]
+
+
+def test_combine_cached_embedding_response_uncached_first():
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            None,
+            Embedding(embedding=[0.2], index=1, object="embedding"),
+            Embedding(embedding=[0.3], index=2, object="embedding"),
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    api_response = EmbeddingResponse(
+        data=[Embedding(embedding=[0.1], index=0, object="embedding")]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 3
+    assert [item.index for item in result.data] == [0, 1, 2]
+    assert result.data[0].embedding == [0.1]
+
+
+def test_combine_cached_embedding_response_short_upstream_raises_index_error():
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1], index=0, object="embedding"),
+            None,
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    api_response = EmbeddingResponse(
+        data=[Embedding(embedding=[0.2], index=0, object="embedding")]
+    )
+
+    with pytest.raises(IndexError):
+        caching_handler._combine_cached_embedding_response_with_api_result(
+            _caching_handler_response=caching_handler_response,
+            embedding_response=api_response,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+
+def test_combine_cached_embedding_response_dict_items():
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            {"embedding": [0.1], "index": 0, "object": "embedding"},
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+    api_response = EmbeddingResponse(
+        data=[{"embedding": [0.2], "index": 0, "object": "embedding"}]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 2
+    assert result.data[0]["index"] == 0
+    assert result.data[1]["index"] == 1
+    assert result.data[0]["embedding"] == [0.1]
+    assert result.data[1]["embedding"] == [0.2]
+
 
 
 @pytest.mark.asyncio
