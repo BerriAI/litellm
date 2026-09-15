@@ -245,7 +245,7 @@ async def _normalize_claude_model(
 
 
 async def _resolve_router_settings_model_group_alias(
-    request_data: dict,  # mutable-ok: the request body is rewritten in place for every downstream reader
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     valid_token: UserAPIKeyAuth,
     request: Request | None,
     route: str,
