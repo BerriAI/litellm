@@ -1,4 +1,5 @@
 import warnings
+
 import pytest
 from pydantic import ValidationError
 
@@ -639,3 +640,316 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+class TestMapOpenaiParams:
+    """Unit tests for GenAIHubOrchestrationConfig.map_openai_params."""
+
+    @pytest.fixture
+    def config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        c = GenAIHubOrchestrationConfig.__new__(GenAIHubOrchestrationConfig)
+        return c
+
+    def test_supported_params_pass_through(self, config):
+        result = config.map_openai_params(
+            non_default_params={"temperature": 0.7, "reasoning_effort": "high", "thinking": {"type": "enabled", "budget_tokens": 2000}},
+            optional_params={},
+            model="anthropic--claude-4-sonnet",
+            drop_params=False,
+        )
+        assert result["temperature"] == 0.7
+        assert result["reasoning_effort"] == "high"
+        assert result["thinking"] == {"type": "enabled", "budget_tokens": 2000}
+
+    def test_unsupported_params_are_excluded(self, config):
+        result = config.map_openai_params(
+            non_default_params={"store": True, "service_tier": "auto", "modalities": ["text"]},
+            optional_params={},
+            model="gpt-4o",
+            drop_params=False,
+        )
+        assert result == {}
+
+    def test_reasoning_effort_passes_for_all_sap_model_names(self, config):
+        # SAP model names don't match OpenAI's o-series/gpt-5 patterns;
+        # the override ensures they are not silently dropped by the inherited dispatcher.
+        for model in ("anthropic--claude-4-sonnet", "gpt-4o", "gemini-2.5-flash", "gpt-5", "amazon--titan"):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+            assert "reasoning_effort" in result, f"reasoning_effort dropped for {model}"
+
+    def test_thinking_passes_for_all_sap_model_names(self, config):
+        thinking = {"type": "enabled", "budget_tokens": 2000}
+        for model in ("anthropic--claude-4-sonnet", "gpt-4o", "gemini-2.5-flash"):
+            result = config.map_openai_params(
+                non_default_params={"thinking": thinking},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+            assert "thinking" in result, f"thinking dropped for {model}"
+
+    def test_existing_optional_params_are_preserved(self, config):
+        result = config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={"seed": 42},
+            model="gpt-4o",
+            drop_params=False,
+        )
+        assert result["seed"] == 42
+        assert result["temperature"] == 0.5
+
+
+class TestGetSupportedOpenaiParams:
+    """Unit tests for GenAIHubOrchestrationConfig.get_supported_openai_params."""
+
+    @pytest.fixture
+    def config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        return GenAIHubOrchestrationConfig.__new__(GenAIHubOrchestrationConfig)
+
+    def test_new_params_present_for_standard_models(self, config):
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet", "gemini-2.5-flash"):
+            params = config.get_supported_openai_params(model)
+            assert "reasoning_effort" in params, f"reasoning_effort missing for {model}"
+            assert "thinking" in params, f"thinking missing for {model}"
+
+    def test_response_format_excluded_for_unsupported_models(self, config):
+        for model in ("amazon--titan", "cohere--command", "alephalpha--luminous", "gpt-4"):
+            assert "response_format" not in config.get_supported_openai_params(model)
+
+    def test_tool_choice_excluded_for_gemini_and_amazon(self, config):
+        for model in ("gemini-2.5-flash", "amazon--titan"):
+            assert "tool_choice" not in config.get_supported_openai_params(model)
+
+    def test_tool_choice_present_for_gpt_and_anthropic(self, config):
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet"):
+            assert "tool_choice" in config.get_supported_openai_params(model)
+
+
+class TestNormalizeReasoningContent:
+    """Unit tests for GenAIHubOrchestrationConfig._normalize_reasoning_content."""
+
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    _normalize = staticmethod(GenAIHubOrchestrationConfig._normalize_reasoning_content)
+
+    def test_list_reasoning_content_mapped_to_thinking_blocks(self):
+        """List-shaped reasoning_content is converted to thinking_blocks."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Latin.",
+                    "reasoning_content": [
+                        {"content": "Romans spoke Latin.", "signature": "sig1"},
+                        {"content": "That is well known.", "signature": "sig2"},
+                    ],
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == [
+            {"type": "thinking", "thinking": "Romans spoke Latin.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "That is well known.", "signature": "sig2"},
+        ]
+        assert msg["reasoning_content"] == "Romans spoke Latin.\nThat is well known."
+
+    def test_string_reasoning_content_unchanged(self):
+        """String reasoning_content is left as-is (already the right type)."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "42",
+                    "reasoning_content": "I thought about it.",
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["reasoning_content"] == "I thought about it."
+        assert "thinking_blocks" not in msg
+
+    def test_no_reasoning_content_unchanged(self):
+        """A message without reasoning_content is not modified."""
+        raw = {"choices": [{"message": {"role": "assistant", "content": "Hi."}}]}
+        out = self._normalize(raw)
+        assert out == raw
+
+    def test_empty_list_reasoning_content_sets_none(self):
+        """An empty list produces None for reasoning_content and empty thinking_blocks."""
+        raw = {"choices": [{"message": {"reasoning_content": []}}]}
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == []
+        assert msg["reasoning_content"] is None
+
+    def test_multiple_choices_all_normalized(self):
+        """All choices in the response are normalized."""
+        raw = {
+            "choices": [
+                {"message": {"reasoning_content": [{"content": "thought A", "signature": None}]}},
+                {"message": {"reasoning_content": [{"content": "thought B", "signature": "s"}]}},
+            ]
+        }
+        out = self._normalize(raw)
+        assert out["choices"][0]["message"]["reasoning_content"] == "thought A"
+        assert out["choices"][1]["message"]["reasoning_content"] == "thought B"
+
+
+    def test_null_content_in_block_uses_empty_string(self):
+        """Explicit null content value must not leak None into thinking field."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "reasoning_content": [{"content": None, "signature": "s"}],
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        block = out["choices"][0]["message"]["thinking_blocks"][0]
+        assert block["thinking"] == ""
+        assert out["choices"][0]["message"]["reasoning_content"] is None
+
+    def test_transform_response_normalizes_list_reasoning_content(self):
+        """Production path: transform_response must produce a ModelResponse
+        with thinking_blocks populated when the raw payload carries a
+        list-shaped reasoning_content.
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gemini-test",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": [
+                        {"content": "Let me think.", "signature": "sig1"},
+                        {"content": "Yes, 42.", "signature": "sig2"},
+                    ],
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+
+        response = config.transform_response(
+            model="gemini-test",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        assert hasattr(choice.message, "thinking_blocks"), "thinking_blocks missing from message"
+        assert choice.message.thinking_blocks == [
+            {"type": "thinking", "thinking": "Let me think.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Yes, 42.", "signature": "sig2"},
+        ]
+        assert choice.message.reasoning_content == "Let me think.\nYes, 42."
+
+
+class TestNormalizeChoice:
+    """Unit tests for GenAIHubOrchestrationConfig._normalize_choice (message and delta shapes)."""
+
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    _normalize_choice = staticmethod(GenAIHubOrchestrationConfig._normalize_choice)
+
+    def test_message_list_reasoning_content_normalized(self):
+        choice = {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi", "reasoning_content": [{"content": "thought", "signature": "s1"}]},
+            "finish_reason": "stop",
+        }
+        result = self._normalize_choice(choice)
+        msg = result["message"]
+        assert msg["reasoning_content"] == "thought"
+        assert msg["thinking_blocks"] == [{"type": "thinking", "thinking": "thought", "signature": "s1"}]
+
+    def test_delta_list_reasoning_content_normalized(self):
+        choice = {
+            "index": 0,
+            "delta": {"role": "assistant", "reasoning_content": [{"content": "delta thought", "signature": None}]},
+            "finish_reason": None,
+        }
+        result = self._normalize_choice(choice)
+        delta = result["delta"]
+        assert delta["reasoning_content"] == "delta thought"
+        assert delta["thinking_blocks"][0]["thinking"] == "delta thought"
+
+    def test_string_reasoning_content_unchanged(self):
+        choice = {"index": 0, "message": {"reasoning_content": "already a string"}}
+        assert self._normalize_choice(choice) == choice
+
+    def test_no_reasoning_content_unchanged(self):
+        choice = {"index": 0, "delta": {"content": "hello"}}
+        assert self._normalize_choice(choice) == choice
+
+    def test_normalize_reasoning_content_covers_delta_path(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        raw = {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {"index": 0, "delta": {"reasoning_content": [{"content": "stream thought", "signature": "sig"}]}, "finish_reason": None}
+            ],
+        }
+        result = GenAIHubOrchestrationConfig._normalize_reasoning_content(raw)
+        delta = result["choices"][0]["delta"]
+        assert delta["reasoning_content"] == "stream thought"
+        assert delta["thinking_blocks"][0]["type"] == "thinking"
+
+
+class TestMessagesToSapTemplateReasoningContent:
+    """_messages_to_sap_template must forward reasoning_content on assistant turns."""
+
+    def test_assistant_message_with_reasoning_content_is_preserved(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": "4",
+                "reasoning_content": [
+                    {"content": "Simple arithmetic.", "signature": "sig1"}
+                ],
+            },
+            {"role": "user", "content": "Are you sure?"},
+        ]
+        result = _messages_to_sap_template(messages)
+        assistant_msg = result[1]
+        assert assistant_msg["reasoning_content"] == [
+            {"content": "Simple arithmetic.", "signature": "sig1"}
+        ]
