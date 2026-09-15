@@ -276,6 +276,7 @@ from litellm.constants import (
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    REDIS_SOCKET_TIMEOUT,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
@@ -1003,6 +1004,9 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
+    for replica in rate_limit_remote_replica_caches:
+        await replica.disconnect()
+
     await jwt_handler.close()
 
     if db_writer_client is not None:
@@ -1246,6 +1250,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         llm_router=llm_router,
         proxy_logging_obj=proxy_logging_obj,
         redis_usage_cache=transaction_buffer_redis_cache,
+        rate_limit_remote_replica_caches=rate_limit_remote_replica_caches,
     )
 
     ## V2 OTEL: publish the chosen V2 logger's TracerProvider as the OTel global.
@@ -2361,6 +2366,8 @@ cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_T
 model_max_budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spend, tpm/rpm limits
+# read-only replicas of OTHER regions' coordination Redis; read by the v3 rate limiter, never written to
+rate_limit_remote_replica_caches: tuple[RedisCache, ...] = ()
 polling_via_cache_enabled: Literal["all"] | list[str] | bool = False
 native_background_mode: list[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
@@ -4435,16 +4442,22 @@ def _resolve_coordination_redis_env_refs(raw_params: Mapping[str, object]) -> di
     }
 
 
-def _build_redis_usage_cache(redis_params: Mapping[str, object]) -> RedisCache:
+def _build_redis_usage_cache(
+    redis_params: Mapping[str, object],
+    allow_env_cluster_fallback: bool = True,
+) -> RedisCache:
     """
     Builds the proxy's coordination Redis client from resolved connection
     params. Cluster-mode targets (explicit `startup_nodes` or the
     REDIS_CLUSTER_NODES env var) get a `RedisClusterCache`, so consumers that
     branch on cluster mode (e.g. the v3 rate limiter) take the cluster path;
     everything else (host/url/sentinel) gets a plain `RedisCache`.
+
+    `allow_env_cluster_fallback=False` suppresses the REDIS_CLUSTER_NODES fallback, which names
+    THIS pod's local cluster. Pass it whenever the target is not the local coordination Redis.
     """
     startup_nodes = redis_params.get("startup_nodes")
-    if startup_nodes is None:
+    if startup_nodes is None and allow_env_cluster_fallback:
         env_cluster_nodes: Final = get_secret_str("REDIS_CLUSTER_NODES")
         if env_cluster_nodes is not None:
             startup_nodes = json.loads(env_cluster_nodes)
@@ -5071,6 +5084,62 @@ class ProxyConfig:
         )
         return coordination_redis_cache
 
+    def _init_rate_limit_remote_replicas(self, config: Mapping[str, Any]) -> tuple[RedisCache, ...]:
+        """
+        Builds the read-only remote-region replica clients from
+        `general_settings.rate_limit_remote_replicas`. These are replicas of another region's
+        Redis, so they are deliberately not attached to the usage cache, the pod lock manager,
+        or anything else the proxy writes to.
+        """
+        raw_replicas: Final = (config.get("general_settings") or {}).get("rate_limit_remote_replicas")
+        if raw_replicas is None:
+            return ()
+        if not isinstance(raw_replicas, list):
+            raise TypeError("general_settings.rate_limit_remote_replicas must be a list of Redis connection params")
+
+        replica_params: Final = tuple(
+            CoordinationRedisParams.model_validate(_resolve_coordination_redis_env_refs(raw_params))
+            for raw_params in raw_replicas
+        )
+        for params in replica_params:
+            if not params.has_connection_target():
+                raise ValueError(
+                    "every general_settings.rate_limit_remote_replicas entry needs a connection target: "
+                    "set one of host, url, startup_nodes, or sentinel_nodes"
+                )
+
+        # litellm._redis applies REDIS_CLUSTER_NODES to any client with no explicit `startup_nodes`,
+        # so a host-only replica entry would silently connect to THIS region's cluster and the
+        # limiter would add this region's counters to themselves.
+        if get_secret_str("REDIS_CLUSTER_NODES") is not None:
+            env_ambiguous: Final = [params for params in replica_params if not params.startup_nodes]
+            if env_ambiguous:
+                raise ValueError(
+                    "REDIS_CLUSTER_NODES is set, which would point every "
+                    "general_settings.rate_limit_remote_replicas entry at THIS region's cluster "
+                    "instead of the remote region's, silently enforcing half of every configured "
+                    f"limit. Give each of the {len(env_ambiguous)} affected replica entr"
+                    f"{'y' if len(env_ambiguous) == 1 else 'ies'} its own `startup_nodes`, or unset "
+                    "REDIS_CLUSTER_NODES and name the local cluster under "
+                    "general_settings.coordination_redis.startup_nodes instead."
+                )
+
+        # REDIS_SOCKET_TIMEOUT instead of RedisCache's 5.0s default, so a degraded replica cannot
+        # add seconds to every request. A per-entry socket_timeout still wins.
+        replicas: Final = tuple(
+            _build_redis_usage_cache(
+                {"socket_timeout": REDIS_SOCKET_TIMEOUT, **params.model_dump(exclude_none=True)},
+                allow_env_cluster_fallback=False,
+            )
+            for params in replica_params
+        )
+        verbose_proxy_logger.info(
+            "rate_limit_remote_replicas: reading rate-limit counters from %s remote replica(s); "
+            "limits are enforced against the sum of local and remote counters.",
+            len(replicas),
+        )
+        return replicas
+
     @staticmethod
     async def _init_coordination_redis_env_fallback(litellm_settings: Mapping[str, object]) -> RedisCache | None:
         """
@@ -5443,6 +5512,10 @@ class ProxyConfig:
         coordination_redis_cache: Final = self._init_coordination_redis(config=config)
         if coordination_redis_cache is not None:
             _set_redis_usage_cache(coordination_redis_cache)
+
+        ## Read-only replicas of other regions' coordination Redis, read by the v3 rate limiter
+        global rate_limit_remote_replica_caches
+        rate_limit_remote_replica_caches = self._init_rate_limit_remote_replicas(config=config)
 
         ## Callback settings
         callback_settings: Final = config.get("callback_settings", {})
@@ -9336,12 +9409,17 @@ class ProxyStartupEvent:
         llm_router: Router | None,
         proxy_logging_obj: ProxyLogging,
         redis_usage_cache: RedisCache | None,
+        rate_limit_remote_replica_caches: tuple[RedisCache, ...] = (),
     ):
         """Initialize logging and alerting on startup"""
         ## COST TRACKING ##
         cost_tracking()
 
-        proxy_logging_obj.startup_event(llm_router=llm_router, redis_usage_cache=redis_usage_cache)
+        proxy_logging_obj.startup_event(
+            llm_router=llm_router,
+            redis_usage_cache=redis_usage_cache,
+            rate_limit_remote_replica_caches=rate_limit_remote_replica_caches,
+        )
 
     @staticmethod
     def _warn_if_mock_testing_params_enabled(general_settings: dict) -> None:

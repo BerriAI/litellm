@@ -30,7 +30,7 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_cache import log_redis_failure
+from litellm.caching.redis_cache import RedisCache, log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -398,6 +398,35 @@ CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
 
+# (window key, counter key, window size)
+RemoteCounterProbe: TypeAlias = tuple[str, str, int]
+
+_NO_REMOTE_OFFSETS: Final[Mapping[str, int]] = MappingProxyType({})
+
+
+def _as_counter(value: object) -> int:
+    """Coerce a counter read out of Redis (or a replica) to an int, treating anything unreadable as 0."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str | bytes):
+        return 0
+    text: Final = value.decode("utf-8", errors="ignore") if isinstance(value, bytes) else value
+    try:
+        return int(float(text))
+    except (ValueError, OverflowError):
+        return 0
+
+
+def _merged_counter(local_value: CacheCounterValue | None, remote_offset: int) -> CacheCounterValue | None:
+    """
+    Add a remote-region counter to the local one.
+
+    A missing local counter with a non-zero remote term must report the remote value
+    rather than None: `is_cache_list_over_limit` reads None as "no counter yet" and
+    hands back the full limit, dropping the remote usage on the floor.
+    """
+    if local_value is None:
+        return remote_offset or None
+    return _as_counter(local_value) + remote_offset
+
 
 class _AsyncLuaScript(Protocol):
     """A Lua script registered against the async Redis client, called with KEYS and ARGV."""
@@ -481,6 +510,8 @@ class AtomicCounterMeta(TypedDict):
     increment: int
     ttl: int
     window_size: int
+    # Subtracted from the limit sent to Lua, added back when reporting.
+    remote_offset: ReadOnly[int]
 
 
 class AtomicCounterState(TypedDict):
@@ -608,9 +639,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         internal_usage_cache: InternalUsageCache,
         time_provider: Callable[[], datetime] | None = None,
+        remote_replica_caches: Sequence[RedisCache] = (),
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
+        # `RedisClusterCache` overrides the batch read with `mget_nonatomic`, so a cluster
+        # replica is slot-safe here whatever mode the local primary runs in.
+        self.remote_replica_caches = tuple(remote_replica_caches)
+        if self.remote_replica_caches and self.internal_usage_cache.dual_cache.redis_cache is None:
+            raise ValueError(
+                "general_settings.rate_limit_remote_replicas is set, but this region keeps its rate-limit "
+                "counters in memory only, so the other regions can never read them and the shared limit is "
+                "enforced in one direction. Give this region a Redis of its own under "
+                "general_settings.coordination_redis (or litellm_settings.cache with type: redis), or remove "
+                "general_settings.rate_limit_remote_replicas."
+            )
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -1131,6 +1174,87 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
 
+    async def _read_replica_counters(self, replica: RedisCache, keys: Sequence[str]) -> Mapping[str, object]:
+        """
+        `async_batch_get_cache` swallows read failures itself, but its circuit-breaker
+        guard raises `RedisCircuitBreakerOpenError` before the body runs once the
+        replica's breaker opens. A replica must never fail the request either way.
+        """
+        try:
+            return await replica.async_batch_get_cache(key_list=list(keys))
+        except Exception as e:  # noqa: BLE001  # any replica failure degrades to local-only enforcement, never a 500
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.WARNING,
+                "rate_limit_remote_replicas: replica read failed, enforcing against local counters only",
+                e,
+            )
+            return {}
+
+    async def _remote_counter_offsets(
+        self,
+        probes: Sequence[RemoteCounterProbe],
+        now_int: int,
+    ) -> Mapping[str, int]:
+        """
+        Sum each counter's value across the remote replicas, counting a replica
+        only while its copy of that counter's window is still current. A replica
+        that reads back empty or fails contributes nothing, so a region whose
+        replica link is down falls back to the per-region enforcement it has today.
+        """
+        if not self.remote_replica_caches or not probes:
+            return _NO_REMOTE_OFFSETS
+
+        keys: Final = [key for window_key, counter_key, _ in probes for key in (window_key, counter_key)]
+        replica_reads: Final = await asyncio.gather(
+            *(self._read_replica_counters(replica, keys) for replica in self.remote_replica_caches)
+        )
+        return MappingProxyType(
+            {
+                counter_key: sum(
+                    _as_counter(read.get(counter_key))
+                    for read in replica_reads
+                    if (window_value := read.get(window_key)) is not None
+                    and now_int - _as_counter(window_value) < window_size
+                )
+                for window_key, counter_key, window_size in probes
+            }
+        )
+
+    async def _merge_remote_counters(
+        self,
+        keys_to_fetch: Sequence[str],
+        cache_values: CacheCounterValues,
+        key_metadata: Mapping[str, WindowKeyMetadata],
+        now_int: int,
+    ) -> CacheCounterValues:
+        """
+        Add the remote-region counters to a (window, counter) pair list, leaving the
+        window values untouched. The merged list is for the limit comparison only and
+        must never be written back to the in-memory cache, or the next request's
+        in-memory pre-check would count the remote term a second time.
+
+        Each probe carries its own descriptor's window size, not `self.window_size`,
+        because a descriptor may override it with `rate_limit.window_size`.
+        """
+        offsets: Final = await self._remote_counter_offsets(
+            probes=tuple(
+                (
+                    keys_to_fetch[i],
+                    keys_to_fetch[i + 1],
+                    key_metadata[keys_to_fetch[i]]["window_size"],
+                )
+                for i in range(0, len(keys_to_fetch) - 1, 2)
+            ),
+            now_int=now_int,
+        )
+        if not offsets:
+            return cache_values
+        return [
+            value if index % 2 == 0 else _merged_counter(value, offsets.get(keys_to_fetch[index], 0))
+            for index, value in enumerate(cache_values)
+        ]
+
     def keyslot_for_redis_cluster(self, key: str) -> int:
         """
         Compute the Redis Cluster slot for a given key.
@@ -1357,7 +1481,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
 
-            windowed_response = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+            # Must stay after the in-memory write-back above, which stores the local value only.
+            merged_values: Final = (
+                await self._merge_remote_counters(keys_to_fetch, cache_values, key_metadata, now_int)
+                if self.remote_replica_caches
+                else cache_values
+            )
+            windowed_response = self.is_cache_list_over_limit(keys_to_fetch, merged_values, key_metadata)
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
@@ -1716,17 +1846,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Build per-descriptor (keys, args, meta) groups. All keys within a
         # group share the descriptor's {key:value} hash tag, so a single Lua
         # call per group never triggers CROSSSLOT on Redis Cluster.
-        descriptor_groups: Final[list[DescriptorAtomicGroup]] = []
-        for descriptor, increment_amounts in zip(descriptors, increments):
-            keys, args, meta = self._build_descriptor_atomic_payload(
-                descriptor=descriptor,
-                increment_amounts=increment_amounts,
-            )
-            if keys:
-                descriptor_groups.append((keys, args, meta))
+        descriptor_groups: Final = self._build_descriptor_groups(descriptors, increments, _NO_REMOTE_OFFSETS)
 
         if not descriptor_groups:
             return RateLimitResponse(overall_code="OK", statuses=[])
+
+        # The first pass exists only to learn which counter keys are in play; it is pure,
+        # so with no offsets to apply the groups it built are reused as-is.
+        remote_offsets: Final = await self._remote_counter_offsets(
+            probes=tuple(
+                (meta["window_key"], meta["counter_key"], meta["window_size"])
+                for _keys, _args, group_meta in descriptor_groups
+                for meta in group_meta
+            ),
+            now_int=int(self._get_current_time().timestamp()),
+        )
+        effective_groups: Final = (
+            self._build_descriptor_groups(descriptors, increments, remote_offsets)
+            if remote_offsets
+            else descriptor_groups
+        )
 
         # Multi-process atomicity via Redis Lua, per descriptor for slot
         # co-location. Single-process atomicity falls back to the
@@ -1735,12 +1874,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # critical section for true cross-descriptor atomicity.
         if self.check_and_increment_by_n_script is not None:
             return await self._atomic_lua_per_descriptor(
-                descriptor_groups=descriptor_groups,
+                descriptor_groups=effective_groups,
                 parent_otel_span=parent_otel_span,
             )
 
         flat_meta: Final[list[AtomicCounterMeta]] = [
-            m for _keys, _args, group_meta in descriptor_groups for m in group_meta
+            m for _keys, _args, group_meta in effective_groups for m in group_meta
         ]
         async with self._check_and_increment_lock:
             return await self._atomic_check_and_increment_in_memory(
@@ -1748,14 +1887,40 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 parent_otel_span=parent_otel_span,
             )
 
+    def _build_descriptor_groups(
+        self,
+        descriptors: Sequence[RateLimitDescriptor],
+        increments: Sequence[Mapping[Literal["requests", "tokens"], int]],
+        remote_offsets: Mapping[str, int],
+    ) -> tuple[DescriptorAtomicGroup, ...]:
+        """Build one (KEYS, ARGV, meta) group per descriptor that has at least one enforced counter."""
+        return tuple(
+            group
+            for descriptor, increment_amounts in zip(descriptors, increments)
+            if (
+                group := self._build_descriptor_atomic_payload(
+                    descriptor=descriptor,
+                    increment_amounts=increment_amounts,
+                    remote_offsets=remote_offsets,
+                )
+            )[0]
+        )
+
     def _build_descriptor_atomic_payload(
         self,
         descriptor: RateLimitDescriptor,
-        increment_amounts: dict[Literal["requests", "tokens"], int],
+        increment_amounts: Mapping[Literal["requests", "tokens"], int],
+        remote_offsets: Mapping[str, int] = _NO_REMOTE_OFFSETS,
     ) -> DescriptorAtomicGroup:
         """
         Build (KEYS, ARGV, per-counter meta) for a single descriptor's Lua
         call. All keys returned share the descriptor's {key:value} hash tag.
+
+        `remote_offsets` carries each counter's usage in the other regions. It is
+        subtracted from the limit sent to Lua rather than added to the counter,
+        because `local + remote + increment > limit` is the same test as
+        `local + increment > limit - remote`, so the shared Lua script needs no
+        change. `meta` keeps the true configured limit for reporting.
         """
         descriptor_key: Final = descriptor["key"]
         descriptor_value: Final = descriptor["value"]
@@ -1786,10 +1951,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # custom-TTL descriptor doesn't reintroduce a silent expiry bug.
             ttl_seconds = int(window_size)
             window_size_seconds = int(window_size)
+            remote_offset = remote_offsets.get(counter_key, 0)
             keys.extend([window_key, counter_key])
             # 4-tuple matches the Lua ARGV layout:
             #   [limit, increment, ttl_seconds, window_size_seconds].
-            args.extend([int(limit_value), inc_amount, ttl_seconds, window_size_seconds])
+            # A remote region that already burned the quota drives the limit negative, which blocks.
+            args.extend([int(limit_value) - remote_offset, inc_amount, ttl_seconds, window_size_seconds])
             meta.append(
                 {
                     "descriptor_key": descriptor_key,
@@ -1801,13 +1968,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "increment": inc_amount,
                     "ttl": ttl_seconds,
                     "window_size": window_size_seconds,
+                    "remote_offset": remote_offset,
                 }
             )
         return keys, args, meta
 
     async def _atomic_lua_per_descriptor(
         self,
-        descriptor_groups: list[DescriptorAtomicGroup],
+        descriptor_groups: Sequence[DescriptorAtomicGroup],
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
         """
@@ -1918,17 +2086,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         status_code: Final = int(raw[0])
         if status_code == 1:
             # Over limit: { 1, counter_index (1-based), current_counter, limit }
+            # `raw[3]` is the reduced limit the script was given, so report `meta` instead.
             descriptor_index: Final = int(raw[1]) - 1
             current_counter: Final = int(raw[2])
-            limit: Final = int(raw[3])
             meta = per_counter_meta[descriptor_index]
+            merged_counter: Final = current_counter + meta["remote_offset"]
             return RateLimitResponse(
                 overall_code="OVER_LIMIT",
                 statuses=[
                     RateLimitStatus(
                         code="OVER_LIMIT",
-                        current_limit=limit,
-                        limit_remaining=max(0, limit - current_counter),
+                        current_limit=meta["current_limit"],
+                        limit_remaining=max(0, meta["current_limit"] - merged_counter),
                         rate_limit_type=meta["rate_limit_type"],
                         descriptor_key=meta["descriptor_key"],
                         descriptor_value=meta["descriptor_value"],
@@ -1943,7 +2112,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 RateLimitStatus(
                     code="OK",
                     current_limit=meta["current_limit"],
-                    limit_remaining=max(0, meta["current_limit"] - int(new_counter)),
+                    limit_remaining=max(0, meta["current_limit"] - int(new_counter) - meta["remote_offset"]),
                     rate_limit_type=meta["rate_limit_type"],
                     descriptor_key=meta["descriptor_key"],
                     descriptor_value=meta["descriptor_value"],
@@ -1998,10 +2167,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
             current_counter = 0 if window_expired else int(raw_counter or 0)
+            effective_limit = meta["current_limit"] - meta["remote_offset"]
             over_limit = (
-                current_counter + meta["increment"] > meta["current_limit"]
+                current_counter + meta["increment"] > effective_limit
                 if meta["increment"] > 0
-                else current_counter >= meta["current_limit"]
+                else current_counter >= effective_limit
             )
             if over_limit:
                 return RateLimitResponse(
@@ -2010,7 +2180,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         RateLimitStatus(
                             code="OVER_LIMIT",
                             current_limit=meta["current_limit"],
-                            limit_remaining=max(0, meta["current_limit"] - current_counter),
+                            limit_remaining=max(0, effective_limit - current_counter),
                             rate_limit_type=meta["rate_limit_type"],
                             descriptor_key=meta["descriptor_key"],
                             descriptor_value=meta["descriptor_value"],
@@ -2048,7 +2218,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 RateLimitStatus(
                     code="OK",
                     current_limit=meta["current_limit"],
-                    limit_remaining=max(0, meta["current_limit"] - new_counter),
+                    limit_remaining=max(0, meta["current_limit"] - new_counter - meta["remote_offset"]),
                     rate_limit_type=meta["rate_limit_type"],
                     descriptor_key=meta["descriptor_key"],
                     descriptor_value=meta["descriptor_value"],

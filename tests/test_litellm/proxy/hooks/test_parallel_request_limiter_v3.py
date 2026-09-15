@@ -23,6 +23,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
     RequestRateLimiterStash,
+    _as_counter,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
@@ -6529,3 +6530,506 @@ async def test_request_capacity_rejection_keeps_existing_redis_mirror():
                 pytest.fail("rejection released another request's mirrored slot")
         assert exc.value.status_code == 429
         assert await cache.async_get_cache(counter_key, local_only=True) == 1
+
+
+# ---------------------------------------------------------------------------
+# Cross-region rate limiting: read-only replicas of other regions' Redis
+# ---------------------------------------------------------------------------
+
+
+class _ReplicaRedis:
+    """Read-only replica stand-in: answers the batch read from a fixed snapshot."""
+
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+        return {key: self.snapshot[key] for key in key_list if key in self.snapshot}
+
+
+class _OpenBreakerReplicaRedis:
+    """Replica whose circuit breaker has opened: the guard raises before the read body runs."""
+
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+        from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+
+class _ExplodingReplicaRedis:
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+        raise ConnectionError("replica unreachable")
+
+
+class _LuaFailurePrimaryRedis:
+    """
+    Primary Redis whose Lua calls fail. That is how production reaches the in-memory
+    enforcement fallback, since a limiter with no primary Redis at all is now refused
+    whenever remote replicas are configured.
+    """
+
+    def async_register_script(self, script: str):
+        async def failing(keys, args):
+            raise ConnectionError("primary Redis Lua unavailable")
+
+        return failing
+
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+        return {}
+
+
+class _ScriptedPrimaryRedis:
+    """
+    Primary-Redis stand-in that runs the documented check-and-increment-by-N
+    contract against a dict, so the TPM reservation path can be driven end to end.
+    """
+
+    def __init__(self, now_int: int):
+        self.now_int = now_int
+        self.counters: Dict[str, int] = {}
+        self.windows: Dict[str, int] = {}
+
+    def async_register_script(self, script: str):
+        if "Atomic check-and-increment-by-N" not in script:
+
+            async def unsupported(keys, args):
+                raise AssertionError(
+                    "this double only scripts the check-and-increment-by-N contract"
+                )
+
+            return unsupported
+
+        async def check_and_increment(keys, args):
+            state = []
+            for index in range(len(keys) // 2):
+                window_key = keys[index * 2]
+                counter_key = keys[index * 2 + 1]
+                limit, increment, _ttl, window_size = args[index * 4 : index * 4 + 4]
+                window_start = self.windows.get(window_key)
+                expired = (
+                    window_start is None
+                    or self.now_int - window_start >= int(window_size)
+                )
+                current = 0 if expired else self.counters.get(counter_key, 0)
+                blocked = (
+                    current + int(increment) > int(limit)
+                    if int(increment) > 0
+                    else current >= int(limit)
+                )
+                if blocked:
+                    return [1, index + 1, current, int(limit)]
+                state.append((window_key, counter_key, expired, current, int(increment)))
+
+            results: List[int] = [0]
+            for window_key, counter_key, expired, current, increment in state:
+                if expired:
+                    self.windows[window_key] = self.now_int
+                self.counters[counter_key] = (0 if expired else current) + increment
+                results.extend([self.counters[counter_key], self.windows[window_key]])
+            return results
+
+        return check_and_increment
+
+
+def _rpm_handler(replicas, time_controller, rpm_limit: int):
+    """A limiter whose primary Redis fails every Lua call, so the windowed check lands on
+    the in-memory fallback."""
+    primary = _LuaFailurePrimaryRedis()
+    return _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(
+            DualCache(redis_cache=primary)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        ),
+        time_provider=time_controller.now,
+        remote_replica_caches=replicas,
+    ), [
+        {
+            "key": "api_key",
+            "value": "sk-cross-region",
+            "rate_limit": {"requests_per_unit": rpm_limit},
+        }
+    ]
+
+
+def _rpm_keys():
+    return "{api_key:sk-cross-region}:window", "{api_key:sk-cross-region}:requests"
+
+
+@pytest.mark.asyncio
+async def test_remote_replica_counters_are_summed_into_the_rpm_decision(time_controller):
+    window_key, counter_key = _rpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    handler, descriptors = _rpm_handler(
+        [_ReplicaRedis({window_key: now_int, counter_key: 100})], time_controller, 100
+    )
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OVER_LIMIT", (
+        "one local request plus 100 already spent in the other region is 101 against "
+        "a limit of 100 — neither region sees that on its own counter"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_remote_replicas_leaves_the_rpm_decision_unchanged(time_controller):
+    handler, descriptors = _rpm_handler([], time_controller, 100)
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99
+
+
+@pytest.mark.asyncio
+async def test_expired_remote_window_is_not_counted(time_controller):
+    window_key, counter_key = _rpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    replica = _ReplicaRedis({})
+    handler, descriptors = _rpm_handler([replica], time_controller, 100)
+    replica.snapshot = {
+        window_key: now_int - handler.window_size - 1,
+        counter_key: 999,
+    }
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK", (
+        "a remote counter whose window has already rolled over is spent quota from a "
+        "previous window and must not be charged against this one"
+    )
+
+
+@pytest.mark.asyncio
+async def test_remote_window_currency_uses_the_descriptors_own_window_size(time_controller):
+    """A descriptor may override the window (`rate_limit.window_size`). Judging the
+    replica's copy against the limiter-wide default instead would keep charging remote
+    usage from a window that has already rolled over on a short-window descriptor."""
+    window_key, counter_key = _rpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    replica = _ReplicaRedis({})
+    handler, descriptors = _rpm_handler([replica], time_controller, 100)
+    descriptors[0]["rate_limit"]["window_size"] = 10
+    assert handler.window_size > 10, "the default window has to be the longer one for this to bite"
+    # Expired for this descriptor's 10s window, still current under the 60s default.
+    replica.snapshot = {window_key: now_int - 20, counter_key: 999}
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK", (
+        "the remote window rolled over 20s ago on a 10s window, so that usage is spent "
+        "quota from a previous window and must not be charged against this one"
+    )
+
+
+@pytest.mark.asyncio
+async def test_in_memory_atomic_fallback_still_counts_remote_usage(time_controller):
+    """The reservation path falls back to in-memory enforcement whenever the Lua call
+    fails. Dropping the remote offset there would let a Redis blip silently downgrade
+    a region to per-region limits, which is the bug this feature exists to fix."""
+    window_key = "{api_key:sk-cross-region}:window"
+    counter_key = "{api_key:sk-cross-region}:tokens"
+    now_int = int(time_controller.now().timestamp())
+    # No primary Redis on this handler, so atomic_check_and_increment_by_n takes the
+    # same in-memory branch the post-Lua-failure fallback lands on.
+    handler, _ = _rpm_handler([_ReplicaRedis({window_key: now_int, counter_key: 60})], time_controller, 100)
+
+    response = await handler.atomic_check_and_increment_by_n(
+        descriptors=[
+            {
+                "key": "api_key",
+                "value": "sk-cross-region",
+                "rate_limit": {"tokens_per_unit": 100},
+            }
+        ],
+        increments=[{"tokens": 50}],
+    )
+
+    assert response["overall_code"] == "OVER_LIMIT", (
+        "50 tokens locally on top of 60 already spent in the other region is 110 "
+        "against a limit of 100"
+    )
+    assert response["statuses"][0]["current_limit"] == 100, (
+        "the configured limit is what the customer set; the remote offset is an "
+        "implementation detail and must not leak into what we report"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_replica_that_reads_back_empty_fails_open(time_controller):
+    """RedisCache logs and swallows its own read failures and hands back an empty mapping,
+    so a replica outage reaches the limiter as an empty read. It must degrade to per-region
+    enforcement rather than reject traffic the other region cannot vouch for."""
+    handler, descriptors = _rpm_handler([_ReplicaRedis({})], time_controller, 100)
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99, (
+        "nothing was readable on the replica, so no remote term is charged"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_replica_whose_breaker_is_open_fails_open(time_controller):
+    """`async_batch_get_cache` swallows its own read failures, but the circuit-breaker guard
+    wrapping it raises before the body once the replica's breaker opens, which is the state a
+    replica outage settles into after a few failed reads. That must not fail the request."""
+    handler, descriptors = _rpm_handler([_OpenBreakerReplicaRedis()], time_controller, 100)
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99
+
+
+@pytest.mark.asyncio
+async def test_a_replica_read_that_raises_fails_open_and_warns(time_controller, caplog):
+    handler, descriptors = _rpm_handler([_ExplodingReplicaRedis()], time_controller, 100)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99
+    replica_warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING and "replica read failed" in record.getMessage()
+    ]
+    assert len(replica_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_replica_read_missing_the_window_key_contributes_nothing(time_controller):
+    """A read that returns the counter but not its window cannot say which window that
+    counter belongs to, so charging it could bill usage from an already rolled-over window."""
+    _window_key, counter_key = _rpm_keys()
+    handler, descriptors = _rpm_handler([_ReplicaRedis({counter_key: 90})], time_controller, 100)
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 99
+
+
+@pytest.mark.asyncio
+async def test_two_remote_replicas_are_summed(time_controller):
+    window_key, counter_key = _rpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    handler, descriptors = _rpm_handler(
+        [
+            _ReplicaRedis({window_key: now_int, counter_key: 40}),
+            _ReplicaRedis({window_key: now_int, counter_key: 40}),
+        ],
+        time_controller,
+        75,
+    )
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OVER_LIMIT", "40 + 40 + 1 local exceeds 75"
+
+
+@pytest.mark.asyncio
+async def test_in_memory_counter_excludes_remote_counters_after_a_merged_check(
+    time_controller,
+):
+    window_key, counter_key = _rpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    handler, descriptors = _rpm_handler(
+        [_ReplicaRedis({window_key: now_int, counter_key: 10})], time_controller, 100
+    )
+
+    await handler.should_rate_limit(descriptors=descriptors)
+
+    assert (
+        await handler.internal_usage_cache.async_get_cache(
+            key=counter_key, litellm_parent_otel_span=None, local_only=True
+        )
+        == 1
+    ), (
+        "the merged value is for the comparison only; writing it back would make the "
+        "next request's in-memory pre-check count the remote term a second time"
+    )
+
+
+@pytest.mark.asyncio
+async def test_limit_remaining_reflects_remote_counters(time_controller):
+    window_key, counter_key = _rpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    handler, descriptors = _rpm_handler(
+        [_ReplicaRedis({window_key: now_int, counter_key: 30})], time_controller, 100
+    )
+
+    response = await handler.should_rate_limit(descriptors=descriptors)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 69, (
+        "100 - (1 local + 30 remote); the response headers are what the customer's "
+        "clients back off on, so they have to be cross-region aware too"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_only_check_merges_remote_counters(time_controller):
+    window_key, counter_key = _rpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    handler, descriptors = _rpm_handler(
+        [_ReplicaRedis({window_key: now_int, counter_key: 60})], time_controller, 100
+    )
+
+    response = await handler.should_rate_limit(descriptors=descriptors, read_only=True)
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 40
+
+
+def _tpm_handler(replicas, time_controller, tpm_limit: int):
+    now_int = int(time_controller.now().timestamp())
+    primary = _ScriptedPrimaryRedis(now_int=now_int)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(
+            DualCache(redis_cache=primary)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+        ),
+        time_provider=time_controller.now,
+        remote_replica_caches=replicas,
+    )
+    descriptors = [
+        {
+            "key": "api_key",
+            "value": "sk-cross-region",
+            "rate_limit": {"tokens_per_unit": tpm_limit},
+        }
+    ]
+    return handler, descriptors
+
+
+def _tpm_keys():
+    return "{api_key:sk-cross-region}:window", "{api_key:sk-cross-region}:tokens"
+
+
+@pytest.mark.asyncio
+async def test_reserve_tpm_tokens_counts_remote_usage_against_the_limit(time_controller):
+    window_key, counter_key = _tpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    handler, descriptors = _tpm_handler(
+        [_ReplicaRedis({window_key: now_int, counter_key: 900})], time_controller, 1000
+    )
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=descriptors, estimated_tokens=200
+    )
+
+    assert response["overall_code"] == "OVER_LIMIT", (
+        "900 already reserved in the other region leaves 100 of headroom, so a "
+        "200-token estimate must not be admitted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reserve_tpm_over_limit_reports_the_configured_limit(time_controller):
+    window_key, counter_key = _tpm_keys()
+    now_int = int(time_controller.now().timestamp())
+    handler, descriptors = _tpm_handler(
+        [_ReplicaRedis({window_key: now_int, counter_key: 900})], time_controller, 1000
+    )
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=descriptors, estimated_tokens=200
+    )
+
+    status = response["statuses"][0]
+    assert status["current_limit"] == 1000, (
+        "the limit handed to Lua is reduced by the remote usage, but the customer "
+        "must be told the limit they configured"
+    )
+    assert status["limit_remaining"] == 100
+
+
+@pytest.mark.asyncio
+async def test_reserve_tpm_without_replicas_allows_a_request_that_fits_locally(
+    time_controller,
+):
+    handler, descriptors = _tpm_handler([], time_controller, 1000)
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=descriptors, estimated_tokens=200
+    )
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["current_limit"] == 1000
+    assert response["statuses"][0]["limit_remaining"] == 800
+
+
+@pytest.mark.asyncio
+async def test_an_open_replica_breaker_on_the_reservation_path_enforces_local_limits_only(
+    time_controller,
+):
+    handler, descriptors = _tpm_handler([_OpenBreakerReplicaRedis()], time_controller, 1000)
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=descriptors, estimated_tokens=200
+    )
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 800
+
+
+@pytest.mark.asyncio
+async def test_an_empty_replica_read_on_the_reservation_path_enforces_local_limits_only(
+    time_controller,
+):
+    handler, descriptors = _tpm_handler([_ReplicaRedis({})], time_controller, 1000)
+
+    response = await handler.reserve_tpm_tokens(
+        descriptors=descriptors, estimated_tokens=200
+    )
+
+    assert response["overall_code"] == "OK"
+    assert response["statuses"][0]["limit_remaining"] == 800
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (12, 12),
+        (12.9, 12),
+        (True, 0),
+        (False, 0),
+        ("12", 12),
+        ("12.0", 12),
+        (b"12", 12),
+        (b"12.0", 12),
+        ("", 0),
+        ("garbage", 0),
+        (b"garbage", 0),
+        (None, 0),
+        ({"counter": 1}, 0),
+        ("inf", 0),
+        (float("inf"), 0),
+        (float("nan"), 0),
+    ],
+)
+def test_as_counter_coerces_whatever_redis_hands_back(value, expected):
+    """Counters come back as ints from a Lua call, as strings or bytes from a raw read, and
+    as None for a key that does not exist. A bool is never a counter, so it reads as 0."""
+    assert _as_counter(value) == expected
+
+
+def test_remote_replicas_without_a_local_redis_are_refused():
+    """Other regions read this region's usage off this region's Redis. With counters in
+    memory only there is nothing for them to read, so the shared limit would be enforced
+    in one direction and the operator would never be told."""
+    with pytest.raises(ValueError, match="rate_limit_remote_replicas"):
+        _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            remote_replica_caches=[_ReplicaRedis({})],
+        )
+
+
+def test_no_remote_replicas_still_runs_without_a_local_redis():
+    """The refusal is scoped to the cross-region feature; single-region in-memory
+    enforcement is untouched."""
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    assert handler.remote_replica_caches == ()

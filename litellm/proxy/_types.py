@@ -2531,6 +2531,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    rate_limit_remote_replicas: tuple[CoordinationRedisParams, ...] | None = Field(
+        None,
+        description=(
+            "read-only Redis replicas of OTHER regions' coordination Redis, used only to read "
+            "rate-limit counters. The limiter adds each replica's counter to the local one before "
+            "comparing against the limit, so an active-active deployment enforces one shared limit "
+            "instead of one per region. Never written to, and never used for spend, locks, or caching"
+        ),
+    )
     control_plane_url: str | None = Field(
         None,
         description=(
