@@ -6786,6 +6786,18 @@ class TestMCPServerManager:
                 id="per-server-auth-header",
             ),
             pytest.param(
+                {"auth_type": MCPAuth.oauth2_token_exchange},
+                ListedToolsCaller(
+                    user_api_key_auth=UserAPIKeyAuth(user_id="team-bot", api_key="hashed-shared"),
+                    raw_headers={"x-litellm-api-key": "sk-shared", "authorization": "Bearer entra-alice"},
+                ),
+                ListedToolsCaller(
+                    user_api_key_auth=UserAPIKeyAuth(user_id="team-bot", api_key="hashed-shared"),
+                    raw_headers={"x-litellm-api-key": "sk-shared", "authorization": "Bearer entra-bob"},
+                ),
+                id="shared-key-different-obo-subjects",
+            ),
+            pytest.param(
                 {"transport": MCPTransport.stdio, "command": "srv", "env": {"WS": "${X-WS}"}},
                 ListedToolsCaller(raw_headers={"X-WS": "A"}),
                 ListedToolsCaller(raw_headers={"X-WS": "B"}),
