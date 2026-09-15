@@ -444,7 +444,12 @@ class TestStreamingIterator:
 
         text_event = self._make_text_delta("hi")
         completed = MagicMock(spec=ResponseCompletedEvent)
-        completed.response = MagicMock(id="resp_999")
+        # Create a proper mock response with usage attribute that has model_dump method
+        mock_response = MagicMock(id="resp_999")
+        mock_usage = MagicMock()
+        mock_usage.model_dump.return_value = {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}
+        mock_response.usage = mock_usage
+        completed.response = mock_response
 
         sync_iter = MagicMock()
         sync_iter.__iter__ = lambda self: self
