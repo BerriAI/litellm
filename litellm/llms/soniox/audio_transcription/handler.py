@@ -39,7 +39,9 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.soniox.audio_transcription.transformation import (
     SONIOX_HANDLER_ONLY_PARAMS,
     SonioxAudioTranscriptionConfig,
+    SonioxInvalidBoolParam,
     decode_soniox_form_params,
+    raise_soniox_form_error,
 )
 from litellm.llms.soniox.common_utils import (
     SONIOX_DEFAULT_CLEANUP,
@@ -228,6 +230,8 @@ class SonioxAudioTranscriptionHandler:
         base_url: Final = get_soniox_api_base(api_base)
 
         decoded: Final = decode_soniox_form_params(optional_params)
+        if isinstance(decoded, SonioxInvalidBoolParam):
+            raise_soniox_form_error(decoded)
 
         # Server-side clamps. Caller-supplied poll settings (from request kwargs)
         # are bounded so an authenticated caller cannot force a worker into a

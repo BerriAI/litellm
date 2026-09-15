@@ -9,7 +9,9 @@ import pytest
 
 from litellm.llms.soniox.audio_transcription.transformation import (
     SonioxAudioTranscriptionConfig,
+    SonioxInvalidBoolParam,
     decode_soniox_form_params,
+    raise_soniox_form_error,
 )
 from litellm.llms.soniox.common_utils import SonioxException
 from litellm.llms.soniox.types import (
@@ -751,11 +753,16 @@ class TestDecodeSonioxFormParams:
             "language_hints_strict": expected,
         }
 
-    def test_should_raise_400_on_non_boolean_string(self):
+    def test_should_return_error_value_on_non_boolean_string(self):
+        result = decode_soniox_form_params({"context": '{"general": []}', "enable_speaker_diarization": "yes"})
+        assert result == SonioxInvalidBoolParam(key="enable_speaker_diarization", value="yes")
+
+    def test_should_map_invalid_bool_error_to_400(self):
         with pytest.raises(SonioxException) as exc_info:
-            decode_soniox_form_params({"enable_speaker_diarization": "yes"})
+            raise_soniox_form_error(SonioxInvalidBoolParam(key="enable_speaker_diarization", value="yes"))
         assert exc_info.value.status_code == 400
         assert "enable_speaker_diarization" in str(exc_info.value)
+        assert "yes" in str(exc_info.value)
 
     @pytest.mark.parametrize(
         "raw, expected",
