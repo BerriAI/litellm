@@ -7234,69 +7234,23 @@ async def _monitor_spend_logs_queue(
 
 MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
-_RESPONSE_ID_KEYED_SPEND_LOG_CALL_TYPES: Final = frozenset(
-    {
-        CallTypes.completion.value,
-        CallTypes.acompletion.value,
-        CallTypes.text_completion.value,
-        CallTypes.atext_completion.value,
-        CallTypes.embedding.value,
-        CallTypes.aembedding.value,
-        CallTypes.image_generation.value,
-        CallTypes.aimage_generation.value,
-        CallTypes.image_edit.value,
-        CallTypes.aimage_edit.value,
-        CallTypes.moderation.value,
-        CallTypes.amoderation.value,
-        CallTypes.transcription.value,
-        CallTypes.atranscription.value,
-        CallTypes.speech.value,
-        CallTypes.aspeech.value,
-        CallTypes.rerank.value,
-        CallTypes.arerank.value,
-        CallTypes.search.value,
-        CallTypes.asearch.value,
-        CallTypes.anthropic_messages.value,
-        CallTypes.aanthropic_messages.value,
-        CallTypes.responses.value,
-        CallTypes.aresponses.value,
-        CallTypes.generate_content.value,
-        CallTypes.agenerate_content.value,
-        CallTypes.generate_content_stream.value,
-        CallTypes.agenerate_content_stream.value,
-        CallTypes.ocr.value,
-        CallTypes.aocr.value,
-        CallTypes.vector_store_search.value,
-        CallTypes.avector_store_search.value,
-        CallTypes.create_interaction.value,
-        CallTypes.acreate_interaction.value,
-        CallTypes.create_video.value,
-        CallTypes.acreate_video.value,
-        CallTypes.video_remix.value,
-        CallTypes.avideo_remix.value,
-        CallTypes.video_edit.value,
-        CallTypes.avideo_edit.value,
-        CallTypes.video_extension.value,
-        CallTypes.avideo_extension.value,
-        CallTypes.create_container.value,
-        CallTypes.acreate_container.value,
-        CallTypes.run_code.value,
-        CallTypes.arun_code.value,
-        CallTypes.code_interpreter_tool.value,
-        CallTypes.acode_interpreter_tool.value,
-        CallTypes.call_mcp_tool.value,
-        CallTypes.send_message.value,
-        CallTypes.asend_message.value,
-        CallTypes.pass_through.value,
-        CallTypes.llm_passthrough_route.value,
-        CallTypes.allm_passthrough_route.value,
-    }
-)
-"""The inference and create calls, whose provider mints a response id per call: a stored row
-with the same ``request_id`` is another request the provider gave the same id. Every other call
-type (object reads, polls, cancels, lists and deletes, batch cost claims) is keyed on the id of the
-object it addressed, and a second row for one of those collapses on purpose. Realtime and
-Responses websocket sessions carry no provider id and are keyed on the call id already."""
+
+def _spend_log_row_response_id(row: Mapping[str, object]) -> str | None:
+    """``metadata.response_id`` of a row: the id the provider minted for this response, absent
+    for rows keyed on an object the request addressed (a batch poll, a file or response read)."""
+    metadata: Final = row.get("metadata")
+    try:
+        parsed: Final = json.loads(metadata) if isinstance(metadata, str) else metadata
+    except ValueError:
+        return None
+    response_id: Final = parsed.get("response_id") if isinstance(parsed, Mapping) else None
+    return response_id if isinstance(response_id, str) and response_id else None
+
+
+def _spend_log_row_keyed_on_addressed_object(row: Mapping[str, object]) -> bool:
+    """A row keyed on the id of the object its request addressed rather than on a minted response id
+    or on its own call id; a second row for one of those collapses on purpose."""
+    return _spend_log_row_response_id(row) is None and row.get("request_id") != row.get("litellm_call_id")
 
 
 def _is_transient_spend_log_write_error(e: Exception) -> bool:
@@ -7325,11 +7279,11 @@ async def _spend_logs_rekeyed_after_duplicate_skip(
     landed, so the rows are read back by identity from the writer (a lagging read replica
     would report the rows this very insert landed as missing): a stored row carrying this
     row's ``request_id`` AND ``litellm_call_id``, or already keyed on its call id, is this row
-    or a replay of it after a transport retry, and stays skipped. Rows of a call type keyed on
-    an object id collapse on purpose, and a row already keyed on its call id has nothing left to
-    fall back to; those are skipped and only logged.
+    or a replay of it after a transport retry, and stays skipped. Rows keyed on the id of an
+    object the request addressed collapse on purpose, and a row already keyed on its call id has
+    nothing left to fall back to; those are skipped and only logged.
     """
-    unverified: Final = tuple(row for row in rows if row.get("call_type") in _RESPONSE_ID_KEYED_SPEND_LOG_CALL_TYPES)
+    unverified: Final = tuple(row for row in rows if not _spend_log_row_keyed_on_addressed_object(row))
     if not unverified:
         return ()
     stored_identities: Final = await SpendLogsRepository(WriterPinnedClient(repo.prisma_client.db)).stored_identities(

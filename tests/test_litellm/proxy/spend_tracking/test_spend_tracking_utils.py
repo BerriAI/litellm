@@ -1442,6 +1442,42 @@ def test_get_logging_payload_recognises_the_call_id_the_row_itself_resolves():
     assert json.loads(payload["metadata"])["response_id"] is None
 
 
+@pytest.mark.parametrize(
+    "url, call_type, expected",
+    [
+        ("http://litellm/v1/files/file-abc", "afile_retrieve", None),
+        ("http://litellm/v1/files/file-abc/content", "afile_content", None),
+        ("http://litellm/openai/v1/batches/file-abc?limit=1", "aretrieve_batch", None),
+        ("http://litellm/v1/responses/file%2Dabc", "aget_responses", None),
+        ("http://litellm/v1/chat/completions", "acompletion", "file-abc"),
+        ("http://litellm/v1/responses?previous_response_id=file-abc", "aresponses", "file-abc"),
+        (None, "acompletion", "file-abc"),
+    ],
+)
+def test_get_logging_payload_leaves_metadata_response_id_empty_for_an_object_the_request_addressed(
+    url: str | None, call_type: str, expected: str | None
+):
+    """A read, poll or download of a stored object answers with that object's id, which the request
+    named in its path: it is the object's identity, not an id minted for this call, and only a
+    minted id can mark a row as one the flush may re-key."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "call_type": call_type,
+            "litellm_call_id": "call-1",
+            "litellm_params": {
+                "metadata": {"user_api_key": "test-key"},
+                "proxy_server_request": {"url": url, "method": "GET"} if url is not None else None,
+            },
+        },
+        response_obj={"id": "file-abc"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"])["response_id"] == expected
+
+
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():

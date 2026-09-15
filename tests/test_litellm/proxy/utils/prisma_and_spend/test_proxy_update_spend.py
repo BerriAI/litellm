@@ -948,6 +948,19 @@ def _wire_routed_db(mock_prisma_client: MagicMock, table: _SpendLogsTable) -> Ma
     return routed
 
 
+def _inference_row(
+    make_spend_log_row: SpendLogRowFactory, *, request_id: str, litellm_call_id: str, response_id: str | None = None
+) -> SpendLogRow:
+    """A row as ``get_logging_payload`` builds it for an inference call: ``metadata`` is a JSON
+    string carrying the id the provider minted, which is the row's key unless it was re-keyed."""
+    return make_spend_log_row(
+        request_id=request_id,
+        litellm_call_id=litellm_call_id,
+        call_type="acompletion",
+        metadata=json.dumps({"response_id": response_id or request_id}),
+    )
+
+
 async def _flush(mock_prisma_client: MagicMock, logs: list[SpendLogRow]) -> None:
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
@@ -970,7 +983,7 @@ async def test_update_spend_logs_rekeys_the_rows_a_reused_provider_response_id_w
     duplicate-tolerant flush kept one row while key and daily spend counted all three."""
     table = _wire_spend_logs_table(mock_prisma_client)
     logs = [
-        make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}", call_type="acompletion")
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}")
         for i in range(3)
     ]
 
@@ -985,27 +998,18 @@ async def test_update_spend_logs_rekeys_the_rows_a_reused_provider_response_id_w
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "call_type",
-    [
-        "acompletion",
-        "atext_completion",
-        "aembedding",
-        "aresponses",
-        "aanthropic_messages",
-        "acreate_interaction",
-        "acreate_video",
-        "call_mcp_tool",
-        "allm_passthrough_route",
-    ],
-)
-async def test_update_spend_logs_rekeys_every_inference_call_type(
-    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, call_type: str
+@pytest.mark.parametrize("metadata", [json.dumps({"response_id": "static-1"}), {"response_id": "static-1"}])
+async def test_update_spend_logs_rekeys_a_row_carrying_the_id_the_provider_minted(
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, metadata: str | dict[str, str]
 ) -> None:
-    """A self-hosted server reuses its id on every inference route it serves, not only chat."""
+    """Whatever the route, a row whose key is the id the provider minted for that response is a
+    charged request of its own once another row holds the same id."""
     table = _wire_spend_logs_table(mock_prisma_client)
     logs = [
-        make_spend_log_row(request_id="static-1", litellm_call_id=f"call-{i}", call_type=call_type) for i in range(2)
+        make_spend_log_row(
+            request_id="static-1", litellm_call_id=f"call-{i}", call_type="aresponses", metadata=metadata
+        )
+        for i in range(2)
     ]
 
     await _flush(mock_prisma_client, logs)
@@ -1023,7 +1027,7 @@ async def test_update_spend_logs_reads_stored_identities_back_from_the_writer(
     table = _wire_spend_logs_table(mock_prisma_client)
     routed = _wire_routed_db(mock_prisma_client, table)
     logs = [
-        make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}", call_type="acompletion")
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}")
         for i in range(2)
     ]
 
@@ -1042,12 +1046,12 @@ async def test_update_spend_logs_rekeys_only_the_colliding_rows_of_a_mixed_batch
     unique provider keeps its key and only the later rows of each reused id are re-keyed."""
     table = _wire_spend_logs_table(mock_prisma_client)
     logs = [
-        make_spend_log_row(request_id="chatcmpl-unique-a", litellm_call_id="call-a", call_type="acompletion"),
-        make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id="call-b", call_type="acompletion"),
-        make_spend_log_row(request_id="chatcmpl-static-2", litellm_call_id="call-c", call_type="acompletion"),
-        make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id="call-d", call_type="acompletion"),
-        make_spend_log_row(request_id="chatcmpl-unique-e", litellm_call_id="call-e", call_type="acompletion"),
-        make_spend_log_row(request_id="chatcmpl-static-2", litellm_call_id="call-f", call_type="acompletion"),
+        _inference_row(make_spend_log_row, request_id="chatcmpl-unique-a", litellm_call_id="call-a"),
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id="call-b"),
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-2", litellm_call_id="call-c"),
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id="call-d"),
+        _inference_row(make_spend_log_row, request_id="chatcmpl-unique-e", litellm_call_id="call-e"),
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-2", litellm_call_id="call-f"),
     ]
 
     await _flush(mock_prisma_client, logs)
@@ -1069,14 +1073,12 @@ async def test_update_spend_logs_rekeys_a_row_whose_provider_id_an_earlier_flush
     """The colliding row usually landed in an earlier flush, or from another worker."""
     table = _wire_spend_logs_table(
         mock_prisma_client,
-        seeded=[
-            make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id="call-old", call_type="acompletion")
-        ],
+        seeded=[_inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id="call-old")],
     )
 
     await _flush(
         mock_prisma_client,
-        [make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id="call-new", call_type="acompletion")],
+        [_inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id="call-new")],
     )
 
     assert {rid: row["litellm_call_id"] for rid, row in table.rows.items()} == {
@@ -1093,12 +1095,12 @@ async def test_update_spend_logs_does_not_rekey_a_replay_of_a_stored_row(
     the same request, not a collision, and must not become a second row."""
     table = _wire_spend_logs_table(
         mock_prisma_client,
-        seeded=[make_spend_log_row(request_id="chatcmpl-1", litellm_call_id="call-1", call_type="acompletion")],
+        seeded=[_inference_row(make_spend_log_row, request_id="chatcmpl-1", litellm_call_id="call-1")],
     )
 
     await _flush(
         mock_prisma_client,
-        [make_spend_log_row(request_id="chatcmpl-1", litellm_call_id="call-1", call_type="acompletion")],
+        [_inference_row(make_spend_log_row, request_id="chatcmpl-1", litellm_call_id="call-1")],
     )
 
     assert list(table.rows) == ["chatcmpl-1"]
@@ -1107,40 +1109,34 @@ async def test_update_spend_logs_does_not_rekey_a_replay_of_a_stored_row(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "call_type",
+    "call_type, request_id, metadata",
     [
-        "acreate_batch",
-        "aretrieve_batch",
-        "acancel_batch",
-        "acreate_file",
-        "afile_retrieve",
-        "afile_content",
-        "afile_delete",
-        "aretrieve_fine_tuning_job",
-        "avideo_retrieve",
-        "aretrieve_container",
-        "avector_store_retrieve",
-        "avector_store_delete",
-        "aget_responses",
-        None,
+        ("aretrieve_batch", "batch_abc_batch_cost", json.dumps({"response_id": None})),
+        ("afile_retrieve", "file-abc", json.dumps({})),
+        ("avector_store_retrieve", "vs_abc", {}),
+        ("aget_responses", "resp_abc", "not json"),
+        (None, "obj_abc", None),
     ],
 )
 async def test_update_spend_logs_keeps_object_keyed_rows_collapsed_on_their_object_id(
-    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, call_type: str | None
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: SpendLogRowFactory,
+    call_type: str | None,
+    request_id: str,
+    metadata: str | dict[str, str] | None,
 ) -> None:
     """Every poll of one batch shares its cost row by design, and every read of a stored object
-    is keyed on that object's id, so a duplicate here is not a lost row and the identity read-back
-    is not even issued. Only the inference call types are re-keyed; anything else, a call type
-    this code has never heard of included, keeps collapsing."""
+    is keyed on that object's id: such a row carries no minted response id, so a duplicate is
+    not a lost row and the identity read-back is not even issued."""
     table = _wire_spend_logs_table(mock_prisma_client)
     logs = [
-        make_spend_log_row(request_id="batch_abc_batch_cost", litellm_call_id=f"call-{i}", call_type=call_type)
+        make_spend_log_row(request_id=request_id, litellm_call_id=f"call-{i}", call_type=call_type, metadata=metadata)
         for i in range(2)
     ]
 
     await _flush(mock_prisma_client, logs)
 
-    assert list(table.rows) == ["batch_abc_batch_cost"]
+    assert list(table.rows) == [request_id]
     assert table.query_raw_calls == 0
     assert len(table.inserts) == 1
 
@@ -1153,13 +1149,17 @@ async def test_update_spend_logs_drops_and_logs_a_row_already_keyed_on_its_call_
     row, say) has nothing to fall back to: it stays dropped, but loudly."""
     table = _wire_spend_logs_table(
         mock_prisma_client,
-        seeded=[make_spend_log_row(request_id="call-pinned", litellm_call_id="call-other", call_type="acompletion")],
+        seeded=[_inference_row(make_spend_log_row, request_id="call-pinned", litellm_call_id="call-other")],
     )
 
     with caplog.at_level(logging.ERROR, logger=utils_mod.verbose_proxy_logger.name):
         await _flush(
             mock_prisma_client,
-            [make_spend_log_row(request_id="call-pinned", litellm_call_id="call-pinned", call_type="acompletion")],
+            [
+                make_spend_log_row(
+                    request_id="call-pinned", litellm_call_id="call-pinned", call_type="acompletion", metadata="{}"
+                )
+            ],
         )
 
     assert list(table.rows) == ["call-pinned"]
@@ -1181,14 +1181,16 @@ async def test_update_spend_logs_rekey_that_collides_again_stops(
     table = _wire_spend_logs_table(
         mock_prisma_client,
         seeded=[
-            make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id="call-old", call_type="acompletion"),
-            make_spend_log_row(request_id="call-pinned", litellm_call_id="call-pinned", call_type="acompletion"),
+            _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id="call-old"),
+            make_spend_log_row(
+                request_id="call-pinned", litellm_call_id="call-pinned", call_type="acompletion", metadata="{}"
+            ),
         ],
     )
 
     await _flush(
         mock_prisma_client,
-        [make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id="call-pinned", call_type="acompletion")],
+        [_inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id="call-pinned")],
     )
 
     assert sorted(table.rows) == ["call-pinned", "chatcmpl-static-1"]
@@ -1204,7 +1206,7 @@ async def test_update_spend_logs_treats_a_replay_of_a_rekeyed_row_as_stored(
     or warned about a second time."""
     table = _wire_spend_logs_table(mock_prisma_client)
     logs = [
-        make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}", call_type="acompletion")
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}")
         for i in range(2)
     ]
     await _flush(mock_prisma_client, logs)
@@ -1231,7 +1233,7 @@ async def test_update_spend_logs_leaves_rows_skipped_when_the_read_back_fails_on
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     logs = [
-        make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}", call_type="acompletion")
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}")
         for i in range(2)
     ]
 
@@ -1261,7 +1263,7 @@ async def test_update_spend_logs_retries_the_flush_when_the_read_back_hits_a_tra
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     logs = [
-        make_spend_log_row(request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}", call_type="acompletion")
+        _inference_row(make_spend_log_row, request_id="chatcmpl-static-1", litellm_call_id=f"call-{i}")
         for i in range(2)
     ]
 
