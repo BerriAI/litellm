@@ -80,7 +80,8 @@ const AllModelsTab = ({
     debouncedUpdateSearch(modelNameSearch);
   }, [modelNameSearch, debouncedUpdateSearch]);
 
-  const teamIdForQuery = selectedTeamValue === PERSONAL_TEAM_VALUE ? undefined : selectedTeamValue;
+  const teamIdForQuery =
+    modelViewMode === "current_team" && selectedTeamValue !== PERSONAL_TEAM_VALUE ? selectedTeamValue : undefined;
   const isConcreteModelGroup =
     Boolean(selectedModelGroup) &&
     selectedModelGroup !== ALL_MODEL_GROUPS_VALUE &&
@@ -168,6 +169,11 @@ const AllModelsTab = ({
 
   const handleTeamChange = (value: string) => {
     setSelectedTeamValue(value);
+    resetToFirstPage();
+  };
+
+  const handleViewModeChange = (nextViewMode: ModelViewMode) => {
+    setModelViewMode(nextViewMode);
     resetToFirstPage();
   };
 
@@ -275,7 +281,7 @@ const AllModelsTab = ({
           onTeamChange={handleTeamChange}
           isLoadingTeams={isLoadingTeams}
           viewMode={modelViewMode}
-          onViewModeChange={setModelViewMode}
+          onViewModeChange={handleViewModeChange}
           onOpenModelSettings={handleOpenModelSettings}
           availableModelGroups={availableModelGroups}
           availableModelAccessGroups={availableModelAccessGroups}
