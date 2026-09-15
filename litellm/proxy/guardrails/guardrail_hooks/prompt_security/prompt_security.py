@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 
 _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
+_SANITIZE_FILE_QUEUED_STATUSES: Final = frozenset({"created", "in progress"})
 
 
 class PromptSecurityGuardrailMissingSecrets(Exception):
@@ -512,15 +513,17 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     "metadata": result.get("metadata", {}),
                     "violations": result.get("metadata", {}).get("violations", []),
                 }
-            elif status == "in progress":
-                verbose_proxy_logger.debug(
-                    "Prompt Security Guardrail: File sanitization in progress (attempt %d/%d)",
-                    attempt + 1,
-                    self.max_poll_attempts,
-                )
-                continue
-            else:
+
+            if status not in _SANITIZE_FILE_QUEUED_STATUSES:
                 raise HTTPException(status_code=500, detail=f"Unexpected sanitization status: {status}")
+
+            verbose_proxy_logger.debug(
+                "Prompt Security Guardrail: File sanitization status=%s for jobId=%s (attempt %d/%d)",
+                status,
+                job_id,
+                attempt + 1,
+                self.max_poll_attempts,
+            )
 
         raise HTTPException(status_code=408, detail="File sanitization timeout")
 

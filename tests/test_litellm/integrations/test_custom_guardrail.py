@@ -2625,7 +2625,7 @@ class TestLoggingOnlyApplyGuardrail:
         assert [e["guardrail_status"] for e in entries] == ["success"]
 
     @pytest.mark.asyncio
-    async def test_native_lifecycle_hook_guardrail_is_left_alone(self):
+    async def test_native_lifecycle_hook_guardrail_scans_in_logging_only(self):
         class _NativeHooks(_ApplyOnlyObserver):
             use_native_lifecycle_hooks = True
 
@@ -2634,9 +2634,9 @@ class TestLoggingOnlyApplyGuardrail:
 
         out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        assert guardrail.calls == []
-        assert out_kwargs is kwargs
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
         assert out_response is response
+        assert out_kwargs["standard_logging_object"]["guardrail_information"]
 
     @pytest.mark.asyncio
     async def test_aresponses_scans_logged_messages_when_input_is_cleared(self):
@@ -2888,6 +2888,61 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
         assert response.choices[0].message.content == "filtered response"
         assert "guardrail_to_apply" not in request_data
         assert len(_guardrail_entries(request_data)) == 1
+
+
+class _NativeLifecycleLoggingGuardrail(CustomGuardrail):
+    """Native lifecycle guardrail that also implements apply_guardrail, like the azure guards."""
+
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+    def __init__(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        super().__init__(
+            guardrail_name="native-logging-guardrail",
+            event_hook=GuardrailEventHooks.logging_only,
+        )
+        self.calls: list[tuple[Literal["request", "response"], list[str]]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls.append((input_type, list(inputs.get("texts") or [])))
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response():
+    """A use_native_lifecycle_hooks guardrail accepts mode logging_only and its
+    async_logging_hook scans kwargs["async_complete_streaming_response"], not the raw result."""
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    guardrail = _NativeLifecycleLoggingGuardrail()
+    assembled = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content="assembled stream text"))]
+    )
+    sentinel_result = object()
+    kwargs = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_call_id": "call-1",
+        "litellm_params": {"metadata": {}},
+        "optional_params": {},
+        "standard_logging_object": {"guardrail_information": None},
+        "async_complete_streaming_response": assembled,
+    }
+
+    out_kwargs, out_result = await guardrail.async_logging_hook(
+        kwargs=kwargs, result=sentinel_result, call_type=CallTypes.acompletion.value
+    )
+
+    assert out_result is sentinel_result
+    assert ("response", ["assembled stream text"]) in guardrail.calls
+    assert out_kwargs["standard_logging_object"]["guardrail_information"]
 
 
 class TestPreCallHookResponseIsNotLoggedVerbatim:

@@ -45,7 +45,10 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.db.health_check_latest import (
+    LatestHealthCheckRow,
+    query_latest_health_checks,
+)
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
@@ -876,7 +879,7 @@ async def _save_background_health_checks_to_db(
         )
 
         # Step 3: Get latest health checks for all models in one query to compare status
-        latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        latest_checks: Final = await query_latest_health_checks(prisma_client)
         latest_checks_map: Final = {}
         for check in latest_checks:
             # Use model_id as primary key, fallback to model_name
