@@ -527,3 +527,28 @@ class TestGeminiTTSSpeechConfigInRequestBody:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.parametrize("voice_key", ["name", "voiceName", "voice_name", "voice"])
+@pytest.mark.parametrize("wrapper", [None, "speechConfig", "speech_config"])
+def test_speech_bridge_preserves_single_speaker_voice_mapping(voice_key: str, wrapper: str | None):
+    handler = SpeechToCompletionBridgeTransformationHandler()
+    config = {voice_key: "Umbriel", "language_code": "en-US"}
+    voice = {wrapper: config} if wrapper else config
+    result = handler.transform_request(
+        model=f"vertex_ai/{GEMINI_3_1_FLASH_TTS_MODEL}",
+        input="Hello",
+        voice=voice,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="vertex_ai",
+    )
+    assert result["audio"] == {
+        "speech_config": {
+            "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}},
+            "languageCode": "en-US",
+        },
+        "format": "pcm16",
+    }

@@ -72,3 +72,14 @@ def test_gemini_tts_detection_uses_model_metadata(monkeypatch):
     _invalidate_model_cost_lowercase_map()
 
     assert is_gemini_tts_model(model)
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash-preview-tts", "gemini-2.5-flash-tts", "gemini-2.5-pro-tts"])
+@pytest.mark.parametrize("prefixed", [False, True])
+def test_existing_vertex_tts_models_keep_gemini_dispatch(model: str, prefixed: bool, monkeypatch):
+    model_cost = _load_model_cost_map(Path(__file__).parents[2] / "model_prices_and_context_window.json")
+    monkeypatch.setattr(litellm, "model_cost", model_cost)
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+    requested_model = f"vertex_ai/{model}" if prefixed else model
+    assert is_gemini_tts_model(requested_model, custom_llm_provider="vertex_ai")
