@@ -339,6 +339,24 @@ class TestPollLimitsClamping:
     a worker on tight poll loops.
     """
 
+    def test_should_raise_400_when_form_bool_param_is_invalid(self):
+        handler = SonioxAudioTranscriptionHandler()
+        with pytest.raises(SonioxException) as exc_info:
+            handler._prepare(
+                audio_file=None,
+                optional_params={
+                    "enable_speaker_diarization": "yes",
+                    "audio_url": "https://example.com/a.wav",
+                },
+                litellm_params={},
+                api_key="sk-test",
+                api_base=None,
+                provider_config=SonioxAudioTranscriptionConfig(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert "enable_speaker_diarization" in str(exc_info.value)
+
     def test_should_clamp_poll_interval_to_minimum(self):
         from litellm.llms.soniox.common_utils import SONIOX_MIN_POLL_INTERVAL
 
