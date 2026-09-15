@@ -5773,8 +5773,7 @@ async def _organization_max_budget_check(
     if org_table.litellm_budget_table is not None:
         org_max_budget = org_table.litellm_budget_table.max_budget
 
-    # Only check if organization has a valid max_budget set
-    if org_max_budget is None or org_max_budget <= 0:
+    if org_max_budget is None:
         return
 
     # Read spend from cross-pod counter (Redis-first) or cached object (fallback)

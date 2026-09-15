@@ -1856,9 +1856,9 @@ def validate_team_org_change(
 
     # Check if the team's budget is less than the org's max_budget
     if (
-        team.max_budget
-        and organization.litellm_budget_table
-        and organization.litellm_budget_table.max_budget
+        team.max_budget is not None
+        and organization.litellm_budget_table is not None
+        and organization.litellm_budget_table.max_budget is not None
         and team.max_budget > organization.litellm_budget_table.max_budget
     ):
         raise HTTPException(
