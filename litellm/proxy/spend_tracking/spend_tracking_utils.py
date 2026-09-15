@@ -230,7 +230,9 @@ def _get_spend_logs_metadata(
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 
 
-def get_provider_response_id(response_obj: Mapping[str, object], kwargs: Mapping[str, object]) -> str | None:
+def get_provider_response_id(
+    response_obj: Mapping[str, object], kwargs: Mapping[str, object], litellm_call_id: str | None
+) -> str | None:
     """The id the provider minted for this response: the response's own, else the one the standard
     logging payload resolved. Never the proxy's call id, which is not a provider identity."""
     standard_logging_payload: Final = kwargs.get("standard_logging_object")
@@ -242,7 +244,7 @@ def get_provider_response_id(response_obj: Mapping[str, object], kwargs: Mapping
         (
             candidate
             for candidate in candidate_ids
-            if isinstance(candidate, str) and candidate and candidate != kwargs.get("litellm_call_id")
+            if isinstance(candidate, str) and candidate and candidate != litellm_call_id
         ),
         None,
     )
@@ -379,6 +381,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params: Final = kwargs.get("litellm_params", {})
+    litellm_call_id: Final = cast(
+        str | None,
+        kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
+    )
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
     call_type: Final = kwargs.get("call_type")
@@ -412,7 +418,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
-    provider_response_id: Final = get_provider_response_id(response_obj_dict, kwargs)
+    provider_response_id: Final = get_provider_response_id(response_obj_dict, kwargs, litellm_call_id)
     standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
@@ -483,10 +489,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         UNKNOWN_MODEL_SPEND_LOG_MODEL
         if rejected_as_unknown_model or failed_with_prompt_shaped_model
         else resolved_model
-    )
-    litellm_call_id: Final = cast(
-        str | None,
-        kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
     )
 
     # clean up litellm metadata

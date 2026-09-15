@@ -1425,6 +1425,23 @@ def test_get_logging_payload_falls_back_to_the_standard_logging_payload_response
     assert payload["request_id"] == (standard_logging_id or "call-1")
 
 
+def test_get_logging_payload_recognises_the_call_id_the_row_itself_resolves():
+    """The row resolves its call id from litellm_params when kwargs carry none at the top level;
+    a response id equal to that call id is the proxy's own identity, so metadata.response_id stays empty."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"litellm_call_id": "call-1", "metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj={"id": "call-1", "choices": []},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["litellm_call_id"] == "call-1"
+    assert json.loads(payload["metadata"])["response_id"] is None
+
+
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
