@@ -4055,6 +4055,10 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
 
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
+    from litellm.llms.bedrock.chat.openai_chat_completions_transformation import (
+        AmazonBedrockOpenAIChatCompletionsConfig,
+    )
+
     if "aws_bedrock_client" in optional_params:
         verbose_logger.warning(
             "'aws_bedrock_client' is a deprecated param. Please move to another auth method - https://docs.litellm.ai/docs/providers/bedrock#boto3---authentication."
@@ -4073,7 +4077,27 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             optional_params["aws_region_name"] = aws_bedrock_client.meta.region_name
 
     bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
-    if bedrock_route == "claude_platform":
+    if isinstance(provider_config, AmazonBedrockOpenAIChatCompletionsConfig):
+        return base_llm_http_handler.completion(
+            model=model.removeprefix("bedrock/"),
+            stream=stream,
+            messages=messages,
+            acompletion=acompletion,
+            api_base=api_base,
+            model_response=model_response,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            shared_session=shared_session,
+            custom_llm_provider="bedrock",
+            timeout=timeout,
+            headers=headers,
+            encoding=_get_encoding(),
+            api_key=api_key,
+            logging_obj=logging,
+            client=client,
+            provider_config=provider_config,
+        )
+    elif bedrock_route == "claude_platform":
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model,
             provider=LlmProviders.BEDROCK,
