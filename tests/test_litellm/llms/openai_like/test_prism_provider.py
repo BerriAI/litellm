@@ -1,9 +1,19 @@
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+
+def _prism_client(requests: list[httpx.Request], response_body: dict[str, object]) -> HTTPHandler:
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=response_body)
+
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
 
 
 def test_prism_provider_resolution(monkeypatch: pytest.MonkeyPatch):
@@ -108,33 +118,90 @@ def test_prism_supported_endpoints():
     }
 
 
-def test_prism_resolves_responses_and_messages_configs():
-    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-    from litellm.llms.openai_like.messages.transformation import (
-        JSONProviderAnthropicMessagesConfig,
+def test_prism_responses_request():
+    requests: list[httpx.Request] = []
+    client = _prism_client(
+        requests,
+        {
+            "id": "resp_prism",
+            "object": "response",
+            "created_at": 1_789_550_000,
+            "model": "deepseek-v4-flash",
+            "status": "completed",
+            "output": [
+                {
+                    "id": "msg_prism",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Hello from Prism",
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 4,
+                "output_tokens": 3,
+                "total_tokens": 7,
+            },
+        },
     )
-    from litellm.utils import ProviderConfigManager
 
-    assert JSONProviderRegistry.supports_responses_api("prism") is True
-    responses_config = ProviderConfigManager.get_provider_responses_api_config(
-        provider="prism",
-        model="deepseek-v4-flash",
-    )
-    messages_config = ProviderConfigManager.get_provider_anthropic_messages_config(
-        provider=litellm.LlmProviders.PRISM,
-        model="deepseek-v4-flash",
+    response = litellm.responses(
+        model="prism/deepseek-v4-flash",
+        input="Say hello",
+        api_key="prism-test-key",
+        client=client,
     )
 
-    assert responses_config is not None
-    assert responses_config.custom_llm_provider == "prism"
-    assert isinstance(messages_config, JSONProviderAnthropicMessagesConfig)
-    assert (
-        messages_config.get_complete_url(
-            api_base=None,
-            api_key="prism-test-key",
-            model="deepseek-v4-flash",
-            optional_params={},
-            litellm_params={},
-        )
-        == "https://api.prisminference.com/v1/messages"
+    request = requests[0]
+    body = json.loads(request.content)
+    assert str(request.url) == "https://api.prisminference.com/v1/responses"
+    assert request.headers["authorization"] == "Bearer prism-test-key"
+    assert body["model"] == "deepseek-v4-flash"
+    assert body["input"] == "Say hello"
+    assert response.output[0].content[0].text == "Hello from Prism"
+
+
+@pytest.mark.asyncio
+async def test_prism_anthropic_messages_request():
+    requests: list[httpx.Request] = []
+    response_body: dict[str, object] = {
+        "id": "msg_prism",
+        "type": "message",
+        "role": "assistant",
+        "model": "deepseek-v4-flash",
+        "content": [{"type": "text", "text": "Hello from Prism"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 4, "output_tokens": 3},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=response_body)
+
+    client = AsyncHTTPHandler()
+    await client.close()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+    response = await litellm.anthropic.messages.acreate(
+        model="prism/deepseek-v4-flash",
+        messages=[{"role": "user", "content": "Say hello"}],
+        max_tokens=32,
+        api_key="prism-test-key",
+        client=client,
     )
+
+    request = requests[0]
+    body = json.loads(request.content)
+    assert str(request.url) == "https://api.prisminference.com/v1/messages"
+    assert request.headers["authorization"] == "Bearer prism-test-key"
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert body["model"] == "deepseek-v4-flash"
+    assert body["messages"] == [{"role": "user", "content": "Say hello"}]
+    assert response["content"][0]["text"] == "Hello from Prism"
