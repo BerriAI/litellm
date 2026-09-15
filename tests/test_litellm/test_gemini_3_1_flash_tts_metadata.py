@@ -45,7 +45,6 @@ def test_gemini_3_1_flash_tts_model_metadata(model, provider):
         assert info["supports_audio_output"] is True
         assert info["supports_function_calling"] is False
         assert info["supports_prompt_caching"] is False
-        assert info["health_check_voice"] == "Kore"
 
 
 def test_gemini_3_1_flash_tts_backup_matches_main():

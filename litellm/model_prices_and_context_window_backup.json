@@ -48169,7 +48169,6 @@
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2e-05,
         "source": "https://cloud.google.com/text-to-speech/pricing",
-        "health_check_voice": "Kore",
         "max_input_tokens": 8192,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
@@ -55650,7 +55649,6 @@
         ]
     },
     "gemini-3.1-flash-tts-preview": {
-        "health_check_voice": "Kore",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "gemini",
         "max_input_tokens": 8192,
