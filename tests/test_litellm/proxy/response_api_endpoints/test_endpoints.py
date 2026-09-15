@@ -15,6 +15,61 @@ from litellm.proxy.proxy_server import app
 
 
 class TestResponsesAPIEndpoints(unittest.TestCase):
+    def test_responses_api_missing_input_returns_openai_400(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test")
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                mock_router.aresponses = AsyncMock()
+                client = TestClient(app)
+                response = client.post(
+                    "/v1/responses",
+                    json={"model": "gpt-4o", "instructions": "Be brief."},
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+                mock_aresponses = mock_router.aresponses
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": "Missing required parameter: 'input'.",
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": "400",
+            }
+        }
+        mock_aresponses.assert_not_awaited()
+
+    def test_responses_api_null_input_reaches_downstream_validation(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        processor = MagicMock()
+        processor.base_process_llm_request = AsyncMock(return_value={"ok": True})
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test")
+        try:
+            with patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/v1/responses",
+                    json={"model": "gpt-4o", "input": None},
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"ok": True}
+        processor.base_process_llm_request.assert_awaited_once()
+
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
