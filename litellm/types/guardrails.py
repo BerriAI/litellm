@@ -138,6 +138,7 @@ class SupportedGuardrailIntegrations(Enum):
     STRAIKER = "straiker"
     ALICE = "alice"
     CONDUCT = "conduct"
+    SENSITIVE_DATA_ROUTING = "sensitive_data_routing"
 
 
 class Role(Enum):
