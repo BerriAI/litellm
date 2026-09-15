@@ -7631,9 +7631,15 @@ async def test_startup_schedules_first_retention_cleanup_soon_after_boot(monkeyp
     mock_proxy_logging.db_spend_update_writer = MagicMock()
 
     with (
-        patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
-        patch("litellm.proxy.proxy_server.store_model_in_db", False),
-        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+        patch(  # test-quality-ok: initialize_scheduled_background_jobs reads these module globals, there is no seam to inject them
+            "litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()
+        ),
+        patch(  # test-quality-ok: same module global as above
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ),
+        patch(  # test-quality-ok: same module global as above
+            "litellm.proxy.proxy_server.get_secret_bool", return_value=False
+        ),
     ):
         before = datetime.now(timezone.utc)
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
