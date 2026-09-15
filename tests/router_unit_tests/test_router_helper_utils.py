@@ -631,9 +631,11 @@ def test_deployment_callback_respects_cooldown_time(model_list):
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 def test_log_retry(model_list, metadata_key):
-    """log_retry appends one flat record per failed attempt and copies neither the request kwargs nor
-    the request metadata into it"""
+    """log_retry appends one flat record per failed attempt, copies neither the request kwargs nor the
+    request metadata into it, and counts every failed attempt of the request independently of the
+    per-hop attempted_retries"""
     router = Router(model_list=model_list)
+    rate_limit_error = litellm.RateLimitError(message="slow down", llm_provider="openai", model="gpt-3.5-turbo")
     new_kwargs = router.log_retry(
         kwargs={
             "model": "gpt-3.5-turbo",
@@ -641,7 +643,7 @@ def test_log_retry(model_list, metadata_key):
             "messages": [{"role": "user", "content": "hi"}],
             metadata_key: {"model_info": {"id": "deployment-1"}, "attempted_retries": 2, "user_api_key": "sk-proxy"},
         },
-        e=litellm.RateLimitError(message="slow down", llm_provider="openai", model="gpt-3.5-turbo"),
+        e=rate_limit_error,
     )
     assert json.loads(json.dumps(new_kwargs[metadata_key]["previous_models"])) == [
         {
@@ -652,6 +654,8 @@ def test_log_retry(model_list, metadata_key):
             "attempted_retries": 2,
         }
     ]
+    assert new_kwargs[metadata_key]["request_retry_count"] == 1
+    assert router.log_retry(kwargs=new_kwargs, e=rate_limit_error)[metadata_key]["request_retry_count"] == 2
 
 
 def test_update_usage(model_list):
