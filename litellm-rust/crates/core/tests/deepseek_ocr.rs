@@ -2,7 +2,8 @@ use rstest::rstest;
 use serde_json::{Value, json};
 
 use crate::llms::vertex_ai::ocr::deepseek_transformation::{
-    DeepSeekOcrParams, DeepSeekOcrResponse, transform_ocr_request, transform_ocr_response,
+    DeepSeekOcrParams, DeepSeekOcrResponse, provider_model, transform_ocr_request,
+    transform_ocr_response,
 };
 use crate::ocr::types::OcrDocument;
 
@@ -22,7 +23,12 @@ fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
     let params: DeepSeekOcrParams =
         serde_json::from_value(json!({name: value.clone(), "ignored": true})).unwrap();
     let result = serde_json::to_value(
-        transform_ocr_request("deepseek-ai/deepseek-ocr-maas", document(), &params).unwrap(),
+        transform_ocr_request(
+            provider_model("deepseek-ai/deepseek-ocr-maas").unwrap(),
+            document(),
+            &params,
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(result["model"], "deepseek-ai/deepseek-ocr-maas");
@@ -44,7 +50,7 @@ fn request_maps_both_document_types_to_image_content(#[case] document: Value) {
         .unwrap()
         .clone();
     let request = transform_ocr_request(
-        "deepseek-ai/deepseek-ocr-maas",
+        provider_model("deepseek-ai/deepseek-ocr-maas").unwrap(),
         serde_json::from_value(document).unwrap(),
         &DeepSeekOcrParams::default(),
     )
