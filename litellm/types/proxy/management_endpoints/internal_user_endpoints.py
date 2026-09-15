@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -6,12 +6,15 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
+    NewUserRequest,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
 from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 MAX_BULK_DELETE_USERS: Final = 500
+
+MAX_BULK_NEW_USERS: Final = 500
 
 
 class InsensitiveContains(TypedDict):
@@ -108,3 +111,50 @@ class UserDeleteResult(BaseModel):
 
 class BulkDeleteUsersResponse(ResourceResponse[tuple[UserDeleteResult, ...]]):
     """`{data: [...]}` with one `UserDeleteResult` per requested user, in request order."""
+
+
+class BulkNewUserItem(NewUserRequest):
+    """One row of `POST /management/v1/users/bulk`: the `/user/new` body, with keys opt-in and invite emails
+    unsupported. Unknown fields are rejected, as on every `/management/v1` request body."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    auto_create_key: bool = False
+
+    @field_validator("send_invite_email")
+    @classmethod
+    def reject_invite_email(cls, value: bool | None) -> bool | None:
+        if value:
+            raise ValueError("send_invite_email is not supported on /management/v1/users/bulk; invite users separately")
+        return value
+
+
+class BulkNewUserRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    users: Sequence[BulkNewUserItem] = Field(min_length=1, max_length=MAX_BULK_NEW_USERS)
+
+
+class UserCreateResult(BaseModel):
+    """Outcome for one row of `POST /management/v1/users/bulk`. `teams` lists the teams the user was actually
+    added to."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    teams: tuple[str, ...] | None = None
+    key: str | None = None
+    error: str | None = None
+
+
+class BulkNewUserMeta(BaseModel):
+    total_requested: int
+    created: int
+    failed: int
+
+
+class BulkNewUserResponse(BaseModel):
+    """`data` holds one result per input row, in input order."""
+
+    data: tuple[UserCreateResult, ...]
+    meta: BulkNewUserMeta
