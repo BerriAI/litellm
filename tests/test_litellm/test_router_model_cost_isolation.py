@@ -1282,23 +1282,29 @@ def test_repointing_a_deployment_drops_its_previous_backend_key(monkeypatch):
         dict(litellm_utils._runtime_registered_model_cost),
     )
 
+    # ``mode`` is a cost-map schema field, so it flows through to the shared
+    # backend key. Without at least one such field the shared payload is empty
+    # and ``register_model`` (correctly) registers nothing for the backend key,
+    # which would leave this test nothing to observe.
     router = Router(
         model_list=[
             {
                 "model_name": "moving-target",
                 "litellm_params": {"model": "hosted_vllm/old-backend"},
-                "model_info": {"id": "moving-target-id"},
+                "model_info": {"id": "moving-target-id", "mode": "chat"},
             }
         ],
     )
 
     saved_model_cost = litellm.model_cost
     try:
+        assert "hosted_vllm/old-backend" in litellm.model_cost
+
         router.upsert_deployment(
             deployment=Deployment(
                 model_name="moving-target",
                 litellm_params=LiteLLM_Params(model="hosted_vllm/new-backend"),
-                model_info=ModelInfo(id="moving-target-id"),
+                model_info=ModelInfo(id="moving-target-id", mode="chat"),
             )
         )
 
