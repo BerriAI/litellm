@@ -30,8 +30,8 @@ This pre-call check is responsible only for the routing decision: it reads the e
 the matching deployment.
 
 Safe to enable globally:
-- Only activates when encoded markers appear in the request ``input``.
-- No effect on embedding models, chat completions, or first-time requests.
+- Only pins requests carrying encoded markers in ``input`` or assistant ``reasoning_items``.
+- No effect on embedding models or first-time deployment selection.
 - No quota reduction -- first requests are fully load balanced.
 - No cache required.
 """
@@ -71,8 +71,8 @@ class _SupportsActiveCooldowns(Protocol):
 
 class EncryptedContentAffinityCheck(CustomLogger):
     """
-    Routes follow-up Responses API requests to the deployment that produced
-    the encrypted output items they reference.
+    Routes follow-up Responses API and bridged chat requests to the deployment
+    that produced the encrypted output items they reference.
 
     The ``model_id`` is decoded directly from the litellm-encoded item IDs –
     no caching or TTL management needed.
@@ -185,6 +185,27 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
     @staticmethod
+    def _extract_model_id_from_messages(
+        messages: list[AllMessageValues] | None,
+    ) -> str | None:
+        if messages is None:
+            return None
+        return next(
+            (
+                model_id
+                for message in messages
+                if message.get("role") == "assistant"
+                if (
+                    model_id := EncryptedContentAffinityCheck._extract_model_id_from_input(
+                        message.get("reasoning_items")
+                    )
+                )
+                is not None
+            ),
+            None,
+        )
+
+    @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
@@ -197,7 +218,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _request_team_id(request_kwargs: Mapping[str, object]) -> str | None:
-        containers: Final = (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
+        containers: Final = (
+            request_kwargs.get("metadata"),
+            request_kwargs.get("litellm_metadata"),
+        )
         team_ids: Final = (c.get("user_api_key_team_id") for c in containers if isinstance(c, Mapping))
         return next((tid for tid in team_ids if isinstance(tid, str)), None)
 
@@ -292,7 +316,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         remaining cooldown window) so OpenAI-compatible clients back off and
         retry after the deployment is eligible again.
         """
-        request_kwargs = request_kwargs or {}
+        routing_kwargs: Final = request_kwargs if request_kwargs is not None else {}
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
@@ -304,14 +328,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
         # completions / embeddings, which breaks tag-based routing because
         # _get_metadata_variable_name_from_kwargs would pick "litellm_metadata"
         # over "metadata" where tags are actually stored.
-        if "litellm_metadata" in request_kwargs:
-            request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
+        if "litellm_metadata" in routing_kwargs or messages is not None:
+            metadata_key: Final = "litellm_metadata" if "litellm_metadata" in routing_kwargs else "metadata"
+            routing_kwargs[metadata_key] = {
+                **(routing_kwargs.get(metadata_key) or {}),
+                "encrypted_content_affinity_enabled": True,
+            }
 
-        request_input: Final = request_kwargs.get("input")
-        anthropic_messages: Final = messages or request_kwargs.get("messages")
-        model_id: Final = self._extract_model_id_from_input(
-            request_input
-        ) or self._extract_model_id_from_anthropic_messages(anthropic_messages)
+        request_input: Final = routing_kwargs.get("input")
+        anthropic_messages: Final = messages or routing_kwargs.get("messages")
+        model_id: Final = (
+            self._extract_model_id_from_input(request_input)
+            or self._extract_model_id_from_messages(messages)
+            or self._extract_model_id_from_anthropic_messages(anthropic_messages)
+        )
         if not model_id:
             return typed_healthy_deployments
 
@@ -329,7 +359,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 "EncryptedContentAffinityCheck: pinning -> deployment=%s",
                 model_id,
             )
-            request_kwargs["_encrypted_content_affinity_pinned"] = True
+            routing_kwargs["_encrypted_content_affinity_pinned"] = True
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
@@ -344,7 +374,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 model_id,
                 len(boundary_matches),
             )
-            request_kwargs["_encrypted_content_affinity_pinned"] = True
+            routing_kwargs["_encrypted_content_affinity_pinned"] = True
             return boundary_matches
 
         # The origin cannot serve this turn's routed group and no peer shares the boundary, so its
@@ -358,7 +388,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         # dispatch rather than returning distinguishable responses. Only a genuine same-group member
         # that is currently unavailable falls through to the fail-fast, preserving the cooldown contract.
         routed_group_model_ids: Final = (
-            self._routed_group_candidate_model_ids(request_kwargs, model) if originating is not None else frozenset()
+            self._routed_group_candidate_model_ids(routing_kwargs, model) if originating is not None else frozenset()
         )
         if str(model_id) not in routed_group_model_ids:
             verbose_router_logger.debug(
