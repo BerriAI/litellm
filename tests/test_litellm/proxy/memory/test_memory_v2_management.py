@@ -330,6 +330,35 @@ async def test_capture_records_authenticated_contributor_and_tenant(database: Ma
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential", "secret"),
+    (
+        ("AKIA" + "A" * 16, "A" * 16),
+        ("aws_secret_access_key=" + "B" * 40, "B" * 40),
+        ("AIza" + "C" * 35, "C" * 35),
+        ("postgres://test-user:memory-test-password@db.example.test/app", "memory-test-password"),
+        ("Authorization: Basic " + "D" * 24, "D" * 24),
+        ("Authorization: Bearer " + "E" * 24, "E" * 24),
+        ("ghp_" + "F" * 24, "F" * 24),
+        ("github_pat_" + "G" * 24, "G" * 24),
+    ),
+)
+async def test_capture_redacts_credentials_before_persisting_content_and_metadata(
+    database: MagicMock, credential: str, secret: str
+) -> None:
+    configure(database)
+    text = "Deployment uses staging port 8123; credential: " + credential
+    fields = ("title", "content", "evidence", "when_to_use", "scope", "source")
+    await management.capture_entry(_CAPTURE.model_copy(update={field: text for field in fields}), auth())
+    data = database.db.litellm_memorytable.create.call_args.kwargs["data"]
+    stored = {"content": data["value"], **json.loads(data["metadata"])}
+    for field in fields:
+        assert secret not in stored[field]
+        assert "REDACTED" in stored[field]
+        assert "staging port 8123" in stored[field]
+
+
+@pytest.mark.asyncio
 async def test_search_finds_an_old_record_beyond_the_first_thousand(database: MagicMock) -> None:
     configure(database)
     newer = [

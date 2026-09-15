@@ -55,4 +55,4 @@ def test_recognizable_credentials_are_redacted_without_removing_the_observation(
     assert "The integration failed" in redacted
     assert "abcdefghijklmnopqrst" not in redacted
     assert "private material" not in redacted
-    assert "[REDACTED PRIVATE KEY]" in redacted
+    assert "REDACTED" in redacted

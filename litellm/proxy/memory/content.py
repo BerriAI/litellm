@@ -3,21 +3,18 @@ from typing import Final
 
 from rapidfuzz import fuzz, process
 
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.types.memory_v2 import MemoryEntry
 
 _STOP_WORDS: Final = frozenset(
     "the and for how what why with this that does have from about our are was when should can you work team".split()
 )
 _TOKEN: Final = re.compile(r"[\w-]{2,}", re.UNICODE)
-_PRIVATE_KEY: Final = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)
 _CREDENTIAL: Final = re.compile(r"\b(?:sk-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]{12,}")
-_BEARER: Final = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]{12,}", re.IGNORECASE)
 
 
 def redact_memory(value: str) -> str:
-    return _BEARER.sub(
-        r"\1[REDACTED]", _CREDENTIAL.sub("[REDACTED TOKEN]", _PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", value))
-    )
+    return _CREDENTIAL.sub("[REDACTED TOKEN]", redact_string(value))
 
 
 def _similarity(term: str, text: str, words: tuple[str, ...]) -> float:
