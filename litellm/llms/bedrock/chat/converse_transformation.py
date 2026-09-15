@@ -53,6 +53,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -204,6 +205,82 @@ class AmazonConverseConfig(BaseConfig):
                 messages_copy[user_message_index]["content"] = [{"type": "guarded_text", "text": content}]
 
         return messages_copy
+
+    @staticmethod
+    def _has_orphaned_tool_blocks(messages: list[AllMessageValues]) -> bool:
+        return any(
+            (m.get("role") == "assistant" and m.get("tool_calls")) or m.get("role") in ("tool", "function")
+            for m in messages
+        )
+
+    @staticmethod
+    def _neutralize_orphaned_tool_blocks(
+        messages: list[AllMessageValues], optional_params: dict
+    ) -> list[AllMessageValues]:
+        if optional_params.get("tools") or not AmazonConverseConfig._has_orphaned_tool_blocks(messages):
+            return messages
+
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            convert_content_list_to_str,
+        )
+
+        def _tool_call_text(tool_call: ChatCompletionAssistantToolCall) -> str:
+            function = tool_call.get("function") or {}
+            name = function.get("name") or "unknown_tool"
+            arguments = function.get("arguments") or ""
+            return f"[tool call: {name}({arguments})]"
+
+        def _result_text(message: AllMessageValues) -> str:
+            rendered = convert_content_list_to_str(message).strip()
+            return rendered or "<non-text tool result omitted>"
+
+        guardrail_active: Final = "guardrailConfig" in optional_params
+
+        def _rewrite(message: AllMessageValues) -> AllMessageValues:
+            role = message.get("role")
+            tool_calls = message.get("tool_calls")
+            if role == "assistant" and tool_calls:
+                base_text: Final = convert_content_list_to_str(message)
+                call_texts: Final = tuple(_tool_call_text(call) for call in tool_calls)
+                text: Final = "\n".join(part for part in (base_text, *call_texts) if part)
+                return ChatCompletionAssistantMessage(role="assistant", content=text)
+            if role in ("tool", "function"):
+                tool_call_id = message.get("tool_call_id")
+                name = message.get("name")
+                label = f"tool result for {tool_call_id or name or 'unknown'}"
+                result_text: Final = f"[{label}: {_result_text(message)}]"
+                # Tool results are externally controlled, so guard them wherever they
+                # land in history; _convert_consecutive_user_messages_to_guarded_text
+                # only covers the trailing user turn.
+                content: Final = [{"type": "guarded_text", "text": result_text}] if guardrail_active else result_text
+                return ChatCompletionUserMessage(role="user", content=content)
+            return message
+
+        verbose_logger.warning(
+            "litellm.bedrock: request has tool blocks in message history but no "
+            "`tools=` param; neutralizing orphaned tool blocks to text so Bedrock "
+            "accepts the request without a toolConfig. Non-text tool-result "
+            "payloads are dropped. Pass `tools=` to preserve structured tool calling."
+        )
+        return [_rewrite(message) for message in messages]
+
+    @staticmethod
+    def _handle_orphaned_tool_blocks(messages: list[AllMessageValues], optional_params: dict) -> list[AllMessageValues]:
+        if litellm.bedrock_neutralize_orphaned_tool_blocks:
+            return AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params)
+
+        if "tools" in optional_params or not has_tool_call_blocks(messages):
+            return messages
+
+        if litellm.modify_params:
+            optional_params["tools"] = add_dummy_tool(custom_llm_provider="bedrock_converse")
+            return messages
+
+        raise litellm.utils.UnsupportedParamsError(
+            message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+            model="",
+            llm_provider="bedrock",
+        )
 
     @classmethod
     def get_config(cls):
@@ -1609,20 +1686,6 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool = False,
         litellm_params: Mapping[str, object] | None = None,
     ) -> CommonRequestObject:
-        ## VALIDATE REQUEST
-        """
-        Bedrock doesn't support tool calling without `tools=` param specified.
-        """
-        if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
-            if litellm.modify_params:
-                optional_params["tools"] = add_dummy_tool(custom_llm_provider="bedrock_converse")
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="bedrock",
-                )
-
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
         #
@@ -1735,7 +1798,9 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(messages, model=model)
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        )
         ## TRANSFORMATION ##
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
@@ -1796,7 +1861,9 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(messages, model=model)
 
         # Convert last user message to guarded_text if guardrailConfig is present
-        messages = self._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+        )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
             model=model,
