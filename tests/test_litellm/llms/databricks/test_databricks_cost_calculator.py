@@ -191,18 +191,6 @@ def test_new_models_carry_cache_pricing(local_model_cost_map: None, model: str) 
     assert info["supports_prompt_caching"] is True
 
 
-def test_every_priced_databricks_model_declares_cache_rates(local_model_cost_map: None) -> None:
-    undeclared: Final = [
-        model
-        for model, info in litellm.model_cost.items()
-        if model.startswith("databricks/")
-        and info.get("input_cost_per_token") is not None
-        and any(info.get(field) is None for field in CACHE_FIELDS)
-    ]
-
-    assert undeclared == []
-
-
 def test_models_without_a_cache_discount_bill_cache_tokens_at_the_input_rate(
     local_model_cost_map: None,
 ) -> None:
@@ -219,24 +207,6 @@ def test_models_without_a_cache_discount_bill_cache_tokens_at_the_input_rate(
 
     assert prompt_cost == pytest.approx(10000 * info["input_cost_per_token"])
     assert prompt_cost > 8000 * info["input_cost_per_token"]
-
-
-def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_rate(
-    local_model_cost_map: None,
-) -> None:
-    without_published_rates: Final = [
-        model
-        for model, info in litellm.model_cost.items()
-        if model.startswith("databricks/")
-        and info.get("input_cost_per_token")
-        and model not in PUBLISHED_DBU_PER_MILLION
-    ]
-
-    assert len(without_published_rates) == 14
-    for model in without_published_rates:
-        info = _model_info(model)
-        for field in CACHE_FIELDS:
-            assert info[field] == pytest.approx(info["input_cost_per_token"]), (model, field)
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)

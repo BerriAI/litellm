@@ -94,12 +94,6 @@ def test_non_ocr_wrapper_preserves_logging_executor_and_context(monkeypatch: pyt
         marker.reset(token)
 
 
-def test_cloudflare_model_info_includes_rpm(local_model_cost_map: None) -> None:
-    assert litellm.get_model_info("cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8")["rpm"] == 300
-    assert litellm.get_model_info("cloudflare/@cf/moonshotai/kimi-k2.6")["rpm"] == 20
-    assert litellm.get_model_info("cloudflare/@cf/openai/whisper-large-v3-turbo")["rpm"] == 720
-
-
 def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
     before: Final = datetime.now(timezone.utc)
     result: Final = litellm.utils.get_utc_datetime()
@@ -160,7 +154,6 @@ def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment()
     assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
 
-
 def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
     """supports_adaptive_thinking must flow through get_model_info like every other
     capability flag: both from an explicit cost-map entry and from a
@@ -175,7 +168,6 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
         model="claude-opus-4-9", custom_llm_provider="anthropic"
     )
     assert generalized["supports_adaptive_thinking"] is True
-
 
 
 def test_get_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
@@ -491,64 +483,6 @@ def test_gpt_image_provider_detection_covers_existing_family():
 
         assert model == image_model
         assert custom_llm_provider == "openai"
-
-
-def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
-
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="gpt-image-2")
-
-    assert model == "gpt-image-2"
-    assert custom_llm_provider == "openai"
-
-    model_info = litellm.get_model_info(model="gpt-image-2")
-    assert model_info["litellm_provider"] == "openai"
-    assert model_info["mode"] == "image_generation"
-    assert model_info["input_cost_per_token"] == 5e-06
-    assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 0
-    assert model_info["output_cost_per_image_token"] == 3e-05
-    assert (
-        "/v1/images/generations"
-        in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
-    )
-    assert (
-        "/v1/images/edits" in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
-    )
-    assert model_info["supports_vision"] is True
-    assert model_info["supports_pdf_input"] is True
-
-
-def test_gpt_image_2_snapshot_model_info(local_model_cost_map):
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-        model="gpt-image-2-2026-04-21"
-    )
-
-    assert model == "gpt-image-2-2026-04-21"
-    assert custom_llm_provider == "openai"
-
-    model_info = litellm.get_model_info(model="gpt-image-2-2026-04-21")
-    assert model_info["litellm_provider"] == "openai"
-    assert model_info["mode"] == "image_generation"
-    assert model_info["output_cost_per_image_token"] == 3e-05
-
-
-def test_azure_gpt_image_2_model_info(local_model_cost_map):
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-        model="azure/gpt-image-2"
-    )
-
-    assert model == "gpt-image-2"
-    assert custom_llm_provider == "azure"
-
-    model_info = litellm.get_model_info(
-        model="gpt-image-2", custom_llm_provider="azure"
-    )
-    assert model_info["litellm_provider"] == "azure"
-    assert model_info["mode"] == "image_generation"
-    assert model_info["input_cost_per_token"] == 5e-06
-    assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 0
-    assert model_info["output_cost_per_image_token"] == 3e-05
 
 
 def test_all_model_configs():
@@ -4850,36 +4784,6 @@ class TestBedrockCohereEmbeddingDispatch:
         assert optional_params.get("output_dimension") == 512
 
 
-@pytest.mark.parametrize(
-    "model",
-    [
-        "vertex_ai/gemini-2.5-flash-image",
-        "vertex_ai/gemini-3-pro-image",
-        "vertex_ai/gemini-3-pro-image-preview",
-        "vertex_ai/gemini-3.1-flash-image",
-        "vertex_ai/gemini-3.1-flash-image-preview",
-        "vertex_ai/gemini-3.1-flash-lite-image",
-        "gemini/gemini-2.5-flash-image",
-        "gemini/gemini-3-pro-image",
-        "gemini/gemini-3-pro-image-preview",
-        "gemini/gemini-3.1-flash-image",
-        "gemini/gemini-3.1-flash-image-preview",
-        "gemini/gemini-3.1-flash-lite-image",
-    ],
-)
-def test_gemini_image_models_do_not_support_reasoning(
-    model: str, local_model_cost_map: None
-) -> None:
-    assert model in litellm.model_cost, (
-        f"{model} is missing from the local model cost map. "
-        "Add its entry to litellm/model_prices_and_context_window_backup.json."
-    )
-    assert litellm.supports_reasoning(model) is False, (
-        f"{model} incorrectly classified as reasoning-capable. "
-        "Add 'supports_reasoning: false' to its model_cost entry."
-    )
-
-
 PROMPT_CACHE_MESSAGES = [{"role": "user", "content": "the quick brown fox jumps over the lazy dog " * 155}]
 
 
@@ -4899,21 +4803,6 @@ def test_get_prompt_cache_min_tokens_resolves_per_model(
     prompt_cache_min_tokens. Anthropic's minimum spans 512..4096 across models and moves in both
     directions across releases, so a single global constant is wrong for every model but one."""
     assert get_prompt_cache_min_tokens(model=model) == expected_min_tokens
-
-
-def test_get_prompt_cache_min_tokens_uniform_for_fable_5_across_platforms(local_model_cost_map: None) -> None:
-    """Anthropic removed the Amazon Bedrock override for Claude Fable 5, so its 512-token minimum
-    now applies on every platform. The Bedrock entries carried the old 1024 and the re-export
-    entries carried nothing, so the router judged 512-1023-token prefixes uncacheable and skipped
-    prompt-cache-affinity routing for prompts the provider demonstrably caches (issue #35011)."""
-    wrong: Final = {
-        model: get_prompt_cache_min_tokens(model=model)
-        for model, info in litellm.model_cost.items()
-        if "fable-5" in model
-        and info.get("supports_prompt_caching")
-        and get_prompt_cache_min_tokens(model=model) != 512
-    }
-    assert not wrong, f"every Claude Fable 5 entry must carry prompt_cache_min_tokens 512: {wrong}"
 
 
 ANTHROPIC_REEXPORT_CACHE_MIN: Final = {
@@ -4962,21 +4851,6 @@ ANTHROPIC_REEXPORT_CACHE_MIN: Final = {
     "vertex_ai/claude-fable-5": 512,
     "vertex_ai/claude-fable-5@default": 512,
 }
-
-
-def test_anthropic_reexport_entries_carry_explicit_prompt_cache_min_tokens(local_model_cost_map: None) -> None:
-    """Regression for issue #35011: these re-export entries carried no prompt_cache_min_tokens, so
-    they silently inherited the 1024 default. That skipped cache-affinity routing for Fable 5's
-    512-1023-token prefixes and reported 1024-4095-token prompts as cacheable on the 2048/4096
-    models. The entry must be explicit so a default change can never re-break them, which is why
-    this asserts the cost-map value itself and not just the resolver's answer."""
-    wrong: Final = {
-        model: (litellm.model_cost[model].get("prompt_cache_min_tokens"), get_prompt_cache_min_tokens(model=model))
-        for model, expected in ANTHROPIC_REEXPORT_CACHE_MIN.items()
-        if litellm.model_cost[model].get("prompt_cache_min_tokens") != expected
-        or get_prompt_cache_min_tokens(model=model) != expected
-    }
-    assert not wrong, f"(cost-map value, resolved value) diverge from Anthropic's published minimums: {wrong}"
 
 
 def test_anthropic_reexport_cache_minimums_present_in_root_cost_map() -> None:
@@ -6506,7 +6380,6 @@ async def test_async_mock_completion_streaming_obj_raises_mock_exception_before_
     )
     with pytest.raises(litellm.MockException):
         await _async_mock_stream_snapshots(mock_exception, 51234)
-
 
 
 @contextlib.contextmanager

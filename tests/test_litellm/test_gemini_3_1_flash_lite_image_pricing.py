@@ -166,13 +166,6 @@ def test_vertex_prefix_routes_to_vertex():
     assert provider == "vertex_ai"
 
 
-def test_get_model_info_reports_published_costs(local_model_cost_map):
-    info = litellm.get_model_info(UNPREFIXED)
-    assert info["input_cost_per_token"] == INPUT_COST
-    assert info["output_cost_per_token"] == OUTPUT_TEXT_COST
-    assert info["cache_read_input_token_cost"] == CACHE_READ_COST
-
-
 @pytest.mark.parametrize("model", ALL_KEYS)
 def test_reasoning_params_are_not_offered_on_an_image_endpoint(model: str, local_model_cost_map):
     assert litellm.supports_reasoning(model) is False

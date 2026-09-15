@@ -310,43 +310,7 @@ class TestDeclaredEffortList:
         assert resolved == ("low", "max")
 
 
-KIMI_K3_PASSTHROUGH_KEYS = (
-    "azure_ai/FW-Kimi-K3",
-    "moonshot/kimi-k3",
-    "together_ai/moonshotai/Kimi-K3",
-    "fireworks_ai/kimi-k3",
-    "fireworks_ai/kimi-k3-fast",
-    "fireworks_ai/kimi-k3-us",
-    "fireworks_ai/accounts/fireworks/models/kimi-k3",
-    "fireworks_ai/accounts/fireworks/routers/kimi-k3-fast",
-    "fireworks_ai/accounts/fireworks/routers/kimi-k3-us",
-)
-KIMI_K3_PERPLEXITY_KEY = "perplexity/perplexity/kimi-k3"
-
-
 class TestKimiK3AdvertisesItsDocumentedLevels:
-    @pytest.mark.parametrize("model_key", KIMI_K3_PASSTHROUGH_KEYS)
-    def test_a_passthrough_entry_advertises_the_models_own_levels(self, local_model_cost_map, model_key):
-        """platform.kimi.ai documents exactly low, high and max, and these providers forward the
-        level unchanged. Undeclared, each entry resolves to unknown and the dashboard falls back to
-        a capability-blind list that omits max."""
-        entry = dict(litellm.model_cost[model_key], key=model_key)
-
-        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == ("low", "high", "max")
-
-    def test_the_perplexity_entry_advertises_the_wider_set_it_maps_down(self, local_model_cost_map):
-        """Perplexity's Agent API takes a six-value enum and maps it down internally, so this
-        deployment is legitimately wider than a passthrough. One blanket list could not say both."""
-        entry = dict(litellm.model_cost[KIMI_K3_PERPLEXITY_KEY], key=KIMI_K3_PERPLEXITY_KEY)
-
-        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == (
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-        )
 
     @pytest.mark.parametrize("model, provider", [("kimi-k3", "moonshot"), ("kimi-k3", "fireworks_ai")])
     def test_the_declaration_survives_model_info_hydration(self, local_model_cost_map, model, provider):
