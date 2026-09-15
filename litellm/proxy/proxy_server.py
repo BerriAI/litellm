@@ -3061,7 +3061,7 @@ async def _reconcile_budget_reservation_for_counter_update(
     budget_reservation: dict | None,
     response_cost: float | None,
 ) -> set[str]:
-    if budget_reservation is None:
+    if budget_reservation is None or budget_reservation.get("finalized") is True:
         return set()
 
     from litellm.proxy.spend_tracking.budget_reservation import (
