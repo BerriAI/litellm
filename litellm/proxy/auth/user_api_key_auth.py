@@ -1362,11 +1362,15 @@ async def _user_api_key_auth_builder(
         _lockout_reason: Final = insecure_master_key_reason(
             master_key, alternative_auth_enabled=alternative_auth_enabled(general_settings)
         )
+        try:
+            _request_method: Final = request.method
+        except (KeyError, AttributeError):
+            _request_method = ""
         if (
             _lockout_reason is not None
             and master_key_lockout_action(
                 route=route,
-                method=request.scope.get("method") or "",
+                method=_request_method if isinstance(_request_method, str) else "",
                 reason=_lockout_reason,
                 stored_credentials_present=stored_credentials_present(),
             )
