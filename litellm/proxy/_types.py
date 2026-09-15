@@ -485,6 +485,7 @@ class LiteLLMRoutes(enum.Enum):
         "/milvus",
         "/gigachat",
         "/watsonx",
+        "/nvidia_nim",
     ]
 
     #########################################################

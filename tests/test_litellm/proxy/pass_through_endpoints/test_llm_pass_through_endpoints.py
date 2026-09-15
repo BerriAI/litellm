@@ -40,6 +40,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
+    nvidia_nim_proxy_route,
     openai_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
@@ -5373,6 +5374,152 @@ class TestRouterModelRelayUpstreamContract:
         assert result.status_code == 404
         assert json.loads(result.body) == upstream_body
         assert result.headers["x-ms-request-id"] == "req-1"
+
+
+NIM_INFER_BODY = {
+    "input": [
+        {"type": "image_url", "url": "data:image/png;base64,AAAA"},
+        {"type": "image_url", "url": "data:image/png;base64,BBBB"},
+    ]
+}
+
+
+class TestNvidiaNimProxyRoute:
+    def _request(self) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+        return request
+
+    def _install_router(self, monkeypatch, router, body: dict) -> None:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        async def fake_get_request_body(_request):
+            return dict(body)
+
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+
+    def _recording_router(self, captured: list[dict], model_names: tuple[str, ...]):
+        class RecordingRouter:
+            def get_model_names(self):
+                return list(model_names)
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(
+                    200, json={"data": [{"index": 0, "bounding_boxes": {}}]}, headers={"x-nim-request": "r1"}
+                )
+
+        return RecordingRouter()
+
+    @pytest.mark.asyncio
+    async def test_model_group_in_the_path_selects_the_deployment_and_the_body_stays_model_free(self, monkeypatch):
+        captured: list[dict] = []
+        self._install_router(
+            monkeypatch, self._recording_router(captured, ("nim-page-elements", "nim-table")), NIM_INFER_BODY
+        )
+
+        result = await nvidia_nim_proxy_route(
+            endpoint="nim-page-elements/v1/infer",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token", team_id="team-1"),
+        )
+
+        (relay,) = captured
+        assert relay["model"] == "nim-page-elements"
+        assert relay["endpoint"] == "nim-page-elements/v1/infer"
+        assert relay["method"] == "POST"
+        assert relay["json"] == NIM_INFER_BODY
+        assert "model" not in relay["json"]
+        assert relay["litellm_metadata"]["user_api_key_team_id"] == "team-1"
+        assert result.status_code == 200
+        assert json.loads(result.body) == {"data": [{"index": 0, "bounding_boxes": {}}]}
+        assert result.headers["x-nim-request"] == "r1"
+
+    @pytest.mark.asyncio
+    async def test_model_group_with_a_slash_is_matched_as_the_longest_leading_path(self, monkeypatch):
+        captured: list[dict] = []
+        self._install_router(
+            monkeypatch, self._recording_router(captured, ("nvidia/nemoretriever-page-elements-v2",)), NIM_INFER_BODY
+        )
+
+        await nvidia_nim_proxy_route(
+            endpoint="nvidia/nemoretriever-page-elements-v2/v1/infer",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert captured[0]["model"] == "nvidia/nemoretriever-page-elements-v2"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["v1/infer", "unknown-group/v1/infer", "nim-page-elements-v2/v1/infer"])
+    async def test_path_without_a_configured_model_group_is_rejected_before_any_upstream_call(
+        self, monkeypatch, endpoint
+    ):
+        from fastapi import HTTPException
+
+        captured: list[dict] = []
+        self._install_router(monkeypatch, self._recording_router(captured, ("nim-page-elements",)), NIM_INFER_BODY)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await nvidia_nim_proxy_route(
+                endpoint=endpoint,
+                request=self._request(),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_no_router_is_rejected_before_any_upstream_call(self, monkeypatch):
+        from fastapi import HTTPException
+
+        self._install_router(monkeypatch, None, NIM_INFER_BODY)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await nvidia_nim_proxy_route(
+                endpoint="nim-page-elements/v1/infer",
+                request=self._request(),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_upstream_rejection_is_relayed_with_its_status_body_and_headers(self, monkeypatch):
+        upstream_body = {"detail": "input[0].url must be a data URL"}
+
+        class RejectingRouter:
+            def get_model_names(self):
+                return ["nim-page-elements"]
+
+            async def allm_passthrough_route(self, **kwargs):
+                upstream_request = httpx.Request("POST", "http://nim.internal:8000/v1/infer")
+                upstream = httpx.Response(
+                    422, json=upstream_body, headers={"x-nim-request": "r2"}, request=upstream_request
+                )
+                raise httpx.HTTPStatusError("422", request=upstream_request, response=upstream)
+
+        self._install_router(monkeypatch, RejectingRouter(), {"input": [{"type": "image_url", "url": "x"}]})
+
+        result = await nvidia_nim_proxy_route(
+            endpoint="nim-page-elements/v1/infer",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 422
+        assert json.loads(result.body) == upstream_body
+        assert result.headers["x-nim-request"] == "r2"
 
 
 @pytest.mark.asyncio

@@ -823,6 +823,64 @@ def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_pa
     assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
 
 
+def _nvidia_nim_relay_router():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "nim-page-elements",
+                "litellm_params": {
+                    "model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2",
+                    "api_base": "http://nim-a.internal:8000",
+                    "api_key": "k",
+                },
+            },
+            {
+                "model_name": "nvidia/nemoretriever-table-structure-v1",
+                "litellm_params": {
+                    "model": "nvidia_nim/nvidia/nemoretriever-table-structure-v1",
+                    "api_base": "http://nim-b.internal:8000",
+                    "api_key": "k",
+                },
+            },
+        ]
+    )
+
+
+NIM_INFER_BODY = {"input": [{"type": "image_url", "url": "data:image/png;base64,AAAA"}]}
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/nvidia_nim/nim-page-elements/v1/infer", NIM_INFER_BODY, "nim-page-elements"),
+        (
+            "/nvidia_nim/nim-page-elements/v1/infer",
+            {"model": "nvidia/nemoretriever-table-structure-v1"},
+            "nim-page-elements",
+        ),
+        (
+            "/nvidia_nim/nvidia/nemoretriever-table-structure-v1/v1/infer",
+            NIM_INFER_BODY,
+            "nvidia/nemoretriever-table-structure-v1",
+        ),
+        ("/nvidia_nim/v1/infer", NIM_INFER_BODY, None),
+        ("/nvidia_nim/unknown-group/v1/infer", NIM_INFER_BODY, None),
+        ("/nvidia_nim/nim-page-elements-v2/v1/infer", NIM_INFER_BODY, None),
+    ],
+)
+def test_get_model_from_request_nvidia_nim_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
+    assert (
+        get_model_from_request(request_data=request_data, route=route, llm_router=_nvidia_nim_relay_router())
+        == expected
+    )
+
+
+def test_get_model_from_request_nvidia_nim_relay_without_a_router_has_no_model():
+    assert get_model_from_request(request_data=NIM_INFER_BODY, route="/nvidia_nim/nim-page-elements/v1/infer") is None
+
+
 def test_get_model_from_request_includes_file_endpoint_header_model():
     assert (
         get_model_from_request(
