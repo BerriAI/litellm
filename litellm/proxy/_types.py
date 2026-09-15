@@ -3,11 +3,13 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple
 
 import httpx
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     Json,
@@ -39,8 +41,14 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.carried_budget_state import (
+    OrgBudgetSnapshot,
+    TeamBudgetSnapshot,
+    UserBudgetSnapshot,
+)
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
@@ -496,12 +504,16 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/messages/count_tokens",
         "/v1/skills",
         "/v1/skills/{skill_id}",
+        "/claude-code/marketplace.json",
+        "/claude-code/plugins",
+        "/claude-code/plugins/{plugin_name}",
     ]
 
     # MCP tool-call / passthrough routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
     mcp_inference_routes = [
         "/mcp",
         "/mcp/",
+        "/mcp/proxy",
         "/mcp/{subpath}",
         "/mcp/tools",
         "/mcp/tools/list",
@@ -698,6 +710,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs",
         "/spend/logs/v2",
         "/spend/logs/ui",
+        "/spend/logs/ui/{request_id}",
         "/spend/logs/session/ui",
         "/key/spend/report",
         "/user/spend/report",
@@ -835,6 +848,14 @@ class LiteLLMRoutes(enum.Enum):
         "/team/daily/activity/aggregated",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
+        # POST/GET the team's logging callbacks, and DELETE one of them. Every
+        # handler calls _verify_team_access, which admits only a proxy admin, an
+        # org admin for the team, or an admin of this team.
+        #
+        # team_id is a free-form string, so it spells these with the same path
+        # converter the router uses; the gate matches that converter.
+        "/team/{team_id:path}/callback",
+        "/team/{team_id:path}/callback/{callback_name}",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -848,6 +869,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        "/vector_store/info",
         # Project read routes - endpoint scopes results to caller's teams (non-admin)
         "/project/list",
         "/project/info",
@@ -865,6 +887,9 @@ class LiteLLMRoutes(enum.Enum):
         # proxy admin, or team admin naming their own team via team_id
         "/auto_router/test_routing",
         "/auto_router/validate_complexity_router_config",
+        # Per-session auto-router read - the endpoint scopes the row to the caller's own key hash
+        "/auto_router/session",
+        "/cost/predict-cache",
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
@@ -918,10 +943,10 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the filter facets.
-            # The list endpoint `/spend/logs/ui` is covered via
-            # spend_tracking_routes below.
-            "/spend/logs/ui/{logId}",
+            # UI Logs page session detail drawer and the end-user filter facet.
+            # The list endpoint `/spend/logs/ui` and the single-log detail route
+            # `/spend/logs/ui/{request_id}` are covered via spend_tracking_routes
+            # below.
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
             "/management/v1/spend_logs/users",
@@ -1113,6 +1138,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: list[str] | None = None
     search_tools: list[str] | None = None
     mcp_tool_search_enabled: bool | None = None
+    skills: list[str] | None = None
 
 
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
@@ -1276,12 +1302,25 @@ class UpdateKeyRequest(KeyRequestBase):
     # else they will get overwritten
     duration: str | None = None
     spend: float | None = None
+    soft_budget: float | None = None
     metadata: dict | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
     auto_rotate: bool | None = None
     rotation_interval: str | None = None
     organization_id: str | None = None
+
+    project_id: str | None = Field(
+        default=None,
+        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_blank_team_id(cls, values: object) -> object:
+        if isinstance(values, Mapping) and values.get("team_id") == "":
+            return MappingProxyType({k: v for k, v in values.items() if k != "team_id"})
+        return values
 
     @field_validator("organization_id", mode="before")
     @classmethod
@@ -1944,8 +1983,14 @@ class OrgMember(MemberBase):
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
+RouterSettingsDict = Annotated[
+    dict[str, object],
+    BeforeValidator(validate_router_settings_dict, json_schema_input_type=UpdateRouterConfig),
+]
+
 
 class NewTeamRequest(TeamBase):
+    router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     tags: list | None = None
     guardrails: list[str] | None = None
@@ -2043,7 +2088,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
     enforced_file_expires_after: dict | None = None
-    router_settings: dict | None = None
+    router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
@@ -2408,6 +2453,13 @@ class CoordinationRedisParams(LiteLLMPydanticObjectBase):
     )
     sentinel_password: str | None = Field(None, description="password for the sentinel nodes")
     service_name: str | None = Field(None, description="sentinel service name")
+    aws_iam_auth: bool | str | None = Field(None, description="enable AWS ElastiCache IAM authentication")
+    aws_iam_user_name: str | None = Field(None, description="AWS ElastiCache IAM user name")
+    aws_iam_cache_name: str | None = Field(None, description="AWS ElastiCache cache name")
+    aws_iam_region: str | None = Field(None, description="AWS region for ElastiCache IAM authentication")
+    aws_iam_serverless: bool | str | None = Field(
+        None, description="the ElastiCache cache is serverless rather than a self-designed cluster"
+    )
 
     def has_connection_target(self) -> bool:
         return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
@@ -2571,6 +2623,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     global_max_parallel_requests: int | None = Field(
         None, description="global max parallel requests to allow for a proxy instance."
     )
+    user_api_key_cache_max_size: int | None = Field(
+        None,
+        gt=0,
+        description=(
+            "max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in "
+            "its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth "
+            "lookups keep hitting the DB"
+        ),
+    )
     max_request_size_mb: int | None = Field(
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
@@ -2583,9 +2644,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
+    allowed_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied",
+    )
     blocked_file_extensions: tuple[str, ...] | None = Field(
         None,
-        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -2817,6 +2882,37 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "UI username/password login. Default is False."
         ),
     )
+    disable_responses_id_security: bool | None = Field(
+        None,
+        description=(
+            "If True, disables ownership enforcement on Responses API ids. "
+            "Keys may then retrieve, cancel, delete, and chain from any response id, "
+            "including ids belonging to another user or team and ids this proxy never issued. "
+            "WARNING: this removes tenant isolation on /v1/responses"
+        ),
+    )
+    allow_unmanaged_response_ids: bool | None = Field(
+        None,
+        description=(
+            "If True, lets keys address Responses API ids that this proxy did not issue "
+            "(raw provider ids, or ids issued before response-id encryption was configured). "
+            "Such an id carries no owner, so no ownership check can run on it; ids this proxy "
+            "did issue keep full ownership enforcement. Off by default, in which case an "
+            "unrecognized response id is rejected with 403"
+        ),
+    )
+    disable_env_credential_login: bool | None = Field(
+        None,
+        description=(
+            "If True, disables signing in to the Admin UI with the environment credentials: "
+            "UI_USERNAME/UI_PASSWORD, or the master key when UI_PASSWORD is unset (that fallback "
+            "means env-credential login is always live by default). Database users with passwords "
+            "are unaffected. LOCKOUT RISK: create at least one proxy admin user with a password "
+            "before enabling, or nobody can sign in to the UI. A locked-out admin can still "
+            "administer the proxy over the API with the master key, and can unset this setting "
+            "and restart the proxy to restore env-credential login. Default is False."
+        ),
+    )
     disable_budget_reservation: bool | None = Field(
         None,
         description=(
@@ -2831,7 +2927,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Enable only if your deployment is experiencing phantom "
             "BudgetExceededError responses caused by leaked reservations "
             "(see GitHub issue #27639). "
-            "A proxy-level WARNING is logged on every request while this flag "
+            "An INFO notice is logged once per worker at config load while this flag "
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
@@ -3033,6 +3129,9 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
+    user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
+    org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
@@ -3582,7 +3681,9 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="OpenTelemetry",
         litellm_callback_params=[
             "OTEL_EXPORTER",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
             "OTEL_ENDPOINT",
+            "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
         ],
     )
@@ -3693,6 +3794,15 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    pointfive: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="pointfive",
+        ui_callback_name="PointFive",
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+            "POINTFIVE_API_KEY",
+            "POINTFIVE_API_URL",
+        ],
+    )
+
 
 class SpendLogsRouterMetadata(TypedDict):
     """
@@ -3785,6 +3895,7 @@ class SpendLogsPayload(TypedDict):
     session_id: str | None
     request_duration_ms: int | None
     status: Literal["success", "failure"]
+    litellm_call_id: ReadOnly[str | None]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -4304,13 +4415,21 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     agent_ids: tuple[str, ...] = ()
 
 
+class TeamInfoMember(Member):
+    user_alias: str | None = None
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
+    members_with_roles: tuple[TeamInfoMember, ...] = ()
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
+    # Parent org's model ceiling, reported only to callers who can manage the team.
+    # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
+    organization_models: list[str] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -4478,7 +4597,6 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     )
     metadata_doc_str = """Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }"""
     max_parallel_requests_doc_str = """Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x."""
-    soft_budget_doc_str = """Optional[float] - Get alerts when user crosses given budget, doesn't block requests."""
     model_max_budget_doc_str = """Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)"""
     model_rpm_limit_doc_str = """Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
     model_tpm_limit_doc_str = """Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
@@ -4735,6 +4853,14 @@ class JWTIssuerConfig(BaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    virtual_key_claim_field: str | None = Field(
+        default=None,
+        description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
+    )
+    unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior | None = Field(
+        default=None,
+        description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
+    )
 
     model_config = {
         "extra": "forbid",
@@ -4961,6 +5087,28 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
 
         super().__init__(**kwargs)
 
+    def get_issuer_config(self, issuer: str | None) -> JWTIssuerConfig | None:
+        if issuer is None or self.issuers is None:
+            return None
+        return next((config for config in self.issuers if config.issuer == issuer), None)
+
+    def is_virtual_key_mapping_configured(self) -> bool:
+        if self.virtual_key_claim_field is not None:
+            return True
+        return any(config.virtual_key_claim_field is not None for config in self.issuers or ())
+
+    def get_virtual_key_claim_field(self, issuer: str | None) -> str | None:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.virtual_key_claim_field is not None:
+            return issuer_config.virtual_key_claim_field
+        return self.virtual_key_claim_field
+
+    def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.unregistered_jwt_client_behavior is not None:
+            return issuer_config.unregistered_jwt_client_behavior
+        return self.unregistered_jwt_client_behavior
+
 
 class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_name: str
@@ -5135,8 +5283,25 @@ class CostEstimateRequest(LiteLLMPydanticObjectBase):
     model: str = Field(description="Model name (from /model_group/info)")
     input_tokens: int = Field(description="Expected input tokens per request", ge=0)
     output_tokens: int = Field(description="Expected output tokens per request", ge=0)
+    cache_read_input_tokens: int = Field(
+        default=0, description="Input tokens read from the prompt cache; counted within input_tokens", ge=0
+    )
+    cache_creation_input_tokens: int = Field(
+        default=0, description="Input tokens written to the prompt cache; counted within input_tokens", ge=0
+    )
+    reasoning_tokens: int = Field(
+        default=0, description="Reasoning tokens the model emits; counted within output_tokens", ge=0
+    )
     num_requests_per_day: int | None = Field(default=None, description="Number of requests per day", ge=0)
     num_requests_per_month: int | None = Field(default=None, description="Number of requests per month", ge=0)
+
+    @model_validator(mode="after")
+    def validate_token_subsets(self) -> "CostEstimateRequest":
+        if self.cache_read_input_tokens + self.cache_creation_input_tokens > self.input_tokens:
+            raise ValueError("cache_read_input_tokens plus cache_creation_input_tokens cannot exceed input_tokens")
+        if self.reasoning_tokens > self.output_tokens:
+            raise ValueError("reasoning_tokens cannot exceed output_tokens")
+        return self
 
 
 class CostEstimateResponse(LiteLLMPydanticObjectBase):
@@ -5145,6 +5310,9 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     model: str
     input_tokens: int
     output_tokens: int
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    reasoning_tokens: int = 0
     num_requests_per_day: int | None = None
     num_requests_per_month: int | None = None
     # Per-request costs
@@ -5152,17 +5320,33 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     input_cost_per_request: float = Field(description="Input token cost per request (before margin)")
     output_cost_per_request: float = Field(description="Output token cost per request (before margin)")
     margin_cost_per_request: float = Field(default=0.0, description="Margin/fee added per request")
+    cache_read_cost_per_request: float = Field(default=0.0, description="Cache-read share of input_cost_per_request")
+    cache_creation_cost_per_request: float = Field(
+        default=0.0, description="Cache-write share of input_cost_per_request"
+    )
+    reasoning_cost_per_request: float = Field(default=0.0, description="Reasoning share of output_cost_per_request")
     # Daily costs (if num_requests_per_day provided)
     daily_cost: float | None = Field(default=None, description="Total daily cost (includes margin)")
     daily_input_cost: float | None = Field(default=None, description="Daily input token cost")
     daily_output_cost: float | None = Field(default=None, description="Daily output token cost")
     daily_margin_cost: float | None = Field(default=None, description="Daily margin/fee")
+    daily_cache_read_cost: float | None = Field(default=None, description="Cache-read share of daily_input_cost")
+    daily_cache_creation_cost: float | None = Field(default=None, description="Cache-write share of daily_input_cost")
+    daily_reasoning_cost: float | None = Field(default=None, description="Reasoning share of daily_output_cost")
     # Monthly costs (if num_requests_per_month provided)
     monthly_cost: float | None = Field(default=None, description="Total monthly cost (includes margin)")
     monthly_input_cost: float | None = Field(default=None, description="Monthly input token cost")
     monthly_output_cost: float | None = Field(default=None, description="Monthly output token cost")
     monthly_margin_cost: float | None = Field(default=None, description="Monthly margin/fee")
-    # Pricing info
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
+    monthly_cache_read_cost: float | None = Field(default=None, description="Cache-read share of monthly_input_cost")
+    monthly_cache_creation_cost: float | None = Field(
+        default=None, description="Cache-write share of monthly_input_cost"
+    )
+    monthly_reasoning_cost: float | None = Field(default=None, description="Reasoning share of monthly_output_cost")
+    # Pricing info: the rates this request's usage bills at, after token tiers and regional multipliers
+    input_cost_per_token: float | None = Field(default=None, description="Rate billed per input token")
+    output_cost_per_token: float | None = Field(default=None, description="Rate billed per output token")
+    cache_read_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-read token")
+    cache_creation_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-write token")
+    output_cost_per_reasoning_token: float | None = Field(default=None, description="Rate billed per reasoning token")
     provider: str | None = None

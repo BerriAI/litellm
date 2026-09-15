@@ -10,6 +10,7 @@
 import ast
 import hashlib
 import json
+import logging
 import time
 import traceback
 from collections.abc import Mapping
@@ -32,7 +33,7 @@ from .dual_cache import DualCache  # noqa: F401
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
-from .redis_cache import RedisCache
+from .redis_cache import RedisCache, log_redis_failure
 from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
@@ -678,7 +679,14 @@ class Cache:
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
+            self._log_add_cache_failure(e)
+
+    def _log_add_cache_failure(self, exc: Exception) -> None:
+        message: Final = "LiteLLM Cache: exception in add_cache"
+        if isinstance(self.cache, RedisCache):
+            log_redis_failure(verbose_logger, logging.ERROR, message, exc)
+            return
+        verbose_logger.error("%s: %s", message, exc)
 
     async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -697,7 +705,7 @@ class Cache:
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
+            self._log_add_cache_failure(e)
 
     def _convert_to_cached_embedding(
         self,
@@ -876,7 +884,7 @@ class Cache:
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
+            self._log_add_cache_failure(e)
 
     def should_use_cache(self, **kwargs):
         """

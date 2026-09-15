@@ -42,6 +42,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
 }));
 
+const mockUseTeams = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => mockUseTeams(),
+}));
+
 const mockUsePtuCostAttributionEnabled = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () => ({
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
@@ -102,6 +107,7 @@ describe("ModelInfoView", () => {
     });
     vi.clearAllMocks();
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
+    mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
     mockUseModelsInfo.mockReturnValue({
       data: {
@@ -1305,6 +1311,78 @@ describe("ModelInfoView", () => {
     });
   });
 
+  describe("team alias", () => {
+    const teamModel = {
+      ...defaultModelData,
+      model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+    };
+
+    beforeEach(() => {
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+    });
+
+    const readRawJson = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(await screen.findByRole("tab", { name: /raw json/i }));
+      const pre = await screen.findByText(/"model_name": "GPT-4"/, { selector: "pre" });
+      return JSON.parse(pre.textContent ?? "");
+    };
+
+    it("shows the team alias next to the team id and adds team_alias to the raw JSON", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-0", team_alias: "other" },
+          { team_id: "team-1", team_alias: "alpha" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByText("alpha (team-1)")).toBeInTheDocument();
+
+      const raw = await readRawJson(user);
+      expect(raw.model_info).toMatchObject({ team_id: "team-1", team_alias: "alpha" });
+      const keys = Object.keys(raw.model_info);
+      expect(keys.indexOf("team_alias")).toBe(keys.indexOf("team_id") + 1);
+    });
+
+    it("falls back to the bare team id when the team is not in the caller's team list", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-0", team_alias: "other" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByText("team-1")).toBeInTheDocument();
+
+      const raw = await readRawJson(user);
+      expect(raw.model_info.team_id).toBe("team-1");
+      expect(raw.model_info).not.toHaveProperty("team_alias");
+    });
+
+    it("shows Not Set and no team_alias for a model without a team", async () => {
+      mockUseModelsInfo.mockReturnValue({ data: { data: [defaultModelData] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [defaultModelData] });
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-1", team_alias: "alpha" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByText("Team")).toBeInTheDocument();
+      expect(screen.queryByText(/alpha/)).not.toBeInTheDocument();
+
+      const raw = await readRawJson(user);
+      expect(raw.model_info).not.toHaveProperty("team_alias");
+    });
+  });
+
   it("renders the provider card logo from the bundled provider map", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
@@ -1729,5 +1807,77 @@ describe("ModelInfoView", () => {
         expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", index: "2" }]);
       });
     });
+
+    const setInputCost = (value: string) => {
+      fireEvent.change(screen.getByPlaceholderText("Enter input cost"), { target: { value } });
+    };
+
+    it("carries an edited input cost and the model identifier onto the wire", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("5");
+      const payload = await save(user);
+
+      expect(mockModelPatchUpdateCall.mock.calls[0][2]).toBe("123");
+      expect(payload.litellm_params.input_cost_per_token).toBe(5 / 1_000_000);
+    });
+
+    it.fails(
+      "sends only the edited input cost (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+        setInputCost("5");
+        const payload = await save(user);
+
+        expect(payload).toStrictEqual({ litellm_params: { input_cost_per_token: 5 / 1_000_000 } });
+      },
+    );
+
+    const savePayloadAfterCostEditOnResolvedModel = async () => {
+      const resolved = {
+        ...defaultModelData,
+        model_info: {
+          ...defaultModelData.model_info,
+          max_input_tokens: 128_000,
+          mode: "chat",
+          supports_vision: true,
+          supports_function_calling: true,
+        },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [resolved] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [resolved] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      setInputCost("5");
+      return save(user);
+    };
+
+    it.fails(
+      "leaves max_input_tokens off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const payload = await savePayloadAfterCostEditOnResolvedModel();
+
+        expect(payload.model_info).not.toHaveProperty("max_input_tokens");
+      },
+    );
+
+    it.fails(
+      "leaves mode off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const payload = await savePayloadAfterCostEditOnResolvedModel();
+
+        expect(payload.model_info).not.toHaveProperty("mode");
+      },
+    );
+
+    it.fails(
+      "leaves every supports_ capability off the wire when only the input cost is edited (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const payload = await savePayloadAfterCostEditOnResolvedModel();
+
+        expect(Object.keys(payload.model_info).filter((key) => key.startsWith("supports_"))).toStrictEqual([]);
+      },
+    );
   });
 });

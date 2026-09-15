@@ -5,10 +5,12 @@ All Bedrock HTTP calls are mocked; no real AWS calls are made.
 """
 
 import json
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import httpx
 from fastapi import HTTPException
 
 
@@ -21,6 +23,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrailResponse,
 )
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 CONTENT_FILTER_CHECKS = {"contentFilter": {"categories": [{"category": "VIOLENCE"}]}}
 
@@ -861,3 +864,33 @@ async def test_checks_bearer_token_never_runs_the_sigv4_credential_chain(monkeyp
         {"check": "contentFilter", "category": "VIOLENCE", "severityScore": 0.8}
     ]
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+@pytest.mark.asyncio
+async def test_invoke_guardrail_checks_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: the checks request is signed with SigV4, and botocore refreshes
+    expiring credentials inside that signing with a blocking HTTP call, so it must run on a worker
+    thread to keep the loop serving other requests."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, content_filter_threshold=0.5)
+    probe = EventLoopProbe()
+    allowed = httpx.Response(
+        200,
+        json={"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.1}]}}},
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+    )
+
+    with (
+        patch.object(g, "_load_credentials", return_value=(probe.credentials(), "us-east-1")),
+        patch.object(g.async_handler, "post", new=AsyncMock(return_value=allowed)),
+    ):
+        release = asyncio.create_task(probe.release_refresh_from_the_loop())
+        response = await g.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data={"messages": []},
+        )
+        await release
+
+    assert response == BedrockGuardrailResponse()
+    assert probe.served_during_refresh is True

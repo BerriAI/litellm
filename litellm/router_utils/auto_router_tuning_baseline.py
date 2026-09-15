@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 
-TUNING_BASELINE_PARAM_NAME: Final = "auto_router_tuning_baseline"
+TUNING_BASELINE_PARAM_NAME: Final = "auto_router_tuning_baseline_v2"
 
 HEURISTIC_V1_TUNING_FIELDS: Final = (
     "tiers",
@@ -20,6 +20,7 @@ HEURISTIC_V1_TUNING_FIELDS: Final = (
     "reasoning_override_min_score",
     "token_thresholds",
     "dimension_weights",
+    "custom_dimensions",
     "code_keywords",
     "reasoning_keywords",
     "technical_keywords",
@@ -28,6 +29,8 @@ HEURISTIC_V1_TUNING_FIELDS: Final = (
     "escalation_keywords",
     "keyword_tier_rules",
 )
+
+_TUNING_FIELD_SET: Final = frozenset(HEURISTIC_V1_TUNING_FIELDS)
 
 _V1_SCORING_CLASSIFIER_TYPES: Final = frozenset({"heuristic", "heuristic_first", "hybrid"})
 _AUTO_ROUTER_COMPLEXITY_PREFIX: Final = "auto_router/complexity_router"
@@ -40,12 +43,26 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 
 def tuning_fingerprint(complexity_router_config: object) -> str | None:
-    """Digest of normalized heuristic-v1 tuning fields, or None when the config is invalid."""
+    """Digest of explicitly supplied heuristic-v1 tuning fields, normalized, or None when invalid."""
+    raw: Final = _mapping(complexity_router_config)
     try:
-        validated: Final = ComplexityRouterConfig.model_validate(_mapping(complexity_router_config))
+        validated: Final = ComplexityRouterConfig.model_validate(raw)
     except ValidationError:
         return None
-    payload: Final = validated.model_dump(mode="json", include=frozenset(HEURISTIC_V1_TUNING_FIELDS))
+    supplied: Final = ((_TUNING_FIELD_SET - frozenset(("tier_model_configs",))) & frozenset(raw)) | (
+        frozenset(("tier_model_configs",)) if validated.tier_model_configs else frozenset()
+    )
+    payload: Final = validated.model_dump(
+        mode="json",
+        include=supplied,
+        exclude={
+            "custom_dimensions": {
+                index: {"scoring_mode"}
+                for index, dimension in enumerate(validated.custom_dimensions)
+                if dimension.scoring_mode == "binary"
+            }
+        },
+    )
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 

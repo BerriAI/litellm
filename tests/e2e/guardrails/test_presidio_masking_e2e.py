@@ -19,6 +19,12 @@ PRESIDIO_ANONYMIZER_API_BASE; missing env is a hard failure, never a skip.
 Each guardrail registers with an explicit presidio_filter_scope so only the
 configured hook's callback exists (the default "both" registers input masking
 AND a post_call output masker), and is deleted on teardown.
+
+The spend-log audit test requires general_settings.store_prompts_in_spend_logs:
+true in the proxy config, or STORE_PROMPTS_IN_SPEND_LOGS=true in the proxy
+process environment before startup. Setting it only on pytest has no effect.
+Without this opt-in, redacting guardrail_response is expected proxy behavior;
+this suite deliberately requires the detected-entity details to remain visible.
 """
 
 from __future__ import annotations
@@ -26,16 +32,22 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable
-from typing import Literal
+from typing import Final, Literal
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from e2e_config import unique_marker
-from e2e_http import Result, Success
+from e2e_http import Result, StreamingResponse, Success
 from guardrails_client import GuardrailMode, GuardrailsClient, PiiAction, PiiEntity, PresidioParamsBody
 from lifecycle import ResourceManager
-from models import AnthropicMessagesResponse, ChatResponse
+from models import (
+    AnthropicMessagesResponse,
+    ChatResponse,
+    GuardrailEntityMatch,
+    GuardrailRunRecord,
+    SpendLogRow,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -276,3 +288,114 @@ class TestPresidioPostCallMasking:
                     f"{GUARDRAIL_PROPAGATION_DEADLINE_SECONDS}s; last observation: {last[:300]!r}"
                 )
             time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
+
+
+_LOGGED_ENTITIES: dict[PiiEntity, PiiAction] = {"EMAIL_ADDRESS": "MASK", "PHONE_NUMBER": "MASK"}
+
+_ENTITY_LIST_ADAPTER: Final = TypeAdapter(list[GuardrailEntityMatch])
+
+
+def _applied_guardrails(outcome: StreamingResponse) -> str:
+    return outcome.headers.get("x-litellm-applied-guardrails", "")
+
+
+def _guardrail_records(row: SpendLogRow) -> tuple[GuardrailRunRecord, ...]:
+    metadata = row.metadata
+    if metadata is None:
+        return ()
+    return tuple(metadata.guardrail_information or ())
+
+
+def _poll_until_guardrail_applied(
+    client: GuardrailsClient, key: str, guardrail_name: str, prompt: str
+) -> StreamingResponse:
+    deadline = time.monotonic() + GUARDRAIL_PROPAGATION_DEADLINE_SECONDS
+    last = client.chat_raw(key, MODEL, prompt, guardrails=[guardrail_name], max_tokens=128)
+    while time.monotonic() < deadline:
+        if last.ok and guardrail_name in _applied_guardrails(last):
+            return last
+        time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
+        last = client.chat_raw(key, MODEL, prompt, guardrails=[guardrail_name], max_tokens=128)
+    return last
+
+
+class TestPresidioSpendLogRecord:
+    @pytest.mark.covers(
+        "guardrail.presidio.pre_call.logs_masked_entities",
+        exercised_on=["chat_completions"],
+    )
+    def test_masking_run_is_recorded_on_the_spend_log(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = f"e2e-presidio-log-{unique_marker()}"
+        _register_presidio(client, resources, name=name, entities=_LOGGED_ENTITIES)
+
+        email = _fake_email()
+        prompt = _pii_prompt(unique_marker(), email)
+
+        outcome = _poll_until_guardrail_applied(client, scoped_key, name, prompt)
+        assert outcome.ok, f"the guarded call must be served, got {outcome.status_code}: {outcome.body[:400]}"
+        assert name in _applied_guardrails(outcome), (
+            "the response must carry x-litellm-applied-guardrails naming the guardrail; without it "
+            f"the 200 only proves the guardrail never attached. Got {_applied_guardrails(outcome)!r}"
+        )
+
+        request_id = ChatResponse.model_validate_json(outcome.body).id
+        assert request_id, f"the served response must carry an id to look the spend log up by: {outcome.body[:400]}"
+
+        rows = client.proxy.poll_logs_for_request_id(
+            request_id,
+            predicate=lambda logged: bool(_guardrail_records(logged[0])),
+        )
+        assert rows, f"no spend log row ever appeared for request {request_id}"
+
+        records = _guardrail_records(rows[0])
+        assert records, (
+            f"the spend log for {request_id} carries no guardrail_information, so the dashboard's "
+            "guardrail panel would render nothing for a request the guardrail demonstrably ran on"
+        )
+
+        record = next(
+            (entry for entry in records if entry.guardrail_name == name and entry.guardrail_mode == "pre_call"),
+            None,
+        )
+        assert record is not None, (
+            "guardrail_information carries no pre_call record for this guardrail, only "
+            f"{[(entry.guardrail_name, entry.guardrail_mode) for entry in records]}"
+        )
+        assert record.guardrail_status == "success", (
+            f"the recorded status must be success for a run that masked and served, got {record.guardrail_status!r}"
+        )
+        assert record.guardrail_provider == "presidio", (
+            f"the record must attribute the run to presidio so the dashboard picks the right "
+            f"renderer, got {record.guardrail_provider!r}"
+        )
+
+        counts = record.masked_entity_count or {}
+        assert _LOGGED_ENTITIES.keys() <= counts.keys(), (
+            f"every entity the guardrail was configured to mask must appear in masked_entity_count, got {counts}"
+        )
+        assert all(counts[entity] >= 1 for entity in _LOGGED_ENTITIES), (
+            f"each masked entity must be counted at least once, got {counts}"
+        )
+
+        assert not isinstance(record.guardrail_response, str), (
+            "This audit test requires general_settings.store_prompts_in_spend_logs: true in the proxy config "
+            "or STORE_PROMPTS_IN_SPEND_LOGS=true in the proxy process environment before startup "
+            "(not just the pytest environment). Default prompt redaction is valid proxy behavior, "
+            f"but prevents entity-detail assertions; got guardrail_response={record.guardrail_response!r}"
+        )
+        entities = _ENTITY_LIST_ADAPTER.validate_python(record.guardrail_response)
+        assert entities, (
+            "guardrail_response must carry the detected entities; the dashboard's Detected Entities "
+            "list and its per-entity scores are rendered from exactly this array"
+        )
+        assert {entity.entity_type for entity in entities} >= _LOGGED_ENTITIES.keys(), (
+            f"the detected entities must cover what was masked, got "
+            f"{sorted(entity.entity_type for entity in entities)}"
+        )
+        for entity in entities:
+            assert 0.0 < entity.score <= 1.0, f"{entity.entity_type} carries an out-of-range score: {entity.score}"
+            assert 0 <= entity.start < entity.end, (
+                f"{entity.entity_type} carries a degenerate span: {entity.start}-{entity.end}"
+            )

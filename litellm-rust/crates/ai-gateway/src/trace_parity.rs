@@ -10,6 +10,7 @@ use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
 use serde::Serialize;
 use serde_json::Value;
 use tower::ServiceExt;
+use tracing::instrument::WithSubscriber;
 
 use crate::io::realtime_pool::RealtimePool;
 use crate::routes;
@@ -21,7 +22,41 @@ pub struct GatewayResponse {
     pub body: Value,
 }
 
-pub async fn messages_request(
+#[derive(Debug, Serialize)]
+pub struct TracedGatewayResponse {
+    pub response: Option<GatewayResponse>,
+    pub error: Option<String>,
+    pub trace: Vec<litellm_core::observability::FunctionTraceEvent>,
+}
+
+pub async fn traced_request(
+    path: String,
+    model_alias: String,
+    provider_model: String,
+    api_base: String,
+    body: Value,
+) -> TracedGatewayResponse {
+    let trace = litellm_core::observability::FunctionTrace::default();
+    let result = request(path, model_alias, provider_model, api_base, body)
+        .with_subscriber(trace.dispatcher())
+        .await;
+    let events = trace.events();
+    match result {
+        Ok(response) => TracedGatewayResponse {
+            response: Some(response),
+            error: None,
+            trace: events,
+        },
+        Err(error) => TracedGatewayResponse {
+            response: None,
+            error: Some(error.to_string()),
+            trace: events,
+        },
+    }
+}
+
+pub async fn request(
+    path: String,
     model_alias: String,
     provider_model: String,
     api_base: String,
@@ -42,15 +77,15 @@ pub async fn messages_request(
     };
     let request = Request::builder()
         .method("POST")
-        .uri("/v1/messages")
+        .uri(path)
         .header(AUTHORIZATION, "Bearer trace-master-key")
         .header(CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-    let response = routes::app(state)
-        .oneshot(request)
-        .await
-        .map_err(|error| match error {})?;
+    let response = match routes::app(state).oneshot(request).await {
+        Ok(response) => response,
+        Err(error) => match error {},
+    };
     let status: StatusCode = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
