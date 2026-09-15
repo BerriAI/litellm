@@ -8038,7 +8038,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
-    model: str,
+    model: str = "",
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
