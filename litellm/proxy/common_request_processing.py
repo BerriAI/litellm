@@ -14,7 +14,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -50,12 +50,17 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
+from litellm.proxy.auth.auth_checks import (
+    can_key_call_resolved_model,
+    route_skips_budget_checks,
+    tag_max_budget_check_for_tags,
+)
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -640,6 +645,60 @@ async def _resolve_per_request_model_group_alias(
         llm_router=llm_router,
     )
     return target
+
+
+_REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+
+
+def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
+    """The request's model name or names, or None when the field is missing or malformed."""
+    try:
+        return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
+    except ValidationError:
+        return None
+
+
+def _tags_on_request(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Every tag on the request under either metadata key, since spend attribution reads both."""
+    without_litellm_metadata: Final = MappingProxyType(
+        {key: value for key, value in data.items() if key != "litellm_metadata"}
+    )
+    return tuple(
+        dict.fromkeys(
+            (
+                *get_tags_from_request_body(request_body=data),
+                *get_tags_from_request_body(request_body=without_litellm_metadata),
+            )
+        )
+    )
+
+
+async def _enforce_tag_budgets_for_added_tags(
+    data: Mapping[str, object],
+    tags_before_pre_call_hook: frozenset[str],
+    route: str,
+    llm_router: Router | None,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """Budget-check the tags that ``pre_call_hook`` added to the request.
+
+    Tag budgets are enforced in auth against the tags in the request body, and
+    guardrails run after auth, so a tag a guardrail sets is only checked here,
+    on the same routes auth checks.
+    """
+    added_tags: Final = tuple(tag for tag in _tags_on_request(data) if tag not in tags_before_pre_call_hook)
+    if not added_tags or route_skips_budget_checks(route=route):
+        return
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    await tag_max_budget_check_for_tags(
+        tags=added_tags,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        model=_request_model(data),
+        llm_router=llm_router,
+    )
 
 
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
@@ -1522,6 +1581,7 @@ def _timing_values(
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+        self._tags_before_pre_call_hook: frozenset[str] | None = None
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
@@ -2011,6 +2071,8 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        if self._tags_before_pre_call_hook is None:
+            self._tags_before_pre_call_hook = frozenset(_tags_on_request(self.data))
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -2032,6 +2094,13 @@ class ProxyBaseLLMRequestProcessing:
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
 
+        await _enforce_tag_budgets_for_added_tags(
+            data=self.data,
+            tags_before_pre_call_hook=self._tags_before_pre_call_hook,
+            route=get_request_route(request=request),
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+        )
         return self.data, logging_obj
 
     async def _pre_call_with_fallbacks(

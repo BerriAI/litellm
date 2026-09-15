@@ -76,6 +76,7 @@ from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
+    get_tags_from_request_body,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -102,6 +103,7 @@ from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
@@ -851,6 +853,13 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
 )
 
 
+def route_skips_budget_checks(route: str) -> bool:
+    """Budget checks only guard LLM API routes and the health routes that spend money."""
+    return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
+        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+    )
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -898,10 +907,7 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or (
-        route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
-        and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
-    )
+    skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
 
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
@@ -2099,7 +2105,7 @@ async def _fetch_uncached_tags(
 
 @log_db_metrics
 async def get_tag_objects_batch(
-    tag_names: list[str],
+    tag_names: Sequence[str],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
@@ -5821,16 +5827,46 @@ async def _tag_max_budget_check(
 
     Raises:
         BudgetExceededError if any tag is over its max budget.
-        Triggers a budget alert if any tag is over its max budget.
     """
-    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    await tag_max_budget_check_for_tags(
+        tags=get_tags_from_request_body(request_body=request_body),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
-    if prisma_client is None:
-        return
 
-    # Get tags from request metadata
-    tags: Final = get_tags_from_request_body(request_body=request_body)
-    if not tags:
+def _llm_provider_for_budget_error(model: str | list[str] | None) -> str:
+    """Provider for the budget error's failure record, resolved from the request model when one is given."""
+    model_name: Final = model if isinstance(model, str) else (model[0] if model else None)
+    if model_name is None:
+        return ""
+    _, llm_provider = resolve_llm_provider_for_rate_limit(model_name)
+    return llm_provider
+
+
+async def tag_max_budget_check_for_tags(
+    tags: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    model: str | list[str] | None = None,
+    llm_router: Router | None = None,
+) -> None:
+    """
+    Check if any of ``tags`` is over its max budget.
+
+    Auth calls this with the tags in the request body. The request pipeline calls
+    it again after ``pre_call_hook`` with the tags a hook added, passing ``model``
+    and ``llm_router`` so a zero-cost model skips the check the way auth does and
+    the raised error names the provider. This is a plain read with no reservation,
+    the same fallback ``disable_budget_reservation`` uses, so concurrent requests
+    can overshoot the ceiling slightly.
+
+    Raises:
+        BudgetExceededError if any tag is over its max budget.
+    """
+    if prisma_client is None or not tags or _is_model_cost_zero(model=model, llm_router=llm_router):
         return
 
     # Batch fetch all tags in one go
@@ -5863,6 +5899,7 @@ async def _tag_max_budget_check(
                 current_cost=tag_spend,
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
+                llm_provider=_llm_provider_for_budget_error(model=model),
                 entity_type=Litellm_EntityType.TAG.value,
                 entity_id=tag_name,
             )
