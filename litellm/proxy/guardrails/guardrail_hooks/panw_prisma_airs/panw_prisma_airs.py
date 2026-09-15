@@ -194,7 +194,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # internal '<=' comparison and surfaces as a misleading api_error.
         self.timeout = float(timeout) if timeout is not None else 10.0
 
-        # Tri-state: None = not set (default-on for Anthropic), True = explicit on, False = explicit off
+        # Tri-state scan-scope flag; resolution semantics in _use_latest_user_only()
         self.experimental_use_latest_role_message_only: bool | None = kwargs.get(
             "experimental_use_latest_role_message_only"
         )
@@ -202,6 +202,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if self.fallback_on_error == "allow":
             verbose_proxy_logger.warning(
                 "PANW Prisma AIRS Guardrail '%s': fallback_on_error='allow' - requests will proceed without scanning when API is unavailable.",
+                guardrail_name,
+            )
+
+        if self.experimental_use_latest_role_message_only is True:
+            verbose_proxy_logger.warning(
+                "PANW Prisma AIRS Guardrail '%s': experimental_use_latest_role_message_only=true - only the latest user/developer message is scanned on the request side. Earlier turns in caller-supplied history are not rescanned before being forwarded to the model. Enable only where every turn is scanned while it is the latest message, or where conversation history is server-controlled.",
                 guardrail_name,
             )
 
@@ -1580,16 +1586,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     ) -> bool:
         """Resolve whether to scan only the latest user message.
 
-        - Non-Anthropic requests: always False (existing behavior)
-        - Anthropic requests:
-          - Flag explicitly True/False: respect it
-          - Flag None (not set): default to True
+        - Flag explicitly True/False: respect it for every request shape,
+          matching the bedrock guardrail's semantics for the same flag
+        - Flag None (not set): keep the historical defaults - True for
+          Anthropic /v1/messages requests, False for everything else
         """
-        if not self._is_anthropic_request(request_data, logging_obj):
-            return False
-        if self.experimental_use_latest_role_message_only is None:
-            return True  # Default-on for Anthropic
-        return self.experimental_use_latest_role_message_only
+        if self.experimental_use_latest_role_message_only is not None:
+            return self.experimental_use_latest_role_message_only
+        return self._is_anthropic_request(request_data, logging_obj)
 
     @staticmethod
     def _get_latest_user_text_indices(
@@ -1787,15 +1791,29 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if input_type == "request":
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
-                # For Anthropic /v1/messages: default to latest-user-only scanning.
-                # Uses request_data["messages"] (original format), NOT structured_messages
-                # (which has injected system content from adapter translation).
+                # Neither message source aligns with `texts` on every request shape,
+                # so try both and let the count check in
+                # _get_latest_user_text_indices pick the one that does:
+                #   - request_data["messages"] is the original, unfiltered list. It
+                #     is the aligned source for Anthropic /v1/messages, whose
+                #     structured_messages carries a system entry injected by
+                #     translation that has no counterpart in `texts`.
+                #   - structured_messages is built alongside `texts` by the
+                #     translation handler. It is the aligned source when a skip flag
+                #     scoped a message out upstream, and the only source at all for
+                #     /v1/responses, whose request_data carries `input` rather than
+                #     `messages`.
+                # If neither walks to the same text count, scannable_indices stays
+                # None and the existing role filter below engages unchanged.
                 if self._use_latest_user_only(request_data, logging_obj):
-                    original_messages: Final = request_data.get("messages")
-                    if original_messages:
-                        scannable_indices = self._get_latest_user_text_indices(texts, original_messages)
+                    for candidate in (request_data.get("messages"), structured_messages):
+                        if not candidate:
+                            continue
+                        scannable_indices = self._get_latest_user_text_indices(texts, candidate)
+                        if scannable_indices is not None:
+                            break
                 # Fall through to existing role filtering if:
-                # - not Anthropic, OR flag explicitly False, OR
+                # - latest-only not enabled for this request, OR
                 # - no original messages, OR
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
