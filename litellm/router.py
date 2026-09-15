@@ -4849,6 +4849,7 @@ class Router:
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
 
             data: Final = deployment["litellm_params"].copy()
@@ -5163,13 +5164,11 @@ class Router:
             return healthy_deployments[0]
 
         # Use simple_shuffle for weighted selection
-        return cast(
-            GuardrailTypedDict,
-            simple_shuffle(
-                llm_router_instance=self,
-                healthy_deployments=healthy_deployments,
-                model=guardrail_name,
-            ),
+        return simple_shuffle(
+            resolve_model_alias=self._get_model_from_alias,
+            healthy_deployments=healthy_deployments,
+            model=guardrail_name,
+            request_kwargs=None,
         )
 
     async def _ageneric_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
@@ -8378,7 +8377,8 @@ class Router:
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
-        When a retry or fallback happens, record which model group, deployment and attempt just failed and why
+        When a retry or fallback happens, record which model group, deployment and attempt just failed and why,
+        and count it toward the request-wide num_retries_per_request cap
         """
         from litellm.types.router import RetryAttemptRecord
 
@@ -8402,7 +8402,10 @@ class Router:
             else ()
         )
         breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
+        earlier: Final = request_metadata.get("request_retry_count")
+        request_retry_count: Final = (earlier if type(earlier) is int and 0 <= earlier else 0) + 1
         kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
+        kwargs[_metadata_var]["request_retry_count"] = request_retry_count  # rebind-ok: same dict, read by the cap
         return kwargs
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Span | None) -> int:
@@ -13045,9 +13048,10 @@ class Router:
             start_time: Final = time.time()
             if strategy == "simple-shuffle":
                 return simple_shuffle(
-                    llm_router_instance=self,
+                    resolve_model_alias=self._get_model_from_alias,
                     healthy_deployments=healthy_deployments,
                     model=model,
+                    request_kwargs=request_kwargs,
                 )
             deployment: Final = await self._select_deployment_async(
                 strategy=strategy,
@@ -13190,9 +13194,10 @@ class Router:
             start_time: Final = time.perf_counter()
             if strategy == "simple-shuffle":
                 return simple_shuffle(
-                    llm_router_instance=self,
+                    resolve_model_alias=self._get_model_from_alias,
                     healthy_deployments=pass_through_deployments,
                     model=model,
+                    request_kwargs=request_kwargs,
                 )
             deployment: Final = await self._select_deployment_async(
                 strategy=strategy,
@@ -13888,9 +13893,10 @@ class Router:
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
             return simple_shuffle(
-                llm_router_instance=self,
+                resolve_model_alias=self._get_model_from_alias,
                 healthy_deployments=healthy_deployments,
                 model=model,
+                request_kwargs=request_kwargs,
             )
         deployment: Final = self._select_deployment_sync(
             strategy=strategy,
@@ -13958,6 +13964,7 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
         )
 
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
@@ -14040,9 +14047,10 @@ class Router:
         # 6. Apply load balancing strategy
         if strategy == "simple-shuffle":
             return simple_shuffle(
-                llm_router_instance=self,
+                resolve_model_alias=self._get_model_from_alias,
                 healthy_deployments=pass_through_deployments,
                 model=model,
+                request_kwargs=request_kwargs,
             )
         deployment: Final = self._select_deployment_sync(
             strategy=strategy,

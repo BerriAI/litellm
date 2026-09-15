@@ -8499,6 +8499,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/users/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Create Users Route
+         * @description Create up to 500 internal users in one request, optionally adding each one to teams.
+         *
+         *     Every entry in `users` takes the same fields as `/user/new`, with two differences: `auto_create_key`
+         *     defaults to `false` (opt in per user to also get a virtual key back) and `send_invite_email` is not
+         *     supported. Unknown fields are rejected with 422. Rows are validated together (duplicate ids or emails,
+         *     unknown teams, roles the caller may not grant), inserted in one statement, and each referenced team is
+         *     written once for all of its new members.
+         *
+         *     Rows fail independently: a bad row is reported in `data` with `success: false` and an `error`, and the
+         *     other rows still get created. A user that was created but could not be added to one of its teams is
+         *     reported with `success: true`, `teams` listing where they did land, and `error` naming the failed team.
+         *     The whole request is refused with a 403 problem document only if creating the valid rows would exceed
+         *     the license seat limit.
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X POST "http://localhost:4000/management/v1/users/bulk" \
+         *     -H "Content-Type: application/json" \
+         *     -H "Authorization: Bearer sk-1234" \
+         *     -d '{
+         *         "users": [
+         *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
+         *             {"user_email": "b@example.com", "user_role": "internal_user", "auto_create_key": true}
+         *         ]
+         *     }'
+         *     ```
+         *
+         *     Returns `data` (one entry per input row, in order, with `user_id`, `user_email`, `success`, `teams`,
+         *     `key`, `error`) and `meta` with `total_requested`, `created` and `failed`.
+         */
+        post: operations["bulk_create_users_route_management_v1_users_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -24533,6 +24581,156 @@ export interface components {
             budgets: string[];
         };
         /**
+         * BulkNewUserItem
+         * @description One row of `POST /management/v1/users/bulk`: the `/user/new` body, with keys opt-in and invite emails
+         *     unsupported. Unknown fields are rejected, as on every `/management/v1` request body.
+         */
+        BulkNewUserItem: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Aliases
+             * @default {}
+             */
+            aliases: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: unknown[] | null;
+            /**
+             * Auto Create Key
+             * @default false
+             */
+            auto_create_key: boolean;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
+             * Config
+             * @default {}
+             */
+            config: {
+                [key: string]: unknown;
+            } | null;
+            /** Duration */
+            duration?: string | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Metadata
+             * @default {}
+             */
+            metadata: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organizations */
+            organizations?: string[] | null;
+            /**
+             * Permissions
+             * @default {}
+             */
+            permissions: {
+                [key: string]: unknown;
+            } | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Send Invite Email */
+            send_invite_email?: boolean | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Sso User Id */
+            sso_user_id?: string | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Teams */
+            teams?: string[] | components["schemas"]["NewUserRequestTeam"][] | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+            /** User Role */
+            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** BulkNewUserMeta */
+        BulkNewUserMeta: {
+            /** Created */
+            created: number;
+            /** Failed */
+            failed: number;
+            /** Total Requested */
+            total_requested: number;
+        };
+        /** BulkNewUserRequest */
+        BulkNewUserRequest: {
+            /** Users */
+            users: components["schemas"]["BulkNewUserItem"][];
+        };
+        /**
+         * BulkNewUserResponse
+         * @description `data` holds one result per input row, in input order.
+         */
+        BulkNewUserResponse: {
+            /** Data */
+            data: components["schemas"]["UserCreateResult"][];
+            meta: components["schemas"]["BulkNewUserMeta"];
+        };
+        /**
          * BulkTeamMemberAddRequest
          * @description Request for bulk team member addition
          */
@@ -32897,9 +33095,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Rpm Limit Type */
@@ -33650,9 +33846,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Secret Manager Settings */
@@ -38087,6 +38281,21 @@ export interface components {
              */
             blocked_users: string[];
         };
+        /** UpdateCredentialItem */
+        UpdateCredentialItem: {
+            /** Credential Info */
+            credential_info: {
+                [key: string]: unknown;
+            };
+            /** Credential Name */
+            credential_name: string;
+            /** Credential Values */
+            credential_values?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Id */
+            model_id?: string | null;
+        };
         /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
@@ -38605,6 +38814,12 @@ export interface components {
             tag_routing_prefix?: string | null;
             /** Timeout */
             timeout?: number | null;
+            /** Weights */
+            weights?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
         };
         /** UpdateSearchToolRequest */
         UpdateSearchToolRequest: {
@@ -38702,9 +38917,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Secret Manager Settings */
@@ -39490,6 +39703,25 @@ export interface components {
              * @enum {string}
              */
             severity: "info" | "warning" | "error";
+        };
+        /**
+         * UserCreateResult
+         * @description Outcome for one row of `POST /management/v1/users/bulk`. `teams` lists the teams the user was actually
+         *     added to.
+         */
+        UserCreateResult: {
+            /** Error */
+            error?: string | null;
+            /** Key */
+            key?: string | null;
+            /** Success */
+            success: boolean;
+            /** Teams */
+            teams?: string[] | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * UserHeaderMapping
@@ -45717,7 +45949,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
         responses: {
@@ -51289,6 +51521,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_create_users_route_management_v1_users_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNewUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkNewUserResponse"];
                 };
             };
             /** @description Validation Error */
