@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 
@@ -241,6 +242,131 @@ def test_transform_system_message():
     assert out_messages[0]["role"] == "user"
     assert out_messages[1]["role"] == "assistant"
     assert system_blocks == []
+
+
+def test_transform_system_message_hoists_only_leading_system_run():
+    """Converse rejects role:"system" at any position, but hoisting a
+    mid-conversation entry into the top-level system field mutates the cached
+    prefix and collapses Bedrock's implicit prompt cache (issue #41043). A
+    mid-conversation entry is converted to a user turn in place instead, which
+    keeps everything before it byte-identical."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "system", "content": "Base system prompt."},
+        {"role": "user", "content": "read the file"},
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    out_messages, system_blocks = config._transform_system_message(copy.deepcopy(messages))
+
+    assert len(system_blocks) == 1
+    assert system_blocks[0]["text"] == "Base system prompt."
+    assert [m["role"] for m in out_messages] == ["user", "user", "assistant", "user"]
+    assert out_messages[1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "Operator note (not from the user): the following was "
+                    "originally a mid-conversation system-role reminder."
+                ),
+            },
+            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+        ],
+    }
+
+
+def test_transform_system_message_converted_system_keeps_list_content():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "reminder part one"},
+                {"type": "text", "text": "reminder part two"},
+            ],
+        },
+        {"role": "assistant", "content": "hello"},
+    ]
+
+    out_messages, system_blocks = config._transform_system_message(copy.deepcopy(messages))
+
+    assert system_blocks == []
+    assert out_messages[1]["role"] == "user"
+    assert out_messages[1]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "Operator note (not from the user): the following was "
+                "originally a mid-conversation system-role reminder."
+            ),
+        },
+        {"type": "text", "text": "reminder part one"},
+        {"type": "text", "text": "reminder part two"},
+    ]
+
+
+def test_transform_system_message_moves_converted_system_after_tool_result_run():
+    """A reminder wedged between an assistant tool-call turn and its tool-result
+    turns cannot become a user turn in that position: the toolResult blocks must
+    come first, and the OpenAI shape can carry several consecutive role:"tool"
+    turns. The converted turn goes after the whole tool-result run."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "read the file"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+                {"id": "call_2", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+            ],
+        },
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "first 100 lines"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "next 100 lines"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    out_messages, system_blocks = config._transform_system_message(copy.deepcopy(messages))
+
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+        "user",
+    ]
+    assert out_messages[4]["content"][0]["text"].startswith("Operator note")
+    assert out_messages[4]["content"][1]["text"] == "[Truncated: PARTIAL view of big1.txt]"
+
+
+def test_transform_system_message_converted_system_carries_only_its_content():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "system",
+            "content": "stay on task",
+            "name": "budget-reminder",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "assistant", "content": "ok"},
+    ]
+
+    out_messages, _ = config._transform_system_message(copy.deepcopy(messages))
+
+    converted = out_messages[1]
+    assert converted["role"] == "user"
+    assert "name" not in converted
+    assert "cache_control" not in converted
+    assert [b["text"] for b in converted["content"][1:]] == ["stay on task"]
 
 
 def test_transform_thinking_blocks_with_redacted_content():
