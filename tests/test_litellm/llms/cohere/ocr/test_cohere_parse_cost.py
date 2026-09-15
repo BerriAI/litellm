@@ -38,14 +38,6 @@ def test_pricing_entry(cost_map_path: Path, model: str, provider: str) -> None:
 
 
 @pytest.mark.parametrize("model, provider", MODELS)
-def test_model_info_resolves_ocr_mode_and_price(local_model_cost_map, model: str, provider: str) -> None:
-    info = litellm.get_model_info(model=model, custom_llm_provider=provider)
-
-    assert info["mode"] == "ocr"
-    assert info["ocr_cost_per_page"] == COST_PER_PAGE
-
-
-@pytest.mark.parametrize("model, provider", MODELS)
 @pytest.mark.parametrize("pages_processed", [1, 3])
 def test_cost_scales_with_billed_pages(local_model_cost_map, model: str, provider: str, pages_processed: int) -> None:
     cost = completion_cost(

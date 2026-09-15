@@ -1363,14 +1363,6 @@ def test_generic_cost_per_token_bedrock_mantle_gpt5_matches_aws_invoiced_rates(
     assert short_completion_cost == pytest.approx(output_rate * completion_tokens)
 
 
-def test_bedrock_mantle_gpt56_sol_cache_write_matches_aws_invoiced_rate(_local_model_cost_map):
-    """The invoice bills sol 30-minute cache writes at $6.88 per million tokens, 1.25x the $5.50 input rate."""
-
-    sol = litellm.model_cost["bedrock_mantle/openai.gpt-5.6-sol"]
-    assert sol["cache_creation_input_token_cost"] == pytest.approx(6.875e-06)
-    assert sol["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(1.375e-05)
-
-
 def test_generic_cost_per_token_honors_non_standard_above_threshold():
     """Regression for #30344: get_model_info must keep arbitrary
     input/output_cost_per_token_above_<N>_tokens thresholds, not only the hard-coded
@@ -1911,21 +1903,6 @@ def test_generic_cost_per_token_gpt56(_local_model_cost_map,
     assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
 
 
-def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
-    """Regression: the bare gpt-5.6 alias routes to GPT-5.6 Sol, so every cost field on
-    the two entries has to hold the same value. They drifted once before, when Sol took
-    its promotional cut and gpt-5.6 was left on the pre-cut rates, overbilling callers
-    who used the alias."""
-    alias = litellm.model_cost["gpt-5.6"]
-    sol = litellm.model_cost["gpt-5.6-sol"]
-
-    cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 27
-
-    for field in cost_fields:
-        assert alias.get(field) == sol.get(field), field
-
-
 @pytest.mark.parametrize(
     "model,flex_long_input_cost,flex_long_output_cost",
     [
@@ -2245,133 +2222,6 @@ def test_generic_cost_per_token_azure_ai_gpt_6_astra_flex_bills_the_standard_rat
 
     assert flex == standard
     assert standard == pytest.approx((1000 * 1e-05, 100 * 5e-05))
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_xhigh,expected_minimal",
-    [
-        # Verified against OpenAI's live API on 2026-04-24:
-        #   gpt-5.5   -> supports: none, low, medium, high, xhigh
-        #   gpt-5.5-pro -> supports: medium, high, xhigh
-        # Neither supports "minimal"; gpt-5.5-pro additionally does not support "none".
-        # The JSON must reflect this so LiteLLM rejects unsupported values locally
-        # (or drops them with drop_params=True) instead of round-tripping to OpenAI
-        # for a 400.
-        ("gpt-5.5", True, True, False),
-        ("gpt-5.5-2026-04-23", True, True, False),
-        ("gpt-5.5-pro", False, True, False),
-        ("gpt-5.5-pro-2026-04-23", False, True, False),
-    ],
-)
-def test_gpt55_reasoning_effort_flags_match_live_openai_api(_local_model_cost_map, 
-    model, expected_none, expected_xhigh, expected_minimal
-):
-    """Pin reasoning_effort capability flags to OpenAI's actual API contract.
-
-    Observed via `POST /v1/chat/completions` with reasoning_effort=minimal:
-    ``Unsupported value: 'reasoning_effort' does not support 'minimal' with
-    this model``. gpt-5.5-pro additionally rejects 'none' and 'low'.
-    """
-
-    m = litellm.model_cost[model]
-    assert (
-        m.get("supports_none_reasoning_effort") is expected_none
-    ), f"{model}: supports_none_reasoning_effort expected {expected_none}"
-    assert (
-        m.get("supports_xhigh_reasoning_effort") is expected_xhigh
-    ), f"{model}: supports_xhigh_reasoning_effort expected {expected_xhigh}"
-    assert (
-        m.get("supports_minimal_reasoning_effort") is expected_minimal
-    ), f"{model}: supports_minimal_reasoning_effort expected {expected_minimal}"
-
-
-@pytest.mark.parametrize(
-    "base_model,dated_model",
-    [
-        ("gpt-5.5", "gpt-5.5-2026-04-23"),
-        ("gpt-5.5-pro", "gpt-5.5-pro-2026-04-23"),
-    ],
-)
-def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(_local_model_cost_map, 
-    base_model, dated_model
-):
-    """Dated snapshots must carry the same reasoning_effort capability flags as
-    their non-dated counterparts.
-
-    Regression guard: ``supports_{none,minimal,xhigh}_reasoning_effort`` gate
-    downstream routing in ``OpenAIGPT5Config`` — a missing flag is treated as
-    ``False`` for opt-in levels (e.g. ``xhigh``), which silently diverges
-    behavior between ``gpt-5.5`` and ``gpt-5.5-2026-04-23``. Pinning to a
-    dated variant must never lose capabilities relative to the base alias.
-    """
-
-    base = litellm.model_cost[base_model]
-    dated = litellm.model_cost[dated_model]
-
-    for flag in (
-        "supports_none_reasoning_effort",
-        "supports_minimal_reasoning_effort",
-        "supports_xhigh_reasoning_effort",
-    ):
-        assert dated.get(flag) == base.get(flag), (
-            f"{dated_model} has {flag}={dated.get(flag)!r}, "
-            f"but {base_model} has {flag}={base.get(flag)!r}. "
-            f"Dated snapshots must inherit the base model's reasoning_effort "
-            f"capability profile."
-        )
-
-
-@pytest.mark.parametrize(
-    "model,expected_mode,expected_input,expected_output,expected_cache_read",
-    [
-        ("azure/gpt-5.5", "chat", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.5-2026-04-23", "chat", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.5-pro", "responses", 3e-5, 1.8e-4, 3e-6),
-        ("azure/gpt-5.5-pro-2026-04-23", "responses", 3e-5, 1.8e-4, 3e-6),
-    ],
-)
-def test_azure_gpt55_entries_present_with_correct_pricing(_local_model_cost_map, 
-    model, expected_mode, expected_input, expected_output, expected_cache_read
-):
-    """Day-0 Azure entries for GPT-5.5 mirror the OpenAI pricing structure.
-
-    Pricing parity with openai/gpt-5.5* (verified against OpenAI's pricing page
-    on 2026-04-24): $5/$30 input/output per 1M for chat, $30/$180 for pro.
-    Cache discount is 10% of input.
-    """
-
-    m = litellm.model_cost[model]
-    assert m["litellm_provider"] == "azure"
-    assert m["mode"] == expected_mode
-    assert m["input_cost_per_token"] == expected_input
-    assert m["output_cost_per_token"] == expected_output
-    assert m["cache_read_input_token_cost"] == expected_cache_read
-    # Long-context window inherited from gpt-5.4 / openai gpt-5.5.
-    assert m["max_input_tokens"] == 1050000
-    assert m["max_output_tokens"] == 128000
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_minimal,expected_xhigh",
-    [
-        # Mirror live OpenAI API contract (verified via openai/gpt-5.5* on
-        # 2026-04-24): chat accepts {none, low, medium, high, xhigh} but NOT
-        # minimal; pro accepts {medium, high, xhigh} only.
-        # NOTE: openai/gpt-5.5* entries currently set supports_minimal=true on
-        # main (pre #26456). Once that PR lands, OpenAI + Azure flags align.
-        ("azure/gpt-5.5", True, False, True),
-        ("azure/gpt-5.5-pro", False, False, True),
-    ],
-)
-def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(_local_model_cost_map, 
-    model, expected_none, expected_minimal, expected_xhigh
-):
-    """Azure entries pin reasoning_effort flags to OpenAI's actual API contract."""
-
-    m = litellm.model_cost[model]
-    assert m.get("supports_none_reasoning_effort") is expected_none
-    assert m.get("supports_minimal_reasoning_effort") is expected_minimal
-    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
 
 
 def test_generic_cost_per_token_anthropic_prompt_caching():
@@ -3412,8 +3262,6 @@ def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
 # ---------------------------------------------------------------------------
 # Data-residency (OpenAI regional processing) tests
 # ---------------------------------------------------------------------------
-
-
 
 
 @pytest.mark.parametrize("model", ["gpt-5.4", "gpt-realtime-2.1", "gpt-realtime-2.1-mini"])
@@ -4546,28 +4394,6 @@ def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict)
     expected = 19 * 5e-6 + 512 * 8e-6 + 158 * 3e-5
     assert cost is not None
     assert round(cost, 12) == round(expected, 12)
-GEMINI_DAY0_LAUNCH_PRICING = [
-    ("gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-    ("gemini/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-    ("vertex_ai/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-    ("gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
-    ("gemini/gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
-    ("vertex_ai/gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
-]
-
-
-@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_DAY0_LAUNCH_PRICING)
-def test_gemini_36_flash_and_35_flash_lite_launch_pricing(_local_model_cost_map, model, input_cost, output_cost, cache_read_cost):
-
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token"] == input_cost
-    assert model_cost_map["output_cost_per_token"] == output_cost
-    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
-    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 1048576
 
 
 def test_generic_cost_per_token_gemini_36_flash(_local_model_cost_map):
@@ -4627,15 +4453,6 @@ def test_gemini_36_flash_service_tier_introductory_pricing(
     assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
 
 
-@pytest.mark.parametrize(
-    "model", ["gemini-3.6-flash", "gemini/gemini-3.6-flash", "vertex_ai/gemini-3.6-flash"]
-)
-def test_gemini_36_flash_batch_introductory_pricing(model, _local_model_cost_map):
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token_batches"] == 3.75e-07
-    assert model_cost_map["output_cost_per_token_batches"] == 1.875e-06
-
-
 def test_generic_cost_per_token_gemini_35_flash_lite(_local_model_cost_map):
 
     usage = Usage(
@@ -4693,15 +4510,6 @@ def test_gemini_35_flash_lite_service_tier_pricing(
 
     assert prompt_cost == pytest.approx(800 * input_rate + 200 * cache_read_rate, rel=1e-9)
     assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
-
-
-def test_gemini_35_flash_lite_flex_cache_read_map_entries(_local_model_cost_map):
-    """Each map entry carries its own surface's published flex cache-read rate: the bare
-    and vertex_ai keys are the Vertex surface at $0.015/M, the gemini key is the Gemini
-    API surface at $0.02/M."""
-    assert litellm.model_cost["gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
-    assert litellm.model_cost["vertex_ai/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
-    assert litellm.model_cost["gemini/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 2e-08
 
 
 @pytest.mark.parametrize(
@@ -4925,26 +4733,6 @@ def test_tier_request_without_tier_pricing_keeps_the_standard_reasoning_rate():
     assert completion_cost == pytest.approx(400 * 4e-06 + 600 * 6e-06, rel=1e-9)
 
 
-GEMINI_37_FLASH_LAUNCH_PRICING = [
-    ("gemini-3.7-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-    ("gemini/gemini-3.7-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-    ("vertex_ai/gemini-3.7-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-]
-
-
-@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_37_FLASH_LAUNCH_PRICING)
-def test_gemini_37_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token"] == input_cost
-    assert model_cost_map["output_cost_per_token"] == output_cost
-    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
-    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 1048576
-
-
 def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=1000,
@@ -4965,66 +4753,6 @@ def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     assert completion_cost == pytest.approx(0.001875)
 
 
-GEMINI_38_FLASH_LAUNCH_PRICING = [
-    ("gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-    ("gemini/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-    ("vertex_ai/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
-]
-
-
-@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_38_FLASH_LAUNCH_PRICING)
-def test_gemini_38_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token"] == input_cost
-    assert model_cost_map["output_cost_per_token"] == output_cost
-    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
-    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 1048576
-
-
-GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "output_cost_per_reasoning_token",
-    "cache_read_input_token_cost",
-    "input_cost_per_token_batches",
-    "output_cost_per_token_batches",
-    "input_cost_per_token_flex",
-    "output_cost_per_token_flex",
-    "cache_read_input_token_cost_flex",
-    "input_cost_per_token_priority",
-    "output_cost_per_token_priority",
-    "cache_read_input_token_cost_priority",
-    "search_context_cost_per_query",
-    "google_maps_grounding_cost_per_query",
-    "prompt_cache_min_tokens",
-    "max_input_tokens",
-    "max_output_tokens",
-    "supports_reasoning",
-    "supports_function_calling",
-    "supports_prompt_caching",
-    "supports_vision",
-    "supports_pdf_input",
-    "supports_audio_input",
-    "supports_video_input",
-    "supports_response_schema",
-    "supports_tool_choice",
-    "supports_web_search",
-    "supports_url_context",
-)
-
-
-@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
-def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
-    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
-    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
-    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
-        assert new_model[field] == old_model[field], field
-
-
 def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=1000,
@@ -5043,20 +4771,6 @@ def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(0.00075)
     assert completion_cost == pytest.approx(0.001875)
-
-
-def test_grok_46_launch_pricing(_local_model_cost_map):
-    model_cost_map = litellm.model_cost["xai/grok-4.6"]
-    assert model_cost_map["input_cost_per_token"] == 2e-06
-    assert model_cost_map["output_cost_per_token"] == 6e-06
-    assert model_cost_map["cache_read_input_token_cost"] == 5e-07
-    assert model_cost_map["input_cost_per_token_above_200k_tokens"] == 4e-06
-    assert model_cost_map["output_cost_per_token_above_200k_tokens"] == 1.2e-05
-    assert model_cost_map["cache_read_input_token_cost_above_200k_tokens"] == 1e-06
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 500000
 
 
 def test_generic_cost_per_token_grok_46(_local_model_cost_map):

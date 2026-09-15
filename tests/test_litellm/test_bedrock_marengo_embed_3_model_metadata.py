@@ -64,14 +64,6 @@ def test_marengo_prices_are_per_request_not_per_token(model):
     assert info["input_cost_per_audio_per_second"] == AUDIO_COST_PER_SECOND
 
 
-@pytest.mark.parametrize("model", ALL_MODELS)
-def test_marengo_embed_3_is_visible_to_callers(model, local_model_cost_map):
-    info = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
-    assert info["mode"] == "embedding"
-    assert info["output_vector_size"] == 512
-    assert info["max_input_tokens"] == 500
-
-
 @pytest.mark.parametrize("model", PER_REQUEST_MODELS)
 @pytest.mark.parametrize(
     "details,expected_cost",

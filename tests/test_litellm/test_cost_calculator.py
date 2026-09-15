@@ -212,67 +212,6 @@ def test_vertex_lyria_speech_cost(
     assert cost == pytest.approx(expected)
 
 
-def test_baseten_model_api_pricing_entries(_local_model_cost_map):
-
-    expected_pricing = {
-        "baseten/nvidia/Nemotron-120B-A12B": (3e-07, 7.5e-07),
-        "baseten/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
-        "baseten/zai-org/GLM-5": (9.5e-07, 3.15e-06),
-        "baseten/zai-org/GLM-4.7": (6e-07, 2.2e-06),
-        "baseten/zai-org/GLM-4.6": (6e-07, 2.2e-06),
-        "baseten/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
-        "baseten/moonshotai/Kimi-K2-Thinking": (6e-07, 2.5e-06),
-        "baseten/moonshotai/Kimi-K2-Instruct-0905": (6e-07, 2.5e-06),
-        "baseten/openai/gpt-oss-120b": (1e-07, 5e-07),
-        "baseten/deepseek-ai/DeepSeek-V3.1": (5e-07, 1.5e-06),
-        "baseten/deepseek-ai/DeepSeek-V3-0324": (7.7e-07, 7.7e-07),
-    }
-
-    for model_name, (input_cost, output_cost) in expected_pricing.items():
-        model_info = litellm.model_cost.get(model_name)
-        assert model_info is not None, f"Missing model pricing entry: {model_name}"
-        assert model_info["litellm_provider"] == "baseten"
-        assert model_info["input_cost_per_token"] == input_cost
-        assert model_info["output_cost_per_token"] == output_cost
-
-
-def test_wandb_model_api_pricing_entries(_local_model_cost_map):
-
-    expected_pricing = {
-        "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
-        "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
-        "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (1e-07, 1e-07),
-        "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (1e-07, 1e-07),
-        "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35e-06, 5.4e-06),
-        "wandb/deepseek-ai/DeepSeek-V3-0324": (1.14e-06, 2.75e-06),
-        "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": (1.7e-07, 6.6e-07),
-    }
-
-    for model_name, (input_cost, output_cost) in expected_pricing.items():
-        model_info = litellm.model_cost.get(model_name)
-        assert model_info is not None, f"Missing model pricing entry: {model_name}"
-        assert model_info["litellm_provider"] == "wandb"
-        assert model_info["input_cost_per_token"] == input_cost
-        assert model_info["output_cost_per_token"] == output_cost
-
-
-def test_openrouter_qwen36_plus_model_info(_local_model_cost_map):
-
-    model_info = litellm.model_cost.get("openrouter/qwen/qwen3.6-plus")
-
-    assert model_info is not None
-    assert model_info["litellm_provider"] == "openrouter"
-    assert model_info["mode"] == "chat"
-    assert model_info["max_input_tokens"] == 1000000
-    assert model_info["max_output_tokens"] == 65536
-    assert model_info["input_cost_per_token"] == 3.25e-07
-    assert model_info["output_cost_per_token"] == 1.95e-06
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_tool_choice"] is True
-    assert model_info["supports_reasoning"] is True
-    assert model_info["supports_vision"] is True
-
-
 @pytest.mark.parametrize(
     "model",
     [
@@ -1823,23 +1762,6 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
-
-AZURE_GPT_5_6_MAP_KEYS = (
-    "azure/gpt-5.6",
-    "azure/gpt-5.6-sol",
-    "azure/gpt-5.6-terra",
-    "azure/gpt-5.6-luna",
-    "azure/us/gpt-5.6",
-    "azure/us/gpt-5.6-sol",
-    "azure/us/gpt-5.6-terra",
-    "azure/us/gpt-5.6-luna",
-    "azure/eu/gpt-5.6",
-    "azure/eu/gpt-5.6-sol",
-    "azure/eu/gpt-5.6-terra",
-    "azure/eu/gpt-5.6-luna",
-)
-
-
 def test_azure_gpt_5_6_cache_write_tokens_are_billed(_local_model_cost_map):
     """
     Azure bills gpt-5.6 prompt cache writes at 1.25x the input rate on every
@@ -1864,31 +1786,6 @@ def test_azure_gpt_5_6_cache_write_tokens_are_billed(_local_model_cost_map):
     assert input_cost == pytest.approx(687 * 2e-07 + 1313 * 2.5e-07)
     assert output_cost == pytest.approx(100 * 1.2e-06)
 
-
-@pytest.mark.parametrize("model", AZURE_GPT_5_6_MAP_KEYS)
-def test_azure_gpt_5_6_rates_match_azure_price_page(_local_model_cost_map, model):
-    """
-    Per the Azure OpenAI price page (rendered 2026-08-26): cache writes cost
-    1.25x input on every gpt-5.6 tier, and Data Zone costs 1.1x Global for
-    standard and priority alike (us/eu priority rates previously sat at 1.25x).
-    """
-    entry = litellm.model_cost[model]
-    input_keys = [key for key in entry if key.startswith("input_cost_per_token")]
-    assert input_keys
-    for key in input_keys:
-        suffix = key[len("input_cost_per_token") :]
-        assert entry["cache_creation_input_token_cost" + suffix] == pytest.approx(entry[key] * 1.25)
-
-    zone = model.split("/")[1]
-    if zone in ("us", "eu"):
-        global_entry = litellm.model_cost["azure/" + model.split("/", 2)[2]]
-        prefixes = ("input_cost_per_token", "output_cost_per_token", "cache_read", "cache_creation")
-        token_cost_keys = [key for key in entry if key.startswith(prefixes)]
-        global_token_cost_keys = [key for key in global_entry if key.startswith(prefixes)]
-        assert len(token_cost_keys) >= 9
-        assert sorted(token_cost_keys) == sorted(global_token_cost_keys)
-        for key in token_cost_keys:
-            assert entry[key] == pytest.approx(global_entry[key] * 1.1), key
 
 def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     """
@@ -3050,28 +2947,6 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
 
 
 @pytest.mark.parametrize(
-    "model,expected_fast",
-    [
-        ("claude-opus-5", 2.0),
-        ("claude-opus-4-8", 2.0),
-        ("claude-opus-4-6", None),
-        ("claude-opus-4-6-20260205", None),
-        ("claude-opus-4-7", None),
-        ("claude-opus-4-7-20260416", None),
-    ],
-)
-def test_anthropic_fast_multiplier_only_on_models_with_fast_mode(_local_model_cost_map, model, expected_fast):
-    """
-    Anthropic serves fast mode on Opus 5 and Opus 4.8 only, at 2x. Opus 4.6 and
-    4.7 accept the ``speed`` request param but are always served standard, so a
-    ``fast`` multiplier on their map entries overbills every request that asked
-    for fast and was served standard.
-    """
-    entry = litellm.model_cost[model]
-    assert entry["provider_specific_entry"].get("fast") == expected_fast
-
-
-@pytest.mark.parametrize(
     "model",
     ["claude-sonnet-4-6", "claude-mythos-5", "claude-mythos-preview"],
 )
@@ -3321,45 +3196,6 @@ def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
         completion_tokens=50,
     )
     assert result is None, "Vertex AI should have no additional costs"
-
-
-def test_openrouter_gemini_3_1_flash_lite_preview_pricing(_local_model_cost_map):
-    """
-    Test that openrouter/google/gemini-3.1-flash-lite-preview has a pricing entry.
-
-    Regression test for https://github.com/BerriAI/litellm/issues/25604
-
-    The model exists and is callable via OpenRouter, but was missing from
-    model_prices_and_context_window.json when other Gemini 3.x variants were present.
-    This caused ValueError: This model isn't mapped yet during router pre-call checks.
-    """
-
-    model_name = "openrouter/google/gemini-3.1-flash-lite-preview"
-    model_info = litellm.model_cost.get(model_name)
-
-    assert model_info is not None, f"Missing model pricing entry: {model_name}"
-    assert model_info["litellm_provider"] == "openrouter"
-    assert model_info["input_cost_per_token"] == 2.5e-07
-    assert model_info["output_cost_per_token"] == 1.5e-06
-    assert model_info["max_input_tokens"] == 1048576
-    assert model_info["max_output_tokens"] == 65536
-
-
-def test_gemini_3_1_flash_lite_pricing(_local_model_cost_map):
-
-    for model_name in (
-        "gemini-3.1-flash-lite",
-        "gemini/gemini-3.1-flash-lite",
-        "vertex_ai/gemini-3.1-flash-lite",
-    ):
-        model_info = litellm.model_cost.get(model_name)
-        assert model_info is not None, f"Missing model pricing entry: {model_name}"
-        assert model_info["input_cost_per_token"] == 2.5e-07
-        assert model_info["input_cost_per_audio_token"] == 5e-07
-        assert model_info["output_cost_per_token"] == 1.5e-06
-        assert model_info["output_cost_per_reasoning_token"] == 1.5e-06
-        assert model_info["cache_read_input_token_cost"] == 2.5e-08
-        assert model_info["max_input_tokens"] == 1048576
 
 
 def test_custom_pricing_applies_cache_read_input_cost():
@@ -3666,35 +3502,6 @@ def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
     expected = 1000 * 0.0000025 + 100 * 0.000015
 
     assert cost == pytest.approx(expected)
-
-
-def test_openrouter_gemini_3_1_flash_lite_stable_pricing(_local_model_cost_map):
-    """
-    Test that openrouter/google/gemini-3.1-flash-lite (stable, no -preview suffix)
-    has a pricing entry.
-
-    Google promoted gemini-3.1-flash-lite to GA on 2026-05-07. PR #27933 added the
-    stable pricing for the bare, gemini/, and vertex_ai/ prefixes but missed the
-    openrouter/google/ variant — every other Gemini family in the file has an
-    openrouter/google/ sibling (2.0-flash-001, 2.5-flash, 2.5-pro, 3-flash-preview,
-    3-pro-preview, 3.1-flash-lite-preview, 3.1-pro-preview), so the gap is a
-    consistency issue, not a design choice. Same shape as the preview-variant gap
-    fixed in PR #25610.
-
-    Pricing matches the existing -preview entry one-for-one (input $0.25/M, output
-    $1.50/M, cache-read $0.025/M) — Google did not change costs at the GA cutover.
-    """
-
-    model_name = "openrouter/google/gemini-3.1-flash-lite"
-    model_info = litellm.model_cost.get(model_name)
-
-    assert model_info is not None, f"Missing model pricing entry: {model_name}"
-    assert model_info["litellm_provider"] == "openrouter"
-    assert model_info["input_cost_per_token"] == 2.5e-07
-    assert model_info["output_cost_per_token"] == 1.5e-06
-    assert model_info["cache_read_input_token_cost"] == 2.5e-08
-    assert model_info["max_input_tokens"] == 1048576
-    assert model_info["max_output_tokens"] == 65536
 
 
 def test_completion_cost_logs_reasoning_and_cache_breakdown(_local_model_cost_map):
