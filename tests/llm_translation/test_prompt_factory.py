@@ -2490,3 +2490,109 @@ def test_has_tool_with_name_anthropic_shape_without_type_field():
 def test_has_tool_with_name_not_a_list():
     assert not has_tool_with_name(None, "my_tool")
     assert not has_tool_with_name("not a list", "my_tool")
+
+
+def test_gemini_no_duplicate_reasoning_parts_when_both_fields_present():
+    """
+    Regression (#37973): when an assistant message has both reasoning_content and
+    thinking_blocks, only one reasoning part must be emitted. Signed thinking_blocks
+    take priority; reasoning_content is a fallback used only when thinking_blocks is absent.
+    """
+    reasoning_text = "Two plus two is four."
+    signature = "test-signature-abc123"
+
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "reasoning_content": reasoning_text,
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": reasoning_text,
+                    "signature": signature,
+                }
+            ],
+        },
+        {"role": "user", "content": "Multiply by 3."},
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    assistant_turn = contents[1]
+    assert assistant_turn["role"] == "model"
+
+    parts = assistant_turn["parts"]
+
+    # Only the signed block should appear — no extra plain thought part
+    signed_parts = [p for p in parts if p.get("thoughtSignature") is not None]
+    plain_thought_parts = [p for p in parts if p.get("thought") is True]
+
+    assert len(signed_parts) == 1, (
+        f"Expected 1 signed reasoning part, got {len(signed_parts)}: {signed_parts}"
+    )
+    assert len(plain_thought_parts) == 0, (
+        f"reasoning_content must not be emitted when thinking_blocks is present; "
+        f"got {len(plain_thought_parts)} extra plain thought part(s)"
+    )
+    assert signed_parts[0]["thoughtSignature"] == signature
+
+
+def test_gemini_reasoning_content_fallback_when_no_thinking_blocks():
+    """
+    When an assistant message has reasoning_content but no thinking_blocks,
+    a plain thought part should still be emitted (the fallback path still works).
+    """
+    reasoning_text = "I reasoned about this carefully."
+
+    messages = [
+        {"role": "user", "content": "Hello."},
+        {
+            "role": "assistant",
+            "content": "Hi there.",
+            "reasoning_content": reasoning_text,
+        },
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    assistant_turn = contents[1]
+    assert assistant_turn["role"] == "model"
+
+    parts = assistant_turn["parts"]
+
+    plain_thought_parts = [p for p in parts if p.get("thought") is True]
+    assert len(plain_thought_parts) == 1, (
+        f"Expected 1 plain thought part from reasoning_content fallback, got {len(plain_thought_parts)}"
+    )
+    assert plain_thought_parts[0]["text"] == reasoning_text
+
+
+def test_gemini_reasoning_content_fallback_when_thinking_blocks_empty():
+    """
+    Greptile review: when thinking_blocks is non-null but empty (or has no
+    usable signed blocks), reasoning_content must still be emitted as fallback.
+    """
+    reasoning_text = "I reasoned carefully."
+
+    messages = [
+        {"role": "user", "content": "Hello."},
+        {
+            "role": "assistant",
+            "content": "Hi.",
+            "reasoning_content": reasoning_text,
+            "thinking_blocks": [],  # non-null but empty — no usable blocks
+        },
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    assistant_turn = contents[1]
+    parts = assistant_turn["parts"]
+
+    plain_thought_parts = [p for p in parts if p.get("thought") is True]
+    assert len(plain_thought_parts) == 1, (
+        f"reasoning_content fallback must fire when thinking_blocks is empty; "
+        f"got {len(plain_thought_parts)} plain thought part(s)"
+    )
+    assert plain_thought_parts[0]["text"] == reasoning_text
