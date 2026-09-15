@@ -19,6 +19,8 @@ path = "src/bin/trace_parity_gateway.rs"
 required-features = ["trace-parity"]
 
 [dependencies]
+thiserror.workspace = true
+litellm-auth.workspace = true
 tracing.workspace = true
 litellm-core.workspace = true
 litellm-config.workspace = true

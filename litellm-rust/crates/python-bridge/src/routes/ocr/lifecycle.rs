@@ -179,7 +179,11 @@ impl PythonRoute for PythonOcrHost {
         OcrHostResult::Lifecycle(Ok(()))
     }
 
-    fn map_error(error: litellm_core::Error) -> PyErr {
+    fn host_error(message: String) -> litellm_core::ocr::Error {
+        litellm_core::ocr::Error::InvalidRequest(message)
+    }
+
+    fn map_error(error: litellm_core::ocr::Error) -> PyErr {
         ocr_error_to_pyerr(error)
     }
 

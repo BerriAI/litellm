@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::chat_completions::Error;
 use serde_json::Value;
 
 use super::types::{

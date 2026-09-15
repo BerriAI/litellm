@@ -11,16 +11,15 @@ use tokio::time::Instant;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
 
-use crate::Error;
 use crate::constants::{
     AZURE_DI_API_VERSION, AZURE_DI_DEFAULT_DPI, AZURE_DI_DEFAULT_HEIGHT, AZURE_DI_DEFAULT_WIDTH,
     AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS,
 };
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::client::read_json_response;
 use crate::ocr::document::InlineDocument;
-use crate::ocr::error::{OcrError, OcrPollingError, OcrRequestError, OcrResponseError};
 use crate::ocr::hooks::OcrHooks;
 use crate::ocr::prepare::{ParsedProviderParams, credential_env, transform_request_body};
 use crate::ocr::types::{
@@ -173,19 +172,19 @@ fn optional_f64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f64
 fn decode_input_params(
     params: Map<String, Value>,
     prefix: &str,
-) -> Result<ParsedProviderParams<DocumentIntelligenceInputParams>, OcrRequestError> {
+) -> Result<ParsedProviderParams<DocumentIntelligenceInputParams>, Error> {
     if let Some(Value::Array(pages)) = params.get("pages") {
         if pages.iter().any(Value::is_boolean) {
-            return Err(OcrRequestError::Pages("boolean page index".into()));
+            return Err(Error::Pages("boolean page index".into()));
         }
         if pages
             .iter()
             .any(|page| page.is_number() && page.as_i64().is_none())
         {
-            return Err(OcrRequestError::Pages("page index is out of range".into()));
+            return Err(Error::Pages("page index is out of range".into()));
         }
         if !pages.iter().all(Value::is_i64) && !pages.iter().all(Value::is_string) {
-            return Err(OcrRequestError::Pages("mixed page element types".into()));
+            return Err(Error::Pages("mixed page element types".into()));
         }
     }
     crate::ocr::wire::decode_request_value(Value::Object(params), prefix)
@@ -193,7 +192,7 @@ fn decode_input_params(
 
 fn normalize_ocr_params(
     params: DocumentIntelligenceInputParams,
-) -> Result<DocumentIntelligenceParams, OcrRequestError> {
+) -> Result<DocumentIntelligenceParams, Error> {
     Ok(DocumentIntelligenceParams {
         pages: params.pages.map(normalize_pages).transpose()?.flatten(),
         features: params
@@ -204,7 +203,7 @@ fn normalize_ocr_params(
     })
 }
 
-fn normalize_pages(pages: PagesInput) -> Result<Option<String>, OcrRequestError> {
+fn normalize_pages(pages: PagesInput) -> Result<Option<String>, Error> {
     let normalized = match pages {
         PagesInput::ZeroBasedIndices(indices) => {
             if indices.is_empty() {
@@ -214,10 +213,10 @@ fn normalize_pages(pages: PagesInput) -> Result<Option<String>, OcrRequestError>
                 .into_iter()
                 .map(|page| {
                     if page < 0 {
-                        return Err(OcrRequestError::Pages("negative page index".into()));
+                        return Err(Error::Pages("negative page index".into()));
                     }
                     page.checked_add(1)
-                        .ok_or_else(|| OcrRequestError::Pages("page index is out of range".into()))
+                        .ok_or_else(|| Error::Pages("page index is out of range".into()))
                 })
                 .collect::<Result<BTreeSet<_>, _>>()?
                 .into_iter()
@@ -242,7 +241,7 @@ fn normalize_pages(pages: PagesInput) -> Result<Option<String>, OcrRequestError>
             .join(","),
     };
     if !normalized.split(',').all(valid_page_token) {
-        return Err(OcrRequestError::Pages("invalid native page range".into()));
+        return Err(Error::Pages("invalid native page range".into()));
     }
     Ok(Some(normalized))
 }
@@ -263,7 +262,7 @@ fn valid_page_token(token: &str) -> bool {
     }
 }
 
-fn normalize_features(features: FeaturesInput) -> Result<Option<String>, OcrRequestError> {
+fn normalize_features(features: FeaturesInput) -> Result<Option<String>, Error> {
     let tokens = match features {
         FeaturesInput::Names(names) => names,
         FeaturesInput::CommaSeparated(names) => names.split(',').map(str::to_string).collect(),
@@ -278,18 +277,16 @@ fn normalize_features(features: FeaturesInput) -> Result<Option<String>, OcrRequ
         };
         first.is_ascii_alphabetic() && rest.iter().all(u8::is_ascii_alphanumeric)
     }) {
-        return Err(OcrRequestError::Features);
+        return Err(Error::Features);
     }
     Ok(Some(normalized.join(",")))
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-fn transform_ocr_request(
-    document: OcrDocument,
-) -> Result<DocumentIntelligenceRequest, OcrRequestError> {
+fn transform_ocr_request(document: OcrDocument) -> Result<DocumentIntelligenceRequest, Error> {
     let source = document.source();
     if source.is_empty() {
-        return Err(OcrRequestError::MissingDocumentUrl);
+        return Err(Error::MissingDocumentUrl);
     }
     Ok(if let Some(document) = InlineDocument::parse(source)? {
         DocumentIntelligenceRequest::Base64Source {
@@ -306,9 +303,9 @@ fn transform_ocr_request(
 fn transform_ocr_response(
     model: &str,
     response: AzureDocumentIntelligenceOperation,
-) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+) -> Result<LiteLLMOcrResponse, Error> {
     if response.status != Some(OperationStatus::Succeeded) {
-        return Err(OcrResponseError::OperationStatus(
+        return Err(Error::OperationStatus(
             response
                 .status
                 .map(|status| status.to_string())
@@ -337,12 +334,12 @@ fn transform_ocr_response(
     })
 }
 
-fn normalize_page(page: AzureDocumentIntelligencePage) -> Result<Value, OcrResponseError> {
+fn normalize_page(page: AzureDocumentIntelligencePage) -> Result<Value, Error> {
     let index = page
         .page_number
         .unwrap_or(1)
         .checked_sub(1)
-        .ok_or(OcrResponseError::NumericRange("page.pageNumber"))?;
+        .ok_or(Error::NumericRange("page.pageNumber"))?;
     let scale = if page.unit.as_deref().unwrap_or("inch") == "inch" {
         AZURE_DI_DEFAULT_DPI as f64
     } else {
@@ -372,10 +369,10 @@ fn normalize_page(page: AzureDocumentIntelligencePage) -> Result<Value, OcrRespo
     }))
 }
 
-fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, OcrResponseError> {
+fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, Error> {
     let value = value * scale;
     if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
-        return Err(OcrResponseError::NumericRange(field));
+        return Err(Error::NumericRange(field));
     }
     Ok(value.trunc() as i64)
 }
@@ -393,27 +390,27 @@ async fn read_operation_response(
     connection: &OcrConnection,
     native: bool,
     hooks: &Arc<dyn OcrHooks>,
-) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, OcrError> {
+) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
         let bytes =
             crate::ocr::client::read_response_bytes(response, connection.max_response_bytes)
                 .await?;
         crate::ocr::handler::post_call(hooks, &bytes).await?;
-        return Ok(crate::ocr::wire::decode_response(&bytes, native)?);
+        return crate::ocr::wire::decode_response(&bytes, native);
     }
     let location = response
         .headers()
         .get("operation-location")
         .and_then(|value| value.to_str().ok())
-        .ok_or(OcrPollingError::PollLocation)?
+        .ok_or(Error::PollLocation)?
         .to_string();
-    let original = Url::parse(original_url).map_err(|_| OcrPollingError::PollOrigin)?;
-    let operation = Url::parse(&location).map_err(|_| OcrPollingError::PollOrigin)?;
+    let original = Url::parse(original_url).map_err(|_| Error::PollOrigin)?;
+    let operation = Url::parse(&location).map_err(|_| Error::PollOrigin)?;
     if original.origin() != operation.origin()
         || !operation.username().is_empty()
         || operation.password().is_some()
     {
-        return Err(OcrPollingError::PollOrigin.into());
+        return Err(Error::PollOrigin);
     }
     let bytes =
         crate::ocr::client::read_response_bytes(response, connection.max_response_bytes).await?;
@@ -427,16 +424,16 @@ async fn poll_operation(
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
-) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, OcrError> {
+) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     let deadline = Instant::now()
         .checked_add(connection.poll_timeout)
-        .ok_or(OcrPollingError::PollTimeout)?;
+        .ok_or(Error::PollTimeout)?;
 
     loop {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
-            .ok_or(OcrPollingError::PollTimeout)?;
+            .ok_or(Error::PollTimeout)?;
         let builder = http_client
             .get(url.clone())
             .timeout(remaining.min(connection.timeout));
@@ -447,8 +444,8 @@ async fn poll_operation(
         );
         let response = tokio::time::timeout_at(deadline, crate::http_utils::http_request(builder))
             .await
-            .map_err(|_| OcrPollingError::PollTimeout)?
-            .map_err(crate::error::TransportError::from)?;
+            .map_err(|_| Error::PollTimeout)?
+            .map_err(crate::transport::Error::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
@@ -465,22 +462,21 @@ async fn poll_operation(
             ),
         )
         .await
-        .map_err(|_| OcrPollingError::PollTimeout)??;
+        .map_err(|_| Error::PollTimeout)??;
         match &decoded.data.status {
             Some(OperationStatus::Succeeded) => return Ok(decoded),
             Some(OperationStatus::Running | OperationStatus::NotStarted) => {
                 tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_secs(retry)))
                     .await
-                    .map_err(|_| OcrPollingError::PollTimeout)?;
+                    .map_err(|_| Error::PollTimeout)?;
             }
             status => {
-                return Err(OcrResponseError::OperationStatus(
+                return Err(Error::OperationStatus(
                     status
                         .as_ref()
                         .map(ToString::to_string)
                         .unwrap_or_else(|| "None".into()),
-                )
-                .into());
+                ));
             }
         }
     }
@@ -503,7 +499,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, OcrError> {
+    ) -> Result<reqwest::Request, Error> {
         let params = map_ocr_params(request)?;
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
@@ -516,7 +512,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
         let headers = validate_environment(&request.connection, &config, &credential_env).await?;
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
-            .ok_or_else(|| Error::Auth("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into()))?;
+            .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
         let url = get_complete_url(&endpoint, &request.model, &params)?;
         let body = transform_ocr_request(request.document.clone())?;
         transform_request_body(client, request, &url, &headers, false, body, |_| Ok(())).await
@@ -526,7 +522,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: AzureDocumentIntelligenceOperation,
-    ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_ocr_response(&request.model, response)
     }
 
@@ -537,7 +533,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
         url: &str,
         headers: &[(String, String)],
         request: &LiteLLMOcrRequest,
-    ) -> Result<crate::ocr::wire::DecodedOcrResponse<AzureDocumentIntelligenceOperation>, OcrError>
+    ) -> Result<crate::ocr::wire::DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error>
     {
         read_operation_response(
             client.polling_http(),
@@ -553,9 +549,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-fn map_ocr_params(
-    request: &LiteLLMOcrRequest,
-) -> Result<DocumentIntelligenceParams, OcrRequestError> {
+fn map_ocr_params(request: &LiteLLMOcrRequest) -> Result<DocumentIntelligenceParams, Error> {
     let params = decode_input_params(request.optional_params.clone().into(), "optional_params")?;
     let crate::ocr::prepare::ParsedProviderParams {
         known: params,
@@ -568,7 +562,7 @@ fn get_complete_url(
     endpoint: &str,
     model: &str,
     params: &DocumentIntelligenceParams,
-) -> Result<String, OcrError> {
+) -> Result<String, Error> {
     let model = format!("{}:analyze", model_id(model)?);
     ApiUrl::parse(endpoint)
         .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
@@ -586,17 +580,16 @@ fn get_complete_url(
             )
             .into_string()
         })
-        .map_err(|_| OcrRequestError::RequestField {
+        .map_err(|_| Error::RequestField {
             path: "api_base".into(),
         })
-        .map_err(OcrError::from)
 }
 
 async fn validate_environment(
     connection: &OcrConnection,
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, OcrError> {
+) -> Result<Vec<(String, String)>, Error> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization")
         || crate::http_utils::has_header(&connection.extra_headers, AZURE_DI_SUBSCRIPTION_HEADER)
     {
@@ -631,10 +624,10 @@ async fn validate_environment(
     )
 }
 
-fn model_id(model: &str) -> Result<&str, OcrRequestError> {
+fn model_id(model: &str) -> Result<&str, Error> {
     let model = model.rsplit('/').next().unwrap_or(model);
     if matches!(model, "." | "..") {
-        return Err(OcrRequestError::DotModel);
+        return Err(Error::DotModel);
     }
     Ok(model)
 }
@@ -651,7 +644,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
-    fn map(value: Value) -> Result<DocumentIntelligenceParams, OcrRequestError> {
+    fn map(value: Value) -> Result<DocumentIntelligenceParams, Error> {
         let fields = value.as_object().unwrap().clone();
         normalize_ocr_params(decode_input_params(fields, "optional_params")?.known)
     }

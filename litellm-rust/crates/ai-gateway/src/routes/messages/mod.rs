@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use litellm_core::Error;
+use litellm_core::messages::Error;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
@@ -105,30 +105,20 @@ impl IntoResponse for MessagesRouteError {
                 StatusCode::NOT_FOUND,
                 "no messages deployment is configured for this model".to_string(),
             ),
-            Error::Auth(_)
-            | Error::MissingApiKey { .. }
-            | Error::MissingAzureAiCredentials
-            | Error::MissingAzureDocumentIntelligenceCredentials
-            | Error::MissingReductoApiKey => (
+            Error::Auth(_) => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider authentication failed".to_string(),
             ),
-            Error::Http { .. }
-            | Error::Network(_)
-            | Error::Connect(_)
-            | Error::InvalidResponse(_)
-            | Error::InvalidType { .. }
-            | Error::MissingField(_)
-            | Error::MissingDocumentUrl => (
+            Error::Transport(_) | Error::InvalidResponse(_) => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider request failed".to_string(),
             ),
-            // The gateway has no Python implementation to decline to, so a
-            // request the core cannot serve is reported to the caller. The
-            // reason is a fixed internal string, never provider content.
-            Error::Unsupported(reason) => (
+            error @ (Error::Params(_) | Error::Headers(_)) => (
                 StatusCode::BAD_REQUEST,
-                format!("messages request is not supported: {reason}"),
+                error
+                    .to_string()
+                    .trim_start_matches("invalid request: ")
+                    .to_string(),
             ),
         };
         (

@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use litellm_core::AuthError;
-use litellm_core::error::Error;
+use litellm_auth::Error as AuthError;
+use litellm_core::realtime::Error;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
 use tokio::net::TcpStream;
@@ -78,21 +78,21 @@ pub(crate) async fn dial_upstream(
 ) -> Result<UpstreamWs, Error> {
     let url = OPENAI_REALTIME_CONFIG.complete_url(api_base, model);
 
-    let mut request = url
-        .as_str()
-        .into_client_request()
-        .map_err(|err| Error::Network(err.to_string()))?;
+    let mut request = url.as_str().into_client_request().map_err(|err| {
+        Error::Transport(litellm_core::transport::Error::Network(err.to_string()))
+    })?;
     // GA realtime: only Authorization. The legacy OpenAI-Beta header triggers
     // beta_api_shape_disabled, so we do not send it.
     request.headers_mut().insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|err| Error::Auth(err.to_string()))?,
+        HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
+            Error::Auth(litellm_auth::Error::ProviderAuthentication(err.to_string()))
+        })?,
     );
 
-    let (upstream, _response) = connect_upstream(request)
-        .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+    let (upstream, _response) = connect_upstream(request).await.map_err(|err| {
+        Error::Transport(litellm_core::transport::Error::Network(err.to_string()))
+    })?;
     Ok(upstream)
 }
 
@@ -106,8 +106,14 @@ pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> Result<RealtimeE
         let message = upstream_rx
             .next()
             .await
-            .ok_or_else(|| Error::Network("upstream closed before first event".to_string()))?
-            .map_err(|err| Error::Network(err.to_string()))?;
+            .ok_or_else(|| {
+                Error::Transport(litellm_core::transport::Error::Network(
+                    "upstream closed before first event".to_string(),
+                ))
+            })?
+            .map_err(|err| {
+                Error::Transport(litellm_core::transport::Error::Network(err.to_string()))
+            })?;
         match message {
             Message::Text(text) => {
                 return serde_json::from_str(&text)
@@ -116,9 +122,9 @@ pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> Result<RealtimeE
             // Ignore protocol frames (ping/pong) while waiting for the first event.
             Message::Ping(_) | Message::Pong(_) => continue,
             Message::Close(_) => {
-                return Err(Error::Network(
+                return Err(Error::Transport(litellm_core::transport::Error::Network(
                     "upstream closed before first event".to_string(),
-                ));
+                )));
             }
             _ => continue,
         }
@@ -156,10 +162,9 @@ where
     // warm session looks identical to a fresh one from the client's view.
     if let Some(event) = prelude {
         for outbound in config.transform_realtime_response(&event, model)?.events {
-            client_out
-                .send(outbound)
-                .await
-                .map_err(|err| Error::Network(err.to_string()))?;
+            client_out.send(outbound).await.map_err(|err| {
+                Error::Transport(litellm_core::transport::Error::Network(err.to_string()))
+            })?;
         }
     }
 
@@ -184,13 +189,13 @@ where
                     upstream_tx
                         .send(Message::Text(payload))
                         .await
-                        .map_err(|err| Error::Network(err.to_string()))?;
+                        .map_err(|err| Error::Transport(litellm_core::transport::Error::Network(err.to_string())))?;
                 }
             }
             // upstream -> client
             upstream_message = upstream_rx.next() => {
                 let Some(message) = upstream_message else { break }; // upstream closed
-                match message.map_err(|err| Error::Network(err.to_string()))? {
+                match message.map_err(|err| Error::Transport(litellm_core::transport::Error::Network(err.to_string())))? {
                     Message::Text(text) => {
                         let event: RealtimeEvent = serde_json::from_str(&text)
                             .map_err(|err| Error::InvalidResponse(err.to_string()))?;
@@ -199,7 +204,7 @@ where
                             client_out
                                 .send(outbound)
                                 .await
-                                .map_err(|err| Error::Network(err.to_string()))?;
+                                .map_err(|err| Error::Transport(litellm_core::transport::Error::Network(err.to_string())))?;
                         }
                     }
                     Message::Close(_) => break,
@@ -314,7 +319,10 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(Error::Network(_))));
+        assert!(matches!(
+            result,
+            Err(Error::Transport(litellm_core::transport::Error::Network(_)))
+        ));
     }
 
     #[test]

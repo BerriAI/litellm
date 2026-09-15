@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use litellm_core::Error;
+use litellm_core::realtime::Error;
 use litellm_core::realtime::types::RealtimeEvent;
 
 use crate::io::realtime::{

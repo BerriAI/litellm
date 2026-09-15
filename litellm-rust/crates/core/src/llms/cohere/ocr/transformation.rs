@@ -1,12 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::Error;
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
-use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
 use crate::url_utils::ApiUrl;
@@ -32,16 +31,16 @@ pub(crate) struct CohereRequest {
     pub output_format: OutputFormat,
 }
 
-pub(crate) fn validate_document(document: &OcrDocument) -> Result<(), OcrRequestError> {
+pub(crate) fn validate_document(document: &OcrDocument) -> Result<(), Error> {
     let OcrDocument::ImageUrl { image_url, .. } = document else {
-        return Err(OcrRequestError::CohereImageOnly);
+        return Err(Error::CohereImageOnly);
     };
     if image_url.is_empty() {
-        return Err(OcrRequestError::CohereImageOnly);
+        return Err(Error::CohereImageOnly);
     }
     if let Some(inline) = InlineDocument::parse(image_url)? {
         if !inline.mime_type().type_.eq_ignore_ascii_case("image") {
-            return Err(OcrRequestError::CohereImageOnly);
+            return Err(Error::CohereImageOnly);
         }
         inline.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
     }
@@ -82,14 +81,14 @@ struct CohereBilledUnits {
 pub(crate) fn transform_response(
     model: &str,
     response: CohereResponse,
-) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+) -> Result<LiteLLMOcrResponse, Error> {
     let pages_processed = response
         .meta
         .and_then(|meta| meta.billed_units)
         .and_then(|units| units.pages)
         .map(Ok)
         .unwrap_or_else(|| {
-            i64::try_from(response.pages.len()).map_err(|_| OcrResponseError::NumericRange("pages"))
+            i64::try_from(response.pages.len()).map_err(|_| Error::NumericRange("pages"))
         })?;
     let pages = response
         .pages
@@ -97,7 +96,7 @@ pub(crate) fn transform_response(
         .enumerate()
         .map(|(position, page)| {
             let index = page.index.map(Ok).unwrap_or_else(|| {
-                i64::try_from(position).map_err(|_| OcrResponseError::NumericRange("page index"))
+                i64::try_from(position).map_err(|_| Error::NumericRange("page index"))
             })?;
             let (content, images) = page
                 .markdown
@@ -128,7 +127,7 @@ pub(crate) fn transform_response(
             }
             Ok(normalized)
         })
-        .collect::<Result<Vec<_>, OcrResponseError>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
     Ok(LiteLLMOcrResponse {
         pages,
         model: model.into(),
@@ -149,7 +148,7 @@ impl CohereParseConfig {
         model: &str,
         document: OcrDocument,
         params: CohereParams,
-    ) -> Result<CohereRequest, OcrRequestError> {
+    ) -> Result<CohereRequest, Error> {
         validate_document(&document)?;
         Ok(CohereRequest {
             model: model.into(),
@@ -170,7 +169,7 @@ impl BaseOcrConfig for CohereParseConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, OcrError> {
+    ) -> Result<reqwest::Request, Error> {
         let params = crate::ocr::wire::decode_request_value::<CohereParams>(
             serde_json::Value::Object(request.optional_params.clone().into()),
             "optional_params",
@@ -194,24 +193,24 @@ impl BaseOcrConfig for CohereParseConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: CohereResponse,
-    ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_response(&request.model, response)
     }
 }
 
-fn complete_url(base: &str) -> Result<String, OcrError> {
+fn complete_url(base: &str) -> Result<String, Error> {
     let parsed = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(invalid_api_base().into());
+        return Err(invalid_api_base());
     }
     ApiUrl::parse(base)
         .and_then(|url| url.complete_path(&["v2", "parse"]))
         .map(|url| url.into_string())
-        .map_err(|_| invalid_api_base().into())
+        .map_err(|_| invalid_api_base())
 }
 
-fn invalid_api_base() -> OcrRequestError {
-    OcrRequestError::RequestField {
+fn invalid_api_base() -> Error {
+    Error::RequestField {
         path: "api_base".into(),
     }
 }
@@ -219,7 +218,7 @@ fn invalid_api_base() -> OcrRequestError {
 fn validate_environment(
     connection: &OcrConnection,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, OcrError> {
+) -> Result<Vec<(String, String)>, Error> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
         return Ok(connection.extra_headers.clone());
     }
@@ -231,7 +230,9 @@ fn validate_environment(
         .map(str::to_string)
         .or_else(|| env_lookup(COHERE_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
         .ok_or_else(|| {
-            Error::Auth("Missing COHERE_API_KEY - set it in the environment or pass api_key".into())
+            Error::Auth(litellm_auth::Error::ProviderAuthentication(
+                "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
+            ))
         })?;
     Ok(
         std::iter::once(("Authorization".into(), format!("Bearer {key}")))
@@ -320,7 +321,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_document(&serde_json::from_value(value).unwrap()),
-                Err(OcrRequestError::CohereImageOnly)
+                Err(Error::CohereImageOnly)
             );
         }
         assert!(serde_json::from_value::<CohereParams>(json!({"output_format":"html"})).is_err());
@@ -368,7 +369,7 @@ mod tests {
                 },
                 &|_| None,
             ),
-            Err(OcrError::Public(Error::Auth(_)))
+            Err(Error::Auth(_))
         ));
     }
 }

@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::audio_transcription::Error;
 use serde_json::Value;
 
 use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData};

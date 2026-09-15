@@ -1,4 +1,4 @@
-use litellm_core::Error;
+use litellm_core::audio_transcription::Error;
 use litellm_core::audio_transcription::execute_audio_transcription_provider_call;
 use litellm_core::call_lifecycle::CallLifecycle;
 use serde_json::Value;

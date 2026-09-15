@@ -1,5 +1,5 @@
-use crate::Error;
 use crate::http_utils::string_headers as shared_string_headers;
+use crate::messages::Error;
 use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
 use serde_json::{Map, Value};
@@ -24,5 +24,5 @@ pub(super) fn messages_provider_config(
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
 ) -> Result<Vec<(String, String)>, Error> {
-    shared_string_headers(HEADER_CONTEXT, extra_headers)
+    shared_string_headers(HEADER_CONTEXT, extra_headers).map_err(Error::from)
 }

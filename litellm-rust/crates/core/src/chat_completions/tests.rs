@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::error::Error;
+use crate::chat_completions::Error;
 
 use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
@@ -264,9 +264,11 @@ fn rejects_non_string_extra_headers() {
     call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
     assert_eq!(
         decline(call),
-        Error::InvalidRequest(
-            "chat completions extra_headers.x-trace must be a string, got number".to_string()
-        )
+        Error::Headers(crate::http_utils::HeaderError {
+            context: "chat completions",
+            name: "x-trace".to_string(),
+            actual: "number",
+        })
     );
 }
 
@@ -728,7 +730,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_)),
+            matches!(err, Error::InvalidResponse(_) | Error::ResponseTransform(_)),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -746,7 +748,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_)),
+            matches!(err, Error::InvalidResponse(_) | Error::ResponseTransform(_)),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -764,7 +766,10 @@ mod round_trip {
         .expect_err("upstream rejects");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::Http { status: 429, .. }),
+            matches!(
+                err,
+                Error::Transport(crate::transport::Error::Http { status: 429, .. })
+            ),
             "expected a 429, got {err:?}"
         );
     }
@@ -788,7 +793,7 @@ mod round_trip {
         .await
         .expect_err("nothing is listening");
         assert!(
-            matches!(err, Error::Connect(_)),
+            matches!(err, Error::Transport(crate::transport::Error::Connect(_))),
             "expected a pre-send connect failure, got {err:?}"
         );
     }
@@ -801,21 +806,23 @@ mod round_trip {
             Error::MissingField("usage"),
             Error::Unsupported("non-text response content block"),
             Error::InvalidRequest("whatever".to_string()),
-            Error::Auth("whatever".to_string()),
+            Error::Auth(litellm_auth::Error::ProviderAuthentication(
+                "whatever".to_string(),
+            )),
         ] {
             let label = format!("{original:?}");
             assert!(
-                matches!(as_response_error(original), Error::InvalidResponse(_)),
+                matches!(as_response_error(original.clone()), Error::ResponseTransform(source) if *source == original),
                 "{label} must not stay retryable once the provider has answered"
             );
         }
         // An upstream status is already unambiguous, so it survives intact.
         assert!(matches!(
-            as_response_error(Error::Http {
+            as_response_error(Error::Transport(crate::transport::Error::Http {
                 status: 500,
                 body: "boom".to_string()
-            }),
-            Error::Http { status: 500, .. }
+            })),
+            Error::Transport(crate::transport::Error::Http { status: 500, .. })
         ));
     }
 }

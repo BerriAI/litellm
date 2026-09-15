@@ -1,10 +1,9 @@
-use crate::Error;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::llms::cohere::ocr::transformation::CohereParseConfig;
 use crate::llms::cohere::ocr::{CohereParams, CohereResponse, validate_document};
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
@@ -26,7 +25,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, OcrError> {
+    ) -> Result<reqwest::Request, Error> {
         let params = crate::ocr::wire::decode_request_value::<CohereParams>(
             serde_json::Value::Object(request.optional_params.clone().into()),
             "optional_params",
@@ -46,9 +45,9 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
             .or_else(|| credential_env(AZURE_AI_API_BASE_ENV))
             .filter(|base| !base.trim().is_empty())
             .ok_or_else(|| {
-                Error::Auth(
+                Error::Auth(litellm_auth::Error::ProviderAuthentication(
                     "Missing Azure AI API Base - Set AZURE_AI_API_BASE or pass api_base".into(),
-                )
+                ))
             })?;
         let headers = super::transformation::validate_environment(
             &request.connection,
@@ -85,15 +84,15 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: CohereResponse,
-    ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         CohereParseConfig.transform_ocr_response(request, response)
     }
 }
 
-fn complete_url(base: &str) -> Result<String, OcrError> {
+fn complete_url(base: &str) -> Result<String, Error> {
     let mut url = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(invalid_api_base().into());
+        return Err(invalid_api_base());
     }
     let path = url.path().trim_end_matches('/').to_string();
     if path.ends_with("/v2/parse") {
@@ -104,11 +103,11 @@ fn complete_url(base: &str) -> Result<String, OcrError> {
     ApiUrl::parse(url.as_str())
         .and_then(|url| url.complete_path(&["providers", "cohere", "v2", "parse"]))
         .map(|url| url.into_string())
-        .map_err(|_| invalid_api_base().into())
+        .map_err(|_| invalid_api_base())
 }
 
-fn invalid_api_base() -> OcrRequestError {
-    OcrRequestError::RequestField {
+fn invalid_api_base() -> Error {
+    Error::RequestField {
         path: "api_base".into(),
     }
 }

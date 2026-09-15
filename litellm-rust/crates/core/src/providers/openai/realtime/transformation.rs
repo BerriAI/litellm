@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::realtime::Error;
 use crate::realtime::transformation::RealtimeProviderConfig;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 

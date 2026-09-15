@@ -10,12 +10,12 @@ use super::hooks::{
     OcrPreCallRequest,
 };
 use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
-use crate::AuthError;
-use crate::Error;
 use crate::call_lifecycle::host::{
     HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
 };
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
+use crate::ocr::Error;
+use litellm_auth::Error as AuthError;
 use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 
 pub type NativeResult<T> = Result<NativeOutcome<T>, Error>;
@@ -84,7 +84,7 @@ impl OcrHostOperation {
 
 pub enum OcrHostResult {
     Request(Result<(Box<LiteLLMOcrRequest>, bool), Error>),
-    Lifecycle(Result<(), HostFailure>),
+    Lifecycle(Result<(), HostFailure<Error>>),
     AzureAdToken(Result<ResolvedCredential, AuthError>),
     PreCall(Result<OcrPreCallRequest, Error>),
     DuringCall(Result<OcrDuringCallRequest, Error>),
@@ -256,7 +256,7 @@ impl OcrCall {
         Ok(self.host_step(operation))
     }
 
-    fn accept(&mut self, result: Result<(), HostFailure>) {
+    fn accept(&mut self, result: Result<(), HostFailure<Error>>) {
         let cancelled = matches!(&result, Err(HostFailure::Cancelled(_)));
         if let Some(error) = self.lifecycle.accept(result) {
             if cancelled {
@@ -268,7 +268,7 @@ impl OcrCall {
         }
     }
 
-    pub async fn interrupt(&mut self, failure: HostFailure) -> Result<OcrCallStep, Error> {
+    pub async fn interrupt(&mut self, failure: HostFailure<Error>) -> Result<OcrCallStep, Error> {
         if self.completed {
             return Err(Error::InvalidRequest(
                 "OCR call cannot be interrupted after completion".into(),
@@ -286,6 +286,7 @@ impl OcrCall {
 }
 
 impl HostCall for OcrCall {
+    type Error = Error;
     type Operation = OcrHostOperation;
     type Result = OcrHostResult;
     type Complete = LiteLLMOcrResponse;
@@ -293,14 +294,14 @@ impl HostCall for OcrCall {
     fn resume(
         &mut self,
         result: Option<Self::Result>,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
         Box::pin(OcrCall::resume(self, result))
     }
 
     fn interrupt(
         &mut self,
-        failure: HostFailure,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+        failure: HostFailure<Error>,
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
         Box::pin(OcrCall::interrupt(self, failure))
     }
 }
@@ -376,7 +377,7 @@ impl OcrExecution {
                 self.execution = None;
                 self.completed = true;
                 result
-                    .map_err(|error| Error::Network(format!("OCR execution task failed: {error}")))?
+                    .map_err(|error| Error::Transport(crate::transport::Error::Network(format!("OCR execution task failed: {error}"))))?
                     .map(OcrCallStep::Complete)
             }
         }

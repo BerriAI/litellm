@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
-use crate::auth::InputSource;
+use litellm_auth::InputSource;
 
 fn request_body(request: &str) -> Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()

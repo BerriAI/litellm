@@ -1,7 +1,14 @@
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("invalid request: {context} extra_headers.{name} must be a string, got {actual}")]
+pub struct HeaderError {
+    pub context: &'static str,
+    pub name: String,
+    pub actual: &'static str,
+}
+
 use serde_json::{Map, Value};
 
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
-use crate::error::{Error, json_type_name};
 
 #[allow(
     dead_code,
@@ -64,7 +71,7 @@ pub fn truncate_error_body(body: &str) -> String {
 pub fn string_headers(
     context: &'static str,
     extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, HeaderError> {
     extra_headers
         .unwrap_or_default()
         .into_iter()
@@ -72,11 +79,10 @@ pub fn string_headers(
             value
                 .as_str()
                 .map(|value| (key.clone(), value.to_string()))
-                .ok_or_else(|| {
-                    Error::InvalidRequest(format!(
-                        "{context} extra_headers.{key} must be a string, got {}",
-                        json_type_name(&value)
-                    ))
+                .ok_or_else(|| HeaderError {
+                    context,
+                    name: key,
+                    actual: json_type_name(&value),
                 })
         })
         .collect()
@@ -112,6 +118,17 @@ where
     T: serde::Deserialize<'de>,
 {
     <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+pub fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
 }
 
 #[cfg(test)]
@@ -193,9 +210,11 @@ mod tests {
         let err = string_headers("chat completions", Some(headers)).expect_err("non-string value");
         assert_eq!(
             err,
-            Error::InvalidRequest(
-                "chat completions extra_headers.x-trace must be a string, got number".to_string()
-            )
+            HeaderError {
+                context: "chat completions",
+                name: "x-trace".into(),
+                actual: "number"
+            }
         );
     }
 

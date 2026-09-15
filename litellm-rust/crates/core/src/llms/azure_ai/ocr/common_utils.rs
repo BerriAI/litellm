@@ -1,7 +1,6 @@
 use std::sync::OnceLock;
 
-use crate::Error;
-use crate::ocr::error::OcrError;
+use crate::ocr::Error;
 use crate::ocr::types::OcrConnection;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
@@ -16,7 +15,7 @@ pub(super) async fn resolve_entra(
         .get_azure_ad_token(config, env_lookup)
         .await
         .or_else(|error| match error {
-            crate::AuthError::EmptyAzureToken => Ok(None),
+            litellm_auth::Error::EmptyAzureToken => Ok(None),
             other => Err(other),
         })
         .map(|credential| {
@@ -32,12 +31,12 @@ pub(super) async fn resolve_entra(
 pub(super) fn validate_destination(
     connection: &OcrConnection,
     credential_source: InputSource,
-) -> Result<(), OcrError> {
+) -> Result<(), Error> {
     if connection.api_base.is_some()
         && connection.api_base_source == InputSource::Request
         && credential_source != InputSource::Request
     {
-        return Err(Error::from(crate::AuthError::RequestAzureCredentialDestination).into());
+        return Err(litellm_auth::Error::RequestAzureCredentialDestination.into());
     }
     Ok(())
 }

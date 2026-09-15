@@ -1,4 +1,4 @@
-use litellm_core::Error;
+use litellm_core::ocr::Error;
 use litellm_core::ocr::{
     OcrClient,
     wire::{OcrWireRequest, decode_request},

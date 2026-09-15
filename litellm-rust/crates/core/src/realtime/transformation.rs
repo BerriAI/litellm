@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::realtime::Error;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 
 pub trait RealtimeProviderConfig {

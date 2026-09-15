@@ -2,7 +2,7 @@ pub mod audio_transcription;
 pub mod call_lifecycle;
 pub mod chat_completions;
 pub mod constants;
-pub mod error;
+mod error;
 pub mod http_utils;
 pub(crate) mod llms;
 mod media;
@@ -19,4 +19,5 @@ pub mod routing_utils;
 mod url_utils;
 
 pub use error::Error;
-pub use litellm_auth::Error as AuthError;
+
+pub mod transport;

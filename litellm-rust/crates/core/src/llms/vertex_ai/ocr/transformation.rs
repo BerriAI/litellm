@@ -1,11 +1,10 @@
 use super::common_utils::validate_destination;
-use crate::Error;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
@@ -26,7 +25,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, OcrError> {
+    ) -> Result<reqwest::Request, Error> {
         validate_destination(&request.connection)?;
         let params = self.map_ocr_params(&request.model, &request.optional_params);
         let config = VertexConfig::from_sourced_optional_params(
@@ -77,7 +76,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: MistralOcrResponse,
-    ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         MistralOCRConfig.transform_ocr_response(request, response)
     }
 }
@@ -87,7 +86,7 @@ fn get_complete_url(
     project: &str,
     location: &str,
     model: &str,
-) -> Result<String, OcrError> {
+) -> Result<String, Error> {
     validate_location(location)?;
     let default_base = format!("https://{location}-aiplatform.googleapis.com");
     let base = api_base
@@ -110,15 +109,12 @@ fn get_complete_url(
             ])
         })
         .map(|url| url.into_string())
-        .map_err(|_| {
-            OcrRequestError::RequestField {
-                path: "api_base".into(),
-            }
-            .into()
+        .map_err(|_| Error::RequestField {
+            path: "api_base".into(),
         })
 }
 
-fn validate_location(location: &str) -> Result<(), OcrError> {
+fn validate_location(location: &str) -> Result<(), Error> {
     let valid = !location.is_empty()
         && location
             .bytes()
@@ -134,10 +130,9 @@ fn validate_location(location: &str) -> Result<(), OcrError> {
     if valid {
         return Ok(());
     }
-    Err(OcrRequestError::RequestField {
+    Err(Error::RequestField {
         path: "vertex_location".into(),
-    }
-    .into())
+    })
 }
 
 #[cfg(test)]

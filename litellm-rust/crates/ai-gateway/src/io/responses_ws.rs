@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use litellm_core::AuthError;
-use litellm_core::Error;
+use litellm_auth::Error as AuthError;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
+use litellm_core::responses::Error;
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
 use tokio_tungstenite::tungstenite::Message;
@@ -46,29 +46,37 @@ async fn dial_upstream(
     api_base: Option<&str>,
 ) -> Result<ResponsesUpstreamWs, Error> {
     let url = OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(api_base, model);
-    let mut request = url
-        .as_str()
-        .into_client_request()
-        .map_err(|error| Error::Network(error.to_string()))?;
+    let mut request = url.as_str().into_client_request().map_err(|error| {
+        Error::Transport(litellm_core::transport::Error::Network(error.to_string()))
+    })?;
     request.headers_mut().insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|error| Error::Auth(error.to_string()))?,
+        HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|error| {
+            Error::Auth(litellm_auth::Error::ProviderAuthentication(
+                error.to_string(),
+            ))
+        })?,
     );
     let result = tokio::time::timeout(
         Duration::from_secs(DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS),
         connect_upstream(request),
     )
     .await
-    .map_err(|_| Error::Network("Responses WebSocket connection timed out".to_string()))?;
+    .map_err(|_| {
+        Error::Transport(litellm_core::transport::Error::Network(
+            "Responses WebSocket connection timed out".to_string(),
+        ))
+    })?;
     result
         .map(|(socket, _)| socket)
         .map_err(|error| match *error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
-                status: response.status().as_u16(),
-                body: String::new(),
-            },
-            other => Error::Network(other.to_string()),
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                Error::Transport(litellm_core::transport::Error::Http {
+                    status: response.status().as_u16(),
+                    body: String::new(),
+                })
+            }
+            other => Error::Transport(litellm_core::transport::Error::Network(other.to_string())),
         })
 }
 
@@ -130,12 +138,12 @@ where
                         .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                     upstream_tx.send(Message::Text(payload))
                         .await
-                        .map_err(|error| Error::Network(error.to_string()))?;
+                        .map_err(|error| Error::Transport(litellm_core::transport::Error::Network(error.to_string())))?;
                 }
             }
             message = upstream_rx.next() => {
                 let Some(message) = message else { break };
-                match message.map_err(|error| Error::Network(error.to_string()))? {
+                match message.map_err(|error| Error::Transport(litellm_core::transport::Error::Network(error.to_string())))? {
                     Message::Text(text) => {
                         let event = serde_json::from_str::<ResponsesWsEvent>(&text)
                             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
@@ -146,7 +154,7 @@ where
                         {
                             client_out.send(outbound)
                                 .await
-                                .map_err(|error| Error::Network(error.to_string()))?;
+                                .map_err(|error| Error::Transport(litellm_core::transport::Error::Network(error.to_string())))?;
                         }
                     }
                     Message::Close(_) => break,
@@ -188,7 +196,9 @@ where
             upstream_tx
                 .send(Message::Text(payload))
                 .await
-                .map_err(|error| Error::Network(error.to_string()))?;
+                .map_err(|error| {
+                    Error::Transport(litellm_core::transport::Error::Network(error.to_string()))
+                })?;
         }
     }
     ResponsesWebSocketStreaming::bidirectional_forward(
@@ -263,7 +273,10 @@ mod tests {
         let result =
             dial_upstream("gpt-5", "sk-test", Some(&format!("wss://127.0.0.1:{port}"))).await;
 
-        assert!(matches!(result, Err(Error::Network(_))));
+        assert!(matches!(
+            result,
+            Err(Error::Transport(litellm_core::transport::Error::Network(_)))
+        ));
     }
 
     async fn websocket_base() -> (String, tokio::task::JoinHandle<()>) {
@@ -454,7 +467,10 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, Error::Http { status: 401, .. }));
+        assert!(matches!(
+            error,
+            Error::Transport(litellm_core::transport::Error::Http { status: 401, .. })
+        ));
         server.await.expect("server task");
     }
 
@@ -483,7 +499,10 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, Error::Http { status: 500, .. }));
+        assert!(matches!(
+            error,
+            Error::Transport(litellm_core::transport::Error::Http { status: 500, .. })
+        ));
         server.await.expect("server task");
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use litellm_core::Error;
 use litellm_core::constants::ANTHROPIC_MESSAGES_PROVIDER;
+use litellm_core::messages::Error;
 use litellm_core::messages::types::MessagesRequest;
 use litellm_core::messages::{messages, messages_stream};
 use litellm_core::router::Router;

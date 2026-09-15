@@ -1,3 +1,11 @@
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("invalid request: extra_body must be an object")]
+    ExtraBody,
+    #[error("invalid request: body must be a JSON object")]
+    Body,
+}
+
 use std::ops::{Deref, DerefMut};
 
 use serde::{Deserialize, Serialize};
@@ -85,15 +93,13 @@ impl OpaqueParams {
             .collect()
     }
 
-    pub fn into_provider_body(self) -> Result<Map<String, Value>, crate::Error> {
+    pub fn into_provider_body(self) -> Result<Map<String, Value>, Error> {
         let mut fields = self.0;
         let overrides = match fields.remove("extra_body") {
             None | Some(Value::Null) => Map::new(),
             Some(Value::Object(fields)) => fields,
             Some(_) => {
-                return Err(crate::Error::InvalidRequest(
-                    "extra_body must be an object".into(),
-                ));
+                return Err(Error::ExtraBody);
             }
         };
         Ok(fields
@@ -107,13 +113,9 @@ impl OpaqueParams {
 pub(crate) fn merge_extra_params<B: Serialize>(
     body: &B,
     extra_params: OpaqueParams,
-) -> Result<Value, crate::Error> {
-    let Value::Object(fields) = serde_json::to_value(body)
-        .map_err(|_| crate::Error::InvalidRequest("body must be a JSON object".into()))?
-    else {
-        return Err(crate::Error::InvalidRequest(
-            "body must be a JSON object".into(),
-        ));
+) -> Result<Value, Error> {
+    let Value::Object(fields) = serde_json::to_value(body).map_err(|_| Error::Body)? else {
+        return Err(Error::Body);
     };
     Ok(Value::Object(
         fields

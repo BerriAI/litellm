@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::error::Error;
+use crate::chat_completions::Error;
 use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
@@ -31,28 +31,21 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = http_request(request_builder).await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
-        if err.is_connect() || err.is_builder() {
-            Error::Connect(err.to_string())
-        } else {
-            Error::Network(err.to_string())
-        }
-    })?;
+    let response = http_request(request_builder)
+        .await
+        .map_err(crate::transport::Error::from_reqwest_before_dispatch)?;
 
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::Transport(crate::transport::Error::Network(err.to_string())))?;
 
     if !status.is_success() {
-        return Err(Error::Http {
+        return Err(Error::Transport(crate::transport::Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }));
     }
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
@@ -75,8 +68,10 @@ pub(super) async fn execute_chat_completions_provider_call(
 /// can only mean the provider was already called.
 pub(super) fn as_response_error(err: Error) -> Error {
     match err {
-        already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
-        other => Error::InvalidResponse(other.to_string()),
+        already @ (Error::InvalidResponse(_)
+        | Error::ResponseTransform(_)
+        | Error::Transport(crate::transport::Error::Http { .. })) => already,
+        other => Error::ResponseTransform(Box::new(other)),
     }
 }
 

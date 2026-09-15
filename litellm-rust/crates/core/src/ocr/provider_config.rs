@@ -1,4 +1,3 @@
-use crate::Error;
 use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
 use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOCRConfig;
 use crate::llms::azure_ai::ocr::transformation::AzureAIOCRConfig;
@@ -8,6 +7,7 @@ use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
 use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
 use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
 use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
+use crate::ocr::Error;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

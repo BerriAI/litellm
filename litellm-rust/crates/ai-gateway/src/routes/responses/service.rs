@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{Sink, Stream};
-use litellm_core::Error;
 use litellm_core::call_lifecycle::{CallLifecycle, CallLifecycleContext};
+use litellm_core::responses::Error;
 use litellm_core::responses::instrumentation::{
     ResponsesWsCallbackPayload, ResponsesWsInstrumentation, ResponsesWsLogOutcome,
     ResponsesWsMetadata,

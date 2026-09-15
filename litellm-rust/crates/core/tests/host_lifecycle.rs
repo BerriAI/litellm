@@ -1,10 +1,11 @@
-use crate::Error;
 use crate::call_lifecycle::host::{HostFailure, HostLifecycle, HostPhase};
+use crate::ocr::Error;
 
 fn run(fail_at: Option<HostPhase>, asynchronous: bool) -> (Vec<HostPhase>, Vec<Error>) {
     let mut lifecycle = HostLifecycle::new(asynchronous);
     let mut events = Vec::new();
     let mut failures = Vec::new();
+
     while lifecycle.phase() != HostPhase::Complete {
         let phase = lifecycle.phase();
         events.push(phase);
@@ -80,14 +81,14 @@ fn only_provider_and_response_construction_failures_use_provider_mapping() {
 fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_dispatch() {
     let mut lifecycle = HostLifecycle::new(true);
     while lifecycle.phase() != HostPhase::Execute {
-        lifecycle.accept(Ok(()));
+        lifecycle.accept::<Error>(Ok(()));
     }
     let selected = Error::InvalidRequest("provider".into());
     assert_eq!(
         lifecycle.accept(Err(HostFailure::Error(selected.clone()))),
         Some(selected)
     );
-    lifecycle.accept(Ok(()));
+    lifecycle.accept::<Error>(Ok(()));
     for phase in [
         HostPhase::DeploymentFailure,
         HostPhase::Failure,

@@ -1,6 +1,7 @@
+mod error;
+pub use error::Error;
 pub mod client;
 pub(crate) mod document;
-pub mod error;
 pub(crate) mod handler;
 pub mod hooks;
 mod lifecycle;
