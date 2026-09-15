@@ -253,8 +253,16 @@ class TestRender:
         text = render("claude-sonnet-5", RECORDED, config_dir, use_color=False, bar_width=10)
         assert text.splitlines() == [
             "claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5",
-            "LiteLLM       ████░░░░░░ $0.14",
+            "claude-auto   ████░░░░░░ $0.14",
             "Claude Opus 5 ██████████ $0.38",
+        ]
+
+    def test_a_long_router_name_keeps_both_cost_bars_aligned(self, config_dir: Path) -> None:
+        session: Final = RECORDED._replace(router_name="engineering-smart-router")
+        text: Final = render("claude-sonnet-5", session, config_dir, use_color=False, bar_width=10)
+        assert text.splitlines()[1:] == [
+            "engineering-smart-router ████░░░░░░ $0.14",
+            "Claude Opus 5            ██████████ $0.38",
         ]
 
     def test_control_characters_in_any_externally_sourced_label_never_reach_the_terminal(self, tmp_path, config_dir):
@@ -312,6 +320,7 @@ class TestClaudeCodeMode:
 
         text: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
         assert text.startswith("claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5\n")
+        assert text.splitlines()[1].startswith("claude-auto ")
 
     def test_a_discovered_display_name_labels_the_sessions_model(
         self, tmp_path: Path, transcript: Path, config_dir: Path
@@ -379,6 +388,7 @@ class TestCodexMode:
         out = _run({"hook_event_name": "Stop", "session_id": SESSION_ID, "transcript_path": "/nope"}, env, fetch)
         message = json.loads(out)["systemMessage"]
         assert message.splitlines()[1] == "claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5"
+        assert message.splitlines()[2].startswith("claude-auto ")
         assert message.startswith("\n")
         assert seen == [Credentials("http://127.0.0.1:4000", "sk-codex")]
 

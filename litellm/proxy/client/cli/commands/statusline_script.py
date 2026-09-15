@@ -50,7 +50,6 @@ CODEX_BASE_URL_ENV_KEYS: Final = ("OPENAI_BASE_URL",)
 CODEX_API_KEY_ENV_KEYS: Final = ("OPENAI_API_KEY",)
 CODEX_STOP_EVENT: Final = "Stop"
 SYNTHETIC_MODEL: Final = "<synthetic>"
-LITELLM_LABEL: Final = "LiteLLM"
 RESET: Final = "\033[0m"
 BOLD: Final = "\033[1m"
 DIM: Final = "\033[90m"
@@ -316,9 +315,9 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
     pct: Final = (session.baseline_spend - session.spend) / session.baseline_spend * 100
     delta: Final = paint(LITELLM_COLOR, f"{'-' if pct >= 0 else '+'}{abs(round(pct))}% vs {reference}")
     peak: Final = max(session.spend, session.baseline_spend)
-    label_width: Final = max(len(LITELLM_LABEL), len(reference))
+    label_width: Final = max(len(session.router_name), len(reference))
     rows: Final = (
-        (LITELLM_LABEL, session.spend, LITELLM_COLOR),
+        (session.router_name, session.spend, LITELLM_COLOR),
         (reference, session.baseline_spend, BASELINE_COLOR),
     )
     lines: Final = (
