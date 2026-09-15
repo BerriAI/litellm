@@ -3385,7 +3385,8 @@ async def update_key_fn(
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return {"key": key, **response["data"]}
+        updated_key_info: Final = await attach_object_permission_to_dict({**response["data"]}, prisma_client)
+        return {"key": key, **updated_key_info}
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
