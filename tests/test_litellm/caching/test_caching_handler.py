@@ -738,3 +738,45 @@ async def test_converted_stream_cache_hit_replayed_as_plain_object_logs_at_hit_t
     assert hit is not None and hit.cached_result == cached_message
     logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
     assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_followup_cache_hit_with_converted_stream_marker_replays_as_plain_object(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    async def acompletion(**kwargs):
+        return None
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "run the code"}],
+        "caching": True,
+        "stream": False,
+        "_code_interpreter_interception_converted_stream": True,
+        "_agentic_loop_depth": 1,
+    }
+    await litellm.cache.async_add_cache(
+        litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "done"}}]), **kwargs
+    )
+    handler = LLMCachingHandler(original_function=acompletion, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    hit = await handler._async_get_cache(
+        model="gpt-5.6",
+        original_function=acompletion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit is not None and isinstance(hit.cached_result, litellm.ModelResponse)
+    assert hit.cached_result.choices[0].message.content == "done"
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["cache_hit"] is True
