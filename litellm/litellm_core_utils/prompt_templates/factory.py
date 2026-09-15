@@ -1067,6 +1067,13 @@ def _azure_tool_call_invoke_helper(
 def _azure_image_url_helper(content: ChatCompletionImageObject):
     if isinstance(content["image_url"], str):
         content["image_url"] = {"url": content["image_url"]}
+    elif isinstance(content["image_url"], dict):
+        content["image_url"].pop("format", None)
+
+
+def _azure_file_helper(content: ChatCompletionFileObject) -> None:
+    if isinstance(content.get("file"), dict):
+        content["file"].pop("format", None)
 
 
 def convert_to_azure_openai_messages(
@@ -1082,6 +1089,8 @@ def convert_to_azure_openai_messages(
             for content in m.get("content", []):
                 if isinstance(content, dict) and content.get("type") == "image_url":
                     _azure_image_url_helper(content)
+                elif isinstance(content, dict) and content.get("type") == "file":
+                    _azure_file_helper(content)
     return messages
 
 
