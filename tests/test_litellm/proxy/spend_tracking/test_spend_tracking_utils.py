@@ -2935,6 +2935,16 @@ def test_get_spend_logs_metadata_keeps_master_key_alias_readable():
     assert meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
+def test_get_spend_logs_metadata_keeps_user_agent():
+    """`add_litellm_data_to_request` stamps the caller's User-Agent next to its IP, but
+    the spend log metadata dropped it, so an abusive client could not be identified
+    from the Logs page."""
+    meta = _get_spend_logs_metadata({"requester_ip_address": "203.0.113.9", "user_agent": "abusive-client/9.9"})
+    assert meta["requester_ip_address"] == "203.0.113.9"
+    assert meta["user_agent"] == "abusive-client/9.9"
+    assert _get_spend_logs_metadata(None)["user_agent"] is None
+
+
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
     assert _redact_logged_api_key("bearer ") is None

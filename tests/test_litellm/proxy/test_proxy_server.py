@@ -7401,6 +7401,88 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to_db_ones():
+    """user_api_key_auth honours ``auth: false`` only for entries it finds in
+    general_settings["pass_through_endpoints"]. The DB overlay used to replace that
+    list wholesale, so once one endpoint existed in the DB the YAML-declared
+    auth-disabled route started answering 401 while staying registered."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {"path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": False}
+    db_endpoint: Final = {"id": "db-1", "path": "/v1/db-echo", "target": "https://example.com/post", "auth": True}
+
+    def request_without_key(path: str) -> MagicMock:
+        request: Final = MagicMock()
+        request.url.path = path
+        request.headers = {}
+        request.query_params = {}
+        return request
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        anonymous: Final = await user_api_key_auth(request=request_without_key("/v1/cuopt/request"), api_key=None)
+        assert anonymous.api_key is None
+
+        with pytest.raises(ProxyException) as still_protected:
+            await user_api_key_auth(request=request_without_key("/v1/db-echo"), api_key=None)
+        assert still_protected.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("db_methods", "yaml_methods"),
+    [(None, None), (["POST"], ["GET"])],
+    ids=["all-methods", "disjoint-methods"],
+)
+async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path(
+    db_methods: list[str] | None, yaml_methods: list[str] | None
+):
+    """The auth check matches pass-through entries by path only and lets any
+    matching ``auth: false`` entry through, so a DB ``auth: true`` entry can only
+    lock down a YAML-declared path if the YAML entry is dropped from the merged
+    list, whatever ``methods`` either entry declares."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": False,
+        "methods": yaml_methods,
+    }
+    db_endpoint: Final = {
+        "id": "db-1",
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": True,
+        "methods": db_methods,
+    }
+
+    request: Final = MagicMock()
+    request.url.path = "/v1/cuopt/request"
+    request.method = "POST"
+    request.headers = {}
+    request.query_params = {}
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        with pytest.raises(ProxyException) as locked_down:
+            await user_api_key_auth(request=request, api_key=None)
+        assert locked_down.value.code == "401"
+
+
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
     for index in range(count):
         cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
@@ -10750,6 +10832,7 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
     monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", "1h")
+    monkeypatch.setattr(litellm, "openai_system_messages_first", False)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
     )
@@ -10771,6 +10854,10 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
         assert fields["enable_anthropic_prompt_caching"]["field_tab"] == "prompt_caching"
         assert fields["anthropic_prompt_caching_ttl"]["field_tab"] == "prompt_caching"
         assert fields["budget_exceeded_throttle_percentage"]["field_tab"] is None
+
+        assert fields["openai_system_messages_first"]["field_type"] == "Boolean"
+        assert fields["openai_system_messages_first"]["field_value"] is False
+        assert fields["openai_system_messages_first"]["field_tab"] == "prompt_caching"
     finally:
         app.dependency_overrides.clear()
 
@@ -10887,6 +10974,7 @@ def test_general_settings_ui_defaults_unchanged_for_existing_fields():
     [
         ("enable_anthropic_prompt_caching", True),
         ("anthropic_prompt_caching_ttl", "1h"),
+        ("openai_system_messages_first", True),
     ],
 )
 def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_name, db_value):
@@ -10945,6 +11033,8 @@ def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypa
         ("enable_anthropic_prompt_caching", False),
         ("anthropic_prompt_caching_ttl", "5m"),
         ("anthropic_prompt_caching_ttl", "1h"),
+        ("openai_system_messages_first", True),
+        ("openai_system_messages_first", False),
     ],
 )
 @pytest.mark.asyncio
@@ -10993,6 +11083,8 @@ async def test_update_config_field_prompt_caching_persists_to_litellm_settings(m
         ("anthropic_prompt_caching_ttl", "10m"),
         ("anthropic_prompt_caching_ttl", "1H"),
         ("anthropic_prompt_caching_ttl", 3600),
+        ("openai_system_messages_first", "yes"),
+        ("openai_system_messages_first", 1),
     ],
 )
 @pytest.mark.asyncio
@@ -11032,6 +11124,7 @@ async def test_update_config_field_prompt_caching_rejects_invalid(monkeypatch, f
     [
         ("enable_anthropic_prompt_caching", False),
         ("anthropic_prompt_caching_ttl", None),
+        ("openai_system_messages_first", False),
         ("budget_exceeded_throttle_percentage", None),
     ],
 )
@@ -13521,3 +13614,54 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     assert response.tokenizer_type == "huggingface_tokenizer"
     assert response.total_tokens > 0
     assert_loop_stayed_free(took, lags)
+
+
+async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
+    from tokenizers import Tokenizer
+
+    from litellm import Router
+    from litellm.types.router import DeploymentTypedDict
+
+    claude_tokenizer: Final[Tokenizer] = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    from_pretrained: Final = MagicMock(return_value=claude_tokenizer)
+
+    def deployment(model_name: str, revision: str, auth_token: str | None) -> DeploymentTypedDict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
+            "model_info": {
+                "custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": revision, "auth_token": auth_token}
+            },
+        }
+
+    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                deployment("self-hosted", "main", None),
+                deployment("self-hosted-pinned", "v2", None),
+                deployment("self-hosted-private", "main", "hf_test_token"),
+            ]
+        ),
+    )
+    litellm.utils._select_custom_tokenizer_helper.cache_clear()
+    try:
+        responses: Final = [
+            await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            for _ in range(3)
+        ]
+        assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
+        assert all(response.tokenizer_type == "huggingface_tokenizer" for response in responses)
+        assert len({response.total_tokens for response in responses}) == 1
+        assert responses[0].total_tokens > 0
+
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        assert from_pretrained.call_args_list == [
+            mock.call("my-org/tokenizer", revision="main", token=None),
+            mock.call("my-org/tokenizer", revision="v2", token=None),
+            mock.call("my-org/tokenizer", revision="main", token="hf_test_token"),
+        ]
+    finally:
+        litellm.utils._select_custom_tokenizer_helper.cache_clear()
