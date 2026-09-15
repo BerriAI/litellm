@@ -124,7 +124,6 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
-from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
@@ -4057,6 +4056,8 @@ class TeamAliasResolution(NamedTuple):
 
 @functools.cache
 def stale_team_alias_bypass_enabled() -> bool:
+    from litellm.secret_managers.main import get_secret_bool
+
     return get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False) is True
 
 
