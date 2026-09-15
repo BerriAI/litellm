@@ -174,6 +174,21 @@ def test_custom_member_description_edit_lands_without_the_namespace_prefix_or_gr
     assert list(merged) == [{"type": "namespace", "name": "shell", "description": "Shell", "tools": [guarded_member]}]
 
 
+def test_text_appended_after_the_grammar_block_lands_on_the_member_without_the_block():
+    grammar = {"type": "grammar", "syntax": "lark", "definition": "start: X"}
+    custom_member = {"type": "custom", "name": "exec", "description": "Run a command", "format": grammar}
+    original = [{"type": "namespace", "name": "shell", "description": "Shell", "tools": [custom_member]}]
+    groups = _groups(original)
+    edited = copy.deepcopy(_flat(groups))
+    edited[0]["function"]["description"] = edited[0]["function"]["description"] + " [checked]"
+
+    merged = merge_guardrailed_tools(original, groups, edited)
+
+    assert merged[0]["tools"][0]["description"] == "Run a command [checked]"
+    reflattened = _flat(_groups(merged))
+    assert reflattened[0]["function"]["description"] == "Shell\n\nRun a command [checked]\n\nFormat:\n```lark\nstart: X\n```"
+
+
 def test_member_extras_edited_by_the_guardrail_land_on_that_member():
     original = [{"type": "namespace", "name": "ns", "tools": [_function("read")]}]
     groups = _groups(original)

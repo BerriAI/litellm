@@ -72,7 +72,7 @@ def _function_fields(tool: Tool) -> Tool:
 def _member_description(key: str, value: object, prefix: str, suffix: str) -> object:
     if key != "description" or not isinstance(value, str):
         return value
-    return value.removeprefix(prefix).removesuffix(suffix)
+    return value.replace(prefix, "", 1).replace(suffix, "", 1)
 
 
 def _rebuilt_member(member: Tool, flattened: Tool, guardrailed: Tool, namespace_description: str) -> Tool:
