@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildPlaygroundHeaders, customHeadersFromPairs, parseStoredHeaderPairs } from "./request_headers";
+import {
+  buildPlaygroundHeaders,
+  customHeadersFromPairs,
+  parseStoredHeaderPairs,
+  withRequiredHeaders,
+} from "./request_headers";
 
 describe("customHeadersFromPairs", () => {
   it("trims header names and drops rows without a name", () => {
@@ -40,5 +45,16 @@ describe("buildPlaygroundHeaders", () => {
   it("omits x-litellm-tags when there are no tags", () => {
     expect(buildPlaygroundHeaders([], { "x-custom": "1" })).toEqual({ "x-custom": "1" });
     expect(buildPlaygroundHeaders(undefined, undefined)).toEqual({});
+  });
+});
+
+describe("withRequiredHeaders", () => {
+  it("keeps required headers regardless of custom header name casing", () => {
+    expect(
+      withRequiredHeaders(
+        { authorization: "Bearer stolen", "content-type": "text/plain", "x-custom": "1" },
+        { Authorization: "Bearer real", "Content-Type": "application/json" },
+      ),
+    ).toEqual({ Authorization: "Bearer real", "Content-Type": "application/json", "x-custom": "1" });
   });
 });

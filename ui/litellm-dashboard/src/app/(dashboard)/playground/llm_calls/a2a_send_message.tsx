@@ -3,7 +3,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import type { CustomHeaders } from "@/components/llm_calls/request_headers";
+import { type CustomHeaders, withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { A2ATaskMetadata } from "@/components/chat_ui/types";
 
 interface A2AMessagePart {
@@ -148,11 +148,10 @@ export const makeA2ASendMessageRequest = async (
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: {
+      headers: withRequiredHeaders(customHeaders ?? {}, {
         [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
-        ...customHeaders,
-      },
+      }),
       body: JSON.stringify(jsonRpcRequest),
       signal,
     });

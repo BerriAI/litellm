@@ -96,4 +96,22 @@ describe("embeddings_api", () => {
       },
     });
   });
+
+  it("does not let custom headers replace the gateway auth or content-type headers", async () => {
+    await makeOpenAIEmbeddingsRequest(
+      "Sample text",
+      mockUpdateEmbeddingsUI,
+      "text-embedding-3-small",
+      "abcdef",
+      undefined,
+      undefined,
+      { authorization: "Bearer stolen", "Content-Type": "text/plain", "x-request-source": "playground" },
+    );
+
+    expect(mockFetch.mock.calls[0][1].headers).toEqual({
+      Authorization: "Bearer abcdef",
+      "Content-Type": "application/json",
+      "x-request-source": "playground",
+    });
+  });
 });
