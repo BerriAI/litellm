@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from collections.abc import Mapping
 from fastapi.testclient import TestClient
 
 import litellm
@@ -5492,7 +5493,10 @@ def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a
     ),
 )
 def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_path(
-    cache_rates: dict, current_time: datetime | None, expected_creation: float, expected_creation_1h: float
+    cache_rates: Mapping[str, float | Mapping[str, float | str]],
+    current_time: datetime | None,
+    expected_creation: float,
+    expected_creation_1h: float,
 ) -> None:
     model_info = {"input_cost_per_token": 2e-7, "output_cost_per_token": 1.25e-6, **cache_rates}
     usage = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
