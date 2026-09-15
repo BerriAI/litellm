@@ -852,6 +852,7 @@ async def _auto_register_jwt_mapping(
     user_id: str | None = None,
     org_id: str | None = None,
     end_user_id: str | None = None,
+    agent_id: str | None = None,
 ) -> UserAPIKeyAuth | None:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
@@ -884,6 +885,7 @@ async def _auto_register_jwt_mapping(
         team_id=team_id,
         user_id=user_id,
         organization_id=org_id,
+        agent_id=agent_id,
         metadata={
             "auto_registered": True,
             "jwt_claim_field": virtual_key_claim_field,
@@ -1567,6 +1569,7 @@ async def _user_api_key_auth_builder(
                     org_id: Final = result["org_id"]
                     team_membership: Final[LiteLLM_TeamMembership | None] = result.get("team_membership", None)
                     jwt_claims = result.get("jwt_claims", None)
+                    agent_id: Final[str | None] = result.get("agent_id")
 
                     if is_proxy_admin:
                         # Proxy admins authenticate via auth_builder (full
@@ -1592,6 +1595,7 @@ async def _user_api_key_auth_builder(
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
                             jwt_claims=jwt_claims,
+                            agent_id=agent_id,
                             **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                         )
 
@@ -1612,6 +1616,7 @@ async def _user_api_key_auth_builder(
                         user_rpm_limit=(user_object.rpm_limit if user_object is not None else None),
                         user_model_max_budget=(user_object.model_max_budget if user_object is not None else None),
                         jwt_claims=jwt_claims,
+                        agent_id=agent_id,
                         **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                     )
 
@@ -1635,6 +1640,7 @@ async def _user_api_key_auth_builder(
                             user_id=user_id,
                             org_id=org_id,
                             end_user_id=end_user_id,
+                            agent_id=agent_id,
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
@@ -2490,7 +2496,7 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper

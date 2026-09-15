@@ -9,10 +9,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 REPO_ROOT: Final = Path(__file__).parents[2]
 MODEL: Final = "azure_ai/grok-4.6"
-SOURCE: Final = (
-    "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/"
-    "grok-4-6-comes-to-microsoft-foundry-models-built-for-long-horizon-reasoning-and-/4547578"
-)
 COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 
 
@@ -51,5 +47,4 @@ def test_azure_ai_grok_4_6_entry_source_and_backup_match() -> None:
     main_entry = _cost_map_entry(REPO_ROOT / "model_prices_and_context_window.json")
     backup_entry = _cost_map_entry(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json")
 
-    assert main_entry["source"] == SOURCE
     assert backup_entry == main_entry

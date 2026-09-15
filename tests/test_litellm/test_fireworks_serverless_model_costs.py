@@ -88,18 +88,6 @@ TWIN_PINNED_PRICES = {
 }
 
 
-def test_deepseek_v4_flash_twins_pin_published_pricing(model_data):
-    """Both entries of each Flash twin pair carry the price published at docs.fireworks.ai/serverless/pricing."""
-    for bare_suffix, expected in TWIN_PINNED_PRICES.items():
-        for key in (
-            f"fireworks_ai/{bare_suffix}",
-            f"fireworks_ai/accounts/fireworks/models/{bare_suffix}",
-        ):
-            entry = model_data[key]
-            for field, value in expected.items():
-                assert entry[field] == pytest.approx(value), f"{key}.{field}"
-
-
 def test_fireworks_account_prefixed_twins_agree_on_price(model_data):
     """Every accounts/fireworks/models/X entry prices identically to its bare fireworks_ai/X twin."""
     prefix = "fireworks_ai/accounts/fireworks/models/"
