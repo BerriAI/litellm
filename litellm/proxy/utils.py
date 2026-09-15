@@ -2692,7 +2692,7 @@ class ProxyLogging:
     async def _run_during_call_guardrail(
         self,
         callback: CustomGuardrail,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: request payload dict, guardrail_to_apply is written in place
         user_api_key_dict: UserAPIKeyAuth | None,
         user_api_key_auth_dict: UserAPIKeyAuth | dict[str, object] | None,
         call_type: CallTypesLiteral,
