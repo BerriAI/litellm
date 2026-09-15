@@ -1490,8 +1490,8 @@ export interface paths {
          *
          *     Runs the same check every write path runs (the router's own pydantic model), so a form can
          *     show the backend's exact verdict while the operator is still editing rather than after a
-         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
-         *     naming their own team. Nothing is created, routed, or billed.
+         *     rejected save. Uses the same team opt-in and model-access checks as configuration
+         *     writes for members. Nothing is created, routed, or billed.
          */
         post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
@@ -28872,7 +28872,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -40270,6 +40270,11 @@ export interface components {
             input_cost_per_token?: number | null;
             /** Internal Router Model */
             internal_router_model?: boolean | null;
+            /**
+             * Member Auto Router
+             * @default false
+             */
+            member_auto_router: boolean;
             /** Output Cost Per Character */
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
