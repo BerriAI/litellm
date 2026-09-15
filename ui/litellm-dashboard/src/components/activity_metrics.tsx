@@ -1,4 +1,4 @@
-import { AreaChart, BarChart, CustomLegend, CustomTooltip } from "@/components/shared/charts";
+import { AreaChart, BarChart, CustomLegend, CustomTooltip, LineChart } from "@/components/shared/charts";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,12 +9,15 @@ import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
-import { valueFormatter } from "./UsagePage/utils/value_formatters";
+import { averageResponseTimeMs, formatResponseTime, valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
   hidePromptCachingMetrics?: boolean;
 }
+
+const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =>
+  averageResponseTimeMs(metrics.total_response_time_ms ?? 0, metrics.total_timed_requests ?? 0);
 
 const ModelSection = ({
   modelName,
@@ -28,7 +31,7 @@ const ModelSection = ({
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-5 gap-4">
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">Total Requests</p>
@@ -59,6 +62,17 @@ const ModelSection = ({
             <p className="text-sm text-muted-foreground">
               ${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful
               request
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Avg Response Time</p>
+            <h3 className="text-lg font-medium text-foreground">
+              {formatResponseTime(modelAverageResponseTimeMs(metrics))}
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              over {(metrics.total_timed_requests ?? 0).toLocaleString()} timed successful requests
             </p>
           </CardContent>
         </Card>
@@ -153,6 +167,27 @@ const ModelSection = ({
             />
           </CardContent>
         </Card>
+
+        {(metrics.total_timed_requests ?? 0) > 0 && (
+          <Card>
+            <CardContent>
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-foreground">Avg Response Time per day</h3>
+                <CustomLegend categories={["metrics.avg_response_time_ms"]} colors={["amber"]} />
+              </div>
+              <LineChart
+                className="mt-4"
+                data={metrics.daily_data}
+                index="date"
+                categories={["metrics.avg_response_time_ms"]}
+                colors={["amber"]}
+                valueFormatter={formatResponseTime}
+                connectNulls={true}
+                showLegend={false}
+              />
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardContent>
@@ -416,6 +451,9 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
                 <div className="flex space-x-4 text-sm text-muted-foreground">
                   <span>${formatNumberWithCommas(modelMetrics[modelName].total_spend, 2)}</span>
                   <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
+                  {modelAverageResponseTimeMs(modelMetrics[modelName]) != null && (
+                    <span>{formatResponseTime(modelAverageResponseTimeMs(modelMetrics[modelName]))} avg response</span>
+                  )}
                 </div>
               </div>
             }
@@ -471,11 +509,15 @@ export const processActivityData = (
           total_spend: 0,
           total_cache_read_input_tokens: 0,
           total_cache_creation_input_tokens: 0,
+          total_response_time_ms: 0,
+          total_timed_requests: 0,
           top_api_keys: [],
           top_models: [],
           daily_data: [],
         };
       }
+      const dayResponseTimeMs = modelData.metrics.total_response_time_ms || 0;
+      const dayTimedRequests = modelData.metrics.timed_requests || 0;
       // Update totals
       modelMetrics[model].total_requests += modelData.metrics.api_requests;
       modelMetrics[model].prompt_tokens += modelData.metrics.prompt_tokens;
@@ -486,6 +528,9 @@ export const processActivityData = (
       modelMetrics[model].total_failed_requests += modelData.metrics.failed_requests;
       modelMetrics[model].total_cache_read_input_tokens += modelData.metrics.cache_read_input_tokens || 0;
       modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics.cache_creation_input_tokens || 0;
+      modelMetrics[model].total_response_time_ms =
+        (modelMetrics[model].total_response_time_ms ?? 0) + dayResponseTimeMs;
+      modelMetrics[model].total_timed_requests = (modelMetrics[model].total_timed_requests ?? 0) + dayTimedRequests;
 
       // Add daily data
       modelMetrics[model].daily_data.push({
@@ -500,6 +545,7 @@ export const processActivityData = (
           failed_requests: modelData.metrics.failed_requests,
           cache_read_input_tokens: modelData.metrics.cache_read_input_tokens || 0,
           cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0,
+          avg_response_time_ms: averageResponseTimeMs(dayResponseTimeMs, dayTimedRequests),
         },
       });
     });

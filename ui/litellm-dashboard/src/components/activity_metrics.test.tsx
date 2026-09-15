@@ -1424,6 +1424,133 @@ describe("processActivityData", () => {
 
     expect(result).toEqual({});
   });
+
+  it("sums response time per model and derives a per-day average over timed requests", () => {
+    const dayWithModel = (date: string, metrics: Partial<typeof EMPTY_SPEND_METRICS> & Record<string, number>) =>
+      createMockDailyData(date, EMPTY_SPEND_METRICS, {
+        ...EMPTY_BREAKDOWN,
+        models: {
+          "gpt-5.5": { metrics: { ...EMPTY_SPEND_METRICS, ...metrics }, metadata: {}, api_key_breakdown: {} },
+        },
+      });
+    const fourTimedRequests = {
+      api_requests: 4,
+      successful_requests: 4,
+      total_response_time_ms: 6000,
+      timed_requests: 4,
+    };
+    const oneTimedOneFailed = {
+      api_requests: 2,
+      successful_requests: 1,
+      failed_requests: 1,
+      total_response_time_ms: 500,
+      timed_requests: 1,
+    };
+    const onlyFailures = { api_requests: 1, successful_requests: 0, failed_requests: 1 };
+    const activity: { results: DailyData[] } = {
+      results: [
+        dayWithModel("2025-01-02", fourTimedRequests),
+        dayWithModel("2025-01-01", oneTimedOneFailed),
+        dayWithModel("2025-01-03", onlyFailures),
+      ],
+    };
+
+    const result = processActivityData(activity, "models");
+
+    expect(result["gpt-5.5"].total_response_time_ms).toBe(6500);
+    expect(result["gpt-5.5"].total_timed_requests).toBe(5);
+    expect(result["gpt-5.5"].daily_data.map((day) => day.metrics.avg_response_time_ms)).toEqual([500, 1500, null]);
+  });
+
+  it("treats rollups written before response time existed as zero timed requests", () => {
+    const activity: { results: DailyData[] } = {
+      results: [
+        createMockDailyData("2025-01-01", EMPTY_SPEND_METRICS, {
+          ...EMPTY_BREAKDOWN,
+          models: {
+            "gpt-5.5": {
+              metrics: { ...EMPTY_SPEND_METRICS, api_requests: 3, successful_requests: 3 },
+              metadata: {},
+              api_key_breakdown: {},
+            },
+          },
+        }),
+      ],
+    };
+
+    const result = processActivityData(activity, "models");
+
+    expect(result["gpt-5.5"].total_response_time_ms).toBe(0);
+    expect(result["gpt-5.5"].total_timed_requests).toBe(0);
+    expect(result["gpt-5.5"].daily_data[0].metrics.avg_response_time_ms).toBeNull();
+  });
+});
+
+describe("ActivityMetrics response time", () => {
+  const timedModel = createMockModelActivityData("GPT-5.5", {
+    total_response_time_ms: 6000,
+    total_timed_requests: 4,
+    daily_data: [
+      {
+        date: "2025-01-01",
+        metrics: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+          api_requests: 3,
+          spend: 1,
+          successful_requests: 3,
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          avg_response_time_ms: 2000,
+        },
+      },
+      {
+        date: "2025-01-02",
+        metrics: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+          api_requests: 1,
+          spend: 1,
+          successful_requests: 1,
+          failed_requests: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          avg_response_time_ms: 1000,
+        },
+      },
+    ],
+  });
+
+  it("shows the model's average response time in the summary card and the collapsed header", () => {
+    render(<ActivityMetrics modelMetrics={{ "gpt-5.5": timedModel }} />);
+
+    expect(screen.getByText("Avg Response Time")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "1.50s" })).toBeInTheDocument();
+    expect(screen.getByText("over 4 timed successful requests")).toBeInTheDocument();
+    expect(screen.getByText("1.50s avg response")).toBeInTheDocument();
+  });
+
+  it("renders the per-day response time chart with duration-formatted axis ticks", () => {
+    render(<ActivityMetrics modelMetrics={{ "gpt-5.5": timedModel }} />);
+
+    expect(screen.getByText("Avg Response Time per day")).toBeInTheDocument();
+    expect(screen.getByText("Avg Response Time Ms")).toBeInTheDocument();
+    expect(screen.getAllByText(/^\d+(\.\d+)?(ms|s)$/).length).toBeGreaterThan(1);
+  });
+
+  it("shows a dash and no response time chart when the model has no timed requests", () => {
+    render(<ActivityMetrics modelMetrics={{ "gpt-5.5": createMockModelActivityData("GPT-5.5") }} />);
+
+    expect(screen.getByText("Avg Response Time")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "-" })).toBeInTheDocument();
+    expect(screen.getByText("over 0 timed successful requests")).toBeInTheDocument();
+    expect(screen.queryByText(/avg response$/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Avg Response Time per day")).not.toBeInTheDocument();
+    expect(screen.queryByText("Avg Response Time Ms")).not.toBeInTheDocument();
+  });
 });
 
 describe("formatKeyLabel", () => {

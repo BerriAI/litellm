@@ -27506,6 +27506,11 @@ export interface components {
              */
             total_prompt_tokens: number;
             /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
+            /**
              * Total Spend
              * @default 0
              */
@@ -27515,6 +27520,11 @@ export interface components {
              * @default 0
              */
             total_successful_requests: number;
+            /**
+             * Total Timed Requests
+             * @default 0
+             */
+            total_timed_requests: number;
             /**
              * Total Tokens
              * @default 0
@@ -37045,6 +37055,16 @@ export interface components {
              * @default 0
              */
             successful_requests: number;
+            /**
+             * Timed Requests
+             * @default 0
+             */
+            timed_requests: number;
+            /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
             /**
              * Total Tokens
              * @default 0
