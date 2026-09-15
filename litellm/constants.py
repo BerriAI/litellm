@@ -1974,11 +1974,7 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
     }
 )
 
-ORIGIN_SERVER_HEADERS: Final[frozenset[str]] = frozenset({"date", "server"})
-
-UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = (
-    HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS | ORIGIN_SERVER_HEADERS
-)
+UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
 
 STRINGIFIED_NONE: Final[str] = "None"
 
