@@ -34,7 +34,7 @@ export function AutomaticMemoryEntries({
   const [deleting, setDeleting] = useState<Entry | null>(null);
   const status = useQuery({
     queryKey: ["memoryStatus", userId, readOnly, proxyAdmin],
-    queryFn: async ({ signal }) => (await fetchClient.GET("/v2/memory/status", { signal })).data,
+    queryFn: async ({ signal }) => (await fetchClient.GET("/memory/v2/status", { signal })).data,
   });
   const entries = useInfiniteQuery({
     queryKey: ["memoryEntries", userId, query, teamId, filterUserId, status.data?.team_ids, status.data?.admin_view],
@@ -42,7 +42,7 @@ export function AutomaticMemoryEntries({
     initialPageParam: null as Cursor,
     queryFn: async ({ signal, pageParam }) =>
       (
-        await fetchClient.GET("/v2/memory/entries", {
+        await fetchClient.GET("/memory/v2/entries", {
           params: {
             query: {
               query,
@@ -64,7 +64,7 @@ export function AutomaticMemoryEntries({
   });
   const save = useMutation({
     mutationFn: ({ memory_id, body }: { memory_id: string; body: Capture }) =>
-      fetchClient.PUT("/v2/memory/entries/{memory_id}", { params: { path: { memory_id } }, body }),
+      fetchClient.PUT("/memory/v2/entries/{memory_id}", { params: { path: { memory_id } }, body }),
     onSuccess: () => {
       setEditing(null);
       toast.success("Memory updated");
@@ -74,7 +74,7 @@ export function AutomaticMemoryEntries({
   });
   const remove = useMutation({
     mutationFn: (memory_id: string) =>
-      fetchClient.DELETE("/v2/memory/entries/{memory_id}", { params: { path: { memory_id } } }),
+      fetchClient.DELETE("/memory/v2/entries/{memory_id}", { params: { path: { memory_id } } }),
     onSuccess: () => {
       setDeleting(null);
       toast.success("Memory deleted");
@@ -105,7 +105,12 @@ export function AutomaticMemoryEntries({
       },
     });
   };
-  const filtered = Boolean(query || teamId || filterUserId);
+  const filtered = Boolean(search || teamId || filterUserId);
+  const clearFilters = () => {
+    setTeamId("");
+    setFilterUserId("");
+    setSearch("");
+  };
   const accessDescription = status.data?.active
     ? "Your assistant can save and search memories using your gateway permissions."
     : "Automatic memory is off. Your administrator can enable it; saved memories remain available here.";
@@ -155,14 +160,8 @@ export function AutomaticMemoryEntries({
                 />
               </div>
             )}
-            {(teamId || filterUserId) && (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setTeamId("");
-                  setFilterUserId("");
-                }}
-              >
+            {filtered && (
+              <Button variant="ghost" onClick={clearFilters}>
                 Clear filters
               </Button>
             )}
@@ -173,7 +172,6 @@ export function AutomaticMemoryEntries({
             onQueryChange={setSearch}
             loading={entries.isPending || status.isPending}
             readOnly={readOnly}
-            canEdit={true}
             busy={busy}
             onEdit={setEditing}
             onDelete={setDeleting}

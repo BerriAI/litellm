@@ -281,7 +281,7 @@ class TestMemoryV2:
         marker = f"team-{unique_marker()}"
         saved = unwrap(memory.capture(subjects.owner, _fact(marker)))
         assert memory.entries(subjects.outsider) == []
-        for permissions, visible in ((["/spend/logs"], False), (["/v2/memory/entries"], True), ([], False)):
+        for permissions, visible in ((["/spend/logs"], False), (["/memory/v2/entries"], True), ([], False)):
             unwrap(
                 client.proxy.transport.post(
                     "/team/permissions_update",

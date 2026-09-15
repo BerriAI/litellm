@@ -44,7 +44,6 @@ export function MemoryEntriesTable({
   empty,
   footer,
   readOnly,
-  canEdit,
   busy,
   onEdit,
   onDelete,
@@ -56,7 +55,6 @@ export function MemoryEntriesTable({
   empty: React.ReactNode;
   footer: React.ReactNode;
   readOnly: boolean;
-  canEdit: boolean;
   busy: boolean;
   onEdit: (entry: Entry) => void;
   onDelete: (entry: Entry) => void;
@@ -171,7 +169,7 @@ export function MemoryEntriesTable({
               </Collapsible>
               {!readOnly && selected.can_edit && (
                 <div className="flex gap-2 border-t pt-4">
-                  <Button variant="outline" size="sm" disabled={busy || !canEdit} onClick={() => onEdit(selected)}>
+                  <Button variant="outline" size="sm" disabled={busy} onClick={() => onEdit(selected)}>
                     Edit memory
                   </Button>
                   <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDelete(selected)}>

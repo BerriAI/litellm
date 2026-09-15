@@ -19,7 +19,7 @@ class MemoryClient:
     def settings(self) -> MemorySettingsBody:
         return unwrap(
             self.proxy.transport.get(
-                "/v2/memory/settings",
+                "/memory/v2/settings",
                 headers=self.proxy.transport.master,
                 params=NoBody(),
                 response_type=MemorySettingsBody,
@@ -28,7 +28,7 @@ class MemoryClient:
 
     def set_settings(self, body: MemorySettingsBody, *, caller: str | None = None) -> Result[MemorySettingsBody]:
         return self.proxy.transport.put(
-            "/v2/memory/settings",
+            "/memory/v2/settings",
             headers=self.proxy.transport.bearer(caller) if caller else self.proxy.transport.master,
             json=body,
             response_type=MemorySettingsBody,
@@ -36,7 +36,7 @@ class MemoryClient:
 
     def read(self, key: str, memory_id: str) -> Result[MemoryEntryData]:
         return self.proxy.transport.get(
-            f"/v2/memory/entries/{memory_id}",
+            f"/memory/v2/entries/{memory_id}",
             headers=self.proxy.transport.bearer(key),
             params=NoBody(),
             response_type=MemoryEntryData,
@@ -44,7 +44,7 @@ class MemoryClient:
 
     def update(self, key: str, memory_id: str, body: MemoryCaptureBody) -> Result[MemoryEntryData]:
         return self.proxy.transport.put(
-            f"/v2/memory/entries/{memory_id}",
+            f"/memory/v2/entries/{memory_id}",
             headers=self.proxy.transport.bearer(key),
             json=body,
             response_type=MemoryEntryData,
@@ -53,7 +53,7 @@ class MemoryClient:
     def status(self, key: str) -> MemoryStatusData:
         return unwrap(
             self.proxy.transport.get(
-                "/v2/memory/status",
+                "/memory/v2/status",
                 headers=self.proxy.transport.bearer(key),
                 params=NoBody(),
                 response_type=MemoryStatusData,
@@ -63,7 +63,7 @@ class MemoryClient:
     def entries(self, key: str, params: MemoryEntryParams = MemoryEntryParams()) -> list[MemoryEntryData]:
         return unwrap(
             self.proxy.transport.get(
-                "/v2/memory/entries",
+                "/memory/v2/entries",
                 headers=self.proxy.transport.bearer(key),
                 params=params,
                 response_type=MemoryEntriesData,
@@ -72,7 +72,7 @@ class MemoryClient:
 
     def capture(self, key: str, body: MemoryCaptureBody) -> Result[MemoryEntryData]:
         return self.proxy.transport.post(
-            "/v2/memory/entries",
+            "/memory/v2/entries",
             headers=self.proxy.transport.bearer(key),
             json=body,
             response_type=MemoryEntryData,
@@ -80,7 +80,7 @@ class MemoryClient:
 
     def delete_entry(self, key: str, memory_id: str) -> Result[NoBody]:
         return self.proxy.transport.delete(
-            f"/v2/memory/entries/{memory_id}",
+            f"/memory/v2/entries/{memory_id}",
             headers=self.proxy.transport.bearer(key),
             json=NoBody(),
             response_type=NoBody,
@@ -90,7 +90,7 @@ class MemoryClient:
         while True:
             page = unwrap(
                 self.proxy.transport.get(
-                    "/v2/memory/entries",
+                    "/memory/v2/entries",
                     headers=self.proxy.transport.master,
                     params=MemoryEntryParams(user_id=user_id),
                     response_type=MemoryEntriesData,
@@ -101,7 +101,7 @@ class MemoryClient:
             for entry in page:
                 unwrap(
                     self.proxy.transport.delete(
-                        f"/v2/memory/entries/{entry.memory_id}",
+                        f"/memory/v2/entries/{entry.memory_id}",
                         headers=self.proxy.transport.master,
                         json=NoBody(),
                         response_type=NoBody,

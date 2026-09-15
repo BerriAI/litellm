@@ -30,7 +30,7 @@ from litellm.types.memory_v2 import (
 )
 
 _AUTH: Final = Depends(user_api_key_auth)
-router: Final = APIRouter(prefix="/v2/memory", tags=["memory management"])  # mutable-ok: FastAPI requires native tags.
+router: Final = APIRouter(prefix="/memory/v2", tags=["memory management"])  # mutable-ok: FastAPI requires native tags.
 
 
 def require_memory_admin(auth: UserAPIKeyAuth, *, write: bool = False) -> None:

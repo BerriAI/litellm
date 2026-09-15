@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
@@ -25,12 +26,12 @@ export function MemoryAdministration({
   const settings = useQuery({
     queryKey: ["memorySettings", userId],
     enabled: proxyAdmin,
-    queryFn: async ({ signal }) => (await fetchClient.GET("/v2/memory/settings", { signal })).data,
+    queryFn: async ({ signal }) => (await fetchClient.GET("/memory/v2/settings", { signal })).data,
   });
   const current = draft ?? settings.data;
   const save = useMutation({
     mutationFn: ({ enabled, everyone, user_ids }: Settings) =>
-      fetchClient.PUT("/v2/memory/settings", { body: { enabled, everyone, user_ids } }),
+      fetchClient.PUT("/memory/v2/settings", { body: { enabled, everyone, user_ids } }),
     onSuccess: async ({ data }) => {
       cache.setQueryData(["memorySettings", userId], data);
       setDraft(null);
@@ -82,16 +83,19 @@ export function MemoryAdministration({
           </div>
           <div className="space-y-2">
             <Label htmlFor="memory-enrollment">Enable for</Label>
-            <select
-              id="memory-enrollment"
-              className="h-9 w-full rounded-md border bg-background px-3 text-sm sm:max-w-sm"
+            <Select
               value={current.everyone ? "everyone" : "selected"}
               disabled={busy}
-              onChange={(event) => setDraft({ ...current, everyone: event.target.value === "everyone" })}
+              onValueChange={(value) => setDraft({ ...current, everyone: value === "everyone" })}
             >
-              <option value="everyone">Everyone</option>
-              <option value="selected">Selected users</option>
-            </select>
+              <SelectTrigger id="memory-enrollment" className="w-full sm:max-w-sm">
+                <SelectValue>{current.everyone ? "Everyone" : "Selected users"}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="everyone">Everyone</SelectItem>
+                <SelectItem value="selected">Selected users</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {!current.everyone && (
             <div className="space-y-3">
@@ -148,7 +152,7 @@ export function MemoryAdministration({
         <h3 className="font-medium">Who can see memories?</h3>
         <p className="text-sm text-muted-foreground">
           Users see their own memories. Team admins can also see their team&apos;s memories, and proxy admins can see
-          all. To give ordinary members access to their team&apos;s memories, allow “Read team memories” in Member
+          all. To give ordinary members access to their team&apos;s memories, enable team memory access in Member
           Permissions.
         </p>
         <Link className="inline-block text-sm underline underline-offset-4" href={uiHref("teams")}>

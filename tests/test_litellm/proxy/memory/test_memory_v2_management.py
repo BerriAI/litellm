@@ -174,9 +174,9 @@ async def test_everyone_clears_stale_selection_and_includes_service_keys(databas
     [
         ("owner", "user", None, LitellmUserRoles.INTERNAL_USER, ()),
         ("owner", "user", "/spend/logs", LitellmUserRoles.INTERNAL_USER, ()),
-        ("owner", "user", "/v2/memory/entries", LitellmUserRoles.INTERNAL_USER, ("team",)),
+        ("owner", "user", "/memory/v2/entries", LitellmUserRoles.INTERNAL_USER, ("team",)),
         ("owner", "admin", None, LitellmUserRoles.INTERNAL_USER, ("team",)),
-        ("other", "admin", "/v2/memory/entries", LitellmUserRoles.INTERNAL_USER, ()),
+        ("other", "admin", "/memory/v2/entries", LitellmUserRoles.INTERNAL_USER, ()),
         ("owner", "user", None, LitellmUserRoles.ORG_ADMIN, ()),
     ],
 )
@@ -197,7 +197,7 @@ async def test_team_memory_access_reuses_membership_but_not_log_permission(
 
 
 @pytest.mark.parametrize(
-    "permission,log_read,memory_read", [("/spend/logs", True, False), ("/v2/memory/entries", False, True)]
+    "permission,log_read,memory_read", [("/spend/logs", True, False), ("/memory/v2/entries", False, True)]
 )
 def test_common_helper_keeps_resource_permissions_independent(
     permission: str, log_read: bool, memory_read: bool
@@ -266,7 +266,7 @@ async def test_service_key_write_ownership_never_matches_all_unowned_rows(databa
 @pytest.mark.asyncio
 async def test_revocation_blocks_existing_store_and_private_continuation(database: MagicMock) -> None:
     configure(database)
-    database.db.litellm_teamtable.find_many.return_value = [team(permissions=("/v2/memory/entries",))]
+    database.db.litellm_teamtable.find_many.return_value = [team(permissions=("/memory/v2/entries",))]
     original = await management.memory_store(auth())
     patch = MemoryContinuation(
         replaces=1,
@@ -383,6 +383,6 @@ def test_invalid_queries_are_rejected_before_database_work(database: MagicMock, 
     app.include_router(management.router)
     app.dependency_overrides[user_api_key_auth] = auth
     with TestClient(app) as client:
-        response = client.get("/v2/memory/entries", params=params)
+        response = client.get("/memory/v2/entries", params=params)
     assert response.status_code == 422
     database.db.litellm_memorytable.find_many.assert_not_awaited()

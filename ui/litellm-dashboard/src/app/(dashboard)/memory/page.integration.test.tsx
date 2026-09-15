@@ -55,18 +55,18 @@ beforeEach(async () => {
     const text = request.method === "GET" ? "" : await request.text();
     const call = { path, method: request.method, body: text ? JSON.parse(text) : undefined, params: url.search };
     calls.push(call);
-    if (failure === path && (path !== "/v2/memory/settings" || request.method === "PUT")) {
+    if (failure === path && (path !== "/memory/v2/settings" || request.method === "PUT")) {
       return new Response(JSON.stringify({ detail: "Memory service unavailable" }), {
         status: 503,
         headers: { "Content-Type": "application/json" },
       });
     }
     const response = () => {
-      if (path === "/v2/memory/settings") {
+      if (path === "/memory/v2/settings") {
         if (request.method === "PUT") settings = JSON.parse(text);
         return { ...settings, user_names: { u1: "Alex Rivera" } };
       }
-      if (path === "/v2/memory/status")
+      if (path === "/memory/v2/status")
         return {
           active: settings.enabled && (settings.everyone || settings.user_ids?.includes("u1")),
           enabled: settings.enabled,
@@ -75,7 +75,7 @@ beforeEach(async () => {
           team_ids: ["engineering"],
           admin_view: false,
         };
-      if (path === "/v2/memory/entries") {
+      if (path === "/memory/v2/entries") {
         if (paginated) {
           const offset = url.searchParams.get("before_memory_id") === "entry-19" ? 20 : 0;
           return Array.from({ length: offset ? 1 : 20 }, (_, i) => ({
@@ -87,7 +87,7 @@ beforeEach(async () => {
         }
         return [{ ...entry, can_edit: canEdit }];
       }
-      if (path === "/v2/memory/entries/entry-1") return { ...entry, can_edit: canEdit };
+      if (path === "/memory/v2/entries/entry-1") return { ...entry, can_edit: canEdit };
       if (path === "/v1/memory") return { memories: [], total: 0 };
       if (path === "/v2/team/list")
         return { teams: [{ team_id: "engineering", team_alias: "Engineering" }], page: 1, total_pages: 1, total: 1 };
@@ -111,7 +111,7 @@ describe("Memory dashboard", () => {
     expect(screen.getByText("Engineering")).toBeVisible();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Administration" })).not.toBeInTheDocument();
-    expect(calls.some(({ path }) => path === "/v2/memory/settings")).toBe(false);
+    expect(calls.some(({ path }) => path === "/memory/v2/settings")).toBe(false);
   });
 
   it("lets a proxy admin enable everyone through one configuration", async () => {
@@ -138,7 +138,8 @@ describe("Memory dashboard", () => {
     renderWithProviders(<Memory />);
     await user.click(screen.getByRole("tab", { name: "Administration" }));
     await user.click(await screen.findByRole("switch", { name: "Gateway memory" }));
-    await user.selectOptions(screen.getByLabelText("Enable for"), "selected");
+    await user.click(screen.getByRole("combobox", { name: "Enable for" }));
+    await user.click(screen.getByRole("option", { name: "Selected users" }));
     await user.click(screen.getByLabelText("Add a user"));
     await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
     expect(screen.getByRole("button", { name: "Remove alex@example.test" })).toBeVisible();
@@ -160,7 +161,7 @@ describe("Memory dashboard", () => {
 
   it("keeps an unsuccessful activation unsaved and shows the error", async () => {
     session("proxy_admin");
-    failure = "/v2/memory/settings";
+    failure = "/memory/v2/settings";
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
     await user.click(screen.getByRole("tab", { name: "Administration" }));
@@ -203,7 +204,7 @@ describe("Memory dashboard", () => {
     fireEvent.change(screen.getByLabelText("Correct this memory"), { target: { value: "Use port 8124" } });
     await user.click(screen.getByRole("button", { name: "Save correction" }));
     const expectedCall = {
-      path: "/v2/memory/entries/entry-1",
+      path: "/memory/v2/entries/entry-1",
       method: "PUT",
       params: "",
       body: {
@@ -222,17 +223,29 @@ describe("Memory dashboard", () => {
     await waitFor(() => expect(calls).toContainEqual(expectedCall));
   });
 
-  it("filters permitted memories by team and can clear the filter", async () => {
+  it("clears the search and team filter together", async () => {
     session("internal_user");
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
     await screen.findByText("Off · Managed by your admin");
+    fireEvent.change(screen.getByRole("textbox", { name: "Search memories" }), { target: { value: "demo" } });
     await user.click(screen.getByLabelText("Team"));
     await user.click(await screen.findByRole("option", { name: "Engineering" }));
     await waitFor(() => expect(calls.some(({ params }) => params.includes("team_id=engineering"))).toBe(true));
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("textbox", { name: "Search memories" })).toHaveValue("");
     expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
     expect(calls.some(({ params }) => params.includes("key_id"))).toBe(false);
+  });
+
+  it("labels the contributor picker and sends its selected user filter", async () => {
+    session("proxy_admin");
+    const user = userEvent.setup();
+    renderWithProviders(<Memory />);
+    await screen.findByText("Off · Managed by your admin");
+    await user.click(screen.getByRole("combobox", { name: "Contributor" }));
+    await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
+    await waitFor(() => expect(calls.some(({ params }) => params.includes("user_id=u1"))).toBe(true));
   });
 
   it("searches and paginates without replacing the visible first page", async () => {
@@ -250,7 +263,7 @@ describe("Memory dashboard", () => {
 
   it("shows a loading failure instead of claiming an empty collection", async () => {
     session("internal_user");
-    failure = "/v2/memory/entries";
+    failure = "/memory/v2/entries";
     renderWithProviders(<Memory />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Memory service unavailable");
     expect(screen.queryByText("No memories yet")).not.toBeInTheDocument();

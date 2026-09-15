@@ -240,8 +240,8 @@ def test_every_app_mount_is_assigned_to_a_component():
 def test_memory_v2_settings_stay_on_backend_while_entries_are_available_on_gateway():
     gateway = _component_paths(app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES)
     backend = _component_paths(app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES)
-    assert "/v2/memory/settings" in backend
-    assert "/v2/memory/settings" not in gateway
-    for path in ("/v2/memory/status", "/v2/memory/entries", "/v2/memory/entries/{memory_id}"):
+    assert "/memory/v2/settings" in backend
+    assert "/memory/v2/settings" not in gateway
+    for path in ("/memory/v2/status", "/memory/v2/entries", "/memory/v2/entries/{memory_id}"):
         assert path in gateway
         assert path in backend
