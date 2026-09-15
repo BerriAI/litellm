@@ -388,17 +388,17 @@ class RouterBudgetLimiting(CustomLogger):
         - Increments the spend in memory cache (so spend instantly updated in memory)
         - Queues the increment operation to Redis Pipeline (using batched pipeline to optimize performance. Using Redis for multi instance environment of LiteLLM)
         """
-        await self.dual_cache.in_memory_cache.async_increment(
-            key=spend_key,
-            value=response_cost,
-            ttl=ttl,
-        )
         increment_op: Final = RedisPipelineIncrementOperation(
             key=spend_key,
             increment_value=response_cost,
             ttl=ttl,
         )
         async with self._get_redis_increment_queue_lock():
+            await self.dual_cache.in_memory_cache.async_increment(
+                key=spend_key,
+                value=response_cost,
+                ttl=ttl,
+            )
             self.redis_increment_operation_queue.append(increment_op)
 
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
@@ -635,18 +635,21 @@ class RouterBudgetLimiting(CustomLogger):
             # No need to sync if Redis cache is not initialized
             if self.dual_cache.redis_cache is None:
                 return
-            await self._flush_increments_then_copy_redis_spend()
+            async with self._redis_increment_flush_lock:
+                try:
+                    await self._flush_increments_then_copy_redis_spend()
+                except asyncio.CancelledError:
+                    await asyncio.shield(self._requeue_detached_increment_operations())
+                    raise
         except Exception as e:
             log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
 
     async def _flush_increments_then_copy_redis_spend(self) -> None:
-        if not await self._push_in_memory_increments_to_redis():
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or not await self._flush_queued_increment_operations(redis_cache):
             return
 
         cache_keys: Final = []
-        redis_cache: Final = self.dual_cache.redis_cache
-        if redis_cache is None:
-            return
 
         if self.provider_budget_config is not None:
             for provider, config in self.provider_budget_config.items():
@@ -668,11 +671,20 @@ class RouterBudgetLimiting(CustomLogger):
 
         redis_values: Final = await redis_cache.async_batch_get_cache(key_list=cache_keys)
 
-        if isinstance(redis_values, dict):
+        if not isinstance(redis_values, dict):
+            return
+        async with self._get_redis_increment_queue_lock():
             for key, value in redis_values.items():
-                if value is not None:
-                    await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=float(value))
-                    verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, value)
+                if value is None:
+                    continue
+                pending_spend: Final = sum(
+                    operation["increment_value"]
+                    for operation in self.redis_increment_operation_queue
+                    if operation["key"] == key
+                )
+                updated_spend: Final = float(value) + pending_spend
+                await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=updated_spend)
+                verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, updated_spend)
 
     def _get_budget_config_for_deployment(
         self,
