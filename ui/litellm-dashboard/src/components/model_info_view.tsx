@@ -248,9 +248,9 @@ export default function ModelInfoView({
         custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
       },
     };
-    toast.info("Storing credential..");
-    let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
-    toast.success("Credential stored successfully");
+    await credentialCreateCall(accessToken, credentialItem)
+      .then(() => toast.success("Credential stored successfully"))
+      .catch((error) => toast.fromError(error));
   };
 
   const handleModelUpdate = async (
@@ -414,7 +414,7 @@ export default function ModelInfoView({
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      toast.fromError("Failed to update model settings");
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }
