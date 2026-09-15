@@ -5484,8 +5484,6 @@ class TestNvidiaNimProxyRoute:
         ["v1/infer", "unknown-group/v1/infer", "nim-page-elements-v2/v1/infer", "gpt-4o/v1/infer"],
     )
     async def test_path_without_a_nim_model_group_is_rejected_before_any_upstream_call(self, endpoint):
-        from fastapi import HTTPException
-
         captured: list[dict] = []
         router = self._recording_router(
             captured,
@@ -5500,8 +5498,6 @@ class TestNvidiaNimProxyRoute:
 
     @pytest.mark.asyncio
     async def test_a_group_mixing_nim_and_other_deployments_is_rejected_before_any_upstream_call(self):
-        from fastapi import HTTPException
-
         captured: list[dict] = []
 
         class MixedRouter:
@@ -5526,8 +5522,6 @@ class TestNvidiaNimProxyRoute:
 
     @pytest.mark.asyncio
     async def test_no_router_is_rejected_before_any_upstream_call(self):
-        from fastapi import HTTPException
-
         with pytest.raises(HTTPException) as exc_info:
             await self._relay(None, "nim-page-elements/v1/infer", NIM_INFER_BODY)
 
