@@ -156,6 +156,25 @@ class TinyFishPassthroughLoggingHandler:
             verbose_proxy_logger.warning(
                 "TinyFish passthrough: run-async response carried no run_id; logging the request without cost"
             )
+        TinyFishPassthroughLoggingHandler._spawn_billing_poller(
+            run_id=run_id,
+            logging_obj=logging_obj,
+            result=result,
+            start_time=start_time,
+            cache_hit=cache_hit,
+            kwargs=kwargs,
+        )
+
+    @staticmethod
+    def _spawn_billing_poller(
+        run_id: str | None,
+        logging_obj: LiteLLMLoggingObj,
+        result: str,
+        start_time: datetime,
+        cache_hit: bool,
+        kwargs: Mapping[str, object],
+        client: AsyncHTTPHandler | None = None,
+    ) -> None:
         task: Final = asyncio.create_task(
             TinyFishPassthroughLoggingHandler._poll_and_log(
                 run_id=run_id,
@@ -164,6 +183,7 @@ class TinyFishPassthroughLoggingHandler:
                 start_time=start_time,
                 cache_hit=cache_hit,
                 kwargs=kwargs,
+                client=client,
             )
         )
         _BACKGROUND_BILLING_TASKS.add(task)
@@ -286,7 +306,9 @@ class TinyFishPassthroughLoggingHandler:
         client: AsyncHTTPHandler | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """Bill a POST /v1/automation/run-sse stream: SSE events carry no num_of_steps, so the
-        run_id parsed from the buffered events prices the run via one GET /v1/runs/{id}."""
+        run_id parsed from the buffered events prices the run via one GET /v1/runs/{id}. A run
+        still live at stream end (client disconnect) is handed to the background poller instead,
+        signalled by a None result, so its steps are still billed when it finishes."""
         try:
             run_id: Final = _run_id_from_sse_chunks(all_chunks)
             if run_id is None:
@@ -294,6 +316,18 @@ class TinyFishPassthroughLoggingHandler:
                     "TinyFish passthrough: no run_id in SSE stream; logging the request without cost"
                 )
             run: Final = await TinyFishPassthroughLoggingHandler._fetch_run(run_id, client) if run_id else None
+            if run_id is not None and (run is None or (run.get("status") or "") not in TINYFISH_TERMINAL_RUN_STATUSES):
+                TinyFishPassthroughLoggingHandler._spawn_billing_poller(
+                    run_id=run_id,
+                    logging_obj=litellm_logging_obj,
+                    result="",
+                    start_time=start_time,
+                    cache_hit=False,
+                    kwargs=_EMPTY_KWARGS,
+                    client=client,
+                )
+                deferred_payload: Final[PassThroughEndpointLoggingTypedDict] = {"result": None, "kwargs": {}}
+                return deferred_payload
             payload: Final = TinyFishPassthroughLoggingHandler._build_logging_payload(
                 run=run,
                 logging_obj=litellm_logging_obj,
