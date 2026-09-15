@@ -1,6 +1,8 @@
 import json
 import re
+import time
 import traceback
+from datetime import datetime, timedelta, timezone
 from typing import Any, Final, Protocol, cast
 
 import httpx
@@ -178,6 +180,45 @@ def _get_body_error_code(error_str: str) -> int | None:
         body: Final = json.loads(error_str)
         code: Final = body.get("error", {}).get("code")
         return int(code) if code is not None else None
+    except Exception:
+        return None
+
+
+_RECOVERY_TIMESTAMP_RE: Final = re.compile(r"(20\d{2}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})")
+
+
+def _get_retry_after_from_exception_body(
+    original_exception: Exception,
+    now: float | None = None,
+) -> float | None:
+    """
+    Extract a "cooldown until" duration from a provider error body that states
+    when a quota window resets, e.g. Zhipu (bigmodel) 1308/1310:
+
+        "已达到 7 天使用上限，2026-09-15 09:21:11 后可继续使用。"
+
+    Providers omit the Retry-After header for quota resets, so without this the
+    router benches the deployment for the default cooldown_time (e.g. 60s),
+    re-picks it, eats another 429, and repeats until the stated reset time.
+
+    Returns seconds-from-now until the timestamp (> 0), or None when the body
+    carries no future timestamp. Timestamps without an explicit zone are
+    interpreted in the provider's local timezone (Asia/Shanghai for Zhipu).
+    """
+    if not isinstance(original_exception, Exception):
+        return None
+    try:
+        match = _RECOVERY_TIMESTAMP_RE.search(str(original_exception))
+        if match is None:
+            return None
+        # Accept both "2026-09-15 09:21:11" and ISO "2026-09-15T09:21:11"
+        stamp = match.group(1).replace("T", " ")
+        target = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone(timedelta(hours=8))
+        )
+        base = now if now is not None else time.time()
+        seconds = target.timestamp() - base
+        return seconds if seconds > 0 else None
     except Exception:
         return None
 
