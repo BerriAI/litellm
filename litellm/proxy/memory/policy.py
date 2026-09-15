@@ -16,7 +16,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.memory_v2 import MemorySettings, MemoryStatus
 
-_CONFIGURED_CACHE_KEY: Final = "litellm:memory_v2:configured"
+_SETTINGS_CACHE_KEY: Final = "litellm:memory_v2:settings"
 MEMORY_CONFIG_PARAM: Final = "memory_v2"
 
 
@@ -25,24 +25,23 @@ async def memory_settings(prisma_client: object) -> MemorySettings:
     return MemorySettings.model_validate(row.param_value) if row is not None else MemorySettings()
 
 
-async def gateway_memory_is_configured(prisma_client: object, cache: DualCache) -> bool:
-    cached: Final = await cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
-    if cached is True:
+async def gateway_memory_is_enabled(prisma_client: object, cache: DualCache, identity: "MemoryIdentity") -> bool:
+    cached: Final = await cache.async_get_cache(key=_SETTINGS_CACHE_KEY, ttl=30)
+    if cached is not None and MemoryAccess(identity, MemorySettings.model_validate(cached)).active:
         return True
     redis_cache: Final = cache.redis_cache or coordination_redis_cache()
     shared_cache: Final = DualCache(redis_cache=redis_cache) if redis_cache is not None else None
-    if cached is False:
+    if cached is not None:
         if shared_cache is None:
             return False
-        shared: Final = await shared_cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
-        if shared is False:
-            return False
+        shared: Final = await shared_cache.async_get_cache(key=_SETTINGS_CACHE_KEY, ttl=30)
+        if shared is not None:
+            return MemoryAccess(identity, MemorySettings.model_validate(shared)).active
     settings: Final = await memory_settings(prisma_client)
-    configured: Final = settings.enabled or settings.read.enabled
-    await cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
+    await cache.async_set_cache(key=_SETTINGS_CACHE_KEY, value=settings.model_dump(mode="json"), ttl=30)
     if shared_cache is not None and cache.redis_cache is None:
-        await shared_cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
-    return configured
+        await shared_cache.async_set_cache(key=_SETTINGS_CACHE_KEY, value=settings.model_dump(mode="json"), ttl=30)
+    return MemoryAccess(identity, settings).active
 
 
 async def invalidate_memory_configuration() -> None:
@@ -52,7 +51,7 @@ async def invalidate_memory_configuration() -> None:
         in_memory_cache=user_api_key_cache.in_memory_cache,
         redis_cache=user_api_key_cache.redis_cache or coordination_redis_cache(),
     )
-    await evict_and_broadcast(cache_keys=(_CONFIGURED_CACHE_KEY,), user_api_key_cache=cache)
+    await evict_and_broadcast(cache_keys=(_SETTINGS_CACHE_KEY,), user_api_key_cache=cache)
 
 
 def memory_primary_client(prisma_client: object) -> WriterPinnedClient:

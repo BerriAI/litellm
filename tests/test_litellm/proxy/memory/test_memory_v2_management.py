@@ -299,6 +299,51 @@ async def test_service_key_write_ownership_never_matches_all_unowned_rows(databa
 
 
 @pytest.mark.asyncio
+async def test_service_key_hash_is_private_in_entries_and_agent_results(database: MagicMock) -> None:
+    configure(database, read={"enabled": True})
+    database.db.litellm_teamtable.find_many.return_value = [team(permissions=("/memory/v2/entries",))]
+    service_row = row(user_id=None, created_by="b" * 64, owner_key_id="b" * 64)
+    table = database.db.litellm_memorytable
+    table.find_first.return_value = service_row
+    table.find_many.return_value = [service_row]
+    table.create.return_value = service_row
+    reader = await management.memory_store(auth())
+    entries = await management.list_entries(query="", limit=20, offset=0, auth=auth())
+    named = await management.read_entry("entry", auth=auth())
+    recalled, _ = await reader.recall(MemoryRecallRequest(query=""))
+    captured = await management.capture_entry(_CAPTURE, auth(None).model_copy(update={"token": "b" * 64}))
+    for entry in (*entries, named, recalled[0][0], captured):
+        assert entry.actor is None and entry.actor_name == "Service key"
+        assert "b" * 64 not in entry.model_dump_json()
+    assert not named.can_edit and captured.can_edit
+    assert table.create.call_args.kwargs["data"]["created_by"] == "b" * 64
+    database.db.litellm_usertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_only_enrollment", [False, True])
+async def test_unenrolled_requests_skip_user_and_team_reads_and_settings_changes_invalidate(
+    database: MagicMock, read_only_enrollment: bool
+) -> None:
+    enrollment = {"enabled": True, "everyone": False, "user_ids": ["other"]}
+    configure(database, **({"enabled": False, "read": enrollment} if read_only_enrollment else enrollment))
+    for _ in range(10):
+        assert await gateway_memory_store(auth()) is None
+    database.db.litellm_config.find_unique.assert_awaited_once()
+    database.db.litellm_usertable.find_unique.assert_not_awaited()
+    database.db.litellm_teamtable.find_many.assert_not_awaited()
+    enrolled = await gateway_memory_store(auth("other"))
+    assert enrolled is not None and enrolled.access.active
+    settings = MemorySettings(enabled=True, read=MemoryEnrollment(enabled=True))
+    await management.set_settings(settings, auth(role=LitellmUserRoles.PROXY_ADMIN))
+    configure(database, **settings.model_dump())
+    newly_enrolled = await gateway_memory_store(auth())
+    assert newly_enrolled is not None and newly_enrolled.access.active
+    configure(database, enabled=False)
+    assert await gateway_memory_store(auth()) is None
+
+
+@pytest.mark.asyncio
 async def test_revocation_blocks_existing_store_and_private_continuation(database: MagicMock) -> None:
     configure(database)
     database.db.litellm_teamtable.find_many.return_value = [team(permissions=("/memory/v2/entries",))]

@@ -517,32 +517,33 @@ async def test_replica_lag_cannot_authorize_memory_after_primary_revocation(
 @pytest.mark.asyncio
 async def test_unconfigured_gate_caches_presence_without_caching_authorization(prisma_edge: MagicMock) -> None:
     from litellm.caching.caching import DualCache
-    from litellm.proxy.memory.policy import gateway_memory_is_configured
+    from litellm.proxy.memory.policy import gateway_memory_is_enabled
 
     cache = DualCache()
     config = prisma_edge.db.litellm_config.find_unique
     config.return_value = None
-    assert not await gateway_memory_is_configured(prisma_edge, cache)
-    assert not await gateway_memory_is_configured(prisma_edge, cache)
+    assert not await gateway_memory_is_enabled(prisma_edge, cache, _IDENTITY)
+    assert not await gateway_memory_is_enabled(prisma_edge, cache, _IDENTITY)
     config.assert_awaited_once()
     assert config.call_args.kwargs == {"where": {"param_name": "memory_v2"}}
     enabled_cache = DualCache()
     config.return_value = SimpleNamespace(param_value=_SETTINGS.model_dump())
-    assert await gateway_memory_is_configured(prisma_edge, enabled_cache)
+    assert await gateway_memory_is_enabled(prisma_edge, enabled_cache, _IDENTITY)
     config.return_value = None
-    assert await gateway_memory_is_configured(prisma_edge, enabled_cache)
+    assert await gateway_memory_is_enabled(prisma_edge, enabled_cache, _IDENTITY)
     assert not (await resolve_memory_access(prisma_edge, _IDENTITY)).active
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("share_auth_cache", [False, True])
+@pytest.mark.parametrize("other_user_enrolled", [False, True])
 async def test_backend_activation_invalidates_a_gateway_negative_hint_without_pubsub(
-    prisma_edge: MagicMock, share_auth_cache: bool
+    prisma_edge: MagicMock, share_auth_cache: bool, other_user_enrolled: bool
 ) -> None:
     from unittest.mock import patch
 
     from litellm.caching.caching import DualCache
-    from litellm.proxy.memory.policy import gateway_memory_is_configured, invalidate_memory_configuration
+    from litellm.proxy.memory.policy import gateway_memory_is_enabled, invalidate_memory_configuration
 
     shared = {}
 
@@ -566,13 +567,15 @@ async def test_backend_activation_invalidates_a_gateway_negative_hint_without_pu
     with patch.multiple(  # test-quality-ok: Inject external worker caches and Redis; run real invalidation.
         "litellm.proxy.proxy_server", user_api_key_cache=backend_cache, redis_usage_cache=redis
     ):
-        config.return_value = None
-        assert not await gateway_memory_is_configured(prisma_edge, gateway_cache)
-        assert not await gateway_memory_is_configured(prisma_edge, gateway_cache)
+        config.return_value = SimpleNamespace(
+            param_value=MemorySettings(enabled=other_user_enrolled, everyone=False, user_ids=("other",)).model_dump()
+        )
+        assert not await gateway_memory_is_enabled(prisma_edge, gateway_cache, _IDENTITY)
+        assert not await gateway_memory_is_enabled(prisma_edge, gateway_cache, _IDENTITY)
         config.assert_awaited_once()
         config.return_value = SimpleNamespace(param_value=_SETTINGS.model_dump())
         await invalidate_memory_configuration()
-        assert await gateway_memory_is_configured(prisma_edge, gateway_cache)
+        assert await gateway_memory_is_enabled(prisma_edge, gateway_cache, _IDENTITY)
         assert config.await_count == 2
 
 
@@ -582,7 +585,7 @@ async def test_redis_circuit_breaker_falls_back_to_primary_configuration(prisma_
 
     from litellm.caching.caching import DualCache
     from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
-    from litellm.proxy.memory.policy import gateway_memory_is_configured, invalidate_memory_configuration
+    from litellm.proxy.memory.policy import gateway_memory_is_enabled, invalidate_memory_configuration
 
     redis = MagicMock(
         async_get_cache=AsyncMock(side_effect=RedisCircuitBreakerOpenError("open")),
@@ -594,12 +597,66 @@ async def test_redis_circuit_breaker_falls_back_to_primary_configuration(prisma_
     with patch.multiple(  # test-quality-ok: Inject external Redis failure and local worker cache; exercise real fallback.
         "litellm.proxy.proxy_server", user_api_key_cache=cache, redis_usage_cache=redis
     ):
-        assert not await gateway_memory_is_configured(prisma_edge, cache)
+        assert not await gateway_memory_is_enabled(prisma_edge, cache, _IDENTITY)
         prisma_edge.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=_SETTINGS.model_dump())
-        assert await gateway_memory_is_configured(prisma_edge, cache)
+        assert await gateway_memory_is_enabled(prisma_edge, cache, _IDENTITY)
         await invalidate_memory_configuration()
     assert prisma_edge.db.litellm_config.find_unique.await_count == 2
     redis.async_get_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_coordinates_workers_and_keeps_completed_window_locked(prisma_edge: MagicMock) -> None:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.memory.continuation import cleanup_memory_continuations
+
+    shared = {}
+    now = 0
+
+    async def set_value(key, value, *, nx, ttl):
+        assert nx
+        if key in shared and shared[key][1] > now:
+            return False
+        shared[key] = (value, now + ttl)
+        return True
+
+    async def get(key):
+        return shared[key][0] if key in shared and shared[key][1] > now else None
+
+    redis = MagicMock(async_set_cache=AsyncMock(side_effect=set_value), async_get_cache=AsyncMock(side_effect=get))
+    first = PodLockManager(redis)
+    second = PodLockManager(redis)
+    prisma_edge.db.execute_raw.return_value = 0
+    await cleanup_memory_continuations(prisma_edge, first)
+    transactions = prisma_edge.db.tx.call_count
+    assert transactions == 1
+    await cleanup_memory_continuations(prisma_edge, second)
+    await cleanup_memory_continuations(prisma_edge, first)
+    assert prisma_edge.db.tx.call_count == transactions
+    now = 3599
+    await cleanup_memory_continuations(prisma_edge, second)
+    assert prisma_edge.db.tx.call_count == transactions + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("full_batches", [0, 2, 100])
+async def test_cleanup_without_redis_drains_bounded_batches(prisma_edge: MagicMock, full_batches: int) -> None:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.memory.continuation import cleanup_memory_continuations
+
+    sizes = iter([1000] * full_batches + [17])
+
+    async def execute(query, *params):
+        if query.startswith("DELETE"):
+            assert "expires_at <= $1" in query and "LIMIT 1000 FOR UPDATE SKIP LOCKED" in query
+            assert params[0] <= datetime.now(timezone.utc)
+            return next(sizes)
+        assert query == "SET LOCAL statement_timeout = '5s'"
+        return 0
+
+    prisma_edge.db.execute_raw.side_effect = execute
+    await cleanup_memory_continuations(prisma_edge, PodLockManager())
+    assert prisma_edge.db.tx.call_count == min(full_batches + 1, 100)
 
 
 @pytest.mark.asyncio

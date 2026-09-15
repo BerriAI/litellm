@@ -42,7 +42,7 @@ from litellm.proxy.memory.knowledge import (
 )
 from litellm.proxy.memory.policy import (
     MemoryIdentity,
-    gateway_memory_is_configured,
+    gateway_memory_is_enabled,
     resolve_memory_access,
 )
 from litellm.proxy.memory.store import MemoryStore
@@ -484,7 +484,7 @@ async def gateway_memory_store(auth: UserAPIKeyAuth) -> MemoryStore | None:
     if not identity.user_id and not identity.key_id:
         return None
     try:
-        if not await gateway_memory_is_configured(prisma_client, user_api_key_cache):
+        if not await gateway_memory_is_enabled(prisma_client, user_api_key_cache, identity):
             return None
         access: Final = await resolve_memory_access(prisma_client, identity)
         required_tools: Final = frozenset(str(function["name"]) for function in memory_functions(access))

@@ -10251,13 +10251,13 @@ class ProxyStartupEvent:
         await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
 
         if prisma_client is not None:
-            from litellm.proxy.memory.continuation import cleanup_memory_continuations
+            from litellm.proxy.memory.continuation import MEMORY_CLEANUP_INTERVAL_SECONDS, cleanup_memory_continuations
 
             scheduler.add_job(
                 cleanup_memory_continuations,
                 "interval",
-                seconds=60,
-                args=(prisma_client,),
+                seconds=MEMORY_CLEANUP_INTERVAL_SECONDS,
+                args=(prisma_client, proxy_logging_obj.db_spend_update_writer.pod_lock_manager),
                 id="memory_continuation_cleanup",
                 max_instances=1,
                 coalesce=True,

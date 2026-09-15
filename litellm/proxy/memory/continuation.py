@@ -1,11 +1,13 @@
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.memory.policy import memory_digest, memory_primary_client
 from litellm.proxy.memory.store import MemoryStore
 from litellm.repositories.table_repositories import MemoryContinuationRepository
@@ -14,16 +16,31 @@ from litellm.repositories.unit_of_work import prisma_transaction
 _MAX_PATCH_BYTES: Final = 1024 * 1024
 _MAX_PATCHES: Final = 256
 _MAX_NAMESPACE_BYTES: Final = 32 * 1024 * 1024
+MEMORY_CLEANUP_INTERVAL_SECONDS: Final = 3600
 
 
-async def cleanup_memory_continuations(prisma_client: object) -> None:
-    async with prisma_transaction(memory_primary_client(prisma_client)) as transaction:
-        await transaction.execute_raw(
-            'DELETE FROM "LiteLLM_MemoryContinuation" WHERE id IN '
-            '(SELECT id FROM "LiteLLM_MemoryContinuation" WHERE expires_at <= $1::timestamp '
-            "ORDER BY expires_at LIMIT 1000 FOR UPDATE SKIP LOCKED)",
-            datetime.now(timezone.utc),
+async def cleanup_memory_continuations(prisma_client: object, pod_lock_manager: PodLockManager) -> None:
+    if (
+        await pod_lock_manager.acquire_lock(
+            "memory_continuation_cleanup", ttl=MEMORY_CLEANUP_INTERVAL_SECONDS - 60, allow_reentrant=False
         )
+        is False
+    ):
+        return
+    deadline: Final = monotonic() + 10
+    for _ in range(100):
+        if monotonic() >= deadline:
+            return
+        async with prisma_transaction(memory_primary_client(prisma_client)) as transaction:
+            await transaction.execute_raw("SET LOCAL statement_timeout = '5s'")
+            deleted = await transaction.execute_raw(
+                'DELETE FROM "LiteLLM_MemoryContinuation" WHERE id IN '
+                '(SELECT id FROM "LiteLLM_MemoryContinuation" WHERE expires_at <= $1::timestamp '
+                "ORDER BY expires_at LIMIT 1000 FOR UPDATE SKIP LOCKED)",
+                datetime.now(timezone.utc),
+            )
+        if deleted < 1000:
+            return
 
 
 class MemoryContinuation(BaseModel):

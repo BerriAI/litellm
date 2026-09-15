@@ -138,7 +138,7 @@ async def named_entries(store: MemoryStore, entries: tuple[MemoryEntry, ...]) ->
         entry.model_copy(
             update=MappingProxyType(
                 {
-                    "actor_name": names.get(entry.actor or ""),
+                    "actor_name": names.get(entry.actor or "", entry.actor_name),
                     "team_name": team_names.get(entry.team_id or ""),
                 }
             )

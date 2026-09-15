@@ -38,7 +38,8 @@ def memory_entry(row: "LiteLLM_MemoryTable") -> MemoryEntry:
             "evidence": evidence if isinstance(evidence, str) else "",
             "updated_at": row.updated_at,
             "created_at": row.created_at,
-            "actor": row.created_by,
+            "actor": row.created_by if row.user_id is not None else None,
+            "actor_name": "Service key" if row.user_id is None else None,
             "user_id": row.user_id,
             "team_id": row.team_id,
             **{  # mutable-ok: Prisma requires native JSON.
