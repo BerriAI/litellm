@@ -1015,7 +1015,9 @@ _TTFT_KEEPALIVE_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Router | None = None) -> float | None:
+def ttft_keepalive_interval(
+    request_data: Mapping[str, object], llm_router: Router | None = None, *, default_interval: float | None = None
+) -> float | None:
     """The operator's keepalive interval, but only for a request that asked to stream.
 
     Resolved through the deployments the request could land on, so a deployment's
@@ -1030,7 +1032,8 @@ def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Rout
         if llm_router is not None and isinstance(requested_model, str)
         else ()
     )
-    return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
+    configured: Final = litellm.sse_keepalive_ping_interval_seconds
+    return resolve_ttft_keepalive_interval(deployments, default_interval if configured is None else configured)
 
 
 async def _aclose_late_response(produced: Response) -> None:

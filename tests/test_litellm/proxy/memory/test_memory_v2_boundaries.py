@@ -1073,7 +1073,9 @@ async def test_continuation_quota_rejects_excess_without_writing(
 ) -> None:
     prisma_edge.db.query_raw.return_value = [{"key_count": key_count, "bytes": used_bytes}]
     with pytest.raises(HTTPException) as exc:
-        await MemoryContinuations(store(prisma_edge), "aresponses").save("response", MemoryContinuation(replaces=1))
+        await MemoryContinuations(store(prisma_edge), "aresponses").save_many(
+            (("response", MemoryContinuation(replaces=1)),)
+        )
     assert exc.value.status_code == 429
     prisma_edge.db.litellm_memorycontinuation.upsert.assert_not_awaited()
 
@@ -1086,7 +1088,7 @@ async def test_continuation_quota_shares_namespace_lock_across_keys_and_allows_r
     other_key = MemoryIdentity("b" * 64, "owner", "team", "project", "org", False)
     for identity in (_IDENTITY, other_key):
         continuations = MemoryContinuations(MemoryStore(prisma_edge, access_for(identity)), "aresponses")
-        await continuations.save("response", MemoryContinuation(replaces=1, response={"text": "é漢字"}))
+        await continuations.save_many((("response", MemoryContinuation(replaces=1, response={"text": "é漢字"})),))
         query = prisma_edge.db.query_raw.call_args.args
         assert query[1:4] == (identity.namespace, identity.key_id, [continuations.identifier("response")])
         assert json.loads(query[4])[0]["response"]["text"] == "é漢字"
@@ -1313,3 +1315,65 @@ async def test_structured_output_hides_preparation_and_restores_final_constraint
         elif route == "anthropic_messages":
             assert wire.count(b'"type": "message_start"') == 1
             assert wire.count(b'"type": "message_stop"') == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_interval", (None, 0, 0.01))
+async def test_structured_preparation_pings_before_headers_and_honors_explicit_disable(
+    prisma_edge: MagicMock, configured_interval: float | None
+) -> None:
+    import asyncio
+    from unittest.mock import patch
+
+    from starlette.responses import StreamingResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.memory.gateway import process_gateway_memory
+
+    waiting = asyncio.Event()
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def provider(scope: Scope, receive: Receive, send: Send) -> None:
+        body = json.loads((await receive())["body"])
+        assert body["stream"] is False and "response_format" not in body
+        waiting.set()
+        try:
+            await release.wait()
+            await JSONResponse({"error": "private provider details"}, status_code=429)(scope, receive, send)
+        finally:
+            closed.set()
+
+    with (
+        patch(  # test-quality-ok: Exercise default and explicit operator configuration through the real keepalive selector.
+            "litellm.sse_keepalive_ping_interval_seconds", configured_interval
+        ),
+        patch.multiple(  # test-quality-ok: Inject the external provider HTTP boundary and preserve real gateway dispatch.
+            "litellm.proxy.proxy_server", app=provider, llm_router=None
+        ),
+        patch(  # test-quality-ok: Inject authorized persistence; execute the actual memory loop and keepalive wrapper.
+            "litellm.proxy.memory.gateway.gateway_memory_store", new=AsyncMock(return_value=store(prisma_edge))
+        ),
+    ):
+        pending = asyncio.create_task(
+            process_gateway_memory(
+                {"model": "test", "stream": True, "messages": [], "response_format": {"type": "json_object"}},
+                request(),
+                UserAPIKeyAuth(),
+                "acompletion",
+            )
+        )
+        await asyncio.wait_for(waiting.wait(), timeout=1)
+        if configured_interval == 0:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(pending, timeout=0.05)
+        else:
+            response = await asyncio.wait_for(pending, timeout=6)
+            assert isinstance(response, StreamingResponse)
+            assert not release.is_set() and not closed.is_set()
+            assert await anext(response.body_iterator) == b": ping\n\n"
+            release.set()
+            remaining = b"".join([chunk async for chunk in response.body_iterator])
+            assert b'"code": "429"' in remaining and b"private provider details" not in remaining
+    assert closed.is_set()
+    prisma_edge.db.litellm_memorycontinuation.upsert.assert_not_awaited()

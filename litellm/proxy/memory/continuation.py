@@ -216,9 +216,6 @@ class MemoryContinuations:
         )
         return self.validate_patch(row.payload) if row is not None else None
 
-    async def save(self, anchor: str, patch: MemoryContinuation) -> None:
-        await self.save_many(((anchor, patch),))
-
     async def save_many(self, patches: tuple[tuple[str, MemoryContinuation], ...]) -> None:
         namespace: Final = await self.store.authorize_namespace()
         payloads: Final = tuple(

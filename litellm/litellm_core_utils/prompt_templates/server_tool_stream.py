@@ -165,20 +165,7 @@ class ServerToolStream:
             self.indices = MappingProxyType({**self.indices, index: None if hidden else self.content_count})
             if not hidden:
                 self.content_count += 1
-        if isinstance(index, int):
-            mapped: Final = self.indices.get(index)
-            if mapped is None:
-                return ()
-            return (
-                self._emit(
-                    {  # mutable-ok: Native provider JSON containers.
-                        **data,
-                        "index": mapped,
-                    },
-                    str(kind),
-                ),
-            )
-        return (self._emit(data, str(kind)),)
+        return self._indexed_event(data, "index", str(kind))
 
     def _responses(self, data: Mapping[str, object]) -> tuple[bytes, ...]:
         kind: Final = str(data.get("type", ""))
@@ -212,20 +199,24 @@ class ServerToolStream:
             self.indices = MappingProxyType({**self.indices, index: None if hidden else self.content_count})
             if not hidden:
                 self.content_count += 1
-        if isinstance(index, int):
-            mapped: Final = self.indices.get(index)
-            if mapped is None:
-                return ()
-            return (
-                self._emit(
-                    {  # mutable-ok: Native provider JSON containers.
-                        **data,
-                        "output_index": mapped,
-                    },
-                    kind,
-                ),
-            )
-        return (self._emit(data, kind),)
+        return self._indexed_event(data, "output_index", kind)
+
+    def _indexed_event(self, data: Mapping[str, object], index_field: str, event: str) -> tuple[bytes, ...]:
+        index: Final = data.get(index_field)
+        if not isinstance(index, int):
+            return (self._emit(data, event),)
+        mapped: Final = self.indices.get(index)
+        if mapped is None:
+            return ()
+        return (
+            self._emit(
+                {  # mutable-ok: Native provider JSON containers.
+                    **data,
+                    index_field: mapped,
+                },
+                event,
+            ),
+        )
 
     def _chat(self, data: Mapping[str, object]) -> tuple[bytes, ...]:
         if self.response_id is None:

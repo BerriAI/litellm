@@ -414,10 +414,18 @@ async def process_gateway_memory(
             raise HTTPException(status_code=404, detail="Memory response not found or expired")
         return None
     validate_memory_request(data, request)
+    from litellm.proxy.common_request_processing import (
+        _UpstreamClosingStreamingResponse,  # pyright: ignore[reportPrivateUsage]  # Reuse disconnect cleanup for the prefetched stream.
+        ttft_keepalive_interval,
+    )
     from litellm.proxy.proxy_server import app, llm_router
 
     loop: Final = GatewayMemoryLoop(app, request, data, route, store)
-    iterator: Final = loop.run()
+    iterator: Final = wrap_passthrough_sse_bytes_with_keepalive_pings(
+        loop.run(),
+        ping_interval_seconds=ttft_keepalive_interval(data, llm_router, default_interval=5.0),
+        upstream_headers=MappingProxyType({"content-type": "text/event-stream"}),
+    )
     if not loop.streaming:
         async for _ in iterator:
             pass
@@ -449,17 +457,8 @@ async def process_gateway_memory(
         finally:
             await iterator.aclose()
 
-    from litellm.proxy.common_request_processing import (
-        _UpstreamClosingStreamingResponse,  # pyright: ignore[reportPrivateUsage]  # Reuse cleanup when a client disconnects before consuming the prefetched stream.
-        ttft_keepalive_interval,
-    )
-
     return _UpstreamClosingStreamingResponse(
-        wrap_passthrough_sse_bytes_with_keepalive_pings(
-            stream(),
-            ping_interval_seconds=ttft_keepalive_interval(data, llm_router),
-            upstream_headers=MappingProxyType({"content-type": "text/event-stream"}),
-        ),
+        stream(),
         media_type="text/event-stream",
         headers={  # mutable-ok: Native ASGI response headers.
             **loop.response_headers(),
