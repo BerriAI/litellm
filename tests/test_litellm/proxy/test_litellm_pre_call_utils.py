@@ -14,7 +14,15 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
-from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy._types import (
+    AddTeamCallback,
+    LitellmUserRoles,
+    ProxyException,
+    TeamCallbackMetadata,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -3567,7 +3575,8 @@ def test_get_internal_user_header_from_mapping_none_when_absent():
     assert header_name is None
 
 
-def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
     headers = {"X-OpenWebUI-User-Id": "internal-user-123"}
     general_settings = {
@@ -3580,16 +3589,19 @@ def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
         ]
     }
 
-    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(general_settings, user_api_key_dict, headers)
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
 
     assert result is user_api_key_dict
     assert user_api_key_dict.user_id == "internal-user-123"
 
 
-def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchanged():
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchanged():
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
 
-    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         None, user_api_key_dict, {"X-OpenWebUI-User-Id": "abc"}
     )
     assert result is user_api_key_dict
@@ -3598,11 +3610,233 @@ def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchan
     general_settings = {
         "user_header_mappings": [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
     }
-    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         general_settings, user_api_key_dict, {"Other": "value"}
     )
     assert result is user_api_key_dict
     assert user_api_key_dict.user_id is None
+
+
+class _FakeUserTable:
+    def __init__(self, rows: tuple[LiteLLM_UserTable, ...]) -> None:
+        self.rows = rows
+        self.created: list[dict] = []
+        self.query_count = 0
+
+    async def find_unique(self, where: dict, include: dict | None = None) -> LiteLLM_UserTable | None:
+        self.query_count += 1
+        return next((row for row in self.rows if row.user_id == where.get("user_id")), None)
+
+    async def find_first(self, where: dict, include: dict | None = None) -> LiteLLM_UserTable | None:
+        self.query_count += 1
+        email_filter = where.get("user_email")
+        wanted = email_filter.get("equals") if isinstance(email_filter, dict) else email_filter
+        return next((row for row in self.rows if (row.user_email or "").lower() == str(wanted).lower()), None)
+
+    async def create(self, data: dict, include: dict | None = None) -> LiteLLM_UserTable:
+        self.created.append(dict(data))
+        created_row = LiteLLM_UserTable(**data)
+        self.rows = (*self.rows, created_row)
+        return created_row
+
+
+def _fake_prisma_client(*rows: LiteLLM_UserTable) -> SimpleNamespace:
+    user_table = _FakeUserTable(rows)
+    return SimpleNamespace(db=SimpleNamespace(litellm_usertable=user_table), user_table=user_table)
+
+
+_EMAIL_MAPPING_SETTINGS = {
+    "user_header_mappings": [{"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "internal_user"}]
+}
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_email_header_resolves_internal_user_and_budget():
+    """
+    Regression for #14667: an email-shaped mapped header must resolve to the internal user row so spend
+    lands on that user_id, and the budget fields the max-budget hook reads must move with it.
+    """
+    internal_user = LiteLLM_UserTable(
+        user_id="internal-uuid-1",
+        user_email="Alice.Resolved@example.com",
+        max_budget=25.0,
+        spend=7.5,
+        user_role="internal_user",
+    )
+    prisma_client = _fake_prisma_client(internal_user)
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="key-owner",
+        user_email="key-owner@example.com",
+        user_max_budget=1000.0,
+        user_spend=0.0,
+    )
+
+    result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        _EMAIL_MAPPING_SETTINGS,
+        user_api_key_dict,
+        {"x-openwebui-user-email": "alice.resolved@example.com"},
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id == "internal-uuid-1"
+    assert user_api_key_dict.user_email == "Alice.Resolved@example.com"
+    assert user_api_key_dict.user_max_budget == 25.0
+    assert user_api_key_dict.user_spend == 7.5
+    assert prisma_client.user_table.created == []
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_email_header_does_not_change_authenticated_role():
+    """A mapped header is client controlled, so resolving it must never move the request's privilege level."""
+    prisma_client = _fake_prisma_client(
+        LiteLLM_UserTable(
+            user_id="admin-uuid",
+            user_email="escalate@example.com",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        )
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="key-owner",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+
+    await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        _EMAIL_MAPPING_SETTINGS,
+        user_api_key_dict,
+        {"X-OpenWebUI-User-Email": "escalate@example.com"},
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert user_api_key_dict.user_id == "admin-uuid"
+    assert user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_unknown_email_keeps_raw_value_and_creates_nothing():
+    prisma_client = _fake_prisma_client()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", user_id="key-owner", user_max_budget=1000.0)
+
+    await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        _EMAIL_MAPPING_SETTINGS,
+        user_api_key_dict,
+        {"X-OpenWebUI-User-Email": "absent-user@example.com"},
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert user_api_key_dict.user_id == "absent-user@example.com"
+    assert user_api_key_dict.user_max_budget == 1000.0
+    assert prisma_client.user_table.created == []
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_unknown_email_creates_user_when_upsert_enabled():
+    prisma_client = _fake_prisma_client()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", user_id="key-owner")
+
+    await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        {**_EMAIL_MAPPING_SETTINGS, "user_header_mappings_upsert_user_id": True},
+        user_api_key_dict,
+        {"X-OpenWebUI-User-Email": "brand-new@example.com"},
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert [row["user_id"] for row in prisma_client.user_table.created] == ["brand-new@example.com"]
+    assert prisma_client.user_table.created[0]["user_email"] == "brand-new@example.com"
+    assert user_api_key_dict.user_id == "brand-new@example.com"
+
+
+_USER_ID_MAPPING_SETTINGS = {
+    "user_header_mappings": [{"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}]
+}
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_user_id_header_moves_budget_to_that_user():
+    """
+    The config in #14667 maps a plain user id, not an email, so an id-shaped header has to move the
+    budget fields too. Otherwise the max-budget hook checks the mapped user's spend counter against
+    the key owner's budget.
+    """
+    prisma_client = _fake_prisma_client(
+        LiteLLM_UserTable(
+            user_id="openwebui-user-123",
+            user_email="alice@example.com",
+            max_budget=25.0,
+            spend=7.5,
+        )
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", user_id="key-owner", user_max_budget=1000.0, user_spend=0.0)
+
+    await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        _USER_ID_MAPPING_SETTINGS,
+        user_api_key_dict,
+        {"X-OpenWebUI-User-Id": "openwebui-user-123"},
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert user_api_key_dict.user_id == "openwebui-user-123"
+    assert user_api_key_dict.user_max_budget == 25.0
+    assert user_api_key_dict.user_spend == 7.5
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_unknown_user_id_keeps_raw_value():
+    prisma_client = _fake_prisma_client()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", user_id="key-owner", user_max_budget=1000.0)
+
+    await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        _USER_ID_MAPPING_SETTINGS,
+        user_api_key_dict,
+        {"X-OpenWebUI-User-Id": "never-seen-before"},
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert user_api_key_dict.user_id == "never-seen-before"
+    assert user_api_key_dict.user_max_budget == 1000.0
+    assert prisma_client.user_table.created == []
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_resolves_email_without_a_dotted_domain():
+    """`"@" in value` is the codebase's email-shape rule (auth_checks.get_user_object callers), so an
+    intranet address with no dot in the domain still has to resolve."""
+    prisma_client = _fake_prisma_client(
+        LiteLLM_UserTable(user_id="internal-uuid-2", user_email="bob@localhost", max_budget=5.0)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", user_max_budget=1000.0)
+
+    await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        _EMAIL_MAPPING_SETTINGS,
+        user_api_key_dict,
+        {"X-OpenWebUI-User-Email": "bob@localhost"},
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert user_api_key_dict.user_id == "internal-uuid-2"
+    assert user_api_key_dict.user_max_budget == 5.0
+
+
+@pytest.mark.asyncio
+async def test_add_internal_user_from_user_mapping_email_header_without_db_keeps_raw_value():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        _EMAIL_MAPPING_SETTINGS,
+        user_api_key_dict,
+        {"X-OpenWebUI-User-Email": "no-db@example.com"},
+    )
+
+    assert user_api_key_dict.user_id == "no-db@example.com"
 
 
 def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():
