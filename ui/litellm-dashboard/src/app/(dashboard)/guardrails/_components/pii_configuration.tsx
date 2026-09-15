@@ -24,7 +24,9 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
   const allEntities = mergeCustomEntities(entities, selectedEntities);
   const customEntities = allEntities.filter((entity) => !entities.includes(entity));
   const categories =
-    customEntities.length > 0 ? [...entityCategories, { category: "Custom", entities: customEntities }] : entityCategories;
+    customEntities.length > 0
+      ? [...entityCategories, { category: "Custom", entities: customEntities }]
+      : entityCategories;
 
   // Create a lookup map to quickly find an entity's category
   const entityToCategoryMap = new Map<string, string>();

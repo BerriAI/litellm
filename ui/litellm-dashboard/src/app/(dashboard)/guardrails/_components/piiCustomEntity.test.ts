@@ -16,11 +16,8 @@ describe("normalizeCustomEntityName", () => {
 
 describe("mergeCustomEntities", () => {
   it("keeps supported order, dedupes, and appends unknown selected entities", () => {
-    expect(mergeCustomEntities(["PERSON", "EMAIL"], ["EMAIL", "NO_FODSELSNUMMER", "PERSON", "SE_PERSONNUMMER"])).toEqual([
-      "PERSON",
-      "EMAIL",
-      "NO_FODSELSNUMMER",
-      "SE_PERSONNUMMER",
-    ]);
+    expect(
+      mergeCustomEntities(["PERSON", "EMAIL"], ["EMAIL", "NO_FODSELSNUMMER", "PERSON", "SE_PERSONNUMMER"]),
+    ).toEqual(["PERSON", "EMAIL", "NO_FODSELSNUMMER", "SE_PERSONNUMMER"]);
   });
 });
