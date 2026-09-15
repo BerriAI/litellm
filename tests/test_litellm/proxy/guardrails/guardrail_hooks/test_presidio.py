@@ -3405,3 +3405,126 @@ async def test_chunk_fanout_bound_is_shared_across_concurrent_calls():
         )
     assert state["peak"] >= 2
     assert state["peak"] <= PRESIDIO_ANALYZE_CHUNK_CONCURRENCY
+
+
+@pytest.mark.asyncio
+async def test_pre_call_masks_openai_tool_call_arguments(presidio_guardrail, mock_user_api_key, mock_cache):
+    """PII inside assistant tool_calls[].function.arguments in the history must be masked."""
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "save my card"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "store_card",
+                            "arguments": '{"card": "4111-1111-1111-1111", "email": "test@example.com"}',
+                        },
+                    }
+                ],
+            },
+        ],
+        "model": "gpt-4",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        redacted = text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+        redacted = redacted.replace("test@example.com", "[EMAIL]")
+        return redacted
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    args = result["messages"][1]["tool_calls"][0]["function"]["arguments"]
+    assert "[CREDIT_CARD]" in args
+    assert "[EMAIL]" in args
+    assert "4111-1111-1111-1111" not in args
+    assert "test@example.com" not in args
+
+
+@pytest.mark.asyncio
+async def test_pre_call_masks_openai_legacy_function_call_arguments(
+    presidio_guardrail, mock_user_api_key, mock_cache
+):
+    """PII inside the legacy assistant function_call.arguments must be masked."""
+    test_data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": "store_card",
+                    "arguments": '{"card": "4111-1111-1111-1111"}',
+                },
+            },
+        ],
+        "model": "gpt-4",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    args = result["messages"][0]["function_call"]["arguments"]
+    assert "[CREDIT_CARD]" in args
+    assert "4111-1111-1111-1111" not in args
+
+
+@pytest.mark.asyncio
+async def test_pre_call_masks_anthropic_tool_use_input(presidio_guardrail, mock_user_api_key, mock_cache):
+    """PII inside an Anthropic tool_use block's input in the history must be masked."""
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "save my card"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "store_card",
+                        "input": {"card": "4111-1111-1111-1111", "email": "test@example.com"},
+                    }
+                ],
+            },
+        ],
+        "model": "claude-3-opus-20240229",
+    }
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        redacted = text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+        redacted = redacted.replace("test@example.com", "[EMAIL]")
+        return redacted
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="anthropic_messages",
+    )
+
+    tool_use_input = result["messages"][1]["content"][0]["input"]
+    assert "[CREDIT_CARD]" in str(tool_use_input)
+    assert "[EMAIL]" in str(tool_use_input)
+    assert "4111-1111-1111-1111" not in str(tool_use_input)
+    assert "test@example.com" not in str(tool_use_input)
