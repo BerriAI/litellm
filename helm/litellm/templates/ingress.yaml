@@ -89,7 +89,7 @@
   at "/" Prefix would swallow the whole backend management API) instead of
   adding to it.
 */}}
-{{- $builtinPathKeys := list "/test|Exact" "/|Prefix" -}}
+{{- $builtinPathKeys := list "/test|Exact" "/debug/memory/summary|Exact" "/|Prefix" -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -129,7 +129,16 @@ spec:
           # --- Gateway data plane ---
           # Exact /test only (see the $gatewayPrefixes comment above);
           # /test/* MCP management endpoints fall to the backend catch-all.
+          # Exact /debug/memory/summary reads a serving worker's RSS (the e2e memory
+          # gate); the rest of /debug/* stays on the backend.
           - path: /test
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+          - path: /debug/memory/summary
             pathType: Exact
             backend:
               service:

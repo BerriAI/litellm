@@ -874,15 +874,25 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
     assert model_info.get("mode") == "responses"
 
 
-@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"])
+@pytest.mark.parametrize(
+    "model_name, expected_mode",
+    [
+        pytest.param("gpt-5.6-sol", "responses", id="above-boundary-bridges"),
+        pytest.param("gpt-5.1", None, id="below-boundary-stays-chat"),
+    ],
+)
 def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_to_responses(
-    monkeypatch, model_name
+    monkeypatch, model_name, expected_mode
 ):
     """
-    The whole gpt-5.6 family must bridge on function tools alone. The bridge used to
-    require an explicit reasoning_effort, so a gpt-5.6 call carrying tools and no effort
-    was rejected with "Function tools with reasoning_effort are not supported for
-    gpt-5.6-sol in /v1/chat/completions".
+    gpt-5.6 must bridge on function tools alone. The bridge used to require an explicit
+    reasoning_effort, so a gpt-5.6 call carrying tools and no effort was rejected with
+    "Function tools with reasoning_effort are not supported for gpt-5.6-sol in
+    /v1/chat/completions".
+
+    Paired with a model below the gpt-5.4 boundary, which must still stay on chat. The
+    gate parses the version and drops any suffix, so the family members bridge
+    identically and only the boundary distinguishes behaviour.
     """
     import litellm
     from litellm.main import responses_api_bridge_check
@@ -901,7 +911,7 @@ def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_
         )
 
     assert model == model_name
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") == expected_mode
 
 
 def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat():
@@ -3311,15 +3321,19 @@ def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
     variable alone does not reload the map, so pin the map itself.
 
-    ``get_model_info`` is lru_cached, so pinning ``model_cost`` is not enough on its
-    own: a cached entry warmed against the network-fetched map keeps its old prices
-    and ``completion_cost`` bills at those while the assertions read the pinned map.
-    Clear on the way in and out so entries never leak across tests in either direction."""
+    Prices are read through two separate lru_caches, so pinning ``model_cost`` is not
+    enough on its own: an entry warmed against the network-fetched map keeps its old
+    prices and billing reads those while the assertions read the pinned map.
+    ``_invalidate_model_cost_lowercase_map`` clears both caches, where
+    ``get_model_info.cache_clear`` reaches only one. Invalidate on the way in and out
+    so entries never leak across tests in either direction."""
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
     yield
-    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):
@@ -3781,3 +3795,58 @@ def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_rout
 
     assert route.called
     assert response.content == b"mp3-bytes"
+
+
+FORWARDED_CLIENT_HEADERS: Final = {"x-forwarded-for": "10.0.0.1", "x-amzn-trace-id": "Root=1-lit7694"}
+
+
+def _chat_completion_json() -> Mapping[str, object]:
+    return {
+        "id": "chatcmpl-lit7694",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.4",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def _chat_completion_sse() -> bytes:
+    chunk: Final = {
+        "id": "chatcmpl-lit7694",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5.4",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    }
+    return f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_of_the_body(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, content=_chat_completion_sse(), headers={"content-type": "text/event-stream"})
+        if stream
+        else httpx.Response(200, json=_chat_completion_json())
+    )
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.4",
+        input="Reply with the single word ok",
+        stream=stream,
+        use_chat_completions_api=True,
+        headers=dict(FORWARDED_CLIENT_HEADERS),
+        api_key="sk-test",
+    )
+    if stream:
+        list(response)
+
+    assert route.called
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert "extra_headers" not in body
+    assert body["model"] == "gpt-5.4"
+    assert {k: request.headers[k] for k in FORWARDED_CLIENT_HEADERS} == FORWARDED_CLIENT_HEADERS
