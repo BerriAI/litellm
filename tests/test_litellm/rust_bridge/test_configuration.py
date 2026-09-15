@@ -67,6 +67,8 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
     ("process", "environment", "capability", "expected"),
     (
         (False, True, OPT_OUT, ExecutionDecision.PYTHON),
+        (True, False, OPT_OUT, ExecutionDecision.PYTHON),
+        (True, None, OPT_OUT, ExecutionDecision.RUST_WITH_FALLBACK),
         (True, False, OPT_IN, ExecutionDecision.RUST_WITH_FALLBACK),
         (None, False, OPT_OUT, ExecutionDecision.PYTHON),
         (None, True, OPT_IN, ExecutionDecision.RUST_WITH_FALLBACK),

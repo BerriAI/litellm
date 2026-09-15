@@ -118,15 +118,19 @@ def resolve_capability(
             return ExecutionDecision.PYTHON
         case RolloutPolicy.RUST_REQUIRED:
             return ExecutionDecision.RUST_REQUIRED
-        case RolloutPolicy.RUST_OPT_IN | RolloutPolicy.RUST_OPT_OUT:
+        case RolloutPolicy.RUST_OPT_IN:
             enabled: Final = (
                 process_override
                 if process_override is not None
                 else environment_override
                 if environment_override is not None
-                else capability.rollout is RolloutPolicy.RUST_OPT_OUT
+                else False
             )
             return ExecutionDecision.RUST_WITH_FALLBACK if enabled else ExecutionDecision.PYTHON
+        case RolloutPolicy.RUST_OPT_OUT:
+            if environment_override is False or process_override is False:
+                return ExecutionDecision.PYTHON
+            return ExecutionDecision.RUST_WITH_FALLBACK
         case _:
             assert_never(capability.rollout)
 
@@ -145,8 +149,6 @@ def rust_enabled() -> bool:
 
 
 def rust_ocr_enabled() -> bool:
-    if _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME)) is False:
-        return False
     return capability_decision(_OCR, context=CapabilityContext()) is ExecutionDecision.RUST_WITH_FALLBACK
 
 
