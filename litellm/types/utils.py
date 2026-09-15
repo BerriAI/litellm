@@ -3850,6 +3850,8 @@ all_litellm_params = (
         "budget_duration",
         "use_in_pass_through",
         "merge_reasoning_content_in_choices",
+        "forward_reasoning_content",
+        "reasoning_content_field",
         "litellm_credential_name",
         "allowed_openai_params",
         "litellm_session_id",

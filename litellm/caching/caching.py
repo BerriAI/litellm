@@ -366,6 +366,18 @@ class Cache:
                     param_value = kwargs[param]
                     cache_key += f"{param}: {param_value}"
 
+        nested_litellm_params: Final = kwargs.get("litellm_params") or {}
+        forward_reasoning_content: Final = kwargs.get(
+            "forward_reasoning_content", nested_litellm_params.get("forward_reasoning_content")
+        )
+        if forward_reasoning_content is True:
+            cache_key += "forward_reasoning_content: True"
+        reasoning_content_field: Final = kwargs.get(
+            "reasoning_content_field", nested_litellm_params.get("reasoning_content_field")
+        )
+        if reasoning_content_field == "reasoning":
+            cache_key += "reasoning_content_field: reasoning"
+
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
 
