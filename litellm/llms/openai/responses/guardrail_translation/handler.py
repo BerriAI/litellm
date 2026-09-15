@@ -454,8 +454,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
         raw_tools: Final = data.get("tools")
+        structured_messages: Final = tuple(self.get_structured_messages(data) or ())
         return RequestScanContext(
-            structured_messages=tuple(self.get_structured_messages(data) or ()),
+            structured_messages=structured_messages,
             tools=tuple(
                 cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
                 for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(
@@ -463,6 +464,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
                 for tool in form.chat_tools
             ),
+            conversation_supplied=bool(structured_messages),
         )
 
     async def process_input_messages(

@@ -3397,3 +3397,15 @@ class TestResponsesResponseScanCarriesRequestConversation:
             "assistant",
         ]
         assert inputs["structured_messages"][-1] == {"role": "assistant", "content": "Paris is the capital"}
+
+    @pytest.mark.asyncio
+    async def test_response_scan_without_request_input_stays_response_only(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = TypedInputsRecordingGuardrail()
+        request = {k: v for k, v in self._request().items() if k not in ("input", "instructions")}
+
+        await handler.process_output_response(self._tool_call_response(), guardrail, request_data=request)
+
+        [(_, inputs)] = guardrail.seen
+        assert "structured_messages" not in inputs
+        assert "tools" not in inputs

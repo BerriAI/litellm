@@ -30,6 +30,7 @@ class RequestScanContext:
 
     structured_messages: tuple["AllMessageValues", ...] = ()
     tools: tuple["ChatCompletionToolParam", ...] = ()
+    conversation_supplied: bool = False
 
     @staticmethod
     def scoped(
@@ -51,6 +52,7 @@ class RequestScanContext:
         return RequestScanContext(
             structured_messages=tuple(structured_messages[index] for index in scoped_indices),
             tools=() if scan_only_tool_results else tuple(tools),
+            conversation_supplied=bool(structured_messages),
         )
 
 
@@ -308,7 +310,7 @@ class BaseTranslation(ABC):
         if request_data is None:
             return inputs
         context: Final = self.request_scan_context(request_data, guardrail_to_apply)
-        if not context.structured_messages:
+        if not context.conversation_supplied:
             return inputs
         assistant_turn: Final = response_assistant_turn(inputs.get("texts") or (), inputs.get("tool_calls") or ())
         contextual_inputs: Final[GenericGuardrailAPIInputs] = {
