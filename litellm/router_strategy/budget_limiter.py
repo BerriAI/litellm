@@ -460,8 +460,8 @@ class RouterBudgetLimiting(CustomLogger):
         )
         try:
             await redis_cache.async_increment_pipeline(increment_list=increment_list)
-        except Exception:
-            verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
+        except Exception as error:
+            log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", error)
             await self._requeue_detached_increment_operations()
             return False
         await self._clear_detached_increment_operations()
