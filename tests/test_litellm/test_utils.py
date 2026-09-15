@@ -4643,6 +4643,16 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert result["aws_region_name"] == "us-east-1"
 
 
+@pytest.mark.parametrize("filter_name", [
+    "get_non_default_completion_params", "get_non_default_transcription_params", "filter_out_litellm_params",
+])
+def test_scoped_weights_are_excluded_from_provider_params(filter_name: str) -> None:
+    filtered = getattr(litellm.utils, filter_name)(
+        {"provider_option": "kept", "_router_weights": {"group": {"deployment": 100}}}
+    )
+    assert filtered == {"provider_option": "kept"}
+
+
 class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 
