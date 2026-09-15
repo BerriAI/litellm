@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Literal, NamedTuple
 
 FileContentProvider = Literal[
-    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "manus"
+    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "manus", "mistral"
 ]
 
 

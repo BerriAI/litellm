@@ -63,7 +63,6 @@ def test_ocr4_cost_scales_with_pages(model: str, pages_processed: int) -> None:
     assert cost == pytest.approx(OCR4_COST_PER_PAGE * pages_processed)
 
 
-
 @pytest.mark.parametrize("cost_map_path", [MAIN_COST_MAP, BACKUP_COST_MAP])
 def test_ocr3_pricing_entry(cost_map_path: Path) -> None:
     with open(cost_map_path) as f:
@@ -72,9 +71,11 @@ def test_ocr3_pricing_entry(cost_map_path: Path) -> None:
     assert info is not None, f"{OCR3_MODEL} missing from {cost_map_path.name}"
     assert info["litellm_provider"] == "mistral"
     assert info["mode"] == "ocr"
-    assert info["supported_endpoints"] == ["/v1/ocr"]
+    assert info["supported_endpoints"] == ["/v1/ocr", "/v1/batch"]
     assert info["ocr_cost_per_page"] == OCR3_COST_PER_PAGE
     assert info["annotation_cost_per_page"] == OCR3_ANNOTATION_COST_PER_PAGE
+    assert info["ocr_cost_per_page_batches"] == OCR3_COST_PER_PAGE / 2
+    assert info["annotation_cost_per_page_batches"] == OCR3_ANNOTATION_COST_PER_PAGE / 2
 
 
 def test_ocr3_model_info_price(local_model_cost_map) -> None:

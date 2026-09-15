@@ -35684,51 +35684,66 @@
     "mistral/mistral-ocr-latest": {
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.004,
+        "ocr_cost_per_page_batches": 0.002,
         "annotation_cost_per_page": 0.005,
+        "annotation_cost_per_page_batches": 0.0025,
         "mode": "ocr",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ],
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4-0": {
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.004,
+        "ocr_cost_per_page_batches": 0.002,
         "annotation_cost_per_page": 0.005,
+        "annotation_cost_per_page_batches": 0.0025,
         "mode": "ocr",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ],
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4-1": {
         "annotation_cost_per_page": 0.005,
+        "annotation_cost_per_page_batches": 0.0025,
         "litellm_provider": "mistral",
         "mode": "ocr",
         "ocr_cost_per_page": 0.004,
+        "ocr_cost_per_page_batches": 0.002,
         "source": "https://docs.mistral.ai/models/model-cards/ocr-4-1",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ]
     },
     "mistral/mistral-ocr-2505-completion": {
         "deprecation_date": "2026-05-31",
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.001,
+        "ocr_cost_per_page_batches": 0.0005,
         "annotation_cost_per_page": 0.003,
+        "annotation_cost_per_page_batches": 0.0015,
         "mode": "ocr",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ],
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-2512": {
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.002,
+        "ocr_cost_per_page_batches": 0.001,
         "annotation_cost_per_page": 0.003,
+        "annotation_cost_per_page_batches": 0.0015,
         "mode": "ocr",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ],
         "source": "https://mistral.ai/pricing#api-pricing"
     },
@@ -60865,31 +60880,40 @@
     "mistral/mistral-ocr-3": {
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.002,
+        "ocr_cost_per_page_batches": 0.001,
         "annotation_cost_per_page": 0.003,
+        "annotation_cost_per_page_batches": 0.0015,
         "mode": "ocr",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ],
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-3-0": {
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.002,
+        "ocr_cost_per_page_batches": 0.001,
         "annotation_cost_per_page": 0.003,
+        "annotation_cost_per_page_batches": 0.0015,
         "mode": "ocr",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ],
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4": {
         "annotation_cost_per_page": 0.005,
+        "annotation_cost_per_page_batches": 0.0025,
         "litellm_provider": "mistral",
         "mode": "ocr",
         "ocr_cost_per_page": 0.004,
+        "ocr_cost_per_page_batches": 0.002,
         "source": "https://docs.mistral.ai/models/model-cards/ocr-4-1",
         "supported_endpoints": [
-            "/v1/ocr"
+            "/v1/ocr",
+            "/v1/batch"
         ]
     },
     "mistral/voxtral-mini-latest": {
