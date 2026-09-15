@@ -35,7 +35,10 @@ class ServerToolStreamError(ValueError):
             int(code)
             if code.isascii() and code.isdecimal() and len(code) == 3 and 400 <= int(code) < 600
             else 429
-            if (error.get("type") or code) in ("rate_limit_error", "rate_limit_exceeded", "insufficient_quota")
+            if any(
+                value in ("rate_limit_error", "rate_limit_exceeded", "insufficient_quota")
+                for value in (error.get("type"), code)
+            )
             else 503
             if error.get("type") == "overloaded_error"
             else 502
