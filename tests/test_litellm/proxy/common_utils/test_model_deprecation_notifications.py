@@ -423,6 +423,11 @@ FRESH_DEPLOYMENT: Final = {
     "litellm_params": {"model": "openai/fresh-model-with-no-cost-map-entry"},
     "model_info": {"id": "x"},
 }
+TODAY_DEPLOYMENT: Final = {
+    "model_name": "today-alias",
+    "litellm_params": {"model": "openai/today-model"},
+    "model_info": {"id": "5", "deprecation_date": TODAY.isoformat(), "litellm_provider": "openai"},
+}
 FAR_DEPLOYMENT: Final = {
     "model_name": "far-alias",
     "litellm_params": {"model": "openai/far-model"},
@@ -668,6 +673,19 @@ class TestSendModelDeprecationEmails:
         assert deliverer.sent == []
         assert lock.calls == []
         assert await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value) is not None
+
+    @pytest.mark.asyncio
+    async def test_should_still_email_the_day_zero_milestone_when_the_marker_lifetime_is_under_a_day(self):
+        deliverer: Final = _Deliverer()
+        ctx: Final = _context(
+            _router([TODAY_DEPLOYMENT, DEAD_DEPLOYMENT]),
+            _prisma(TWO_TEAMS[:1], TWO_ADMINS),
+            deliverer,
+            alerting_args=SlackAlertingArgs(model_deprecation_email_ttl=3600),
+        )
+
+        assert await send_model_deprecation_emails(ctx) == 1
+        assert len(deliverer.sent) == 1
 
     @pytest.mark.asyncio
     async def test_should_keep_going_and_leave_keys_unstamped_when_one_team_fails(self):

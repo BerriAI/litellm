@@ -93,7 +93,7 @@ def select_milestone(days_until: int, thresholds: Sequence[int]) -> int | None:
 
 
 def _max_age_days(alerting_args: SlackAlertingArgs) -> int:
-    return alerting_args.model_deprecation_email_ttl // (24 * 60 * 60)
+    return max(1, alerting_args.model_deprecation_email_ttl // (24 * 60 * 60))
 
 
 def _reached(
