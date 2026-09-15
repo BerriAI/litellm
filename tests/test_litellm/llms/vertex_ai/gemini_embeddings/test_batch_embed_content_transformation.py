@@ -10,6 +10,7 @@ Covers:
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
@@ -25,6 +26,15 @@ from litellm.types.utils import EmbeddingResponse
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
+
+
+@pytest.fixture(autouse=True)
+def _local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 class TestIsMultimodalInput:
