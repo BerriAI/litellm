@@ -574,7 +574,7 @@ async def _get_team_allowed_mcp_servers(
         return set()
 
     from litellm.proxy.auth.auth_checks import (
-        _get_mcp_server_ids_from_access_groups,  # pyright: ignore[reportPrivateUsage]  # same shared resolver the runtime MCP auth path calls
+        _get_mcp_server_ids_from_access_groups,  # pyright: ignore[reportPrivateUsage]
     )
 
     access_group_servers: Final = await _get_mcp_server_ids_from_access_groups(
