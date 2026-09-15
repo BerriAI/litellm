@@ -6,7 +6,7 @@ callback's ``kwargs`` into the projection ``_PROXY_track_cost_callback`` and
 ``DBSpendUpdateWriter.update_database`` actually read: identities and metadata, timings, usage, the
 standard logging payload without its prompt/response bodies, and the tool names. The request
 messages, the raw ``proxy_server_request`` body and the full response travel only when spend logs
-are configured to store prompts and responses. The cache key is the preset key the caching layer
+are configured to store prompts and responses; the request's method and path always travel. The cache key is the preset key the caching layer
 already computed, never a fresh hash over the request body.
 
 ``spend_event_callback_args`` rebuilds the ``(kwargs, response_obj, start_time, end_time)`` tuple
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -247,6 +248,19 @@ def _metadata_for_event(
     return MappingProxyType({**kept, "user_api_key_budget_reservation": budget_reservation})
 
 
+def _request_route_for_event(proxy_server_request: object) -> ObjectMapping | None:
+    """The request's method and path alone: what the spend row needs to tell a read of a stored
+    object (its id in the path) from a response minted for this call, with no host, query,
+    headers or body."""
+    request: Final = _mapping_or_none(proxy_server_request)
+    if request is None:
+        return None
+    url: Final = request.get("url")
+    if not isinstance(url, str):
+        return None
+    return MappingProxyType({"url": urlsplit(url).path, "method": request.get("method")})
+
+
 def _litellm_params_for_event(
     litellm_params: _LitellmParams, cache_key: str | None, store_bodies: bool
 ) -> _LitellmParams:
@@ -267,7 +281,11 @@ def _litellm_params_for_event(
         "user_api_key_end_user_id": litellm_params.get("user_api_key_end_user_id"),
         "metadata": _metadata_for_event(metadata, budget_reservation),
         "litellm_metadata": _metadata_for_event(litellm_metadata, budget_reservation),
-        "proxy_server_request": litellm_params.get("proxy_server_request") if store_bodies else None,
+        "proxy_server_request": (
+            litellm_params.get("proxy_server_request")
+            if store_bodies
+            else _request_route_for_event(litellm_params.get("proxy_server_request"))
+        ),
         "preset_cache_key": cache_key,
     }
     return projected

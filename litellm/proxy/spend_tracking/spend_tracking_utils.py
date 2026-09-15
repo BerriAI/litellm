@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from datetime import datetime as dt
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast, runtime_checkable
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel
 
@@ -144,6 +145,7 @@ def _get_spend_logs_metadata(
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
+    response_id: str | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -184,6 +186,7 @@ def _get_spend_logs_metadata(
             litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
+            response_id=response_id,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -191,8 +194,13 @@ def _get_spend_logs_metadata(
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
-        **{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key != "router_metadata"},
+        **{
+            key: metadata.get(key)
+            for key in SpendLogsMetadata.__annotations__
+            if key not in ("router_metadata", "response_id")
+        },
         router_metadata=router_metadata,
+        response_id=response_id,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -221,6 +229,45 @@ def _get_spend_logs_metadata(
 
 
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
+
+
+def _request_path_segments(litellm_params: Mapping[str, object]) -> frozenset[str]:
+    proxy_server_request: Final = litellm_params.get("proxy_server_request")
+    if not isinstance(proxy_server_request, Mapping):
+        return frozenset()
+    request: Final = cast(Mapping[str, object], proxy_server_request)  # cast-ok: built by add_litellm_data_to_request
+    url: Final = request.get("url")
+    if not isinstance(url, str):
+        return frozenset()
+    return frozenset(unquote(segment) for segment in urlsplit(url).path.split("/") if segment)
+
+
+def get_provider_response_id(
+    response_obj: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    litellm_call_id: str | None,
+    litellm_params: Mapping[str, object],
+) -> str | None:
+    """The id the provider minted for this response: the response's own, else the one the standard
+    logging payload resolved. Never the proxy's call id, which is not a provider identity, and
+    never an id the request itself addressed in its path (a file, batch, response or vector store
+    read back by id), which identifies that object rather than this response."""
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    candidate_ids: Final = (
+        response_obj.get("id"),
+        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
+    )
+    minted_id: Final = next(
+        (
+            candidate
+            for candidate in candidate_ids
+            if isinstance(candidate, str) and candidate and candidate != litellm_call_id
+        ),
+        None,
+    )
+    if minted_id is None or minted_id in _request_path_segments(litellm_params):
+        return None
+    return minted_id
 
 
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
@@ -354,6 +401,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params: Final = kwargs.get("litellm_params", {})
+    litellm_call_id: Final = cast(
+        str | None,
+        kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
+    )
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
     call_type: Final = kwargs.get("call_type")
@@ -387,6 +438,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
+    provider_response_id: Final = get_provider_response_id(response_obj_dict, kwargs, litellm_call_id, litellm_params)
     standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
@@ -458,10 +510,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         if rejected_as_unknown_model or failed_with_prompt_shaped_model
         else resolved_model
     )
-    litellm_call_id: Final = cast(
-        str | None,
-        kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
-    )
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
@@ -522,6 +570,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
         ),
         litellm_call_id=litellm_call_id,
+        response_id=provider_response_id,
         router_metadata=_get_router_metadata_for_spend_log(
             metadata=metadata,
             requested_model=_model_group,

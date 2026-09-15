@@ -79,10 +79,16 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
         "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
     }
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
-        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+            kwargs={
+                "standard_logging_object": audit,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": redact},
+            },
+        )
+    )
     if not store_prompts or redact:
         assert "classifier_input" not in stored
         assert "originating_request_masked" not in stored
@@ -208,9 +214,7 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(
-        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
-    )
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
     assert create_session == cost_session == "batch-uid-1"
 
 
@@ -1354,6 +1358,124 @@ def test_get_logging_payload_populates_litellm_call_id_alongside_provider_reques
 
     assert payload["request_id"] == "chatcmpl-provider-id"
     assert payload["litellm_call_id"] == call_id
+
+
+def test_get_logging_payload_keeps_the_provider_response_id_in_metadata():
+    """LIT-6666: a row the flush re-keys on its call id (its provider id was already taken
+    by another request) still has to say which response it logged."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "call-1",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "response_id": "caller-supplied"}},
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-static-1",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"])["response_id"] == "chatcmpl-static-1"
+
+
+def test_get_logging_payload_leaves_metadata_response_id_empty_without_a_response_id():
+    """A failure row has no provider response; a caller cannot fill the slot through request metadata."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "call-1",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "response_id": "caller-supplied"}},
+        },
+        response_obj=None,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"])["response_id"] is None
+
+
+@pytest.mark.parametrize(
+    "standard_logging_id, expected",
+    [("provider-123", "provider-123"), ("call-1", None), (None, None)],
+)
+def test_get_logging_payload_falls_back_to_the_standard_logging_payload_response_id(
+    standard_logging_id: str | None, expected: str | None
+):
+    """A response without an id of its own is keyed on the id the standard logging payload resolved,
+    so metadata.response_id follows the same source, except that the proxy's own call id, which
+    that payload falls back to, is not a provider identity."""
+    standard_logging_payload = _make_standard_logging_payload_with_usage_object({})
+    standard_logging_payload["id"] = standard_logging_id
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "call-1",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj={"choices": []},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"])["response_id"] == expected
+    assert payload["request_id"] == (standard_logging_id or "call-1")
+
+
+def test_get_logging_payload_recognises_the_call_id_the_row_itself_resolves():
+    """The row resolves its call id from litellm_params when kwargs carry none at the top level;
+    a response id equal to that call id is the proxy's own identity, so metadata.response_id stays empty."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"litellm_call_id": "call-1", "metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj={"id": "call-1", "choices": []},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["litellm_call_id"] == "call-1"
+    assert json.loads(payload["metadata"])["response_id"] is None
+
+
+@pytest.mark.parametrize(
+    "url, call_type, expected",
+    [
+        ("http://litellm/v1/files/file-abc", "afile_retrieve", None),
+        ("http://litellm/v1/files/file-abc/content", "afile_content", None),
+        ("http://litellm/openai/v1/batches/file-abc?limit=1", "aretrieve_batch", None),
+        ("http://litellm/v1/responses/file%2Dabc", "aget_responses", None),
+        ("http://litellm/v1/chat/completions", "acompletion", "file-abc"),
+        ("http://litellm/v1/responses?previous_response_id=file-abc", "aresponses", "file-abc"),
+        (None, "acompletion", "file-abc"),
+    ],
+)
+def test_get_logging_payload_leaves_metadata_response_id_empty_for_an_object_the_request_addressed(
+    url: str | None, call_type: str, expected: str | None
+):
+    """A read, poll or download of a stored object answers with that object's id, which the request
+    named in its path: it is the object's identity, not an id minted for this call, and only a
+    minted id can mark a row as one the flush may re-key."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "call_type": call_type,
+            "litellm_call_id": "call-1",
+            "litellm_params": {
+                "metadata": {"user_api_key": "test-key"},
+                "proxy_server_request": {"url": url, "method": "GET"} if url is not None else None,
+            },
+        },
+        response_obj={"id": "file-abc"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"])["response_id"] == expected
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -4460,7 +4582,7 @@ ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":4}}\n\n',
-    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 )
 
 
@@ -4498,9 +4620,7 @@ def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_
     """
     logging_obj = _anthropic_messages_logging_obj(stream=False)
 
-    logged_response = logging_obj._handle_anthropic_messages_response_logging(
-        result=ANTHROPIC_MESSAGES_RESPONSE
-    )
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=ANTHROPIC_MESSAGES_RESPONSE)
 
     assert logged_response.id == "msg_01Lit6806NonStreaming"
     assert (
@@ -4576,9 +4696,7 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
         end_time=datetime.datetime.now(timezone.utc),
         logging_obj=logging_obj,
     )
-    assert logging_obj.model_call_details["complete_streaming_response"].id == (
-        "6806cafe-0000-4000-8000-000000000001"
-    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
 def test_spend_log_request_id_for_chat_completions_is_untouched():
