@@ -288,6 +288,7 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "type": "string",
             "enum": ["lyria_predict", "lyria_interactions"],
         },
+        "health_check_voice": STRING,
     }
 
 
