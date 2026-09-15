@@ -1848,19 +1848,19 @@ def test_mask_input_from_the_request_body_is_unchanged(mask_input, expect_redact
 
 
 @pytest.mark.parametrize("flag", [True, "true"])
-def test_update_trace_keys_header_applies_every_key_when_enabled(flag):
+def test_update_trace_keys_header_applies_every_key_when_enabled(flag, monkeypatch):
     rig = _steering_logger()
 
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", flag):
-        trace_params, _, span = _emit(
-            rig,
-            headers={
-                "langfuse_existing_trace_id": "trace-1",
-                "langfuse_update_trace_keys": "trace_release, trace_tail",
-                "langfuse_trace_release": "v1.2.3",
-                "langfuse_trace_tail": "last",
-            },
-        )
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", flag)
+    trace_params, _, span = _emit(
+        rig,
+        headers={
+            "langfuse_existing_trace_id": "trace-1",
+            "langfuse_update_trace_keys": "trace_release, trace_tail",
+            "langfuse_trace_release": "v1.2.3",
+            "langfuse_trace_tail": "last",
+        },
+    )
 
     assert trace_params["release"] == "v1.2.3"
     assert trace_params["tail"] == "last"
@@ -1893,31 +1893,31 @@ def test_update_trace_keys_is_off_by_default():
     assert "sk-canary" not in json.dumps(dict(span.attributes or {}), default=repr)
 
 
-def test_update_trace_keys_input_and_output_are_gated_too():
+def test_update_trace_keys_input_and_output_are_gated_too(monkeypatch):
     rig = _steering_logger()
 
     off, _, _ = _emit(rig, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
-        on, _, _ = _emit(rig, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    on, _, _ = _emit(rig, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
 
     assert "input" not in off and "output" not in off
     assert "input" in on and "output" in on
 
 
-def test_update_trace_keys_input_output_reach_the_trace_even_under_a_parent():
+def test_update_trace_keys_input_output_reach_the_trace_even_under_a_parent(monkeypatch):
     """With a real parent the generation is not the trace root, so trace-level
     I/O must be stamped explicitly; v2 updated the trace object directly."""
     rig = _steering_logger()
 
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
-        _, _, span = _emit(
-            rig,
-            metadata={
-                "existing_trace_id": "trace-1",
-                "parent_observation_id": "b" * 16,
-                "update_trace_keys": ["input", "output"],
-            },
-        )
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    _, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "parent_observation_id": "b" * 16,
+            "update_trace_keys": ["input", "output"],
+        },
+    )
 
     assert "the-input" in str(span.attributes["langfuse.trace.input"])
     assert "the-output" in str(span.attributes["langfuse.trace.output"])
@@ -1945,54 +1945,54 @@ def test_a_fresh_trace_still_claims_root_so_its_generation_names_it():
     assert span.attributes["langfuse.trace.name"] == "first-call"
 
 
-def test_trace_io_is_not_stamped_when_update_trace_keys_does_not_ask():
+def test_trace_io_is_not_stamped_when_update_trace_keys_does_not_ask(monkeypatch):
     rig = _steering_logger()
 
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
-        _, _, span = _emit(
-            rig,
-            metadata={
-                "existing_trace_id": "trace-1",
-                "parent_observation_id": "b" * 16,
-                "update_trace_keys": ["trace_release"],
-            },
-        )
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    _, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "parent_observation_id": "b" * 16,
+            "update_trace_keys": ["trace_release"],
+        },
+    )
 
     assert "langfuse.trace.input" not in (span.attributes or {})
     assert "langfuse.trace.output" not in (span.attributes or {})
 
 
-def test_update_trace_keys_from_the_request_body_list_applies_when_enabled():
+def test_update_trace_keys_from_the_request_body_list_applies_when_enabled(monkeypatch):
     rig = _steering_logger()
 
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
-        trace_params, _, span = _emit(
-            rig,
-            metadata={
-                "existing_trace_id": "trace-1",
-                "update_trace_keys": ["trace_release"],
-                "trace_release": "v1.2.3",
-            },
-        )
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    trace_params, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "update_trace_keys": ["trace_release"],
+            "trace_release": "v1.2.3",
+        },
+    )
 
     assert trace_params["release"] == "v1.2.3"
     assert span.attributes["langfuse.release"] == "v1.2.3"
 
 
-def test_update_trace_keys_trace_metadata_reaches_the_trace_not_just_the_generation():
+def test_update_trace_keys_trace_metadata_reaches_the_trace_not_just_the_generation(monkeypatch):
     """v2 updated the trace object's metadata; v4 has to propagate it as a trace attribute."""
     rig = _steering_logger()
 
-    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
-        _, _, span = _emit(
-            rig,
-            metadata={
-                "existing_trace_id": "trace-1",
-                "parent_observation_id": "b" * 16,
-                "update_trace_keys": ["trace_metadata"],
-                "trace_metadata": {"step": 2, "note": "x" * 300},
-            },
-        )
+    monkeypatch.setattr(litellm, "langfuse_enable_update_trace_keys", True)
+    _, _, span = _emit(
+        rig,
+        metadata={
+            "existing_trace_id": "trace-1",
+            "parent_observation_id": "b" * 16,
+            "update_trace_keys": ["trace_metadata"],
+            "trace_metadata": {"step": 2, "note": "x" * 300},
+        },
+    )
 
     assert span.attributes["langfuse.trace.metadata.step"] == "2"
     assert span.attributes["langfuse.trace.metadata.note"] == "x" * 200
