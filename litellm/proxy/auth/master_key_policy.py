@@ -41,7 +41,7 @@ class _DeploymentMarker(TypedDict, total=False):
 
 _DEPLOYMENT_MARKERS: Final = TypeAdapter(list[_DeploymentMarker])
 
-_VIRTUAL_KEY_MINTING_ROUTES: Final = ("/user/new",)
+_VIRTUAL_KEY_MINTING_ROUTES: Final = ("/user/new", "/management/v1/users/bulk")
 
 _ACCESS_CREDENTIAL_ROUTES: Final = (
     "/credentials",
