@@ -9476,6 +9476,9 @@ async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
     mock_db_client.get_data = AsyncMock(return_value=None)
     mock_db_client.update_data = AsyncMock(return_value=MagicMock())
     mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[
+        SimpleNamespace(model_id="weighted-id", model_name="group", model_info={})
+    ])
 
     # Mock model table creation
     mock_db_client.db.litellm_modeltable = MagicMock()
@@ -9511,6 +9514,7 @@ async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
 
     # Test router_settings with sample data
     router_settings_data = {
+        "weights": {"group": {"weighted-id": 1}},
         "routing_strategy": "usage-based",
         "num_retries": 3,
         "retry_policy": {"max_retries": 5},
@@ -9543,6 +9547,12 @@ async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
     # Verify router_settings can be deserialized and matches input
     deserialized_settings = json.loads(team_data["router_settings"])
     assert deserialized_settings == router_settings_data
+
+    mock_team_create.reset_mock()
+    team_request.router_settings = {"weights": {"group": {"unknown-id": 1}}}
+    with pytest.raises(ProxyException, match="Unknown deployment ID"):
+        await new_team(data=team_request, http_request=dummy_request, user_api_key_dict=mock_admin_auth)
+    mock_team_create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -9739,6 +9749,9 @@ async def test_update_team_with_router_settings(
     # Configure mocked prisma client
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[
+        SimpleNamespace(model_id="weighted-id", model_name="group", model_info={})
+    ])
 
     # Mock existing team row
     existing_team_mock = MagicMock()
@@ -9773,6 +9786,7 @@ async def test_update_team_with_router_settings(
 
     # Test router_settings with updated data
     router_settings_data = {
+        "weights": {"group": {"weighted-id": 1}},
         "routing_strategy": "latency-based",
         "num_retries": 2,
     }
@@ -9804,6 +9818,12 @@ async def test_update_team_with_router_settings(
     # Verify router_settings can be deserialized and matches input
     deserialized_settings = json.loads(team_data["router_settings"])
     assert deserialized_settings == router_settings_data
+
+    mock_team_update.reset_mock()
+    team_update_request.router_settings = {"weights": {"group": {"unknown-id": 1}}}
+    with pytest.raises(ProxyException, match="Unknown deployment ID"):
+        await update_team(data=team_update_request, http_request=dummy_request, user_api_key_dict=mock_admin_auth)
+    mock_team_update.assert_not_awaited()
 
 
 @pytest.mark.asyncio

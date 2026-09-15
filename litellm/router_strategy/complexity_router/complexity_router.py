@@ -16,6 +16,8 @@ Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import random
 import re
 import time
@@ -28,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 
 from litellm._logging import verbose_router_logger
+from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -55,6 +58,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -1119,10 +1123,10 @@ class _ContextWindowPlacement(NamedTuple):
 
 class _SessionAffinityPin(NamedTuple):
     model: str
-    tier: ComplexityTier | None
+    tier: ComplexityTier | str | None
 
 
-def _parse_session_affinity_pin(value: object) -> _SessionAffinityPin | None:
+def _parse_session_affinity_pin(value: object, active_tiers: tuple[str, ...]) -> _SessionAffinityPin | None:
     if isinstance(value, str):
         return _SessionAffinityPin(model=value, tier=None)
     parts: Final[tuple[object, object] | None] = (
@@ -1137,8 +1141,11 @@ def _parse_session_affinity_pin(value: object) -> _SessionAffinityPin | None:
     model, tier_value = parts
     if not isinstance(model, str):
         return None
-    tier: Final = ComplexityTier(tier_value) if isinstance(tier_value, str) else None
-    return _SessionAffinityPin(model=model, tier=tier)
+    if tier_value is None:
+        return _SessionAffinityPin(model=model, tier=None)
+    if not isinstance(tier_value, str) or tier_value not in active_tiers:
+        return None
+    return _SessionAffinityPin(model=model, tier=_built_in_tier_or_none(tier_value) or tier_value)
 
 
 def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
@@ -1194,6 +1201,10 @@ class ComplexityRouter(CustomLogger):
         # Override default_model if provided
         if default_model:
             self.config.default_model = default_model
+
+        self._tier_affinity_config = hashlib.sha256(
+            self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
+        ).hexdigest()
 
         # Checked here rather than on the config model because the deployment's
         # complexity_router_default_model arrives outside complexity_router_config and is
@@ -2259,6 +2270,51 @@ class ComplexityRouter(CustomLogger):
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
+    async def _pin_model_for_tier(
+        self,
+        tier: ComplexityTier | str,
+        model: str,
+        candidates: tuple[str, ...],
+        request_kwargs: dict[str, object],  # mutable-ok: adaptive feedback metadata must follow the selected model
+        retained_pin: _SessionAffinityPin | None = None,
+    ) -> str:
+        if not self._uses_deployment_pin or model not in candidates:
+            return model
+        retained_model: Final = (
+            retained_pin.model
+            if retained_pin is not None
+            and retained_pin.tier is not None
+            and _tier_name(retained_pin.tier) == _tier_name(tier)
+            else None
+        )
+        if retained_model is not None and retained_model in candidates:
+            self._restamp_adaptive_choice(request_kwargs, model, retained_model)
+            return retained_model
+        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
+        if session_id is None:
+            return model
+        caller: Final = DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs)
+        identity: Final = (self.model_name, self._tier_affinity_config, caller, session_id, _tier_name(tier))
+        cache_identity: Final = (
+            (*identity, ("replay_fallback", retained_model)) if retained_model is not None else identity
+        )
+        cache_key: Final = (
+            "complexity_router_tier_model_affinity:v1:"
+            + hashlib.sha256(json.dumps(cache_identity).encode()).hexdigest()
+        )
+        winner: Final = await claim_affinity_pin(
+            self.litellm_router_instance.cache,
+            cache_key,
+            MappingProxyType({"model": model}),
+            self.config.session_affinity_ttl_seconds,
+            eligible_values=tuple(MappingProxyType({"model": candidate}) for candidate in candidates),
+        )
+        pinned: Final[object] = winner.get("model") if isinstance(winner, Mapping) else None
+        if not isinstance(pinned, str) or pinned not in candidates:
+            return model
+        self._restamp_adaptive_choice(request_kwargs, model, pinned)
+        return pinned
+
     async def _pick_model_for_tier(
         self,
         tier: ComplexityTier | str,
@@ -2266,11 +2322,18 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: list[dict[str, Any]] | None,
         request_kwargs: dict,
         allowed_models: tuple[str, ...] | None = None,
+        retained_pin: _SessionAffinityPin | None = None,
     ) -> str:
         if not self.config.plugins:
-            if allowed_models is not None:
-                return self._pick_from_tier_value(allowed_models, _tier_name(tier))
-            return self.get_model_for_tier(tier)
+            candidates: Final = (
+                allowed_models if allowed_models is not None else tuple(self._tier_pools().get(_tier_name(tier), ()))
+            )
+            selected: Final = (
+                self._pick_from_tier_value(allowed_models, _tier_name(tier))
+                if allowed_models is not None
+                else self.get_model_for_tier(tier)
+            )
+            return await self._pin_model_for_tier(tier, selected, candidates, request_kwargs, retained_pin)
 
         from litellm.types.router import RoutingContext
 
@@ -2369,6 +2432,40 @@ class ComplexityRouter(CustomLogger):
         self._adaptive_chosen_model_key = ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY
         return self.adaptive_router
 
+    def _adaptive_candidate_models(
+        self,
+        classified_tier: ComplexityTier | str,
+        hard_floor: ComplexityTier | str | None = None,
+        hard_ceiling: ComplexityTier | str | None = None,
+        fit_filter: frozenset[str] | None = None,
+    ) -> tuple[str, ...]:
+        pools: Final = self._tier_pools()
+        candidates: Final = (
+            tuple(pools.get(_tier_name(classified_tier), ()))
+            if self.config.adaptive_eligible == "classified_tier"
+            else tuple(dict.fromkeys(chain.from_iterable(pools.values())))
+        )
+        floor: Final = self._active_tier_severity(hard_floor) if hard_floor is not None else None
+        ceiling: Final = self._active_tier_severity(hard_ceiling) if hard_ceiling is not None else None
+        return tuple(
+            model
+            for model in _allowed(candidates, fit_filter)
+            if (
+                floor is None
+                or any(
+                    self._active_tier_severity(tier) >= floor
+                    for tier in self._model_tiers.get(model, (classified_tier,))
+                )
+            )
+            and (
+                ceiling is None
+                or any(
+                    self._active_tier_severity(tier) <= ceiling
+                    for tier in self._model_tiers.get(model, (classified_tier,))
+                )
+            )
+        )
+
     def _soft_floor_pick(
         self,
         classified_tier: ComplexityTier | str,
@@ -2436,34 +2533,17 @@ class ComplexityRouter(CustomLogger):
                         ],
                     }
             return chosen_model
-        if self.config.adaptive_eligible == "classified_tier":
-            candidates = list(classified_candidates)
-            if not candidates:
-                return self._fitting_tier_fallback(classified_tier, fit_filter)
-        else:
-            candidates = list(_allowed(tuple(adaptive.config.available_models), fit_filter))
+        candidates: Final = self._adaptive_candidate_models(classified_tier, fit_filter=fit_filter)
 
         all_costs: Final = [adaptive.model_to_cost.get(m, 0.0) for m in candidates]
         quality_weight: Final = self.config.adaptive_weights.quality
         cost_weight: Final = self.config.adaptive_weights.cost
         penalty_weight: Final = self.config.tier_distance_penalty
 
-        floor_severity: Final = self._active_tier_severity(hard_floor) if hard_floor is not None else None
-        ceiling_severity: Final = self._active_tier_severity(hard_ceiling) if hard_ceiling is not None else None
         best_model: str | None = None
         best_score = float("-inf")
         candidate_scores: Final[list[dict[str, object]]] = []
-        for model in candidates:
-            if floor_severity is not None and all(
-                self._active_tier_severity(model_tier) < floor_severity
-                for model_tier in self._model_tiers.get(model, (classified_tier,))
-            ):
-                continue
-            if ceiling_severity is not None and all(
-                self._active_tier_severity(model_tier) > ceiling_severity
-                for model_tier in self._model_tiers.get(model, (classified_tier,))
-            ):
-                continue
+        for model in self._adaptive_candidate_models(classified_tier, hard_floor, hard_ceiling, fit_filter):
             cell = adaptive._cells[(request_type, model)]
             quality_sample = thompson_sample(cell)
             cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
@@ -2644,8 +2724,6 @@ class ComplexityRouter(CustomLogger):
         """Prompt content the resolved message list never carries: the Responses API's
         `instructions`, the /v1/messages top-level `system` block, and tool definitions.
         A coding agent's context is dominated by these."""
-        import json
-
         instructions: Final = request_kwargs.get("instructions")
         proxy_request: Final = request_kwargs.get("proxy_server_request")
         body: Final = proxy_request.get("body") if isinstance(proxy_request, Mapping) else None
@@ -2831,19 +2909,21 @@ class ComplexityRouter(CustomLogger):
         )
         return higher_tiers[0] if higher_tiers else tier
 
-    def _escalated_pin(self, pinned_model: str) -> str | None:
+    def _escalated_pin(self, pinned_model: str, tier: ComplexityTier | str | None = None) -> _SessionAffinityPin | None:
         """Bump a session's pinned model to the next-higher configured tier.
 
         Returns None when the pin no longer maps to any configured tier, signalling
         a full reclassification instead.
         """
-        pinned_tier: Final = self._tier_for_model(pinned_model)
+        pinned_tier: Final = tier if tier is not None else self._tier_for_model(pinned_model)
         if pinned_tier is None:
             return None
         escalated_tier: Final = self._escalate_tier(pinned_tier)
         if escalated_tier == pinned_tier:
-            return pinned_model
-        return self.get_model_for_tier(escalated_tier)
+            return _SessionAffinityPin(pinned_model, pinned_tier)
+        return _SessionAffinityPin(
+            self.get_model_for_tier(escalated_tier), _built_in_tier_or_none(_tier_name(escalated_tier))
+        )
 
     def _vision_verdicts(self, model_name: str) -> tuple[bool | None, ...]:
         """Declared vision support per deployment serving the name: True, False, or None when
@@ -2907,6 +2987,7 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: dict,  # mutable-ok: same shape the hook receives
         context_fit: _RequestContextFit | None = None,
+        retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
         """Replace a routed model that cannot accept this request's image input.
 
@@ -2955,6 +3036,7 @@ class ComplexityRouter(CustomLogger):
                 repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
                 request_kwargs,
                 allowed_models=tuple(entry for entry in pools.get(capable, ()) if entry in eligible),
+                retained_pin=retained_pin,
             )
         elif self._modality_default_model_usable(request_kwargs, resolved_messages, eligible):
             new_tier = None
@@ -3098,6 +3180,7 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: dict,  # mutable-ok: same shape the hook receives
         context_fit: _RequestContextFit | None = None,
+        retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
         """Try compatible tier recovery before the default, preserving request policy and fit."""
         decision: Final = response.routing_decision
@@ -3155,6 +3238,7 @@ class ComplexityRouter(CustomLogger):
                         repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
                         request_kwargs,
                         allowed_models=live,
+                        retained_pin=retained_pin,
                     )
                 except ValueError as exc:
                     verbose_router_logger.debug(
@@ -3247,8 +3331,13 @@ class ComplexityRouter(CustomLogger):
         """The adaptive feedback loop reads its chosen-model marker from request metadata; a
         gate rewrite must move the marker with the model or rewards land on the displaced one."""
         metadata: Final = request_kwargs.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("adaptive_router_chosen_model") == old_model:
+        if not isinstance(metadata, dict):
+            return
+        if metadata.get("adaptive_router_chosen_model") == old_model:
             metadata["adaptive_router_chosen_model"] = new_model
+        decision: Final = metadata.get("adaptive_router_decision")
+        if isinstance(decision, dict) and decision.get("chosen_model") == old_model:
+            decision["chosen_model"] = new_model
 
     def _lexical_tier_override(self, user_message: str) -> KeywordOverride | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
@@ -3561,25 +3650,42 @@ class ComplexityRouter(CustomLogger):
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
-            pinned_pin: Final = _parse_session_affinity_pin(pinned_value)
+            pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
-                routed_model: str | None = pinned_pin.model
-                pin_escalation_keyword: str | None = None
-                if self.escalation_keywords:
-                    user_message: Final = (
-                        _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
+                user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
+                pin_escalation_keyword: Final = (
+                    self._matched_escalation_keyword(user_message) if user_message is not None else None
+                )
+                selected_pin: Final = (
+                    self._escalated_pin(pinned_pin.model, pinned_pin.tier)
+                    if pin_escalation_keyword is not None
+                    else _SessionAffinityPin(
+                        pinned_pin.model,
+                        pinned_pin.tier if pinned_pin.tier is not None else self._tier_for_model(pinned_pin.model),
                     )
-                    if user_message is not None:
-                        pin_escalation_keyword = self._matched_escalation_keyword(user_message)
-                    if pin_escalation_keyword is not None:
-                        routed_model = self._escalated_pin(pinned_pin.model)
-                if routed_model is not None:
-                    escalated: Final = routed_model != pinned_pin.model
-                    resolved_pin_tier: Final = (
-                        pinned_pin.tier
-                        if not escalated and pinned_pin.tier is not None
-                        else self._tier_for_model(routed_model)
+                )
+                if selected_pin is not None:
+                    escalated: Final = selected_pin.model != pinned_pin.model or (
+                        pin_escalation_keyword is not None
+                        and pinned_pin.tier is not None
+                        and selected_pin.tier != pinned_pin.tier
                     )
+                    resolved_pin_tier: Final = selected_pin.tier
+                    session_model: Final = (
+                        await self._pin_model_for_tier(
+                            resolved_pin_tier,
+                            selected_pin.model,
+                            tuple(self._tier_pools().get(_tier_name(resolved_pin_tier), ())),
+                            request_kwargs,
+                        )
+                        if escalated and resolved_pin_tier is not None
+                        else selected_pin.model
+                    )
+                    retained_pin: Final = _SessionAffinityPin(session_model, resolved_pin_tier)
+                    if resolved_pin_tier is not None:
+                        await self._pin_model_for_tier(
+                            resolved_pin_tier, session_model, (session_model,), request_kwargs
+                        )
                     # The floor outranks the pin because plan mode is a transient state of the
                     # session, not a request to move it: the turns carrying the sentinel route at
                     # the floor, and the stored pin deliberately keeps the session's own model so
@@ -3590,16 +3696,28 @@ class ComplexityRouter(CustomLogger):
                     plan_floored: Final = (
                         pinned_tier is not None and self._apply_plan_mode_floor(pinned_tier) != pinned_tier
                     )
-                    session_model: Final = routed_model
-                    if plan_floored and pinned_tier is not None:
-                        routed_model = self.get_model_for_tier(self._apply_plan_mode_floor(pinned_tier))
-                    pin_source_tier: Final = self._tier_for_model(routed_model)
+                    floor_model: Final = (
+                        await self._pick_model_for_tier(
+                            self._apply_plan_mode_floor(pinned_tier),
+                            messages,
+                            resolved_messages,
+                            request_kwargs,
+                            retained_pin=retained_pin,
+                        )
+                        if plan_floored and pinned_tier is not None
+                        else session_model
+                    )
+                    pin_source_tier: Final = (
+                        self._apply_plan_mode_floor(pinned_tier)
+                        if plan_floored and pinned_tier is not None
+                        else resolved_pin_tier
+                    )
                     pin_placement: Final = (
                         await self._context_window_placement(
                             pin_source_tier,
                             resolved_messages,
                             request_kwargs,
-                            pool_override=(routed_model,),
+                            pool_override=(floor_model,),
                             context_fit=context_fit,
                         )
                         if pin_source_tier is not None
@@ -3612,11 +3730,18 @@ class ComplexityRouter(CustomLogger):
                         and _tier_name(pin_placement.tier) != _tier_name(pin_source_tier)
                         else None
                     )
-                    if pin_placement is not None and pin_context_original_tier is not None:
-                        # The stored pin below keeps the session's own model on purpose.
-                        routed_model = self._pick_from_tier_value(
-                            pin_placement.allowed_models, _tier_name(pin_placement.tier)
+                    routed_model: Final = (
+                        await self._pick_model_for_tier(
+                            pin_placement.tier,
+                            messages,
+                            resolved_messages,
+                            request_kwargs,
+                            allowed_models=pin_placement.allowed_models,
+                            retained_pin=retained_pin,
                         )
+                        if pin_placement is not None and pin_context_original_tier is not None
+                        else floor_model
+                    )
                     # Refresh the TTL on every hit so an active session doesn't lose its
                     # pin mid-conversation just because it outlives the original write.
                     await self.litellm_router_instance.cache.async_set_cache(
@@ -3644,7 +3769,7 @@ class ComplexityRouter(CustomLogger):
                     routed_pin_tier: Final = (
                         pin_placement.tier
                         if pin_placement is not None and pin_context_original_tier is not None
-                        else (self._tier_for_model(routed_model) if plan_floored else resolved_pin_tier)
+                        else pin_source_tier
                     )
                     session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
                     has_original_messages: Final = messages is not None and len(messages) > 0
@@ -3671,12 +3796,14 @@ class ComplexityRouter(CustomLogger):
                                 resolved_messages,
                                 request_kwargs,
                                 context_fit,
+                                retained_pin,
                             ),
                             messages,
                             input,
                             resolved_messages,
                             request_kwargs,
                             context_fit,
+                            retained_pin,
                         )
                     )
 
@@ -3961,13 +4088,21 @@ class ComplexityRouter(CustomLogger):
             housekeeping_ceiling: Final = tier if outcome.cause == "housekeeping" else None
             # A context-escalated tier becomes the hard floor: a floor the bandit can slide
             # under is not a floor.
-            routed_model = self._soft_floor_pick(
+            adaptive_floor: Final = tier if context_original_tier is not None else plan_floor
+            adaptive_fit: Final = context_placement.holdable_models if context_placement is not None else None
+            sampled_model: Final = self._soft_floor_pick(
                 tier,
                 ask,
                 request_kwargs,
-                hard_floor=tier if context_original_tier is not None else plan_floor,
+                hard_floor=adaptive_floor,
                 hard_ceiling=housekeeping_ceiling,
-                fit_filter=context_placement.holdable_models if context_placement is not None else None,
+                fit_filter=adaptive_fit,
+            )
+            routed_model = await self._pin_model_for_tier(  # rebind-ok: reuse the eligible tier winner
+                tier,
+                sampled_model,
+                self._adaptive_candidate_models(tier, adaptive_floor, housekeeping_ceiling, adaptive_fit),
+                request_kwargs,
             )
             adaptive: Final = self._ensure_adaptive_router()
             if adaptive is not None:

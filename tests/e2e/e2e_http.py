@@ -170,6 +170,7 @@ class StreamingResponse(BaseModel):
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
     stream_done: bool = False
+    stream_done_positions: tuple[int, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -647,6 +648,7 @@ def streaming_outcome(
         stream_events=[payload for payload, _ in events],
         stream_event_arrivals=[arrived for _, arrived in events],
         stream_done=any(payload == _SSE_DONE for payload, _ in payloads),
+        stream_done_positions=tuple(index for index, (payload, _) in enumerate(payloads) if payload == _SSE_DONE),
         stream_error=next(
             (line.decode(errors="replace")[:300] for line, _ in stamped if _is_stream_error_line(line)),
             None,
