@@ -14062,6 +14062,7 @@
         },
         "supports_output_config": true,
         "supports_speed": true,
+        "supports_fast_mode": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
@@ -14103,6 +14104,7 @@
         },
         "supports_output_config": true,
         "supports_speed": true,
+        "supports_fast_mode": true,
         "prompt_cache_min_tokens": 1024,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
