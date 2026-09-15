@@ -564,21 +564,19 @@ describe("TeamSSOSettings", () => {
     });
   });
 
-  it("should disable cancel button while saving", async () => {
+  it("should disable cancel button while saving and re-enable it once the save settles", async () => {
     mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
-    mockUpdateDefaultTeamSettings.mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({ settings: mockSettingsResponse.values }), 100)),
-    );
+    const save = Promise.withResolvers<{ settings: typeof mockSettingsResponse.values }>();
+    mockUpdateDefaultTeamSettings.mockImplementation(() => save.promise);
 
     renderWithProviders(<TeamSSOSettings {...defaultProps} />);
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Edit Settings/i }));
     await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
 
     expect(screen.getByRole("button", { name: /Cancel/i })).toBeDisabled();
+
+    save.resolve({ settings: mockSettingsResponse.values });
+    expect(await screen.findByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
   });
 });
