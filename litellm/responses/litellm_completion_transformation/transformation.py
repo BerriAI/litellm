@@ -2701,9 +2701,8 @@ class LiteLLMCompletionResponsesConfig:
                 # the thinking process remains observable without emitting a
                 # standalone reasoning output item that agent clients may
                 # not understand.
-                reasoning_text: Final = (
-                    getattr(choice.message, "reasoning_content", None) or ""
-                )
+                reasoning_text: Final = getattr(choice.message, "reasoning_content", None) or ""
+
                 message_item = GenericResponseOutputItem(
                     type="message",
                     id=f"msg_{uuid.uuid4()}",
