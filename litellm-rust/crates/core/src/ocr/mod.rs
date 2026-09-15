@@ -16,7 +16,10 @@ pub use lifecycle::{
     NativeOutcome, NativeResult, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline,
     OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult,
 };
-pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+pub use types::{
+    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageDimensions,
+    OcrPageImage, OcrUsageInfo,
+};
 
 #[cfg(test)]
 #[path = "../../tests/azure_ai_ocr.rs"]

@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::serde_compat::{FiniteF64, LaxI64};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use serde_with::serde_as;
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
@@ -18,13 +20,13 @@ pub enum OcrDocument {
     DocumentUrl {
         document_url: String,
         #[serde(flatten)]
-        extra_fields: Map<String, Value>,
+        extra_fields: BTreeMap<String, String>,
     },
     #[serde(rename = "image_url")]
     ImageUrl {
         image_url: String,
         #[serde(flatten)]
-        extra_fields: Map<String, Value>,
+        extra_fields: BTreeMap<String, String>,
     },
 }
 
@@ -126,6 +128,7 @@ impl LiteLLMOcrRequest {
     pub(crate) fn response_format(&self) -> Result<OcrResponseFormat, super::Error> {
         self.optional_params
             .get("req_format")
+            .filter(|value| !value.is_null())
             .map(|value| {
                 serde_json::from_value(value.clone()).map_err(|_| super::Error::RequestFormat)
             })
@@ -150,29 +153,155 @@ impl LiteLLMOcrRequest {
     }
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrPageDimensions {
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
+    pub dpi: Option<i64>,
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
+    pub height: Option<i64>,
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
+    pub width: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrPageImage {
+    pub image_base64: Option<String>,
+    pub bbox: Option<Map<String, Value>>,
+    #[serde(flatten)]
+    pub extra_fields: Map<String, Value>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrPage {
+    #[serde_as(deserialize_as = "LaxI64")]
+    pub index: i64,
+    pub markdown: String,
+    pub images: Option<Vec<OcrPageImage>>,
+    pub dimensions: Option<OcrPageDimensions>,
+    #[serde(flatten)]
+    pub extra_fields: Map<String, Value>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OcrUsageInfo {
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
+    pub pages_processed: Option<i64>,
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
+    pub pages_processed_annotation: Option<i64>,
+    #[serde_as(deserialize_as = "Option<FiniteF64>")]
+    pub credits: Option<f64>,
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
+    pub doc_size_bytes: Option<i64>,
+    #[serde(flatten)]
+    pub extra_fields: Map<String, Value>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiteLLMOcrResponse {
-    pub pages: Vec<Value>,
+    pub pages: Vec<OcrPage>,
     pub model: String,
     pub document_annotation: Option<Value>,
-    pub usage_info: Option<Value>,
+    pub usage_info: Option<OcrUsageInfo>,
+    pub content: Option<String>,
+    pub tables: Option<Vec<Map<String, Value>>>,
+    #[serde(rename = "keyValuePairs")]
+    pub key_value_pairs: Option<Vec<Map<String, Value>>>,
+    #[serde(default = "ocr_object")]
     pub object: String,
     #[serde(flatten)]
     pub extra_fields: Map<String, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_native_response: Option<Value>,
+    pub provider_native_response: Option<Map<String, Value>>,
 }
 
 impl LiteLLMOcrResponse {
+    pub fn new(model: impl Into<String>, pages: Vec<OcrPage>) -> Self {
+        Self {
+            pages,
+            model: model.into(),
+            document_annotation: None,
+            usage_info: None,
+            content: None,
+            tables: None,
+            key_value_pairs: None,
+            object: ocr_object(),
+            extra_fields: Map::new(),
+            provider_native_response: None,
+        }
+    }
+
     pub fn into_json(self) -> Value {
         serde_json::to_value(self).expect("OCR response fields are JSON-compatible")
     }
+}
+
+fn ocr_object() -> String {
+    "ocr".into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn normalized_response_rejects_invalid_shared_fields() {
+        for fields in [
+            json!({"pages":[{}]}),
+            json!({"pages":[{"index":0,"markdown":false}]}),
+            json!({"pages":[{"index":0,"markdown":"","images":[{"bbox":[]}]}]}),
+            json!({"usage_info":{"pages_processed":1.5}}),
+            json!({"tables":[false]}),
+            json!({"keyValuePairs":[[]]}),
+            json!({"provider_native_response":[]}),
+        ] {
+            let payload: Map<String, Value> = json!({"model":"model", "pages":[]})
+                .as_object()
+                .unwrap()
+                .iter()
+                .chain(fields.as_object().unwrap())
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            assert!(serde_json::from_value::<LiteLLMOcrResponse>(Value::Object(payload)).is_err());
+        }
+        assert!(
+            serde_json::from_value::<OcrDocument>(json!({
+                "type":"image_url", "image_url":"https://example.com/image", "detail":42
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn numeric_coercion_preserves_integer_precision_and_rejects_fractional_values() {
+        for (value, expected) in [
+            (json!("9007199254740993.0"), 9_007_199_254_740_993),
+            (json!("+2.000"), 2),
+            (json!("1_000"), 1000),
+            (json!(true), 1),
+            (json!(2.0), 2),
+        ] {
+            let page: OcrPage =
+                serde_json::from_value(json!({"index":value,"markdown":""})).unwrap();
+            assert_eq!(page.index, expected);
+        }
+        for value in [
+            json!("1e2"),
+            json!(".0"),
+            json!("2."),
+            json!("_2"),
+            json!("2__0"),
+            json!(2.5),
+            json!(null),
+        ] {
+            assert!(
+                serde_json::from_value::<OcrPage>(json!({"index":value,"markdown":""})).is_err()
+            );
+        }
+    }
 
     #[test]
     fn document_variants_preserve_provider_fields_when_rewriting_sources() {
@@ -218,16 +347,11 @@ mod tests {
     #[test]
     fn response_serialization_flattens_extra_fields_and_omits_absent_native_response() {
         let response = LiteLLMOcrResponse {
-            pages: vec![],
-            model: "model".into(),
-            document_annotation: None,
-            usage_info: None,
-            object: "ocr".into(),
             extra_fields: json!({"provider_field":"kept"})
                 .as_object()
                 .unwrap()
                 .clone(),
-            provider_native_response: None,
+            ..LiteLLMOcrResponse::new("model", vec![])
         };
         let serialized = response.into_json();
         assert_eq!(serialized["provider_field"], "kept");

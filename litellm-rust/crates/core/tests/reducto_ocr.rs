@@ -85,7 +85,7 @@ async fn data_uri_upload_preserves_multipart_headers(#[case] model: &str) {
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "hello");
+    assert_eq!(response.pages[0].markdown, "hello");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[0].starts_with("POST /upload "));
@@ -182,7 +182,7 @@ async fn rejects_invalid_document_sources_before_network(#[case] source: &str) {
 
 #[test]
 fn response_normalization_groups_blocks_and_distinguishes_null_result() {
-    use crate::llms::reducto::ocr::transformation::{ReductoResponse, transform_ocr_response};
+    use crate::llms::reducto::ocr::transformation::{ReductoResponse, normalize_response};
 
     let raw = json!({"usage":{"num_pages":"2","credits":"3"},"result":{"type":"full","chunks":[
         {"blocks":[{
@@ -196,7 +196,7 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
         {"blocks":[{"content":"A","bbox":{"page":1},"type":"Text"},{"content":"C","bbox":{"page":1}}]}
     ]}});
     let response: ReductoResponse = serde_json::from_value(raw).unwrap();
-    let normalized = transform_ocr_response("parse-v3", response)
+    let normalized = normalize_response("parse-v3", response)
         .unwrap()
         .into_json();
     assert_eq!(normalized["pages"][0]["markdown"], "A\n\nC");
@@ -217,13 +217,13 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
 
     let missing: ReductoResponse =
         serde_json::from_value(json!({"chunks":[{"content":"text"}]})).unwrap();
-    let missing = transform_ocr_response("parse-v3", missing).unwrap();
-    assert_eq!(missing.pages[0]["markdown"], "text");
+    let missing = normalize_response("parse-v3", missing).unwrap();
+    assert_eq!(missing.pages[0].markdown, "text");
     let null: ReductoResponse = serde_json::from_value(
         json!({"result":null,"chunks":[{"content":"ignored"}],"usage":null}),
     )
     .unwrap();
-    let null = transform_ocr_response("parse-v3", null).unwrap();
+    let null = normalize_response("parse-v3", null).unwrap();
     assert!(null.pages.is_empty());
 }
 

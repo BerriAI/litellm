@@ -15,6 +15,7 @@ pub mod providers;
 pub mod realtime;
 pub mod responses;
 pub mod routing_utils;
+mod serde_compat;
 mod url_utils;
 
 pub use error::Error;

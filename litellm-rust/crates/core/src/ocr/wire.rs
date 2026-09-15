@@ -40,7 +40,7 @@ pub struct OptionalParamSpec {
 #[derive(Debug)]
 pub struct DecodedOcrResponse<T> {
     pub data: T,
-    pub native: Option<Value>,
+    pub native: Option<Map<String, Value>>,
     pub text: String,
 }
 
@@ -209,6 +209,17 @@ pub fn decode_request_value<T: DeserializeOwned>(
     })
 }
 
+pub(crate) fn decode_response_value<T: DeserializeOwned>(
+    value: Value,
+    prefix: &str,
+) -> Result<T, crate::ocr::Error> {
+    serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
+        crate::ocr::Error::ResponseField {
+            path: format!("{prefix}.{}", error.path()),
+        }
+    })
+}
+
 pub fn decode_response<T: DeserializeOwned>(
     bytes: &[u8],
     native: bool,
@@ -253,7 +264,7 @@ mod tests {
         assert!(!mistral.contains(&"opaque_extension"));
 
         let vertex = consumed_optional_param_names("vertex_ai/deepseek-ocr", None).unwrap();
-        assert!(vertex.contains(&"temperature"));
+        assert!(!vertex.contains(&"temperature"));
         assert!(vertex.contains(&"vertex_credentials"));
         assert!(!vertex.contains(&"pages"));
     }
