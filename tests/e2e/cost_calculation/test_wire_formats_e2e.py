@@ -12,6 +12,9 @@ the proxy to POST /responses) and a streamed Anthropic-messages case.
 from __future__ import annotations
 
 import pytest
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
 
 from conftest import CostCalcClient, cost_rows, register_scenario_deployment
 from cost_matrix import (
@@ -26,12 +29,14 @@ from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatStreamOptions
 from scripted_provider import ScriptedUsage
 
-pytestmark = [pytest.mark.e2e, pytest.mark.cost_map_stack]
+pytestmark: Final = [pytest.mark.e2e, pytest.mark.cost_map_stack]  # mutable-ok: pytest only accepts a list for pytestmark
 
-_MODELS: dict[str, FrontierModel] = {model.map_key: model for model in FRONTIER_MODELS}
+_MODELS: Final[Mapping[str, FrontierModel]] = MappingProxyType(
+    {model.map_key: model for model in FRONTIER_MODELS}
+)
 
 # One scripted usage per wire, every reportable token kind nonzero.
-_WIRE_USAGE: dict[str, tuple[str, ScriptedUsage]] = {
+_WIRE_USAGE: Final[Mapping[str, tuple[str, ScriptedUsage]]] = MappingProxyType({
     "openai_chat": (
         "gpt-5.6",
         ScriptedUsage(
@@ -89,7 +94,7 @@ _WIRE_USAGE: dict[str, tuple[str, ScriptedUsage]] = {
         "fireworks_ai/kimi-k3",
         ScriptedUsage(fresh_input_tokens=80, cache_read_tokens=40, output_tokens=25),
     ),
-}
+})
 
 
 class TestWireFormats:
@@ -103,22 +108,22 @@ class TestWireFormats:
         wire: str,
     ) -> None:
         map_key, usage = _WIRE_USAGE[wire]
-        model = _MODELS[map_key]
-        case = Case(name="basic", usage=usage)
-        marker = unique_marker()
+        model: Final = _MODELS[map_key]
+        case: Final = Case(name="basic", usage=usage)
+        marker: Final = unique_marker()
         model_name, _handle = register_scenario_deployment(client, resources, model, case, marker)
-        response = client.proxy.transport.send(
+        response: Final = client.proxy.transport.send(
             "/chat/completions",
             headers=client.proxy.transport.bearer(scoped_key),
             json=ChatBody(
                 model=model_name,
-                messages=[ChatMessage(role="user", content=f"{marker} scripted wire call")],
+                messages=(ChatMessage(role="user", content=f"{marker} scripted wire call"),),
             ),
         )
         assert response.ok, f"{wire}: proxy returned {response.status_code}: {response.body[:400]}"
 
-        expected = expected_breakdown(model, case)
-        row = cost_rows.poll_cost_row_where(
+        expected: Final = expected_breakdown(model, case)
+        row: Final = cost_rows.poll_cost_row_where(
             client.proxy,
             scoped_key,
             lambda r: r.metadata is not None and r.metadata.cost_breakdown is not None,
@@ -128,7 +133,7 @@ class TestWireFormats:
             f"{wire}: spend {row.spend} != expected {expected.total} "
             f"(breakdown {row.breakdown.model_dump()})"
         )
-        breakdown = row.breakdown
+        breakdown: Final = row.breakdown
         assert breakdown.input_cost is not None and cost_rows.approx_equal(
             breakdown.input_cost, expected.input_cost
         ), (
@@ -153,16 +158,16 @@ class TestWireFormats:
         self, client: CostCalcClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         map_key, usage = _WIRE_USAGE["anthropic_messages"]
-        model = _MODELS[map_key]
-        case = Case(name="stream", usage=usage, stream=True)
-        marker = unique_marker()
+        model: Final = _MODELS[map_key]
+        case: Final = Case(name="stream", usage=usage, stream=True)
+        marker: Final = unique_marker()
         model_name, _handle = register_scenario_deployment(client, resources, model, case, marker)
-        response = client.proxy.transport.send(
+        response: Final = client.proxy.transport.send(
             "/chat/completions",
             headers=client.proxy.transport.bearer(scoped_key),
             json=ChatBody(
                 model=model_name,
-                messages=[ChatMessage(role="user", content=f"{marker} scripted anthropic stream")],
+                messages=(ChatMessage(role="user", content=f"{marker} scripted anthropic stream"),),
                 stream=True,
                 stream_options=ChatStreamOptions(include_usage=True),
             ),
@@ -172,8 +177,8 @@ class TestWireFormats:
         assert response.stream_done, "anthropic stream did not reach its terminal event"
         assert response.stream_error is None, f"stream carried an error event: {response.stream_error}"
 
-        expected = expected_breakdown(model, case)
-        row = cost_rows.poll_cost_row_where(
+        expected: Final = expected_breakdown(model, case)
+        row: Final = cost_rows.poll_cost_row_where(
             client.proxy,
             scoped_key,
             lambda r: r.metadata is not None and r.metadata.cost_breakdown is not None,

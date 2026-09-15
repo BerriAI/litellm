@@ -18,9 +18,11 @@ creation), the case is absent from the matrix rather than silently zero.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -64,8 +66,8 @@ class CostMapEntry(BaseModel):
 
 
 _COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, CostMapEntry])
-_COST_MAP: Final[dict[str, CostMapEntry]] = _COST_MAP_ADAPTER.validate_python(
-    json.loads(COST_MAP_PATH.read_text())
+_COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(
+    _COST_MAP_ADAPTER.validate_python(json.loads(COST_MAP_PATH.read_text()))
 )
 
 TIER_THRESHOLD_TOKENS: Final = 200_000
@@ -109,7 +111,7 @@ class FrontierModel:
 
 # Response-model override targets: emit a sibling's bare provider-facing name so
 # the biller's provider-prefixed lookup lands on that sibling's map key.
-_OVERRIDE_MODELS: Final[dict[str, str]] = {
+_OVERRIDE_MODELS: Final[Mapping[str, str]] = MappingProxyType({
     "gpt-5.6": "gpt-5.4-mini",
     "gpt-5.5-pro": "gpt-5.3-codex",
     "gpt-5.3-codex": "gpt-5.5-pro",
@@ -124,9 +126,9 @@ _OVERRIDE_MODELS: Final[dict[str, str]] = {
     "fireworks_ai/kimi-k3": "qwen3p8-max",
     "fireworks_ai/qwen3p8-max": "kimi-k3",
     "fireworks_ai/deepseek-v4p1-flash": "kimi-k3",
-}
+})
 
-_OVERRIDE_MAP_KEYS: Final[dict[str, str]] = {
+_OVERRIDE_MAP_KEYS: Final[Mapping[str, str]] = MappingProxyType({
     "gpt-5.4-mini": "gpt-5.4-mini",
     "gpt-5.6": "gpt-5.6",
     "gpt-5.3-codex": "gpt-5.3-codex",
@@ -139,7 +141,7 @@ _OVERRIDE_MAP_KEYS: Final[dict[str, str]] = {
     "moonshotai/Kimi-K3": "together_ai/moonshotai/Kimi-K3",
     "qwen3p8-max": "fireworks_ai/qwen3p8-max",
     "kimi-k3": "fireworks_ai/kimi-k3",
-}
+})
 
 
 _FRONTIER_SPECS: Final[tuple[tuple[str, str, Wire], ...]] = (
@@ -176,7 +178,7 @@ def _frontier() -> tuple[FrontierModel, ...]:
 FRONTIER_MODELS: Final[tuple[FrontierModel, ...]] = _frontier()
 
 # Token kinds each wire can report, gating which pricing cases apply.
-_WIRE_CAPS: Final[dict[str, frozenset[str]]] = {
+_WIRE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType({
     "openai_chat": frozenset(
         {
             "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
@@ -205,9 +207,9 @@ _WIRE_CAPS: Final[dict[str, frozenset[str]]] = {
             "web_search", "response_model", "absent_usage",
         }
     ),
-}
+})
 
-CaseName = Literal[
+CaseName: TypeAlias = Literal[
     "basic",
     "cache_read",
     "cache_write_5m",
@@ -260,7 +262,7 @@ _BASIC_USAGE: Final = ScriptedUsage(fresh_input_tokens=120, output_tokens=40)
 
 
 def _web_search_case(model: FrontierModel) -> Case:
-    counts_exactly = model.wire in ("openai_responses", "anthropic_messages", "gemini_generate")
+    counts_exactly: Final = model.wire in ("openai_responses", "anthropic_messages", "gemini_generate")
     return Case(
         name="web_search",
         usage=ScriptedUsage(fresh_input_tokens=100, output_tokens=30, web_search_calls=3),
@@ -269,26 +271,24 @@ def _web_search_case(model: FrontierModel) -> Case:
 
 
 def cases_for(model: FrontierModel) -> tuple[Case, ...]:
-    rates = model.rates
-    caps = _WIRE_CAPS[model.wire]
-    cases: list[Case] = [Case(name="basic", usage=_BASIC_USAGE)]
-    if rates.cache_read_input_token_cost is not None and "cache_read" in caps:
-        cases.append(
+    rates: Final = model.rates
+    caps: Final = _WIRE_CAPS[model.wire]
+    candidates: Final[tuple[Case | None, ...]] = (
+        Case(name="basic", usage=_BASIC_USAGE),
+        (
             Case(name="cache_read", usage=ScriptedUsage(fresh_input_tokens=100, cache_read_tokens=50, output_tokens=30))
-        )
-    if rates.cache_creation_input_token_cost is not None and "cache_write_5m" in caps:
-        cases.append(
+            if rates.cache_read_input_token_cost is not None and "cache_read" in caps
+            else None
+        ),
+        (
             Case(
                 name="cache_write_5m",
                 usage=ScriptedUsage(fresh_input_tokens=90, cache_write_5m_tokens=60, output_tokens=30),
             )
-        )
-    if (
-        rates.cache_creation_input_token_cost_above_1hr is not None
-        and rates.cache_creation_input_token_cost is not None
-        and "cache_write_1h" in caps
-    ):
-        cases.append(
+            if rates.cache_creation_input_token_cost is not None and "cache_write_5m" in caps
+            else None
+        ),
+        (
             Case(
                 name="cache_write_1h",
                 usage=ScriptedUsage(
@@ -298,52 +298,61 @@ def cases_for(model: FrontierModel) -> tuple[Case, ...]:
                     output_tokens=30,
                 ),
             )
-        )
-    if rates.output_cost_per_reasoning_token is not None and "reasoning" in caps:
-        cases.append(
+            if (
+                rates.cache_creation_input_token_cost_above_1hr is not None
+                and rates.cache_creation_input_token_cost is not None
+                and "cache_write_1h" in caps
+            )
+            else None
+        ),
+        (
             Case(
                 name="reasoning",
                 usage=ScriptedUsage(fresh_input_tokens=100, output_tokens=30, reasoning_tokens=70),
             )
-        )
-    if (
-        rates.input_cost_per_audio_token is not None
-        and rates.output_cost_per_audio_token is not None
-        and "audio" in caps
-    ):
-        cases.append(
+            if rates.output_cost_per_reasoning_token is not None and "reasoning" in caps
+            else None
+        ),
+        (
             Case(
                 name="audio",
                 usage=ScriptedUsage(
                     fresh_input_tokens=100, audio_input_tokens=25, output_tokens=30, audio_output_tokens=15
                 ),
             )
-        )
-    if (
-        rates.input_cost_per_token_above_200k_tokens is not None
-        and rates.output_cost_per_token_above_200k_tokens is not None
-    ):
-        cases.append(
+            if (
+                rates.input_cost_per_audio_token is not None
+                and rates.output_cost_per_audio_token is not None
+                and "audio" in caps
+            )
+            else None
+        ),
+        (
             Case(
                 name="tiered",
                 usage=ScriptedUsage(
                     fresh_input_tokens=TIER_THRESHOLD_TOKENS + 1, output_tokens=30
                 ),
             )
-        )
-    if rates.input_cost_per_token_flex is not None and rates.output_cost_per_token_flex is not None:
-        cases.append(
+            if (
+                rates.input_cost_per_token_above_200k_tokens is not None
+                and rates.output_cost_per_token_above_200k_tokens is not None
+            )
+            else None
+        ),
+        (
             Case(name="service_tier_flex", usage=_BASIC_USAGE, service_tier="flex")
-        )
-    if rates.input_cost_per_token_priority is not None and rates.output_cost_per_token_priority is not None:
-        cases.append(
+            if rates.input_cost_per_token_flex is not None and rates.output_cost_per_token_flex is not None
+            else None
+        ),
+        (
             Case(name="service_tier_priority", usage=_BASIC_USAGE, service_tier="priority")
-        )
-    if rates.search_context_cost_per_query is not None and "web_search" in caps:
-        cases.append(_web_search_case(model))
-    cases.append(Case(name="stream", usage=_BASIC_USAGE, stream=True))
-    if "absent_usage" in caps:
-        cases.append(
+            if rates.input_cost_per_token_priority is not None and rates.output_cost_per_token_priority is not None
+            else None
+        ),
+        _web_search_case(model) if rates.search_context_cost_per_query is not None and "web_search" in caps else None,
+        Case(name="stream", usage=_BASIC_USAGE, stream=True),
+        (
             Case(
                 name="stream_no_usage",
                 usage=_BASIC_USAGE,
@@ -355,10 +364,16 @@ def cases_for(model: FrontierModel) -> tuple[Case, ...]:
                 # wires recount tokens proxy-side and bill a nonzero amount.
                 expect_zero_bill=model.wire == "openai_responses",
             )
-        )
-    if "response_model" in caps:
-        cases.append(Case(name="response_model_override", usage=_BASIC_USAGE, response_model_override=True))
-    return tuple(cases)
+            if "absent_usage" in caps
+            else None
+        ),
+        (
+            Case(name="response_model_override", usage=_BASIC_USAGE, response_model_override=True)
+            if "response_model" in caps
+            else None
+        ),
+    )
+    return tuple(case for case in candidates if case is not None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,38 +402,41 @@ def expected_breakdown(model: FrontierModel, case: Case) -> ExpectedCost:
     to the tier's variants, falling back to the base rate when a variant is
     unset -- mirroring _get_token_base_cost in litellm's cost calculator.
     """
-    rates = model.override_rates if case.response_model_override else model.rates
-    u = case.usage
-    prompt_tokens = (
+    rates: Final = model.override_rates if case.response_model_override else model.rates
+    u: Final = case.usage
+    prompt_tokens: Final = (
         u.fresh_input_tokens + u.cache_read_tokens + u.cache_write_5m_tokens
         + u.cache_write_1h_tokens + u.audio_input_tokens
     )
-    tiered = prompt_tokens > TIER_THRESHOLD_TOKENS
-    in_rate = rates.input_cost_per_token or 0.0
-    out_rate = rates.output_cost_per_token or 0.0
-    if case.service_tier == "flex":
-        in_rate = rates.input_cost_per_token_flex or in_rate
-        out_rate = rates.output_cost_per_token_flex or out_rate
-    if case.service_tier == "priority":
-        in_rate = rates.input_cost_per_token_priority or in_rate
-        out_rate = rates.output_cost_per_token_priority or out_rate
-    if tiered:
-        in_rate = rates.input_cost_per_token_above_200k_tokens or in_rate
-        out_rate = rates.output_cost_per_token_above_200k_tokens or out_rate
-    input_cost = (
+    tiered: Final = prompt_tokens > TIER_THRESHOLD_TOKENS
+    in_rate: Final = (
+        (rates.input_cost_per_token_above_200k_tokens if tiered else None)
+        or (rates.input_cost_per_token_priority if case.service_tier == "priority" else None)
+        or (rates.input_cost_per_token_flex if case.service_tier == "flex" else None)
+        or rates.input_cost_per_token
+        or 0.0
+    )
+    out_rate: Final = (
+        (rates.output_cost_per_token_above_200k_tokens if tiered else None)
+        or (rates.output_cost_per_token_priority if case.service_tier == "priority" else None)
+        or (rates.output_cost_per_token_flex if case.service_tier == "flex" else None)
+        or rates.output_cost_per_token
+        or 0.0
+    )
+    input_cost: Final = (
         u.fresh_input_tokens * in_rate
         + u.cache_read_tokens * (rates.cache_read_input_token_cost or 0.0)
         + u.cache_write_5m_tokens * (rates.cache_creation_input_token_cost or 0.0)
         + u.cache_write_1h_tokens * (rates.cache_creation_input_token_cost_above_1hr or 0.0)
         + u.audio_input_tokens * (rates.input_cost_per_audio_token or 0.0)
     )
-    output_cost = (
+    output_cost: Final = (
         u.output_tokens * out_rate
         + u.reasoning_tokens * (rates.output_cost_per_reasoning_token or out_rate)
         + u.audio_output_tokens * (rates.output_cost_per_audio_token or out_rate)
     )
-    search = rates.search_context_cost_per_query
-    tool_cost = case.billed_web_search_calls * (
+    search: Final = rates.search_context_cost_per_query
+    tool_cost: Final = case.billed_web_search_calls * (
         search.search_context_size_medium if search and search.search_context_size_medium else 0.0
     )
     return ExpectedCost(input_cost=input_cost, output_cost=output_cost, tool_cost=tool_cost)
@@ -432,7 +450,7 @@ def expected_token_columns(model: FrontierModel, case: Case) -> tuple[int, int]:
     """(prompt_tokens, completion_tokens) the spend row should carry, per the
     wire's normalization: Anthropic folds cache read/write into prompt_tokens,
     everyone else reports the totals the wire emitted."""
-    u = case.usage
+    u: Final = case.usage
     if model.wire == "anthropic_messages":
         return (
             u.fresh_input_tokens + u.cache_read_tokens + u.cache_write_5m_tokens + u.cache_write_1h_tokens,

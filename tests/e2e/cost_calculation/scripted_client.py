@@ -12,6 +12,7 @@ from e2e_config import SCRIPTED_PROVIDER_CONTROL_URL, SCRIPTED_PROVIDER_PROXY_BA
 from e2e_http import URL, NoBody, unwrap, post
 from e2e_http import delete as http_delete
 from scripted_provider import (
+    WIRE_MOUNTS,
     Scenario,
     ScenarioDeleted,
     ScenarioRegistered,
@@ -29,19 +30,12 @@ class ScenarioHandle:
         return f"{self.proxy_base}/{self.scenario_id}/{self._mount()}"
 
     def _mount(self) -> str:
-        return {
-            "openai_chat": "openai",
-            "openai_responses": "openai",
-            "anthropic_messages": "anthropic",
-            "gemini_generate": "gemini",
-            "together_chat": "together",
-            "fireworks_chat": "fireworks",
-        }[self.wire]
+        return WIRE_MOUNTS[self.wire]
 
 
 def register_scenario(scenario: Scenario) -> ScenarioHandle:
     """POST the scenario to the sidecar's control API and return its handle."""
-    result = unwrap(
+    result: Final = unwrap(
         post(
             URL(f"{SCRIPTED_PROVIDER_CONTROL_URL}/_scenarios"),
             headers=NoBody(),
