@@ -105,6 +105,17 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """
         return None
 
+    def _backend_uses_beta_protocol(self) -> bool | None:
+        """Whether the upstream speaks the OpenAI beta realtime protocol.
+
+        ``None`` infers it from the client's ``OpenAI-Beta`` header, which is correct for
+        OpenAI itself because that header is forwarded upstream. Providers whose backend
+        always speaks beta override this with ``True``, otherwise ``RealTimeStreaming``
+        remaps the client's flat ``session.update`` into GA's nested shape and the
+        backend silently drops the fields it does not know.
+        """
+        return None
+
     async def async_realtime(
         self,
         model: str,
@@ -172,6 +183,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                     event_normalizer=self._make_event_normalizer(),
+                    backend_uses_beta_protocol=self._backend_uses_beta_protocol(),
                 )
                 await realtime_streaming.bidirectional_forward()
 
