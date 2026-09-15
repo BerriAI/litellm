@@ -38,6 +38,15 @@ def test_muse_spark_1_3_web_search_cost_per_query(local_model_cost_map, model: s
     assert StandardBuiltInToolCostTracking.get_cost_for_web_search(model_info=info) == WEB_SEARCH_COST_PER_QUERY
 
 
+@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
+def test_muse_spark_1_3_backup_matches_main(model: str):
+    """Ensure the bundled model cost map stays in sync with the canonical file."""
+    main_cost = _load_cost_map()
+    backup_cost = _load_cost_map("litellm/model_prices_and_context_window_backup.json")
+
+    assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"
+
+
 def test_muse_spark_contributor_tier_is_cheaper_than_standard():
     cost_map = _load_cost_map()
     standard = cost_map[MUSE_SPARK_STANDARD]

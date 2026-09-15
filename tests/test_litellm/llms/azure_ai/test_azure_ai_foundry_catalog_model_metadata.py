@@ -73,11 +73,35 @@ def test_azure_ai_catalog_name_prices_the_same_in_any_casing(catalog_name: str) 
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("catalog_name", GROK_4_20_NAMES)
+def test_azure_ai_grok_4_20_bills_cached_prompt_tokens_at_the_input_price(catalog_name: str) -> None:
+    uncached_prompt_cost, _ = cost_per_token(
+        model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0
+    )
+    cached_prompt_cost, _ = cost_per_token(
+        model=f"azure_ai/{catalog_name}",
+        prompt_tokens=A_MILLION,
+        completion_tokens=0,
+        cache_read_input_tokens=A_MILLION,
+    )
+    assert uncached_prompt_cost > 0
+    assert cached_prompt_cost == pytest.approx(uncached_prompt_cost)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_azure_ai_whisper_catalog_name_is_priced_per_second() -> None:
     one_second_cost: Final = _whisper_transcription_cost(1)
     one_hour_cost: Final = _whisper_transcription_cost(AN_HOUR_IN_SECONDS)
     assert one_second_cost > 0
     assert one_hour_cost == pytest.approx(AN_HOUR_IN_SECONDS * one_second_cost)
+
+
+@pytest.mark.parametrize("catalog_name", CATALOG_NAMES)
+def test_azure_ai_catalog_entry_source_and_backup_match(catalog_name: str) -> None:
+    main_entry = _cost_map_entry(MAIN_COST_MAP, catalog_name)
+    backup_entry = _cost_map_entry(BACKUP_COST_MAP, catalog_name)
+
+    assert backup_entry == main_entry
 
 
 def test_azure_ai_model_router_spellings_share_one_entry() -> None:

@@ -18,6 +18,7 @@ import os
 import pytest
 
 from litellm.constants import BEDROCK_CONVERSE_MODELS
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "../..")
 
@@ -61,5 +62,31 @@ def test_opus_5_bedrock_rejects_strict_tools(model_name, local_model_cost_map):
     assert bedrock_converse_supports_strict_tools(model_name) is False
 
 
+def test_opus_5_present_in_bundled_backup():
+    """The bundled backup is the runtime fallback (and what tests load with
+    ``LITELLM_LOCAL_MODEL_COST_MAP=True``); it must carry the same entries as the
+    root cost map, otherwise the model resolves on one path but not the other."""
+    backup = GetModelCostMap.load_local_model_cost_map()
+    for model_name in ALL_OPUS_5_VARIANTS:
+        assert model_name in backup, f"Missing from backup cost map: {model_name}"
+
+
 def test_opus_5_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-5" in BEDROCK_CONVERSE_MODELS
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_opus_5_all_variants_carry_adaptive_thinking_flag(cost_map):
+    """Every Opus 5 entry must advertise ``supports_adaptive_thinking``.
+
+    Adaptive-thinking detection is cost-map driven, so a single variant missing
+    the flag silently sends the legacy ``thinking.type='enabled'`` shape, which
+    Opus 5 rejects with a 400."""
+    variants = [k for k in cost_map if "claude-opus-5" in k]
+    assert variants, "no claude-opus-5 entries found in cost map"
+    missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
+    assert not missing, f"missing supports_adaptive_thinking: {missing}"

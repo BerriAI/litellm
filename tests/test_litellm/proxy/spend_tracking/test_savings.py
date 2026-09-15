@@ -327,6 +327,29 @@ def test_openai_style_cache_write_tokens_are_netted_out():
     )
 
 
+def test_sub_input_cache_write_price_is_an_extra_saving():
+    """A few models price writes below input; there the premium is a real credit.
+
+    Clamping the premium at zero would silently undercount these, so the subtraction
+    stays signed. ``azure/eu/gpt-4o-2024-11-20`` ships a write price at ~0.5x input.
+    """
+    model = "azure/eu/gpt-4o-2024-11-20"
+    info = litellm.get_model_info(model=model)
+    input_cost = info["input_cost_per_token"]
+    cheap_write = info["cache_creation_input_token_cost"]
+    assert 0 < cheap_write < input_cost, "fixture drifted: this test needs a model pricing cache writes below input"
+
+    result = compute_savings_spend(
+        model=model,
+        custom_llm_provider=None,
+        compression_saved_tokens=0,
+        gateway_injected_cache=True,
+        usage_object=_caching_usage(read=1000, written=4000),
+    )
+    assert result.prompt_caching == pytest.approx(4000 * (input_cost - cheap_write))
+    assert result.prompt_caching > 0
+
+
 def test_negative_cache_write_count_clamps_to_zero():
     """A malformed negative write count must not be read as a saving."""
     input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")

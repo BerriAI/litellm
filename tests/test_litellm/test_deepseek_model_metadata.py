@@ -15,6 +15,7 @@ import os
 import litellm
 from litellm.utils import (
     _supports_factory,
+    supports_response_schema,
 )
 
 # ---------------------------------------------------------------------------
@@ -36,6 +37,18 @@ class TestDeepSeekModelCostEntries:
     """Verify that provider-prefixed DeepSeek entries contain the same
     capability flags as their bare-name counterparts in the JSON files."""
 
+    def test_deepseek_chat_max_input_tokens_matches_bare_in_backup(self):
+        data = _load_backup_json()
+        bare = data.get("deepseek-chat", {})
+        prefixed = data.get("deepseek/deepseek-chat", {})
+        assert prefixed.get("max_input_tokens") == bare.get("max_input_tokens")
+
+    def test_deepseek_reasoner_max_output_tokens_matches_bare_in_backup(self):
+        data = _load_backup_json()
+        bare = data.get("deepseek-reasoner", {})
+        prefixed = data.get("deepseek/deepseek-reasoner", {})
+        assert prefixed.get("max_output_tokens") == bare.get("max_output_tokens")
+
 
 # ---------------------------------------------------------------------------
 # API-level tests – verify supports_response_schema returns True
@@ -45,6 +58,18 @@ class TestDeepSeekModelCostEntries:
 class TestSupportsResponseSchemaDeepSeek:
     """All calling conventions for DeepSeek should return True for
     ``supports_response_schema``."""
+
+    def test_provider_slash_model(self):
+        assert supports_response_schema(model="deepseek/deepseek-chat") is True
+
+    def test_explicit_provider(self):
+        assert supports_response_schema(model="deepseek-chat", custom_llm_provider="deepseek") is True
+
+    def test_reasoner_provider_slash_model(self):
+        assert supports_response_schema(model="deepseek/deepseek-reasoner") is True
+
+    def test_reasoner_explicit_provider(self):
+        assert supports_response_schema(model="deepseek-reasoner", custom_llm_provider="deepseek") is True
 
 
 # ---------------------------------------------------------------------------

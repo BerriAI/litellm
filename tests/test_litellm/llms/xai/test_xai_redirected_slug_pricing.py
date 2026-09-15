@@ -98,3 +98,23 @@ def test_redirected_slug_carries_the_target_tier_rates(cost_map: dict, slug: str
     for field in TIER_COST_FIELDS:
         assert entry[field] == target[field], field
     assert {k for k in entry if "_above_" in k} == {k for k in target if "_above_" in k}
+
+
+def test_both_cost_maps_agree_on_the_redirected_slugs():
+    prices = json.loads(PRICES_PATH.read_text(encoding="utf-8"))
+    backup = json.loads(BACKUP_PRICES_PATH.read_text(encoding="utf-8"))
+    for slug in (*REDIRECTED_SLUGS, *CODE_SLUGS, REDIRECT_TARGET, CODE_REDIRECT_TARGET):
+        assert prices[slug] == backup[slug], slug
+
+
+def test_every_retired_chat_slug_is_covered(cost_map: dict):
+    """The lists above must stay in step with what the registry marks retired."""
+    marked = {
+        key
+        for key, entry in cost_map.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "xai"
+        and "deprecation_date" in entry
+        and entry.get("mode") == "chat"
+    }
+    assert marked == {*REDIRECTED_SLUGS, *CODE_SLUGS}

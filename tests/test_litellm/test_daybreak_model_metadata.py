@@ -32,6 +32,13 @@ def _load(path):
         return json.load(f)
 
 
+def test_blue_alias_matches_its_snapshot_computer_use():
+    cost_map = _load(MAIN_PATH)
+
+    assert cost_map[BLUE_ALIAS]["supports_computer_use"] is True
+    assert cost_map[BLUE_SNAPSHOT]["supports_computer_use"] is True
+
+
 @pytest.mark.parametrize(("alias", "snapshot"), OFFICIAL_ALIAS_SNAPSHOTS)
 def test_official_alias_tracks_snapshot(alias, snapshot):
     cost_map = _load(MAIN_PATH)
@@ -44,3 +51,11 @@ def test_official_alias_tracks_snapshot(alias, snapshot):
         field: snapshot_info.get(field) for field in PRICE_FIELDS
     }
     assert alias_info["max_output_tokens"] == snapshot_info["max_output_tokens"]
+
+
+@pytest.mark.parametrize("model", (*DAYBREAK_MODELS, BLUE_SNAPSHOT, *(alias for alias, _ in OFFICIAL_ALIAS_SNAPSHOTS)))
+def test_backup_matches_main(model):
+    main_cost = _load(MAIN_PATH)
+    backup_cost = _load(BACKUP_PATH)
+
+    assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"

@@ -1,4 +1,8 @@
-from typing_extensions import get_args, get_type_hints
+import json
+from pathlib import Path
+from typing import get_args
+
+from typing_extensions import get_type_hints
 
 from litellm.types.utils import ModelInfoBase
 
@@ -41,3 +45,13 @@ ALL_REALTIME_ONLY_GPT_MODELS = REALTIME_ONLY_GPT_MODELS + REALTIME_ONLY_GPT_MODE
 def test_realtime_is_a_valid_mode_literal():
     hints = get_type_hints(ModelInfoBase, include_extras=False)
     assert "realtime" in get_args(hints["mode"])
+
+
+def test_backup_matches_main_for_realtime_models():
+    repo_root = Path(__file__).parents[2]
+    with open(repo_root / "model_prices_and_context_window.json") as f:
+        main_cost = json.load(f)
+    with open(repo_root / "litellm" / "model_prices_and_context_window_backup.json") as f:
+        backup_cost = json.load(f)
+    for model in ALL_REALTIME_ONLY_GPT_MODELS:
+        assert backup_cost.get(model) == main_cost.get(model)
