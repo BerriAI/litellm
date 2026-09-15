@@ -5941,18 +5941,22 @@ class StandardLoggingPayloadSetup:
         user_agent_tags: list[str] | None = None
         headers: Final = proxy_server_request.get("headers", {})
         if headers is not None and isinstance(headers, dict):
-            if "user-agent" in headers:
-                user_agent: Final = headers["user-agent"]
-                if user_agent is not None:
-                    if user_agent_tags is None:
-                        user_agent_tags = []
-                    user_agent_part: str | None = None
-                    if "/" in user_agent:
-                        user_agent_part = user_agent.split("/")[0]
-                    if user_agent_part is not None:
-                        user_agent_tags.append("User-Agent: " + user_agent_part)
-                    if user_agent is not None:
-                        user_agent_tags.append("User-Agent: " + user_agent)
+            user_agent: Final[str | None] = next(
+                (
+                    v
+                    for k, v in headers.items()
+                    if isinstance(k, str) and k.lower() == "user-agent" and isinstance(v, str)
+                ),
+                None,
+            )
+            if user_agent is not None:
+                user_agent_tags = []
+                user_agent_part: str | None = None
+                if "/" in user_agent:
+                    user_agent_part = user_agent.split("/")[0]
+                if user_agent_part is not None:
+                    user_agent_tags.append("User-Agent: " + user_agent_part)
+                user_agent_tags.append("User-Agent: " + user_agent)
         return user_agent_tags
 
     @staticmethod
