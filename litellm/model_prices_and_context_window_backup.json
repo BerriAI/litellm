@@ -22925,6 +22925,7 @@
     "fireworks_ai/deepseek-v4-pro": {
         "cache_read_input_token_cost": 6e-07,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 1.2e-06,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
@@ -23143,6 +23144,7 @@
     "fireworks_ai/minimax-m2p7": {
         "cache_read_input_token_cost": 6e-08,
         "cache_read_input_token_cost_priority": 6e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_priority": 1.2e-06,
         "litellm_provider": "fireworks_ai",
