@@ -17435,12 +17435,12 @@ GeneralSettingsUILiteLLMValue = float | bool | str | None
 
 
 class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
-    type: Literal["Float", "Dollar", "Boolean", "Select", "String"]
-    description: str
-    options: NotRequired[tuple[str, ...]]
-    tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
-    default: NotRequired[
-        float | bool
+    type: ReadOnly[Literal["Float", "Dollar", "Boolean", "Select", "String"]]
+    description: ReadOnly[str]
+    options: ReadOnly[NotRequired[tuple[str, ...]]]
+    tab: ReadOnly[NotRequired[str]]  # Admin UI sub-tab this field renders under; None groups it with the rest
+    default: ReadOnly[
+        NotRequired[float | bool]
     ]  # reset/clear restores this instead of None; fields whose None means fail-open set it
 
 

@@ -1683,8 +1683,6 @@ _DENIED_MESSAGE_TEMPLATE: Final = "The model `{model}` is unavailable for this A
 
 
 def test_can_object_call_model_denial_uses_configured_message_and_logs_detail(monkeypatch, caplog):
-    """LIT-5283: with model_access_denied_message set, the client sees only the template with
-    {model} filled in, while the allowed models / access groups stay in the proxy log."""
     monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
 
     with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
@@ -1704,6 +1702,26 @@ def test_can_object_call_model_denial_uses_configured_message_and_logs_detail(mo
     assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
     assert "internal-models" in caplog.text
     assert "anthropic-sonnet-4-5" in caplog.text
+
+
+def test_can_object_call_model_denial_log_strips_newlines_from_requested_model(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        with pytest.raises(ProxyException):
+            _can_object_call_model(
+                model="gpt-5.6\r\nWARNING forged log line",
+                llm_router=None,
+                models=["internal-models"],
+                object_type="key",
+            )
+
+    denial_records = [r for r in caplog.records if "not allowed to access model" in r.getMessage()]
+    assert len(denial_records) == 1
+    assert denial_records[0].getMessage() == (
+        "key not allowed to access model. This key can only access models=['internal-models']. "
+        "Tried to access gpt-5.6WARNING forged log line"
+    )
 
 
 @pytest.mark.parametrize("unset_value", [None, ""])

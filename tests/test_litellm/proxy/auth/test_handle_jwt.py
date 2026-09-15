@@ -9,6 +9,8 @@ from fastapi import HTTPException
 import httpx
 import pytest
 
+import litellm
+
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
@@ -21,6 +23,8 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
+    RoleBasedPermissions,
+    ScopeMapping,
 )
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
@@ -6965,3 +6969,56 @@ async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_ch
         )
 
     assert exc_info.value.status_code == 403
+
+
+_JWT_DENIED_MESSAGE_TEMPLATE = "The model `{model}` is unavailable for this identity."
+
+
+@pytest.mark.parametrize(
+    "configured_message, expected_detail",
+    [
+        (None, "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"),
+        ("", "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"),
+        (_JWT_DENIED_MESSAGE_TEMPLATE, "The model `gpt-5.6` is unavailable for this identity."),
+    ],
+)
+def test_can_rbac_role_call_model_denial_honors_configured_message(monkeypatch, configured_message, expected_detail):
+    monkeypatch.setattr(litellm, "model_access_denied_message", configured_message)
+    general_settings = {
+        "role_permissions": [
+            RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["gpt-5.6-mini"]),
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings=general_settings,
+            model="gpt-5.6",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == expected_detail
+
+
+@pytest.mark.parametrize(
+    "configured_message, expected_error",
+    [
+        (None, "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"),
+        ("", "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"),
+        (_JWT_DENIED_MESSAGE_TEMPLATE, "The model `gpt-5.6` is unavailable for this identity."),
+    ],
+)
+def test_check_scope_based_access_denial_honors_configured_message(monkeypatch, configured_message, expected_error):
+    monkeypatch.setattr(litellm, "model_access_denied_message", configured_message)
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager.check_scope_based_access(
+            scope_mappings=[ScopeMapping(scope="litellm.api.consumer", models=["gpt-5.6-mini"])],
+            scopes=["litellm.api.consumer"],
+            request_data={"model": "gpt-5.6"},
+            general_settings={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"error": expected_error}

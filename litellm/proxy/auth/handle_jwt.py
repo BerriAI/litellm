@@ -66,6 +66,7 @@ from litellm.types.agents import AgentResponse
 from .auth_checks import (
     _allowed_routes_check,
     allowed_routes_check,
+    client_facing_model_access_denied_message,
     get_actual_routes,
     get_end_user_object,
     get_org_object,
@@ -1339,7 +1340,10 @@ class JWTAuthManager:
         if model not in role_based_models:
             raise HTTPException(
                 status_code=403,
-                detail=f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
+                detail=client_facing_model_access_denied_message(
+                    internal_message=f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
+                    model=model,
+                ),
             )
 
         return True
@@ -1370,7 +1374,12 @@ class JWTAuthManager:
         if requested_model not in allowed_models:
             raise HTTPException(
                 status_code=403,
-                detail={"error": f"model={requested_model} not allowed. Allowed_models={allowed_models}"},
+                detail={
+                    "error": client_facing_model_access_denied_message(
+                        internal_message=f"model={requested_model} not allowed. Allowed_models={allowed_models}",
+                        model=requested_model,
+                    )
+                },
             )
         return
 
