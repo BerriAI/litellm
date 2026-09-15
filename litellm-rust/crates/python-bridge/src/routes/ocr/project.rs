@@ -143,7 +143,7 @@ pub(super) fn project_request(
         api_base: arguments.api_base()?,
         custom_llm_provider,
         extra_headers: arguments.extra_headers()?,
-        optional_params,
+        optional_params: optional_params.into(),
         input_sources,
         timeout_seconds: arguments.timeout_seconds()?,
     };
@@ -500,7 +500,7 @@ kwargs = {'api_key': key}
                 api_base: None,
                 custom_llm_provider: None,
                 extra_headers: None,
-                optional_params: Map::new(),
+                optional_params: Default::default(),
                 input_sources: Default::default(),
                 timeout_seconds: None,
             }) {

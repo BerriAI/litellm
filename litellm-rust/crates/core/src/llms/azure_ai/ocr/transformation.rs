@@ -2,14 +2,12 @@ use crate::Error;
 use crate::auth::{InputSource, Sourced};
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
-use crate::llms::mistral::ocr::{MistralOcrParams, MistralOcrResponse};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
-use crate::ocr::prepare::{
-    _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
-};
+use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection};
 use crate::providers::azure_ai::auth::AzureAuthInputs;
 use crate::url_utils::ApiUrl;
@@ -23,15 +21,16 @@ pub(crate) struct AzureAIOCRConfig;
 impl BaseOcrConfig for AzureAIOCRConfig {
     type ProviderResponse = MistralOcrResponse;
 
+    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
+        MistralOCRConfig.get_supported_ocr_params(model)
+    }
+
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
-        let ParsedProviderParams {
-            known: params,
-            extra_params: _extra_params,
-        } = _prepare_ocr_request::<MistralOcrParams>(request)?;
+        let params = self.map_ocr_params(&request.model, &request.optional_params);
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
             ..AzureAuthInputs::from_sourced_optional_params(

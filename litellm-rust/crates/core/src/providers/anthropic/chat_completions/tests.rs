@@ -6,9 +6,9 @@ fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")
 }
 
-fn params(value: Value) -> Map<String, Value> {
+fn params(value: Value) -> OpaqueParams {
     match value {
-        Value::Object(map) => map,
+        Value::Object(map) => map.into(),
         other => panic!("params must be an object, got {other}"),
     }
 }
@@ -419,13 +419,20 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
     let config = &ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
         config
-            .complete_url(None, "claude-sonnet-4-5", &Map::new(), &|_| None)
+            .complete_url(None, "claude-sonnet-4-5", &OpaqueParams::default(), &|_| {
+                None
+            })
             .expect("url builds"),
         "https://api.anthropic.com/v1/messages"
     );
     assert_eq!(
         config
-            .auth(Some("sk-x"), "claude-sonnet-4-5", &Map::new(), &|_| None)
+            .auth(
+                Some("sk-x"),
+                "claude-sonnet-4-5",
+                &OpaqueParams::default(),
+                &|_| None,
+            )
             .expect("auth resolves"),
         ChatCompletionsAuth::Header {
             name: "x-api-key",

@@ -629,6 +629,10 @@ pub(crate) struct AzureDocumentIntelligenceOCRConfig;
 impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
     type ProviderResponse = AzureDocumentIntelligenceOperation;
 
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &["pages", "features"]
+    }
+
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
@@ -686,7 +690,8 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
 fn map_ocr_params(
     request: &LiteLLMOcrRequest,
 ) -> Result<DocumentIntelligenceParams, OcrRequestError> {
-    let params = params::decode_input_params(request.optional_params.clone(), "optional_params")?;
+    let params =
+        params::decode_input_params(request.optional_params.clone().into(), "optional_params")?;
     let crate::ocr::prepare::ParsedProviderParams {
         known: params,
         extra_params: _extra_params,

@@ -53,7 +53,7 @@ mod tests {
     use std::sync::Arc;
 
     use litellm_core::ocr::wire::is_supported_request;
-    use serde_json::{Map, json};
+    use serde_json::json;
 
     use super::{OcrRequest, validate_host_hooks};
     use crate::integrations::custom_guardrail::{CustomGuardrail, GuardrailEventHook};
@@ -83,7 +83,7 @@ mod tests {
             api_base: None,
             custom_llm_provider: Some("mistral"),
             extra_headers: None,
-            optional_params: Map::new(),
+            optional_params: Default::default(),
             timeout: None,
             callbacks: Vec::new(),
             guardrails: Vec::new(),

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use litellm_core::params::OpaqueParams;
 use serde_json::{Map, Value};
 
 use crate::integrations::custom_guardrail::CustomGuardrail;
@@ -14,7 +15,7 @@ pub struct OcrRequest<'a> {
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
-    pub optional_params: Map<String, Value>,
+    pub optional_params: OpaqueParams,
     pub timeout: Option<Duration>,
     pub callbacks: Vec<Arc<dyn CustomLogger>>,
     pub guardrails: Vec<Arc<dyn CustomGuardrail>>,

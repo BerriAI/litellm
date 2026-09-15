@@ -44,7 +44,7 @@ fn prepare_ocr(
             api_base,
             custom_llm_provider,
             extra_headers,
-            optional_params,
+            optional_params: optional_params.into(),
             input_sources,
             timeout_seconds: timeout.map(|value| value.as_secs_f64()),
         })?;

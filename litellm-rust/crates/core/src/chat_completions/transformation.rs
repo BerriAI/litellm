@@ -1,10 +1,11 @@
 use crate::Error;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::types::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
+use crate::params::OpaqueParams;
 
 /// How the upstream call is authenticated. API-key strategies are resolved in
 /// `prepare`; SigV4 needs the serialized body, so the handler signs it.
@@ -36,7 +37,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
@@ -44,7 +45,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         &self,
         api_key: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ChatCompletionsAuth, Error>;
 
@@ -74,7 +75,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
     ) -> Option<Unsupported> {
         unsupported_param(
             self.supported_openai_params(),
@@ -88,7 +89,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         &self,
         model: &str,
         messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
+        optional_params: OpaqueParams,
     ) -> Result<ProviderChatRequestData, Error>;
 
     fn transform_response(
@@ -101,7 +102,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
 pub fn unsupported_param(
     supported: &'static [(&'static str, &'static str)],
     config: &'static [&'static str],
-    optional_params: &Map<String, Value>,
+    optional_params: &OpaqueParams,
 ) -> Option<Unsupported> {
     if optional_params
         .get(STREAM_PARAM)

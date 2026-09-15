@@ -3,50 +3,14 @@ use serde_json::{Map, Value};
 
 use crate::ocr::error::{OcrRequestError, OcrResponseError};
 use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument};
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum MistralOcrPages {
-    Range(String),
-    Indices(Vec<i64>),
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct MistralOcrParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pages: Option<MistralOcrPages>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_image_base64: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_limit: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_min_size: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bbox_annotation_format: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub document_annotation_format: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub document_annotation_prompt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extract_header: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extract_footer: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub table_format: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence_scores_granularity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_blocks: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-}
+use crate::params::OpaqueParams;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct MistralOcrRequest {
     pub model: String,
     pub document: OcrDocument,
     #[serde(flatten)]
-    pub params: MistralOcrParams,
+    pub params: OpaqueParams,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -63,7 +27,7 @@ pub(crate) struct MistralOcrResponse {
 pub(crate) fn transform_ocr_request(
     model: &str,
     document: OcrDocument,
-    params: &MistralOcrParams,
+    params: &OpaqueParams,
 ) -> Result<MistralOcrRequest, OcrRequestError> {
     Ok(MistralOcrRequest {
         model: model.to_string(),
@@ -94,7 +58,8 @@ mod mapping_tests {
     use serde_json::{Value, json};
 
     fn mapped_params(value: Value) -> Value {
-        serde_json::to_value(serde_json::from_value::<MistralOcrParams>(value).unwrap()).unwrap()
+        let params = serde_json::from_value::<OpaqueParams>(value).unwrap();
+        serde_json::to_value(MistralOCRConfig.map_ocr_params("model", &params)).unwrap()
     }
 
     fn document() -> OcrDocument {
@@ -169,6 +134,16 @@ mod mapping_tests {
     }
 
     #[rstest]
+    fn map_ocr_params_preserves_unvalidated_values_and_explicit_null() {
+        let mapped = mapped_params(json!({
+            "pages":{"future":"shape"},
+            "include_image_base64":null
+        }));
+        assert_eq!(mapped["pages"], json!({"future":"shape"}));
+        assert!(mapped.get("include_image_base64").unwrap().is_null());
+    }
+
+    #[rstest]
     #[case("table_format", json!("html"))]
     #[case("confidence_scores_granularity", json!("word"))]
     #[case("confidence_scores_granularity", json!("block"))]
@@ -205,8 +180,7 @@ mod mapping_tests {
     #[case("include_blocks", json!(true))]
     #[case("id", json!("req-123"))]
     fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
-        let params: MistralOcrParams =
-            serde_json::from_value(json!({name: value.clone()})).unwrap();
+        let params: OpaqueParams = serde_json::from_value(json!({name: value.clone()})).unwrap();
         let result =
             serde_json::to_value(transform_ocr_request("model", document(), &params).unwrap())
                 .unwrap();
@@ -226,7 +200,7 @@ mod mapping_tests {
         #[case] name: &str,
         #[case] value: Value,
     ) {
-        let params: MistralOcrParams = serde_json::from_value(json!({name:value.clone()})).unwrap();
+        let params: OpaqueParams = serde_json::from_value(json!({name:value.clone()})).unwrap();
         let result = serde_json::to_value(
             transform_ocr_request("mistral-ocr-latest", document(), &params).unwrap(),
         )
@@ -237,7 +211,7 @@ mod mapping_tests {
 
     #[rstest]
     fn transform_ocr_request_includes_multiple_new_params() {
-        let params: MistralOcrParams = serde_json::from_value(json!({
+        let params: OpaqueParams = serde_json::from_value(json!({
             "table_format":"html",
             "confidence_scores_granularity":"page",
             "extract_header":true
@@ -312,9 +286,7 @@ use crate::constants::MISTRAL_OCR_API_BASE;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::ocr::OcrClient;
 use crate::ocr::error::OcrError;
-use crate::ocr::prepare::{
-    _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
-};
+use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, OcrConnection};
 use crate::url_utils::ApiUrl;
 
@@ -328,7 +300,7 @@ impl MistralOCRConfig {
         &self,
         model: &str,
         document: crate::ocr::types::OcrDocument,
-        params: &MistralOcrParams,
+        params: &OpaqueParams,
     ) -> Result<MistralOcrRequest, OcrRequestError> {
         transform_ocr_request(model, document, params)
     }
@@ -337,15 +309,30 @@ impl MistralOCRConfig {
 impl BaseOcrConfig for MistralOCRConfig {
     type ProviderResponse = MistralOcrResponse;
 
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &[
+            "pages",
+            "include_image_base64",
+            "image_limit",
+            "image_min_size",
+            "bbox_annotation_format",
+            "document_annotation_format",
+            "document_annotation_prompt",
+            "extract_header",
+            "extract_footer",
+            "table_format",
+            "confidence_scores_granularity",
+            "include_blocks",
+            "id",
+        ]
+    }
+
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
-        let ParsedProviderParams {
-            known: params,
-            extra_params: _extra_params,
-        } = _prepare_ocr_request::<MistralOcrParams>(request)?;
+        let params = self.map_ocr_params(&request.model, &request.optional_params);
         let headers = validate_environment(&request.connection, &credential_env)?;
         let url = get_complete_url(request.connection.api_base.as_deref())?;
         let body = self.transform_ocr_request(&request.model, request.document.clone(), &params)?;

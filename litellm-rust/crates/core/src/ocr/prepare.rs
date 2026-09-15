@@ -19,7 +19,7 @@ pub(crate) fn _prepare_ocr_request<T: DeserializeOwned>(
     request: &LiteLLMOcrRequest,
 ) -> Result<ParsedProviderParams<T>, OcrRequestError> {
     super::wire::decode_request_value(
-        Value::Object(request.optional_params.clone()),
+        Value::Object(request.optional_params.clone().into()),
         "optional_params",
     )
 }

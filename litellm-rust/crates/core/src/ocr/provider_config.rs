@@ -1,4 +1,13 @@
 use crate::Error;
+use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
+use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOCRConfig;
+use crate::llms::azure_ai::ocr::transformation::AzureAIOCRConfig;
+use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::llms::cohere::ocr::transformation::CohereParseConfig;
+use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
+use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
+use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +33,24 @@ impl OcrConfigKind {
             }
             Self::ReductoLegacy | Self::ReductoV3 => OcrProvider::Reducto,
             Self::VertexAi | Self::VertexDeepSeek => OcrProvider::VertexAi,
+        }
+    }
+
+    pub(crate) fn get_supported_ocr_params(self, model: &str) -> &'static [&'static str] {
+        match self {
+            Self::Cohere => CohereParseConfig.get_supported_ocr_params(model),
+            Self::Mistral => MistralOCRConfig.get_supported_ocr_params(model),
+            Self::AzureAi => AzureAIOCRConfig::default().get_supported_ocr_params(model),
+            Self::AzureCohere => {
+                AzureAICohereParseConfig::default().get_supported_ocr_params(model)
+            }
+            Self::AzureDocumentIntelligence => {
+                AzureDocumentIntelligenceOCRConfig.get_supported_ocr_params(model)
+            }
+            Self::ReductoLegacy => ReductoParseLegacyConfig.get_supported_ocr_params(model),
+            Self::ReductoV3 => ReductoParseV3Config.get_supported_ocr_params(model),
+            Self::VertexAi => VertexAIOCRConfig::default().get_supported_ocr_params(model),
+            Self::VertexDeepSeek => VertexAIDeepSeekOCRConfig.get_supported_ocr_params(model),
         }
     }
 }

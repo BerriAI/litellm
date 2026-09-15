@@ -10,6 +10,7 @@ use super::provider_config::{OcrConfigKind, resolve_provider_config};
 use crate::Error;
 use crate::auth::{InputSource, TokenProviderHandle};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
+use crate::params::OpaqueParams;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -95,7 +96,7 @@ pub struct LiteLLMOcrRequest {
     pub connection: OcrConnection,
     pub hooks: Arc<dyn OcrHooks>,
     pub litellm_call_id: Option<String>,
-    pub optional_params: Map<String, Value>,
+    pub optional_params: OpaqueParams,
     pub input_sources: BTreeMap<String, InputSource>,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
     pub(crate) config: OcrConfigKind,
@@ -106,7 +107,7 @@ impl LiteLLMOcrRequest {
         model: String,
         document: OcrDocument,
         custom_llm_provider: Option<&str>,
-        optional_params: Map<String, Value>,
+        optional_params: OpaqueParams,
     ) -> Result<Self, Error> {
         let (model, config) = resolve_provider_config(&model, custom_llm_provider)?;
 

@@ -290,13 +290,17 @@ impl CohereParseConfig {
 impl BaseOcrConfig for CohereParseConfig {
     type ProviderResponse = CohereResponse;
 
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &["output_format"]
+    }
+
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
         let params = crate::ocr::wire::decode_request_value::<CohereParams>(
-            serde_json::Value::Object(request.optional_params.clone()),
+            serde_json::Value::Object(request.optional_params.clone().into()),
             "optional_params",
         )?;
         let headers = validate_environment(&request.connection, &credential_env)?;

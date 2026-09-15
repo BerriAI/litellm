@@ -40,7 +40,7 @@ fn prepare_transcription(
             api_base: api_base.as_deref(),
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
-            optional_params,
+            optional_params: optional_params.into(),
             timeout,
         })
         .await

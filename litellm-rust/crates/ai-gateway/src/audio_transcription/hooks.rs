@@ -4,7 +4,7 @@ use litellm_core::audio_transcription::{
 };
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -70,13 +70,13 @@ impl AudioTranscriptionLifecycleHooks {
             Error::InvalidRequest("audio transcription guardrail removed audio".to_string())
         })?;
         let optional_params = match data.remove("optional_params") {
-            Some(Value::Object(value)) => value,
+            Some(Value::Object(value)) => value.into(),
             Some(_) => {
                 return Err(Error::InvalidRequest(
                     "audio transcription optional_params must be an object".to_string(),
                 ));
             }
-            None => Map::new(),
+            None => Default::default(),
         };
         Ok(PreparedAudioTranscriptionRequest {
             audio,

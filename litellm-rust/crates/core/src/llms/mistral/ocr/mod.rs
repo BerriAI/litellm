@@ -1,3 +1,3 @@
 pub(crate) mod transformation;
 
-pub(crate) use transformation::{MistralOcrParams, MistralOcrResponse};
+pub(crate) use transformation::MistralOcrResponse;

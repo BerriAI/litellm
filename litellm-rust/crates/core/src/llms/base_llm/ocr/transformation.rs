@@ -6,9 +6,16 @@ use crate::ocr::OcrClient;
 use crate::ocr::error::{OcrError, OcrResponseError};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrResponseFormat};
 use crate::ocr::wire::DecodedOcrResponse;
+use crate::params::OpaqueParams;
 
 pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
     type ProviderResponse: DeserializeOwned + Send;
+
+    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str];
+
+    fn map_ocr_params(&self, model: &str, params: &OpaqueParams) -> OpaqueParams {
+        params.retain_supported(self.get_supported_ocr_params(model))
+    }
 
     fn prepare_request(
         &self,
