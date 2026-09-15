@@ -94,6 +94,23 @@ def test_request_stays_in_anthropic_shape(config):
     assert openai_only_keys.isdisjoint(payload.keys())
 
 
+def test_request_preserves_adaptive_thinking_and_effort(config):
+    payload = config.transform_anthropic_messages_request(
+        model="my-model",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"] == {"effort": "high"}
+
+
 def test_request_requires_max_tokens(config):
     with pytest.raises(AnthropicError, match="max_tokens is required"):
         config.transform_anthropic_messages_request(
