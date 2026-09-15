@@ -13,6 +13,7 @@ import pytest
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
@@ -2163,14 +2164,14 @@ class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
         super().__init__()
         self.return_copies = return_copies
         self.replacement_arguments = replacement_arguments
-        self.seen_tool_calls: list[dict] = []
+        self.seen_tool_calls: list[dict[str, object]] = []
 
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
     ) -> GenericGuardrailAPIInputs:
         outputs = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
         tool_calls = list(outputs.get("tool_calls") or [])
