@@ -33,7 +33,7 @@ from collections.abc import (
 )
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
@@ -2829,9 +2829,7 @@ class Router:
                 # continue it (feature off, or tool/thinking/constrained output):
                 # surface the real error rather than restart into the same stream.
                 if committed and not continue_after_content:
-                    if e.original_exception is not None:
-                        raise e.original_exception from e
-                    raise
+                    self._raise_original_mid_stream_error(e)
 
                 from litellm.main import stream_chunk_builder
 
@@ -2864,9 +2862,7 @@ class Router:
                         if reduced_ceilings is None:
                             # The caller's output allowance is already spent; surface the
                             # error rather than grant a fresh allowance on this fallback hop.
-                            if e.original_exception is not None:
-                                raise e.original_exception from e
-                            raise
+                            self._raise_original_mid_stream_error(e)
                         initial_kwargs.update(reduced_ceilings)
                         initial_kwargs["messages"] = self._build_completion_continuation_input(
                             messages, e.generated_content
@@ -3062,6 +3058,14 @@ class Router:
             output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
             total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
         )
+
+    @staticmethod
+    def _raise_original_mid_stream_error(e: "MidStreamFallbackError") -> NoReturn:
+        """Decline a continuation by surfacing the real provider error the stream
+        wrapper carried, rather than leaking the internal MidStreamFallbackError."""
+        if e.original_exception is not None:
+            raise e.original_exception from e
+        raise e
 
     def _mid_stream_continuation_eligible(
         self,
