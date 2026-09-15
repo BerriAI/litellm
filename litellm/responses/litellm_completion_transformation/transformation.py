@@ -2697,12 +2697,6 @@ class LiteLLMCompletionResponsesConfig:
                 )
                 message_output_items.extend(image_generation_items)
             elif choice.message.content is not None:
-                # Attach unsigned plain-text reasoning to the message item so
-                # the thinking process remains observable without emitting a
-                # standalone reasoning output item that agent clients may
-                # not understand.
-                reasoning_text: Final[str | None] = choice.message.reasoning_content or None
-
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -2716,7 +2710,6 @@ class LiteLLMCompletionResponsesConfig:
                                 choice.message
                             )
                         ],
-                        reasoning_content=reasoning_text,
                     )
                 )
         return message_output_items
