@@ -14,6 +14,17 @@ def _increment(increment_value: float) -> RedisPipelineIncrementOperation:
     return RedisPipelineIncrementOperation(key=_SPEND_KEY, increment_value=increment_value, ttl=86400)
 
 
+class _ObservedLock(asyncio.Lock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.waiter_started = asyncio.Event()
+
+    async def acquire(self) -> bool:
+        if self.locked():
+            self.waiter_started.set()
+        return await super().acquire()
+
+
 class _MockRedisCache:
     def __init__(
         self,
@@ -78,6 +89,7 @@ class _MockInMemoryCache:
 def _new_router_budget_limiter(
     *,
     redis_cache: object,
+    queue_lock: asyncio.Lock | None = None,
     in_memory_cache: object | None = None,
     redis_increment_operation_queue: list[RedisPipelineIncrementOperation] | None = None,
     provider_budget_config: dict[str, BudgetConfig] | None = None,
@@ -93,7 +105,7 @@ def _new_router_budget_limiter(
     budget_limiter.redis_increment_operation_queue = (
         list(redis_increment_operation_queue) if redis_increment_operation_queue is not None else []
     )
-    budget_limiter._redis_increment_queue_lock = asyncio.Lock()
+    budget_limiter._redis_increment_queue_lock = queue_lock if queue_lock is not None else asyncio.Lock()
     budget_limiter._redis_increment_flush_lock = asyncio.Lock()
     budget_limiter._detached_increment_operations = None
     return budget_limiter
@@ -320,12 +332,16 @@ async def test_cancelled_flush_does_not_requeue_an_applied_batch(cancellations: 
         pipeline_completed=pipeline_completed,
         allow_pipeline_to_complete=allow_pipeline,
     )
-    limiter = _new_router_budget_limiter(redis_cache=redis_cache, redis_increment_operation_queue=[_increment(10.0)])
+    queue_lock = _ObservedLock()
+    limiter = _new_router_budget_limiter(
+        redis_cache=redis_cache, queue_lock=queue_lock, redis_increment_operation_queue=[_increment(10.0)]
+    )
     push_task = asyncio.create_task(limiter._push_in_memory_increments_to_redis())
     await asyncio.wait_for(pipeline_started.wait(), timeout=1)
     async with limiter._redis_increment_queue_lock:
         allow_pipeline.set()
         await asyncio.wait_for(pipeline_completed.wait(), timeout=1)
+        await asyncio.wait_for(queue_lock.waiter_started.wait(), timeout=1)
         for _ in range(cancellations):
             push_task.cancel()
             await asyncio.sleep(0)
