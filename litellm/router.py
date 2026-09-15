@@ -8377,7 +8377,8 @@ class Router:
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
-        When a retry or fallback happens, record which model group, deployment and attempt just failed and why
+        When a retry or fallback happens, record which model group, deployment and attempt just failed and why,
+        and count it toward the request-wide num_retries_per_request cap
         """
         from litellm.types.router import RetryAttemptRecord
 
@@ -8401,7 +8402,10 @@ class Router:
             else ()
         )
         breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
+        earlier: Final = request_metadata.get("request_retry_count")
+        request_retry_count: Final = (earlier if type(earlier) is int and 0 <= earlier else 0) + 1
         kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
+        kwargs[_metadata_var]["request_retry_count"] = request_retry_count  # rebind-ok: same dict, read by the cap
         return kwargs
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Span | None) -> int:
