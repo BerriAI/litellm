@@ -2,6 +2,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -84,7 +85,11 @@ def _trigger_cooldown_for_failed_deployment(
         # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
         # actual health. Left unguarded, a caller could force a 408 on every deployment in
         # the fallback chain from a single request with a near-zero timeout.
-        if is_caller_timeout_408(model_call_details, exception_status):
+        if is_caller_timeout_408(
+            model_call_details,
+            exception_status,
+            ended=datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
+        ):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: a caller-supplied "
                 "x-litellm-timeout caused this 408, not deployment health."
