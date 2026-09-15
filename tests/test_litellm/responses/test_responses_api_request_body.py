@@ -424,6 +424,30 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
         assert mock_ws.call_args.kwargs["custom_llm_provider"] == "openai"
 
 
+@pytest.mark.asyncio
+async def test_aresponses_websocket_uses_custom_llm_provider_from_kwargs():
+    """Router-selected deployments pass custom_llm_provider via kwargs (#41081)."""
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import _aresponses_websocket
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as mock_ws:
+        await _aresponses_websocket(
+            model="model-x",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            custom_llm_provider="openai",
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_ws.assert_awaited_once()
+        assert mock_ws.call_args.kwargs["custom_llm_provider"] == "openai"
+        assert mock_ws.call_args.kwargs["model"] == "model-x"
+
+
 _INJECTION_POINT_INPUT = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]
 _SYSTEM_POINT = {"location": "message", "role": "system"}
 _USER_POINT = {"location": "message", "role": "user"}
