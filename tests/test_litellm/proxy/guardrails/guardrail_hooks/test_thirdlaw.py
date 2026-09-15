@@ -24,7 +24,14 @@ from litellm.types.guardrails import (
     LitellmParams,
     SupportedGuardrailIntegrations,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
+    ReasoningSummaryTextDeltaEvent,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.thirdlaw import (
     ThirdlawGuardrailConfigModel,
     ThirdlawGuardrailConfigModelOptionalParams,
@@ -665,6 +672,41 @@ async def test_streaming_buffered_modify_emits_rewritten_response():
     assert "sk-leak" not in emitted_text
 
 
+def _redacting_modify_decision() -> httpx.Response:
+    return _decision_response(
+        {
+            "action": "modify_response",
+            "response_body": {
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "the secret is [REDACTED]"},
+                    }
+                ]
+            },
+        }
+    )
+
+
+async def test_masking_guardrail_does_not_buffer_and_replay_originals():
+    """Buffered replay hands back the unredacted chunks, so a masking guardrail must not buffer."""
+    g = _make_guardrail(decisions=[_redacting_modify_decision()], mask_response_content=True)
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_stream_chunks()), request_data=_request_data()
+        )
+    )
+    emitted = "".join(
+        choice.delta.content or ""
+        for chunk in out
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+    )
+    assert emitted == "the secret is sk-leak"
+    assert "[REDACTED]" not in emitted
+
+
 async def test_streaming_buffered_block_raises_streaming_callback_error():
     from litellm.proxy.proxy_server import StreamingCallbackError
 
@@ -768,7 +810,134 @@ async def test_streaming_raw_sse_allow_replays_frames():
         )
     )
     assert out == frames
-    assert _sent_payload(g)["response_body"]["choices"][0]["message"]["content"] == "hello there"
+    posted = _sent_payload(g)["response_body"]
+    assert "choices" not in posted
+    assert posted["type"] == "message"
+    assert posted["id"] == "msg_abc"
+    assert posted["content"] == [{"type": "text", "text": "hello there"}]
+    assert posted["stop_reason"] == "end_turn"
+    assert posted["usage"] == {"input_tokens": 9, "output_tokens": 4}
+
+
+def _anthropic_thinking_sse_frames() -> list[bytes]:
+    """A turn carrying everything the chat-completions shape has no field for."""
+    events = [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_thinking",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": 9,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 120,
+                        "cache_read_input_tokens": 400,
+                    },
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "weighing it"}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig-xyz"}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "hello there"}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "stop_sequence", "stop_sequence": "END"},
+                "usage": {"output_tokens": 4},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+
+async def test_a_messages_stream_keeps_what_the_chat_shape_has_no_field_for():
+    """Folding the stream into a ModelResponse dropped thinking blocks, the signature,
+    stop_sequence and the cache token split before the scan ever saw them."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_anthropic_thinking_sse_frames()),
+            request_data=_request_data(),
+        )
+    )
+    posted = _sent_payload(g)["response_body"]
+    assert posted["content"][0] == {"type": "thinking", "thinking": "weighing it", "signature": "sig-xyz"}
+    assert posted["content"][1] == {"type": "text", "text": "hello there"}
+    assert posted["stop_sequence"] == "END"
+    assert posted["usage"]["cache_creation_input_tokens"] == 120
+    assert posted["usage"]["cache_read_input_tokens"] == 400
+
+
+async def test_a_messages_stream_rewrite_is_re_emitted_as_anthropic_frames():
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {"content": [{"type": "text", "text": "hello [REDACTED]"}]},
+                }
+            )
+        ]
+    )
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_anthropic_sse_frames()),
+            request_data=_request_data(),
+        )
+    )
+    joined = b"".join(item for item in out if isinstance(item, bytes))
+    assert b"hello [REDACTED]" in joined
+    assert b"hello there" not in joined
+
+
+async def test_a_chat_shaped_rewrite_of_a_messages_stream_fails_closed():
+    """The overlay is a shallow merge, so "choices" would land beside the untouched "content"
+    and the re-emitted stream would carry the very text the rewrite asked to redact."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(decisions=[_redacting_modify_decision()])
+    with pytest.raises(StreamingCallbackError, match="answered a /v1/messages stream"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(_anthropic_sse_frames()),
+                request_data=_request_data(),
+            )
+        )
 
 
 async def test_streaming_raw_sse_block_emits_anthropic_error_frame():
@@ -787,10 +956,22 @@ async def test_streaming_raw_sse_block_emits_anthropic_error_frame():
 
 
 def _unscannable_chunks() -> list[dict]:
-    """A stream shape stream_chunk_builder cannot assemble into a ModelResponse.
+    """A stream shape with no assembler and no wire format of its own.
 
-    /v1/responses and text-completion streams arrive like this: plain dicts that are
-    neither ModelResponseStream nor raw Anthropic SSE frames.
+    Text-completion streams arrive like this: plain dicts that are neither ModelResponseStream,
+    raw Anthropic SSE frames, nor Responses API events, so there is no format to refuse them in.
+    """
+    return [
+        {"text": "the secret ", "index": 0},
+        {"text": "is sk-leak", "index": 0},
+    ]
+
+
+def _truncated_responses_chunks() -> list[dict]:
+    """A /v1/responses stream that died before its terminal event.
+
+    response.created also carries a body, but an empty one, so only a terminal event yields
+    something scannable. Without one the turn cannot be scanned at all.
     """
     return [
         {"type": "response.output_text.delta", "delta": "the secret "},
@@ -811,6 +992,279 @@ async def test_unscannable_stream_fails_closed_by_default():
             )
         )
     assert g.async_handler.post.await_count == 0
+
+
+async def test_an_opaque_sse_stream_is_not_refused_in_anthropic_frames():
+    """A Google :streamGenerateContent stream is raw SSE but not Anthropic, so an Anthropic
+    error frame would refuse it in a format its client cannot parse."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    google_frames = [b'data: {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}\n\n']
+    g = _make_guardrail(decisions=[])
+    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(google_frames),
+                request_data=_request_data(),
+            )
+        )
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_an_earlier_guardrails_refusal_is_passed_through_not_replaced():
+    """post_call guardrails compose, so this hook can be handed the terminal error frames a
+    preceding one emitted. Replacing them would hide the rejection the client is owed."""
+    upstream_refusal = [b'event: error\ndata: {"type": "error", "error": {"message": "blocked by presidio"}}\n\n']
+    g = _make_guardrail(decisions=[])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(upstream_refusal),
+            request_data=_request_data(),
+        )
+    )
+    assert out == upstream_refusal
+    assert g.async_handler.post.await_count == 0
+
+
+def _responses_stream_chunks(text: str = "the secret is sk-leak") -> list[object]:
+    """A complete /v1/responses stream, the shape that crashed stream_chunk_builder.
+
+    The terminal response.completed event carries the finished body; every event before it
+    carries either an empty body or a delta.
+    """
+    body = ResponsesAPIResponse(
+        id="resp_encrypted_abc",
+        created_at=1,
+        model="claude-haiku-4-5",
+        object="response",
+        output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+    )
+    return [
+        ResponseCreatedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            response=ResponsesAPIResponse(
+                id="resp_encrypted_abc",
+                created_at=1,
+                model="claude-haiku-4-5",
+                object="response",
+                output=[],
+                parallel_tool_calls=True,
+                tool_choice="auto",
+                tools=[],
+                top_p=1.0,
+            ),
+        ),
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+        ),
+        ResponseCompletedEvent(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=body),
+    ]
+
+
+async def test_a_responses_stream_is_scanned_in_the_native_responses_body_shape():
+    """stream_chunk_builder raised KeyError: 'model' on these events, refusing the whole stream.
+
+    The body posted to the service must be the Responses shape its non-streaming half already
+    sends, not a chat-completions body with a fabricated "choices".
+    """
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    chunks = _responses_stream_chunks()
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out == chunks
+    assert g.async_handler.post.await_count == 1
+    posted = g.async_handler.post.await_args.kwargs["json"]["response_body"]
+    assert "choices" not in posted
+    assert posted["object"] == "response"
+    assert posted["id"] == "resp_encrypted_abc"
+    assert posted["output"][0]["content"][0]["text"] == "the secret is sk-leak"
+
+
+async def test_a_responses_stream_block_arrives_as_a_responses_error_event():
+    """A raised exception reaches the client as the proxy's {"error": ...} blob, which has no
+    top-level "type" and so is not a Responses event at all."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "block", "message": "leaked secret"})])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_responses_stream_chunks()),
+            request_data=_request_data(),
+        )
+    )
+    assert [getattr(item, "type", None) for item in out] == [ResponsesAPIStreamEvents.ERROR]
+    assert out[0].error.message == "leaked secret"
+
+
+async def test_a_responses_stream_rewrite_arrives_as_responses_events():
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {
+                        "output": [
+                            {
+                                "id": "msg_1",
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": [
+                                    {"type": "output_text", "text": "the secret is [REDACTED]", "annotations": []}
+                                ],
+                            }
+                        ]
+                    },
+                }
+            )
+        ]
+    )
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_responses_stream_chunks()),
+            request_data=_request_data(),
+        )
+    )
+    emitted = "".join(item.delta for item in out if getattr(item, "type", None) == "response.output_text.delta")
+    assert emitted == "the secret is [REDACTED]"
+    assert "sk-leak" not in emitted
+    completed = [item for item in out if getattr(item, "type", None) == "response.completed"]
+    assert len(completed) == 1
+    assert completed[0].response.id == "resp_encrypted_abc"
+
+
+async def test_a_responses_rewrite_cannot_rename_the_encrypted_response_id():
+    """litellm hands out an encrypted response id and the client chains the next turn off it
+    with previous_response_id, so a rewrite must not be able to replace it."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {"action": "modify_response", "response_body": {"id": "resp_attacker_supplied"}},
+            )
+        ]
+    )
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_responses_stream_chunks()),
+            request_data=_request_data(),
+        )
+    )
+    ids = {getattr(item, "response", None) and item.response.id for item in out}
+    assert "resp_attacker_supplied" not in ids
+    assert "resp_encrypted_abc" in ids
+
+
+async def test_a_truncated_responses_stream_is_refused_as_a_responses_error_event():
+    g = _make_guardrail(decisions=[])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_truncated_responses_chunks()),
+            request_data=_request_data(),
+        )
+    )
+    assert [getattr(item, "type", None) for item in out] == [ResponsesAPIStreamEvents.ERROR]
+    assert "could not be assembled for scanning" in out[0].error.message
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_a_responses_error_event_continues_the_streams_sequence_numbering():
+    """An error event restarting at zero after N events would arrive out of order."""
+    chunks = _responses_stream_chunks()
+    chunks[-1].__dict__["sequence_number"] = 11
+    g = _make_guardrail(decisions=[_decision_response({"action": "block", "message": "leaked secret"})])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out[0].sequence_number == 12
+
+
+async def test_delta_text_missing_from_the_terminal_body_is_posted_beside_it():
+    """Reasoning summaries reach the client through deltas some providers never repeat in the
+    finished body. A scan of that body alone would miss them, so they ride along in their own
+    field and the body itself stays the shape the non-streaming route posts."""
+    chunks = _responses_stream_chunks()
+    chunks.insert(
+        2,
+        ReasoningSummaryTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+            item_id="rs_1",
+            output_index=0,
+            summary_index=0,
+            delta="thinking about ",
+        ),
+    )
+    chunks.insert(
+        3,
+        ReasoningSummaryTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+            item_id="rs_1",
+            output_index=0,
+            summary_index=0,
+            delta="sk-other-leak",
+        ),
+    )
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    posted = _sent_payload(g)
+    assert posted["streamed_deltas_not_in_body"] == ["thinking about sk-other-leak"]
+    assert "choices" not in posted["response_body"]
+    assert posted["response_body"]["output"][0]["content"][0]["text"] == "the secret is sk-leak"
+
+
+async def test_the_deltas_field_is_omitted_when_the_body_already_carries_every_delta():
+    """Only text the body does not account for goes beside it; a clean turn posts no field at all,
+    so the service sees the same payload shape it did before the field existed."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_responses_stream_chunks()),
+            request_data=_request_data(),
+        )
+    )
+    assert "streamed_deltas_not_in_body" not in _sent_payload(g)
+
+
+async def test_the_deltas_field_never_appears_on_a_chat_or_messages_stream():
+    """Only a /v1/responses turn can leave delta text out of its body; the other surfaces fold
+    every delta into what they post."""
+    for chunks in (_stream_chunks(), _anthropic_sse_frames()):
+        g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+            )
+        )
+        assert "streamed_deltas_not_in_body" not in _sent_payload(g)
 
 
 @pytest.mark.parametrize("typo", ["fail_close", "failopen", "FAIL_OPEN", ""])
@@ -859,133 +1313,3 @@ async def test_block_never_travels_as_a_success_status(service_status, expected_
             call_type="completion",
         )
     assert excinfo.value.status_code == expected_status
-
-
-def _responses_inputs(texts: Sequence[str] = ("the secret is sk-leak",)) -> dict[str, object]:
-    return {"texts": list(texts), "model": "gpt-5.6"}
-
-
-async def test_apply_guardrail_scans_response_texts_over_the_v2_contract():
-    """The Responses API path must reach the same /guardrails/litellm/v2 endpoint."""
-    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
-    out = await g.apply_guardrail(
-        inputs=_responses_inputs(), request_data=_request_data(), input_type="response"
-    )
-    assert out["texts"] == ["the secret is sk-leak"]
-    payload = _sent_payload(g)
-    assert payload["event_type"] == "post_call"
-    # The extracted text has to actually reach the service, otherwise the scan is a no-op.
-    assert payload["response_body"]["choices"][0]["message"]["content"] == "the secret is sk-leak"
-
-
-async def test_apply_guardrail_applies_a_modify_response_rewrite():
-    g = _make_guardrail(
-        decisions=[
-            _decision_response(
-                {
-                    "action": "modify_response",
-                    "response_body": {"choices": [{"index": 0, "message": {"role": "assistant", "content": "[REDACTED]"}}]},
-                }
-            )
-        ]
-    )
-    out = await g.apply_guardrail(
-        inputs=_responses_inputs(), request_data=_request_data(), input_type="response"
-    )
-    assert out["texts"] == ["[REDACTED]"]
-
-
-async def test_apply_guardrail_blocks():
-    g = _make_guardrail(decisions=[_decision_response({"action": "block", "message": "nope"})])
-    with pytest.raises(GuardrailRaisedException, match="nope"):
-        await g.apply_guardrail(
-            inputs=_responses_inputs(), request_data=_request_data(), input_type="response"
-        )
-
-
-async def test_apply_guardrail_leaves_requests_to_the_native_pre_call_hook():
-    """pre_call already scanned the real body; rescanning here would double-charge."""
-    g = _make_guardrail(decisions=[])
-    out = await g.apply_guardrail(
-        inputs=_responses_inputs(), request_data=_request_data(), input_type="request"
-    )
-    assert out == _responses_inputs()
-    assert g.async_handler.post.await_count == 0
-
-
-async def test_apply_guardrail_keeps_texts_when_the_rewrite_shape_is_wrong():
-    """A choices list that does not line up with the texts must not silently drop content."""
-    g = _make_guardrail(
-        decisions=[_decision_response({"action": "modify_response", "response_body": {"choices": []}})]
-    )
-    out = await g.apply_guardrail(
-        inputs=_responses_inputs(("a", "b")), request_data=_request_data(), input_type="response"
-    )
-    assert out["texts"] == ["a", "b"]
-
-
-async def test_responses_api_stream_is_delegated_not_refused():
-    """The Responses API stream must reach the translation layer, not the fail-closed path."""
-    seen: dict[str, object] = {}
-
-    class _FakeUnified:
-        async def async_post_call_streaming_iterator_hook(self, **kwargs: object) -> AsyncIterator[object]:
-            seen.update(kwargs)
-            yield "delegated"
-
-    g = _make_guardrail(decisions=[], unified_guardrails=_FakeUnified())
-    out = await _collect(
-        g.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/responses"),
-            response=_aiter(_unscannable_chunks()),
-            request_data=_request_data(),
-        )
-    )
-
-    assert out == ["delegated"]
-    assert seen["guardrail_to_apply"] is g
-    assert g.async_handler.post.await_count == 0
-
-
-async def test_non_responses_stream_still_uses_the_native_path():
-    """Only the Responses API detours; chat completions keep the native scan."""
-    seen: dict[str, object] = {}
-
-    class _FakeUnified:
-        async def async_post_call_streaming_iterator_hook(self, **kwargs: object) -> AsyncIterator[object]:
-            seen.update(kwargs)
-            yield "delegated"
-
-    chunks = _stream_chunks()
-    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})], unified_guardrails=_FakeUnified())
-    out = await _collect(
-        g.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
-            response=_aiter(chunks),
-            request_data=_request_data(),
-        )
-    )
-
-    assert out == chunks
-    assert seen == {}
-
-
-async def test_pre_call_still_scans_the_real_request_body():
-    """Implementing apply_guardrail must not move lifecycle events onto the unified path.
-
-    Without use_native_lifecycle_hooks the proxy stops calling these hooks, apply_guardrail
-    returns request inputs untouched, and request scanning silently becomes a no-op.
-    """
-    assert ThirdlawGuardrail.use_native_lifecycle_hooks is True
-
-    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
-    await g.async_pre_call_hook(
-        user_api_key_dict=UserAPIKeyAuth(),
-        cache=DualCache(),
-        data=_request_data(),
-        call_type="completion",
-    )
-    payload = _sent_payload(g)
-    assert payload["event_type"] == "pre_call"
-    # The real provider body has to reach the service, not an extracted-text stand-in.
-    assert payload["request_body"]["messages"][0]["content"] == "my api key is sk-user-secret"

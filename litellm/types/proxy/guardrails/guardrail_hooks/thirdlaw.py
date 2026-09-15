@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,6 +36,9 @@ class ThirdlawGuardrailRequest(BaseModel):
     request_headers: Mapping[str, str] | None = None
     request_body: Mapping[str, object] | None = None
     response_body: Mapping[str, object] | None = None
+    # Text a /v1/responses stream delivered in delta events that its terminal body does not repeat
+    # (reasoning summaries, tool-call arguments on some providers). Present only when non-empty.
+    streamed_deltas_not_in_body: Sequence[str] | None = None
     additional_provider_specific_params: Mapping[str, object] | None = None
 
 
