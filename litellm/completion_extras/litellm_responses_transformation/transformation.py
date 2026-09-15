@@ -268,7 +268,7 @@ def _phase_for_output_text_delta(
     output_item_phases: Mapping[tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase],
 ) -> _ResponsesOutputItemPhase | None:
     if isinstance(item_id := parsed_chunk.get("item_id"), str):
-        phase: Final = output_item_phases.get(("id", item_id))
+        phase = output_item_phases.get(("id", item_id))
         if phase is not None:
             return phase
     if (output_index := _output_index(parsed_chunk)) is not None:
