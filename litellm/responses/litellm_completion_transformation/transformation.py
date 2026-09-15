@@ -2715,11 +2715,9 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
                 if reasoning_text:
-                    # Attach thinking text as an extra field. GenericResponseOutputItem
-                    # uses extra='allow' in its Pydantic config, so the attribute is
-                    # serialized correctly at runtime even though the declared
-                    # schema does not include it.
-                    setattr(message_item, "reasoning_content", reasoning_text)  # type: ignore[attr-defined]  # extra='allow' model
+                    message_item = message_item.model_copy(  # rebind-ok: model_copy returns updated item
+                        update={"reasoning_content": reasoning_text}
+                    )
                 message_output_items.append(message_item)
         return message_output_items
 
