@@ -1430,8 +1430,6 @@ def _openai_handler_error(
     status_code: int = 400,
     message: str = _GUARDRAIL_BLOCK_ERROR["message"],
 ) -> OpenAIError:
-    """What litellm/llms/openai/openai.py raises after the openai SDK rejects a request:
-    the SDK's str() carries the wire body, and the handler copies headers and body over."""
     wire_error = {**_GUARDRAIL_BLOCK_ERROR, "type": error_type, "code": str(status_code), "message": message}
     return OpenAIError(
         status_code=status_code,
@@ -1448,9 +1446,6 @@ _PROXY_HEADERS = {"x-litellm-call-id": "call-guardrail", "x-litellm-applied-guar
     ("error_type", "status_code"), [("None", 400), ("invalid_request_error", 400), ("None", 422)]
 )
 def test_litellm_proxy_guardrail_block_keeps_body_and_headers(error_type: str, status_code: int):
-    """An SDK caller behind a proxy tells a guardrail block from any other 4xx by the body's
-    provider_specific_fields and the proxy's x-litellm-* headers, so the mapped BadRequestError
-    must carry both whichever error.type and status the proxy version on the other end emits."""
     with pytest.raises(litellm.BadRequestError) as exc_info:
         exception_type(
             model="claude-haiku-4-5",
@@ -1469,9 +1464,6 @@ def test_litellm_proxy_guardrail_block_keeps_body_and_headers(error_type: str, s
     "relayed_class", [litellm.BadRequestError, litellm.ContentPolicyViolationError]
 )
 def test_litellm_proxy_relayed_litellm_error_keeps_body_and_headers(relayed_class: type[litellm.BadRequestError]):
-    """A proxy relaying a provider's own litellm error names the class in the message, which
-    re-raises that class on the SDK side before the generic 400 mapping runs; it must carry the
-    body and the proxy headers the same way the generic mapping now does."""
     message = f"litellm.{relayed_class.__name__}: {_GUARDRAIL_BLOCK_ERROR['message']}"
 
     with pytest.raises(relayed_class) as exc_info:
@@ -1489,8 +1481,6 @@ def test_litellm_proxy_relayed_litellm_error_keeps_body_and_headers(relayed_clas
 
 
 def test_openai_compatible_vendor_400_keeps_body_but_not_headers():
-    """A vendor's own response headers stay on e.response the way every other mapped provider
-    error keeps them; only a LiteLLM proxy upstream puts headers on e.headers."""
     with pytest.raises(litellm.BadRequestError) as exc_info:
         exception_type(
             model="gpt-5.4-mini",

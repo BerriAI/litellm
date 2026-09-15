@@ -4064,9 +4064,6 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
     async def test_strips_the_date_and_server_headers_of_an_upstream_litellm_proxy(self):
-        """A proxy fronting another LiteLLM proxy gets the upstream's date and server
-        on the mapped exception; forwarding them would duplicate the Date header
-        uvicorn adds to every response and leak the upstream server identity."""
         exc = litellm.BadRequestError(
             message="Content blocked",
             llm_provider="litellm_proxy",

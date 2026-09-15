@@ -235,7 +235,9 @@ class BadRequestError(openai.BadRequestError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
+        self.headers = (
+            {k: str(v) for k, v in headers.items()} if headers else None  # mutable-ok: the proxy updates it in place
+        )
         # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
         # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
         if (

@@ -8,7 +8,7 @@ from typing import Final
 
 from fastapi import status
 
-_STRINGIFIED_NONE: Final = "None"
+from litellm.constants import STRINGIFIED_NONE
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
@@ -37,7 +37,7 @@ def openai_error_type(exc: object, status_code: int) -> str:
     """OpenAI types ``error.type`` as a required string, so an exception carrying none
     falls back to the type its status code stands for."""
     carried: Final = attribute_of(exc, "type")
-    if isinstance(carried, str) and carried != _STRINGIFIED_NONE:
+    if isinstance(carried, str) and carried != STRINGIFIED_NONE:
         return carried
     mapped: Final = _OPENAI_ERROR_TYPE_BY_STATUS.get(status_code)
     if mapped is not None:
@@ -51,4 +51,4 @@ def openai_error_param(exc: object) -> str | None:
     """OpenAI types ``error.param`` as nullable, so an exception carrying none
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
-    return carried if isinstance(carried, str) and carried != _STRINGIFIED_NONE else None
+    return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
