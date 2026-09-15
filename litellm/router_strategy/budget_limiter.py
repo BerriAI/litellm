@@ -439,8 +439,8 @@ class RouterBudgetLimiting(CustomLogger):
         try:
             await pipeline_task
         except Exception:
-            await self._requeue_detached_increment_operations()
             verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
+            await self._requeue_detached_increment_operations()
             return
         await self._clear_detached_increment_operations()
 
@@ -465,8 +465,8 @@ class RouterBudgetLimiting(CustomLogger):
         try:
             await asyncio.shield(pipeline_task)
         except Exception:
-            await asyncio.shield(self._requeue_detached_increment_operations())
             verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
+            await asyncio.shield(self._requeue_detached_increment_operations())
             return False
         except asyncio.CancelledError:
             await asyncio.shield(self._finish_increment_pipeline_after_cancellation(pipeline_task))
