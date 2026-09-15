@@ -3850,3 +3850,17 @@ def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_
     assert "extra_headers" not in body
     assert body["model"] == "gpt-5.4"
     assert {k: request.headers[k] for k in FORWARDED_CLIENT_HEADERS} == FORWARDED_CLIENT_HEADERS
+
+
+@pytest.mark.parametrize("tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "file_search"}])
+def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Which fruit is red?"}],
+            tools=[{"type": "function", "function": {"name": "lookup_fruit", "parameters": {"type": "object"}}}],
+            tool_choice=tool_choice,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert f"tool_choice={tool_choice}" in str(exc_info.value)
