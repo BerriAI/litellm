@@ -28,7 +28,7 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, load_credentials_from_list
 
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -54,6 +54,12 @@ xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
+
+
+def _model_params_with_stored_credentials(model_params: Mapping[str, Any]) -> Mapping[str, Any]:
+    hydrated: Final = dict(model_params)
+    load_credentials_from_list(hydrated)
+    return MappingProxyType(hydrated)
 
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
@@ -629,34 +635,40 @@ async def _realtime_health_check(
     """
     import websockets
 
+    resolved_params: Final = _model_params_with_stored_credentials(model_params or _EMPTY_MODEL_PARAMS)
+    resolved_api_key: Final = cast(str | None, api_key or resolved_params.get("api_key"))
+    resolved_api_base: Final = cast(str | None, api_base or resolved_params.get("api_base"))
+    resolved_api_version: Final = cast(str | None, api_version or resolved_params.get("api_version"))
     url: str | None = None
     auth_headers: Final = _realtime_health_check_auth_headers(
         custom_llm_provider=custom_llm_provider,
-        api_key=api_key,
-        model_params=model_params or _EMPTY_MODEL_PARAMS,
+        api_key=resolved_api_key,
+        model_params=resolved_params,
     )
     if custom_llm_provider == "azure":
         resolved_protocol, azure_query_params = _azure_realtime_health_protocol(
             model=model,
             realtime_protocol=realtime_protocol,
-            model_params=model_params or _EMPTY_MODEL_PARAMS,
+            model_params=resolved_params,
         )
         url = azure_realtime._construct_url(
-            api_base=api_base or "",
+            api_base=resolved_api_base or "",
             model=model,
-            api_version=api_version or "2024-10-01-preview",
+            api_version=resolved_api_version or "2024-10-01-preview",
             realtime_protocol=resolved_protocol,
             query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/",
+            api_base=resolved_api_base or "https://api.openai.com/",
             query_params={"model": model},
         )
     elif custom_llm_provider == "xai":
-        url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
+        url = xai_realtime._construct_url(
+            api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
+        )
     elif custom_llm_provider == "vertex_ai":
-        vertex_model_params: Final = model_params or {}
+        vertex_model_params: Final = dict(resolved_params)
         resolved_location: Final = vertex_llm_base.get_vertex_region(
             vertex_region=VertexBase.safe_get_vertex_ai_location(vertex_model_params),
             model=model,
@@ -675,19 +687,19 @@ async def _realtime_health_check(
             project=resolved_project,
             location=resolved_location,
         )
-        url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
-        ssl_context = get_shared_realtime_ssl_context()
+        url = vertex_realtime_config.get_complete_url(api_base=resolved_api_base, model=model)
+        vertex_ssl_context: Final = get_shared_realtime_ssl_context()
         headers: Final = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
         async with websockets.connect(
             url,
             additional_headers=headers,
             max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-            ssl=ssl_context,
+            ssl=vertex_ssl_context,
         ):
             return True
     else:
         raise ValueError(f"Unsupported model: {model}")
-    ssl_context = get_shared_realtime_ssl_context()
+    ssl_context: Final = get_shared_realtime_ssl_context()
     async with websockets.connect(
         url,
         additional_headers=auth_headers,
