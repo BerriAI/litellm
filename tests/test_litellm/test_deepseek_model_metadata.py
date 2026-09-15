@@ -53,34 +53,34 @@ class TestDeepSeekModelCostEntries:
 
 
 # ---------------------------------------------------------------------------
-# API-level tests – verify supports_response_schema returns True
+# API-level tests – verify supports_response_schema returns False
 # ---------------------------------------------------------------------------
 
 
 class TestSupportsResponseSchemaDeepSeek:
-    """All calling conventions for DeepSeek should return True for
+    """All calling conventions for DeepSeek should return False for
     ``supports_response_schema``."""
 
     def test_provider_slash_model(self):
-        assert supports_response_schema(model="deepseek/deepseek-chat") is True
+        assert supports_response_schema(model="deepseek/deepseek-chat") is False
 
     def test_explicit_provider(self):
         assert (
             supports_response_schema(
                 model="deepseek-chat", custom_llm_provider="deepseek"
             )
-            is True
+            is False
         )
 
     def test_reasoner_provider_slash_model(self):
-        assert supports_response_schema(model="deepseek/deepseek-reasoner") is True
+        assert supports_response_schema(model="deepseek/deepseek-reasoner") is False
 
     def test_reasoner_explicit_provider(self):
         assert (
             supports_response_schema(
                 model="deepseek-reasoner", custom_llm_provider="deepseek"
             )
-            is True
+            is False
         )
 
 
@@ -96,7 +96,7 @@ class TestBareModelFallback:
 
     def test_fallback_uses_bare_entry(self):
         """Temporarily remove ``supports_response_schema`` from the prefixed
-        entry and verify the fallback still returns True."""
+        entry and verify the fallback returns the value from the bare entry (False)."""
         key = "deepseek/deepseek-chat"
         original = litellm.model_cost.get(key, {}).get("supports_response_schema")
         try:
@@ -108,7 +108,7 @@ class TestBareModelFallback:
                 custom_llm_provider="deepseek",
                 key="supports_response_schema",
             )
-            assert result is True
+            assert result is False
         finally:
             # Restore
             if key in litellm.model_cost and original is not None:

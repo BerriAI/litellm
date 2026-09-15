@@ -1,5 +1,13 @@
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+from litellm.types.utils import ModelResponse
+from litellm.utils import get_optional_params
 
 
 def _function_tool(name: str) -> dict:
@@ -564,3 +572,355 @@ class TestDeepSeekThinkingParams:
         assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True
+
+
+class TestDeepSeekResponseFormatTranslation:
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+        self.model = "deepseek/deepseek-flash"
+
+    def test_json_schema_unsupported_model_produces_tool_call_payload(self):
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        non_default_params = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "person", "schema": schema},
+            }
+        }
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert "response_format" not in result
+        assert result["json_mode"] is True
+        assert result["tool_choice"] == {
+            "type": "function",
+            "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+        }
+        assert len(result["tools"]) == 1
+        assert result["tools"][0]["type"] == "function"
+        assert result["tools"][0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+        assert result["tools"][0]["function"]["parameters"] == schema
+        assert result["thinking"] == {"type": "disabled"}
+
+    def test_json_schema_with_response_schema_key(self):
+        schema = {"type": "object", "properties": {"count": {"type": "integer"}}}
+        non_default_params = {
+            "response_format": {
+                "response_schema": schema,
+            }
+        }
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert "response_format" not in result
+        assert result["json_mode"] is True
+        assert result["tools"][0]["function"]["parameters"] == schema
+        assert result["thinking"] == {"type": "disabled"}
+
+    def test_json_schema_disables_thinking_when_reasoning_effort_requested(self):
+        # DeepSeek rejects tool_choice="required" and named tool choices while thinking mode is enabled (HTTP 400).
+        # When applying the json_schema tool fallback, thinking mode must be forced to disabled.
+        schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+        non_default_params = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"schema": schema},
+            },
+            "reasoning_effort": "high",
+        }
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "disabled"}
+
+    def test_json_schema_disables_thinking_when_thinking_enabled_requested(self):
+        schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+        non_default_params = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"schema": schema},
+            },
+            "thinking": {"type": "enabled"},
+        }
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "disabled"}
+
+    def test_json_schema_with_empty_tools_list_succeeds(self):
+        schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+        non_default_params = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"schema": schema},
+            },
+            "tools": [],
+        }
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["json_mode"] is True
+        assert len(result["tools"]) == 1
+        assert result["tools"][0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+        assert result["tool_choice"] == {
+            "type": "function",
+            "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+        }
+
+    def test_json_schema_conflicts_with_user_tools_raises_bad_request(self):
+        schema = {"type": "object", "properties": {"status": {"type": "string"}}}
+        non_default_params = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"schema": schema},
+            },
+            "tools": [_function_tool("custom_tool")],
+        }
+        optional_params = {}
+
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=self.model,
+                drop_params=False,
+            )
+
+        assert exc_info.value.llm_provider == "deepseek"
+        assert "does not support native structured outputs" in str(exc_info.value.message)
+
+    def test_json_schema_passes_through_when_model_supports_response_schema(self):
+        schema = {"type": "object", "properties": {"item": {"type": "string"}}}
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"schema": schema},
+        }
+        non_default_params = {"response_format": response_format}
+        optional_params = {}
+
+        with patch.object(litellm, "supports_response_schema", return_value=True):  # test-quality-ok: mocking feature support flag for unit test isolation
+            result = self.config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=self.model,
+                drop_params=False,
+            )
+
+        assert result.get("response_format") == response_format
+        assert "tools" not in result
+        assert "json_mode" not in result
+        assert "thinking" not in result
+
+    def test_plain_json_object_response_format_unaffected(self):
+        non_default_params = {"response_format": {"type": "json_object"}}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["response_format"] == {"type": "json_object"}
+        assert "tools" not in result
+        assert "json_mode" not in result
+
+    def test_plain_text_response_format_unaffected(self):
+        non_default_params = {"response_format": {"type": "text"}}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["response_format"] == {"type": "text"}
+        assert "tools" not in result
+        assert "json_mode" not in result
+
+    def test_transform_response_converts_tool_call_to_content(self):
+        raw_response = httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-test-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "deepseek-chat",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "type": "function",
+                                    "function": {
+                                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                                        "arguments": '{"answer": 42}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            },
+            request=httpx.Request("POST", "https://api.deepseek.com/chat/completions"),
+        )
+        logging_obj = MagicMock()
+        model_response = ModelResponse()
+
+        transformed = self.config.transform_response(
+            model="deepseek-chat",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            json_mode=True,
+        )
+
+        assert len(transformed.choices) == 1
+        choice = transformed.choices[0]
+        assert choice.message.content == '{"answer": 42}'
+        assert choice.message.tool_calls is None
+        assert choice.finish_reason == "stop"
+
+    def test_streaming_tool_call_converts_to_content_chunks(self):
+        handler = self.config.get_model_response_iterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=True,
+        )
+
+        initial_chunk = {
+            "id": "chatcmpl-stream-1",
+            "created": 1234567890,
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": RESPONSE_FORMAT_TOOL_NAME,
+                                    "arguments": "",
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        arg_chunk = {
+            "id": "chatcmpl-stream-1",
+            "created": 1234567890,
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "arguments": '{"status": "ok"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        final_chunk = {
+            "id": "chatcmpl-stream-1",
+            "created": 1234567890,
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+
+        res1 = handler.chunk_parser(initial_chunk)
+        assert res1.choices[0].delta.content == ""
+        assert res1.choices[0].delta.tool_calls is None
+
+        res2 = handler.chunk_parser(arg_chunk)
+        assert res2.choices[0].delta.content == '{"status": "ok"}'
+        assert res2.choices[0].delta.tool_calls is None
+
+        res3 = handler.chunk_parser(final_chunk)
+        assert res3.choices[0].finish_reason == "stop"
+
+    def test_get_optional_params_deepseek_json_schema(self):
+        schema = {"type": "object", "properties": {"value": {"type": "number"}}}
+        optional_params = get_optional_params(
+            model="deepseek/deepseek-flash",
+            custom_llm_provider="deepseek",
+            response_format={"type": "json_schema", "json_schema": {"schema": schema}},
+        )
+        assert "response_format" not in optional_params
+        assert optional_params["json_mode"] is True
+        assert optional_params["tool_choice"] == {
+            "type": "function",
+            "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+        }
+        assert optional_params["tools"][0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+        assert optional_params["tools"][0]["function"]["parameters"] == schema
+        assert optional_params["thinking"] == {"type": "disabled"}
