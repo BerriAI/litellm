@@ -9516,6 +9516,9 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        jwt_handler.bind_agent_lookup(global_agent_registry)
 
     @classmethod
     def _add_proxy_budget_to_db(cls):
