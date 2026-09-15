@@ -8169,7 +8169,7 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
             try:
                 raise exc
             except Exception as raised:
-                _log_llm_api_exception(raised)
+                _log_llm_api_exception(raised, "call-id-for-traceback-test")
     finally:
         verbose_proxy_logger.propagate = False
 
@@ -8663,3 +8663,84 @@ class TestBackgroundResponseRetrievalGovernance:
 
         assert "_guardrail_pipelines" not in data["litellm_metadata"]
         assert "applied_policies" not in data["litellm_metadata"]
+
+
+class TestErrorLogCarriesCallId:
+    """Regression for LIT-5856 / #37532: the ERROR line emitted for a failed LLM
+    request must carry the litellm_call_id the client got back in the
+    x-litellm-call-id response header, so a logged exception can be tied to a
+    specific request."""
+
+    async def _invoke(self, data: dict[str, object]) -> None:
+        from litellm._logging import verbose_proxy_logger
+
+        processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+        proxy_logging_obj: Final = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        verbose_proxy_logger.propagate = True
+        try:
+            with pytest.raises(ProxyException):
+                await processor._handle_llm_api_exception(
+                    e=ValueError("upstream blew up"),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    @staticmethod
+    def _error_record(caplog: pytest.LogCaptureFixture):
+        return next(r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage())
+
+    async def test_call_id_from_logging_obj_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        call_id: Final = str(uuid.uuid4())
+        logging_obj: Final = MagicMock()
+        logging_obj.litellm_call_id = call_id
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            await self._invoke({"litellm_logging_obj": logging_obj, "litellm_call_id": "stale-id"})
+
+        record: Final = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    async def test_call_id_falls_back_to_request_data(self, caplog: pytest.LogCaptureFixture) -> None:
+        call_id: Final = str(uuid.uuid4())
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            await self._invoke({"litellm_call_id": call_id})
+
+        record: Final = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    async def test_call_id_falls_back_when_logging_obj_has_none(self, caplog: pytest.LogCaptureFixture) -> None:
+        call_id: Final = str(uuid.uuid4())
+        logging_obj: Final = MagicMock()
+        logging_obj.litellm_call_id = None
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            await self._invoke({"litellm_logging_obj": logging_obj, "litellm_call_id": call_id})
+
+        record: Final = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    def test_client_disconnect_log_carries_call_id(self, caplog: pytest.LogCaptureFixture) -> None:
+        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy.common_request_processing import (
+            _CLIENT_DISCONNECT_DETAIL,
+            _log_llm_api_exception,
+        )
+
+        call_id: Final = str(uuid.uuid4())
+        verbose_proxy_logger.propagate = True
+        try:
+            with caplog.at_level("INFO", logger="LiteLLM Proxy"):
+                _log_llm_api_exception(
+                    HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
+                    call_id,
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+        record: Final = caplog.records[-1]
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
