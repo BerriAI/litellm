@@ -28159,6 +28159,8 @@ export interface components {
             updated_by?: string | null;
             /** User Id */
             user_id?: string | null;
+            /** Warnings */
+            warnings?: components["schemas"]["KeyTeamLimitWarning"][] | null;
         };
         /** GenericGuardrailAPIInputs */
         GenericGuardrailAPIInputs: {
@@ -28611,6 +28613,21 @@ export interface components {
             key_aliases?: string[] | null;
             /** Keys */
             keys?: string[] | null;
+        };
+        /**
+         * KeyTeamLimitWarning
+         * @description Non-blocking warning when a key limit exceeds its team's effective cap.
+         */
+        KeyTeamLimitWarning: {
+            /** Effective Team Cap */
+            effective_team_cap: number;
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "rpm_limit" | "tpm_limit" | "max_parallel_requests" | "max_budget";
+            /** Requested */
+            requested: number;
         };
         /**
          * KeyUpdateFields
@@ -33235,6 +33252,8 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+            /** Warnings */
+            warnings?: components["schemas"]["KeyTeamLimitWarning"][] | null;
         };
         /**
          * OAuth2SecurityScheme
