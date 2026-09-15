@@ -26,6 +26,7 @@ on:
       - ui/Dockerfile
       - ui/nginx.conf
       - .github/workflows/image-scan.yml
+      - .grype.yaml
   schedule:
     - cron: "41 6 * * *"
   workflow_dispatch:

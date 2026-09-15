@@ -1,0 +1,12 @@
+# Wolfi's secdb says this zlib CVE is fixed in 1.3.3-r0, but the newest zlib
+# published to the Wolfi/Chainguard apk repo is 1.3.2-r7, so even a fully
+# upgraded wolfi-base reports it. Remove once apk upgrade pulls zlib >= 1.3.3-r0
+ignore:
+  - vulnerability: CVE-2026-85091
+    package:
+      name: zlib
+      type: apk
+  - vulnerability: GHSA-g5fp-32jq-cfw2
+    package:
+      name: zlib
+      type: apk
