@@ -1,4 +1,3 @@
-use crate::realtime::Error;
 use crate::realtime::transformation::RealtimeProviderConfig;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 
@@ -72,7 +71,7 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         &self,
         event: &RealtimeEvent,
         _model: &str,
-    ) -> Result<RealtimeTransformResult, Error> {
+    ) -> Result<RealtimeTransformResult, crate::realtime::Error> {
         let mut event = event.clone();
         event.data = event.data.into_provider_body()?.into();
         Ok(RealtimeTransformResult::passthrough(event))
@@ -82,7 +81,7 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         &self,
         event: &RealtimeEvent,
         _model: &str,
-    ) -> Result<RealtimeTransformResult, Error> {
+    ) -> Result<RealtimeTransformResult, crate::realtime::Error> {
         Ok(RealtimeTransformResult::passthrough(event.clone()))
     }
 }
@@ -113,14 +112,14 @@ mod extension_tests {
 pub fn transform_realtime_request(
     event: &RealtimeEvent,
     model: &str,
-) -> Result<RealtimeTransformResult, Error> {
+) -> Result<RealtimeTransformResult, crate::realtime::Error> {
     OPENAI_REALTIME_CONFIG.transform_realtime_request(event, model)
 }
 
 pub fn transform_realtime_response(
     event: &RealtimeEvent,
     model: &str,
-) -> Result<RealtimeTransformResult, Error> {
+) -> Result<RealtimeTransformResult, crate::realtime::Error> {
     OPENAI_REALTIME_CONFIG.transform_realtime_response(event, model)
 }
 

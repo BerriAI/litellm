@@ -1,7 +1,6 @@
 use crate::call_lifecycle::host::{HostFailure, HostLifecycle, HostPhase};
-use crate::ocr::Error;
 
-fn run(fail_at: Option<HostPhase>, asynchronous: bool) -> (Vec<HostPhase>, Vec<Error>) {
+fn run(fail_at: Option<HostPhase>, asynchronous: bool) -> (Vec<HostPhase>, Vec<crate::ocr::Error>) {
     let mut lifecycle = HostLifecycle::new(asynchronous);
     let mut events = Vec::new();
     let mut failures = Vec::new();
@@ -10,7 +9,7 @@ fn run(fail_at: Option<HostPhase>, asynchronous: bool) -> (Vec<HostPhase>, Vec<E
         let phase = lifecycle.phase();
         events.push(phase);
         let result = if Some(phase) == fail_at {
-            Err(HostFailure::Error(Error::InvalidRequest(
+            Err(HostFailure::Error(crate::ocr::Error::InvalidRequest(
                 "selected failure".into(),
             )))
         } else {
@@ -81,14 +80,14 @@ fn only_provider_and_response_construction_failures_use_provider_mapping() {
 fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_dispatch() {
     let mut lifecycle = HostLifecycle::new(true);
     while lifecycle.phase() != HostPhase::Execute {
-        lifecycle.accept::<Error>(Ok(()));
+        lifecycle.accept::<crate::ocr::Error>(Ok(()));
     }
-    let selected = Error::InvalidRequest("provider".into());
+    let selected = crate::ocr::Error::InvalidRequest("provider".into());
     assert_eq!(
         lifecycle.accept(Err(HostFailure::Error(selected.clone()))),
         Some(selected)
     );
-    lifecycle.accept::<Error>(Ok(()));
+    lifecycle.accept::<crate::ocr::Error>(Ok(()));
     for phase in [
         HostPhase::DeploymentFailure,
         HostPhase::Failure,
@@ -96,7 +95,7 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
     ] {
         assert_eq!(lifecycle.phase(), phase);
         assert_eq!(
-            lifecycle.accept(Err(HostFailure::Error(Error::InvalidRequest(
+            lifecycle.accept(Err(HostFailure::Error(crate::ocr::Error::InvalidRequest(
                 "callback".into()
             )))),
             None
@@ -108,7 +107,7 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
 #[test]
 fn cancellation_skips_terminal_dispatch() {
     let mut lifecycle = HostLifecycle::new(true);
-    let error = Error::InvalidRequest("cancelled".into());
+    let error = crate::ocr::Error::InvalidRequest("cancelled".into());
     assert_eq!(
         lifecycle.accept(Err(HostFailure::Cancelled(error.clone()))),
         Some(error)

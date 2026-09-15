@@ -14,11 +14,9 @@ use crate::call_lifecycle::host::{
     HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
 };
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
-use crate::ocr::Error;
-use litellm_auth::Error as AuthError;
 use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 
-pub type NativeResult<T> = Result<NativeOutcome<T>, Error>;
+pub type NativeResult<T> = Result<NativeOutcome<T>, super::Error>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum NativeOutcome<T> {
@@ -54,7 +52,7 @@ pub enum OcrHostOperation {
     ProjectRequest,
     Lifecycle(HostPhase),
     ConstructResponse(Arc<LiteLLMOcrResponse>),
-    MapFailure(Error),
+    MapFailure(super::Error),
     Success {
         context: CallLifecycleContext,
         response: Arc<LiteLLMOcrResponse>,
@@ -62,7 +60,7 @@ pub enum OcrHostOperation {
     },
     Failure {
         context: CallLifecycleContext,
-        error: Error,
+        error: super::Error,
         timing: CallLifecycleTiming,
     },
     AcquireAzureAdToken,
@@ -83,12 +81,12 @@ impl OcrHostOperation {
 }
 
 pub enum OcrHostResult {
-    Request(Result<(Box<LiteLLMOcrRequest>, bool), Error>),
-    Lifecycle(Result<(), HostFailure<Error>>),
-    AzureAdToken(Result<ResolvedCredential, AuthError>),
-    PreCall(Result<OcrPreCallRequest, Error>),
-    DuringCall(Result<OcrDuringCallRequest, Error>),
-    PostCall(Result<OcrPostCallRequest, Error>),
+    Request(Result<(Box<LiteLLMOcrRequest>, bool), super::Error>),
+    Lifecycle(Result<(), HostFailure<super::Error>>),
+    AzureAdToken(Result<ResolvedCredential, litellm_auth::Error>),
+    PreCall(Result<OcrPreCallRequest, super::Error>),
+    DuringCall(Result<OcrDuringCallRequest, super::Error>),
+    PostCall(Result<OcrPostCallRequest, super::Error>),
 }
 
 pub type OcrCallStep = HostCallStep<OcrHostOperation, LiteLLMOcrResponse>;
@@ -97,7 +95,7 @@ pub struct OcrCall {
     lifecycle: HostLifecycle,
     execution: OcrExecution,
     response: Option<Arc<LiteLLMOcrResponse>>,
-    error: Option<Error>,
+    error: Option<super::Error>,
     pending: bool,
     completed: bool,
     projecting: bool,
@@ -122,14 +120,17 @@ impl OcrCall {
         })
     }
 
-    pub async fn resume(&mut self, result: Option<OcrHostResult>) -> Result<OcrCallStep, Error> {
+    pub async fn resume(
+        &mut self,
+        result: Option<OcrHostResult>,
+    ) -> Result<OcrCallStep, super::Error> {
         if self.completed {
-            return Err(Error::InvalidRequest(
+            return Err(super::Error::InvalidRequest(
                 "OCR call cannot be resumed after completion".into(),
             ));
         }
         if self.pending != result.is_some() {
-            return Err(Error::InvalidRequest(
+            return Err(super::Error::InvalidRequest(
                 "OCR host operation result does not match pending state".into(),
             ));
         }
@@ -137,7 +138,7 @@ impl OcrCall {
             Some(OcrHostResult::Lifecycle(Ok(())))
                 if self.lifecycle.phase() == HostPhase::Execute =>
             {
-                return Err(Error::InvalidRequest(
+                return Err(super::Error::InvalidRequest(
                     "OCR provider operation requires a typed result".into(),
                 ));
             }
@@ -145,7 +146,7 @@ impl OcrCall {
                 if !matches!(result, OcrHostResult::Lifecycle(_))
                     && self.lifecycle.phase() != HostPhase::Execute =>
             {
-                return Err(Error::InvalidRequest(
+                return Err(super::Error::InvalidRequest(
                     "unexpected OCR provider operation result".into(),
                 ));
             }
@@ -165,7 +166,7 @@ impl OcrCall {
                 None
             }
             Some(OcrHostResult::Request(_)) => {
-                return Err(Error::InvalidRequest(
+                return Err(super::Error::InvalidRequest(
                     "unexpected OCR request projection".into(),
                 ));
             }
@@ -206,20 +207,20 @@ impl OcrCall {
                         .map(Arc::unwrap_or_clone)
                         .map(OcrCallStep::Complete)
                         .ok_or_else(|| {
-                            Error::InvalidRequest("OCR completed without a response".into())
+                            super::Error::InvalidRequest("OCR completed without a response".into())
                         }),
                 };
             }
             HostPhase::ConstructResponse => OcrHostOperation::ConstructResponse(
                 self.response
                     .as_ref()
-                    .ok_or_else(|| Error::InvalidRequest("missing OCR response".into()))?
+                    .ok_or_else(|| super::Error::InvalidRequest("missing OCR response".into()))?
                     .clone(),
             ),
             HostPhase::MapFailure => OcrHostOperation::MapFailure(
                 self.error
                     .as_ref()
-                    .ok_or_else(|| Error::InvalidRequest("missing OCR failure".into()))?
+                    .ok_or_else(|| super::Error::InvalidRequest("missing OCR failure".into()))?
                     .clone(),
             ),
             HostPhase::Success | HostPhase::Failure => {
@@ -235,7 +236,9 @@ impl OcrCall {
                         response: self
                             .response
                             .as_ref()
-                            .ok_or_else(|| Error::InvalidRequest("missing OCR response".into()))?
+                            .ok_or_else(|| {
+                                super::Error::InvalidRequest("missing OCR response".into())
+                            })?
                             .clone(),
                         timing,
                     },
@@ -244,7 +247,9 @@ impl OcrCall {
                         error: self
                             .error
                             .as_ref()
-                            .ok_or_else(|| Error::InvalidRequest("missing OCR failure".into()))?
+                            .ok_or_else(|| {
+                                super::Error::InvalidRequest("missing OCR failure".into())
+                            })?
                             .clone(),
                         timing,
                     },
@@ -256,7 +261,7 @@ impl OcrCall {
         Ok(self.host_step(operation))
     }
 
-    fn accept(&mut self, result: Result<(), HostFailure<Error>>) {
+    fn accept(&mut self, result: Result<(), HostFailure<super::Error>>) {
         let cancelled = matches!(&result, Err(HostFailure::Cancelled(_)));
         if let Some(error) = self.lifecycle.accept(result) {
             if cancelled {
@@ -268,9 +273,12 @@ impl OcrCall {
         }
     }
 
-    pub async fn interrupt(&mut self, failure: HostFailure<Error>) -> Result<OcrCallStep, Error> {
+    pub async fn interrupt(
+        &mut self,
+        failure: HostFailure<super::Error>,
+    ) -> Result<OcrCallStep, super::Error> {
         if self.completed {
-            return Err(Error::InvalidRequest(
+            return Err(super::Error::InvalidRequest(
                 "OCR call cannot be interrupted after completion".into(),
             ));
         }
@@ -286,7 +294,7 @@ impl OcrCall {
 }
 
 impl HostCall for OcrCall {
-    type Error = Error;
+    type Error = super::Error;
     type Operation = OcrHostOperation;
     type Result = OcrHostResult;
     type Complete = LiteLLMOcrResponse;
@@ -300,7 +308,7 @@ impl HostCall for OcrCall {
 
     fn interrupt(
         &mut self,
-        failure: HostFailure<Error>,
+        failure: HostFailure<super::Error>,
     ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
         Box::pin(OcrCall::interrupt(self, failure))
     }
@@ -317,7 +325,7 @@ struct OcrExecution {
     operations_tx: mpsc::UnboundedSender<PendingOperation>,
     operations_rx: mpsc::UnboundedReceiver<PendingOperation>,
     pending_result: Option<oneshot::Sender<OcrHostResult>>,
-    execution: Option<tokio::task::JoinHandle<Result<LiteLLMOcrResponse, Error>>>,
+    execution: Option<tokio::task::JoinHandle<Result<LiteLLMOcrResponse, super::Error>>>,
     completed: bool,
     azure_ad_token_provider: bool,
     terminal: Arc<std::sync::Mutex<Option<(CallLifecycleContext, CallLifecycleTiming)>>>,
@@ -339,25 +347,28 @@ impl OcrExecution {
         }
     }
 
-    pub async fn resume(&mut self, result: Option<OcrHostResult>) -> Result<OcrCallStep, Error> {
+    pub async fn resume(
+        &mut self,
+        result: Option<OcrHostResult>,
+    ) -> Result<OcrCallStep, super::Error> {
         if self.completed {
-            return Err(Error::InvalidRequest(
+            return Err(super::Error::InvalidRequest(
                 "OCR call cannot be resumed after completion".into(),
             ));
         }
         match (self.pending_result.take(), result) {
-            (Some(sender), Some(result)) => sender
-                .send(result)
-                .map_err(|_| Error::InvalidRequest("OCR host operation was abandoned".into()))?,
+            (Some(sender), Some(result)) => sender.send(result).map_err(|_| {
+                super::Error::InvalidRequest("OCR host operation was abandoned".into())
+            })?,
             (None, None) if self.execution.is_none() => self.start(),
             (Some(sender), None) => {
                 self.pending_result = Some(sender);
-                return Err(Error::InvalidRequest(
+                return Err(super::Error::InvalidRequest(
                     "OCR host operation result is required".into(),
                 ));
             }
             (None, Some(_)) => {
-                return Err(Error::InvalidRequest(
+                return Err(super::Error::InvalidRequest(
                     "unexpected OCR host operation result".into(),
                 ));
             }
@@ -365,11 +376,11 @@ impl OcrExecution {
         }
 
         let execution = self.execution.as_mut().ok_or_else(|| {
-            Error::InvalidRequest("OCR call cannot be resumed after completion".into())
+            super::Error::InvalidRequest("OCR call cannot be resumed after completion".into())
         })?;
         tokio::select! {
             operation = self.operations_rx.recv() => {
-                let operation = operation.ok_or_else(|| Error::InvalidRequest("OCR operation channel closed".into()))?;
+                let operation = operation.ok_or_else(|| super::Error::InvalidRequest("OCR operation channel closed".into()))?;
                 self.pending_result = Some(operation.result);
                 Ok(OcrCallStep::Host(operation.operation))
             }
@@ -377,7 +388,7 @@ impl OcrExecution {
                 self.execution = None;
                 self.completed = true;
                 result
-                    .map_err(|error| Error::Transport(crate::transport::Error::Network(format!("OCR execution task failed: {error}"))))?
+                    .map_err(|error| super::Error::Transport(crate::transport::Error::Network(format!("OCR execution task failed: {error}"))))?
                     .map(OcrCallStep::Complete)
             }
         }
@@ -452,15 +463,17 @@ impl TokenProvider for OcrAzureAdTokenProvider {
                     result,
                 })
                 .map_err(|_| {
-                    AuthError::AzureTokenAcquisition("OCR host driver was abandoned".into())
+                    litellm_auth::Error::AzureTokenAcquisition(
+                        "OCR host driver was abandoned".into(),
+                    )
                 })?;
             match receiver.await.map_err(|_| {
-                AuthError::AzureTokenAcquisition(
+                litellm_auth::Error::AzureTokenAcquisition(
                     "OCR token provider operation was abandoned".into(),
                 )
             })? {
                 OcrHostResult::AzureAdToken(result) => result,
-                _ => Err(AuthError::AzureTokenAcquisition(
+                _ => Err(litellm_auth::Error::AzureTokenAcquisition(
                     "invalid OCR token provider host result".into(),
                 )),
             }
@@ -469,14 +482,14 @@ impl TokenProvider for OcrAzureAdTokenProvider {
 }
 
 impl ProtocolHooks {
-    async fn invoke(&self, operation: OcrHostOperation) -> Result<OcrHostResult, Error> {
+    async fn invoke(&self, operation: OcrHostOperation) -> Result<OcrHostResult, super::Error> {
         let (result, receiver) = oneshot::channel();
         self.operations
             .send(PendingOperation { operation, result })
-            .map_err(|_| Error::InvalidRequest("OCR host driver was abandoned".into()))?;
+            .map_err(|_| super::Error::InvalidRequest("OCR host driver was abandoned".into()))?;
         receiver
             .await
-            .map_err(|_| Error::InvalidRequest("OCR host operation was abandoned".into()))
+            .map_err(|_| super::Error::InvalidRequest("OCR host operation was abandoned".into()))
     }
 }
 
@@ -489,7 +502,7 @@ impl OcrHooks for ProtocolHooks {
         Box::pin(async move {
             match self.invoke(OcrHostOperation::PreCall(request)).await? {
                 OcrHostResult::PreCall(result) => result,
-                _ => Err(Error::InvalidRequest(
+                _ => Err(super::Error::InvalidRequest(
                     "invalid OCR pre-call host result".into(),
                 )),
             }
@@ -503,7 +516,7 @@ impl OcrHooks for ProtocolHooks {
         Box::pin(async move {
             match self.invoke(OcrHostOperation::DuringCall(request)).await? {
                 OcrHostResult::DuringCall(result) => result,
-                _ => Err(Error::InvalidRequest(
+                _ => Err(super::Error::InvalidRequest(
                     "invalid OCR during-call host result".into(),
                 )),
             }
@@ -514,7 +527,7 @@ impl OcrHooks for ProtocolHooks {
         Box::pin(async move {
             match self.invoke(OcrHostOperation::PostCall(request)).await? {
                 OcrHostResult::PostCall(result) => result,
-                _ => Err(Error::InvalidRequest(
+                _ => Err(super::Error::InvalidRequest(
                     "invalid OCR post-call host result".into(),
                 )),
             }
@@ -539,7 +552,7 @@ impl OcrHooks for ProtocolHooks {
     fn failure<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        _error: &'a Error,
+        _error: &'a super::Error,
         timing: &'a CallLifecycleTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async move {
@@ -565,7 +578,7 @@ impl OcrHost for NoopOcrHost {
         Box::pin(async move {
             match operation {
                 OcrHostOperation::ProjectRequest => OcrHostResult::Request(Err(
-                    Error::InvalidRequest("OCR host has no request projection".into()),
+                    super::Error::InvalidRequest("OCR host has no request projection".into()),
                 )),
                 OcrHostOperation::Lifecycle(_)
                 | OcrHostOperation::ConstructResponse(_)
@@ -573,7 +586,7 @@ impl OcrHost for NoopOcrHost {
                 | OcrHostOperation::Success { .. }
                 | OcrHostOperation::Failure { .. } => OcrHostResult::Lifecycle(Ok(())),
                 OcrHostOperation::AcquireAzureAdToken => {
-                    OcrHostResult::AzureAdToken(Err(AuthError::AzureTokenAcquisition(
+                    OcrHostResult::AzureAdToken(Err(litellm_auth::Error::AzureTokenAcquisition(
                         "OCR host has no Azure AD token provider".into(),
                     )))
                 }
@@ -600,7 +613,7 @@ impl OcrHost for OcrHookHost {
         Box::pin(async move {
             match operation {
                 OcrHostOperation::ProjectRequest => OcrHostResult::Request(Err(
-                    Error::InvalidRequest("OCR hook host has no request projection".into()),
+                    super::Error::InvalidRequest("OCR hook host has no request projection".into()),
                 )),
                 OcrHostOperation::Success {
                     context,
@@ -622,7 +635,7 @@ impl OcrHost for OcrHookHost {
                 | OcrHostOperation::ConstructResponse(_)
                 | OcrHostOperation::MapFailure(_) => OcrHostResult::Lifecycle(Ok(())),
                 OcrHostOperation::AcquireAzureAdToken => {
-                    OcrHostResult::AzureAdToken(Err(AuthError::AzureTokenAcquisition(
+                    OcrHostResult::AzureAdToken(Err(litellm_auth::Error::AzureTokenAcquisition(
                         "OCR hook host has no Azure AD token provider".into(),
                     )))
                 }

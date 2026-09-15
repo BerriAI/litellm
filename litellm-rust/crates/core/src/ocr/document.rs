@@ -4,28 +4,25 @@ use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
 use serde_json::Map;
 
-use super::Error;
 use super::types::{OcrConnection, OcrDocument};
 use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
-use crate::media::Error as MediaError;
 use crate::media::{DownloadPolicy, MediaFetcher};
-use crate::transport::Error as TransportError;
 
 pub fn encode_file_document(
     bytes: &[u8],
     file_name: Option<&str>,
     mime_type: Option<&str>,
-) -> Result<OcrDocument, Error> {
+) -> Result<OcrDocument, crate::ocr::Error> {
     if bytes.is_empty() {
-        return Err(Error::EmptyFile);
+        return Err(crate::ocr::Error::EmptyFile);
     }
     if bytes.len() > OCR_INLINE_MAX_BYTES {
-        return Err(Error::InlineDocumentTooLarge);
+        return Err(crate::ocr::Error::InlineDocumentTooLarge);
     }
     if let Some(value) = mime_type
         && !valid_mime_type(value)
     {
-        return Err(Error::InvalidMimeType(value.into()));
+        return Err(crate::ocr::Error::InvalidMimeType(value.into()));
     }
     let mime_type = mime_type
         .map(str::to_string)
@@ -90,11 +87,11 @@ pub fn upload_mime_type<'a>(file_name: Option<&str>, content_type: Option<&'a st
 pub(crate) struct InlineDocument<'a>(DataUrl<'a>);
 
 impl<'a> InlineDocument<'a> {
-    pub(crate) fn parse(source: &'a str) -> Result<Option<Self>, Error> {
+    pub(crate) fn parse(source: &'a str) -> Result<Option<Self>, crate::ocr::Error> {
         match DataUrl::process(source) {
             Ok(url) => Ok(Some(Self(url))),
             Err(DataUrlError::NotADataUrl) => Ok(None),
-            Err(DataUrlError::NoComma) => Err(Error::InvalidDataUri),
+            Err(DataUrlError::NoComma) => Err(crate::ocr::Error::InvalidDataUri),
         }
     }
 
@@ -102,26 +99,27 @@ impl<'a> InlineDocument<'a> {
         self.0.mime_type()
     }
 
-    pub(crate) fn decode(&self, max_bytes: usize) -> Result<Vec<u8>, Error> {
+    pub(crate) fn decode(&self, max_bytes: usize) -> Result<Vec<u8>, crate::ocr::Error> {
         let mut body = Vec::new();
         self.0
             .decode(|bytes| {
                 if bytes.len() > max_bytes.saturating_sub(body.len()) {
-                    return Err(Error::InlineDocumentTooLarge);
+                    return Err(crate::ocr::Error::InlineDocumentTooLarge);
                 }
                 body.extend_from_slice(bytes);
                 Ok(())
             })
             .map_err(|error| match error {
-                DecodeError::InvalidBase64(_) => Error::InvalidDataUri,
+                DecodeError::InvalidBase64(_) => crate::ocr::Error::InvalidDataUri,
                 DecodeError::WriteError(error) => error,
             })?;
         Ok(body)
     }
 }
 
-pub(crate) fn validate_inline_document(document: &OcrDocument) -> Result<(), Error> {
-    let inline = InlineDocument::parse(document.source())?.ok_or(Error::InvalidDataUri)?;
+pub(crate) fn validate_inline_document(document: &OcrDocument) -> Result<(), crate::ocr::Error> {
+    let inline =
+        InlineDocument::parse(document.source())?.ok_or(crate::ocr::Error::InvalidDataUri)?;
     inline.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
     Ok(())
 }
@@ -130,13 +128,13 @@ pub(crate) async fn inline_remote_document(
     fetcher: &MediaFetcher,
     document: OcrDocument,
     connection: &OcrConnection,
-) -> Result<OcrDocument, Error> {
+) -> Result<OcrDocument, crate::ocr::Error> {
     let source = document.source();
     if !source.starts_with("http://") && !source.starts_with("https://") {
         validate_inline_document(&document)?;
         return Ok(document);
     }
-    let url = Url::parse(source).map_err(|_| Error::RequestField {
+    let url = Url::parse(source).map_err(|_| crate::ocr::Error::RequestField {
         path: "document URL".into(),
     })?;
     let downloaded = fetcher
@@ -159,25 +157,25 @@ pub(crate) async fn inline_remote_document(
     Ok(result)
 }
 
-fn map_media_error(error: MediaError) -> Error {
+fn map_media_error(error: crate::media::Error) -> crate::ocr::Error {
     match error {
-        MediaError::BlockedUrl => Error::BlockedDocumentUrl,
-        MediaError::DownloadDisabled => Error::DownloadDisabled,
-        MediaError::DownloadTooLarge => Error::DownloadTooLarge,
-        MediaError::TooManyRedirects => Error::TooManyRedirects,
-        MediaError::MissingRedirectLocation => Error::MissingRedirectLocation,
-        MediaError::InvalidRedirect => Error::InvalidRedirect,
-        MediaError::Http(status) => TransportError::Http {
+        crate::media::Error::BlockedUrl => crate::ocr::Error::BlockedDocumentUrl,
+        crate::media::Error::DownloadDisabled => crate::ocr::Error::DownloadDisabled,
+        crate::media::Error::DownloadTooLarge => crate::ocr::Error::DownloadTooLarge,
+        crate::media::Error::TooManyRedirects => crate::ocr::Error::TooManyRedirects,
+        crate::media::Error::MissingRedirectLocation => crate::ocr::Error::MissingRedirectLocation,
+        crate::media::Error::InvalidRedirect => crate::ocr::Error::InvalidRedirect,
+        crate::media::Error::Http(status) => crate::transport::Error::Http {
             status,
             body: "OCR document download failed".into(),
         }
         .into(),
-        MediaError::Timeout => TransportError::Http {
+        crate::media::Error::Timeout => crate::transport::Error::Http {
             status: 408,
             body: "OCR document download timed out".into(),
         }
         .into(),
-        MediaError::Transport(error) => error.into(),
+        crate::media::Error::Transport(error) => error.into(),
     }
 }
 
@@ -254,7 +252,7 @@ mod tests {
         let bytes = vec![b'a'; OCR_INLINE_MAX_BYTES + 1];
         assert_eq!(
             encode_file_document(&bytes, None, None),
-            Err(Error::InlineDocumentTooLarge)
+            Err(crate::ocr::Error::InlineDocumentTooLarge)
         );
         let document = encode_file_document(&bytes[..OCR_INLINE_MAX_BYTES], None, None).unwrap();
         let inline = InlineDocument::parse(document.source()).unwrap().unwrap();
@@ -288,7 +286,7 @@ mod tests {
             assert_eq!(inline.decode(expected.len()).unwrap(), expected);
             assert_eq!(
                 inline.decode(expected.len() - 1),
-                Err(Error::InlineDocumentTooLarge)
+                Err(crate::ocr::Error::InlineDocumentTooLarge)
             );
         }
     }

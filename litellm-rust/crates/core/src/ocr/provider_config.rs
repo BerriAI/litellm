@@ -7,7 +7,6 @@ use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
 use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
 use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
 use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
-use crate::ocr::Error;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,7 +76,7 @@ impl OcrProvider {
 pub(crate) fn resolve_provider_config(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<(String, OcrConfigKind), Error> {
+) -> Result<(String, OcrConfigKind), super::Error> {
     let provider =
         get_custom_llm_provider(model, custom_llm_provider).unwrap_or(CustomLlmProvider {
             model,
@@ -104,7 +103,7 @@ pub(crate) fn resolve_provider_config(
             OcrConfigKind::VertexDeepSeek
         }
         "vertex_ai" => OcrConfigKind::VertexAi,
-        value => return Err(Error::InvalidProvider(value.to_string())),
+        value => return Err(super::Error::InvalidProvider(value.to_string())),
     };
     Ok((provider.model.to_string(), config))
 }

@@ -1,6 +1,5 @@
 use serde_json::Value;
 
-use crate::chat_completions::Error;
 use crate::http_utils::has_header;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
@@ -14,7 +13,7 @@ use super::types::{
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn ChatCompletionsProviderConfig), Error> {
+) -> Result<(String, &'static dyn ChatCompletionsProviderConfig), super::Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -23,33 +22,36 @@ pub(super) fn resolve_provider_config<'a>(
             })
         })
         .ok_or_else(|| {
-            Error::InvalidProvider(
+            super::Error::InvalidProvider(
                 "unable to resolve custom_llm_provider for chat completions request".to_string(),
             )
         })?;
-    let config = chat_completions_provider_config(provider_info.custom_llm_provider)
-        .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
+    let config =
+        chat_completions_provider_config(provider_info.custom_llm_provider).ok_or_else(|| {
+            super::Error::InvalidProvider(provider_info.custom_llm_provider.to_string())
+        })?;
     Ok((provider_info.model.to_string(), config))
 }
 
-pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error> {
-    serde_json::from_value(messages)
-        .map_err(|err| Error::InvalidRequest(format!("invalid chat completions messages: {err}")))
+pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, super::Error> {
+    serde_json::from_value(messages).map_err(|err| {
+        super::Error::InvalidRequest(format!("invalid chat completions messages: {err}"))
+    })
 }
 
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
-) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
+) -> Result<ResolvedChatCompletionsRequest<'_>, super::Error> {
     let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
-        return Err(Error::InvalidRequest(
+        return Err(super::Error::InvalidRequest(
             "chat completions requires at least one message".to_string(),
         ));
     }
     request.optional_params.clone().into_provider_body()?;
     if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
-        return Err(Error::Unsupported(reason.0));
+        return Err(super::Error::Unsupported(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {
         model,
@@ -68,7 +70,7 @@ fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
     config: &dyn ChatCompletionsProviderConfig,
-) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
+) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), super::Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers(request.extra_headers.clone())?;
     let auth = config.auth(
@@ -119,7 +121,7 @@ fn validate_environment(
 
 pub(super) fn prepare_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
-) -> Result<ProviderChatCompletionsRequest, Error> {
+) -> Result<ProviderChatCompletionsRequest, super::Error> {
     let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
     let model = request.model;
     let config = request.config;

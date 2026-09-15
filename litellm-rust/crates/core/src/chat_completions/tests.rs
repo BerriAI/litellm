@@ -1,14 +1,12 @@
 use serde_json::{Map, Value, json};
 
-use crate::chat_completions::Error;
-
 use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
 use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 
 fn prepare_chat_completions_call(
     request: ChatCompletionsRequest<'_>,
-) -> Result<ProviderChatCompletionsRequest, Error> {
+) -> Result<ProviderChatCompletionsRequest, crate::chat_completions::Error> {
     prepare_provider_request(resolve_request(request)?)
 }
 
@@ -35,7 +33,7 @@ fn request<'a>(
 
 /// `ProviderChatCompletionsRequest` deliberately has no `Debug` (its headers
 /// carry resolved credentials), so unwrap the failure case by hand.
-fn decline(request: ChatCompletionsRequest<'_>) -> Error {
+fn decline(request: ChatCompletionsRequest<'_>) -> crate::chat_completions::Error {
     match prepare_chat_completions_call(request) {
         Err(error) => error,
         Ok(prepared) => panic!("expected a decline, prepared a call to {}", prepared.url),
@@ -202,7 +200,10 @@ fn declines_an_unsupported_request_before_resolving_credentials() {
     call.api_key = None;
     // No api_key is set and no env is consulted: the gate must run first, so the
     // error is the decline rather than a missing-credential error.
-    assert_eq!(decline(call), Error::Unsupported("streaming"));
+    assert_eq!(
+        decline(call),
+        crate::chat_completions::Error::Unsupported("streaming")
+    );
 }
 
 #[test]
@@ -214,7 +215,7 @@ fn rejects_an_unknown_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        Error::InvalidProvider("openai".to_string())
+        crate::chat_completions::Error::InvalidProvider("openai".to_string())
     );
 }
 
@@ -227,7 +228,7 @@ fn rejects_a_model_with_no_resolvable_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        Error::InvalidProvider(_)
+        crate::chat_completions::Error::InvalidProvider(_)
     ));
 }
 
@@ -240,7 +241,9 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!([]),
             json!({}),
         )),
-        Error::InvalidRequest("chat completions requires at least one message".to_string())
+        crate::chat_completions::Error::InvalidRequest(
+            "chat completions requires at least one message".to_string()
+        )
     );
     assert!(matches!(
         decline(request(
@@ -249,7 +252,7 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!("not a list"),
             json!({}),
         )),
-        Error::InvalidRequest(_)
+        crate::chat_completions::Error::InvalidRequest(_)
     ));
 }
 
@@ -264,7 +267,7 @@ fn rejects_non_string_extra_headers() {
     call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
     assert_eq!(
         decline(call),
-        Error::Headers(crate::http_utils::HeaderError {
+        crate::chat_completions::Error::Headers(crate::http_utils::HeaderError {
             context: "chat completions",
             name: "x-trace".to_string(),
             actual: "number",
@@ -379,7 +382,7 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
             .await
             .expect_err("{forwarded} should decline instead of being signed");
         assert!(
-            matches!(error, Error::Unsupported(_)),
+            matches!(error, crate::chat_completions::Error::Unsupported(_)),
             "{forwarded} declined as {error:?}, which the host would not fall back on"
         );
     }
@@ -730,7 +733,11 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_) | Error::ResponseTransform(_)),
+            matches!(
+                err,
+                crate::chat_completions::Error::InvalidResponse(_)
+                    | crate::chat_completions::Error::ResponseTransform(_)
+            ),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -748,7 +755,11 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_) | Error::ResponseTransform(_)),
+            matches!(
+                err,
+                crate::chat_completions::Error::InvalidResponse(_)
+                    | crate::chat_completions::Error::ResponseTransform(_)
+            ),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -768,7 +779,10 @@ mod round_trip {
         assert!(
             matches!(
                 err,
-                Error::Transport(crate::transport::Error::Http { status: 429, .. })
+                crate::chat_completions::Error::Transport(crate::transport::Error::Http {
+                    status: 429,
+                    ..
+                })
             ),
             "expected a 429, got {err:?}"
         );
@@ -793,7 +807,10 @@ mod round_trip {
         .await
         .expect_err("nothing is listening");
         assert!(
-            matches!(err, Error::Transport(crate::transport::Error::Connect(_))),
+            matches!(
+                err,
+                crate::chat_completions::Error::Transport(crate::transport::Error::Connect(_))
+            ),
             "expected a pre-send connect failure, got {err:?}"
         );
     }
@@ -803,26 +820,31 @@ mod round_trip {
         use crate::chat_completions::handler::as_response_error;
 
         for original in [
-            Error::MissingField("usage"),
-            Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest("whatever".to_string()),
-            Error::Auth(litellm_auth::Error::ProviderAuthentication(
+            crate::chat_completions::Error::MissingField("usage"),
+            crate::chat_completions::Error::Unsupported("non-text response content block"),
+            crate::chat_completions::Error::InvalidRequest("whatever".to_string()),
+            crate::chat_completions::Error::Auth(litellm_auth::Error::ProviderAuthentication(
                 "whatever".to_string(),
             )),
         ] {
             let label = format!("{original:?}");
             assert!(
-                matches!(as_response_error(original.clone()), Error::ResponseTransform(source) if *source == original),
+                matches!(as_response_error(original.clone()), crate::chat_completions::Error::ResponseTransform(source) if *source == original),
                 "{label} must not stay retryable once the provider has answered"
             );
         }
         // An upstream status is already unambiguous, so it survives intact.
         assert!(matches!(
-            as_response_error(Error::Transport(crate::transport::Error::Http {
+            as_response_error(crate::chat_completions::Error::Transport(
+                crate::transport::Error::Http {
+                    status: 500,
+                    body: "boom".to_string()
+                }
+            )),
+            crate::chat_completions::Error::Transport(crate::transport::Error::Http {
                 status: 500,
-                body: "boom".to_string()
-            })),
-            Error::Transport(crate::transport::Error::Http { status: 500, .. })
+                ..
+            })
         ));
     }
 }

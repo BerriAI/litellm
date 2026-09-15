@@ -8,7 +8,6 @@ use serde_json::{Map, Value};
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
-use crate::ocr::Error;
 use crate::params::OpaqueParams;
 use litellm_auth::{InputSource, TokenProviderHandle};
 
@@ -108,7 +107,7 @@ impl LiteLLMOcrRequest {
         document: OcrDocument,
         custom_llm_provider: Option<&str>,
         optional_params: OpaqueParams,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, super::Error> {
         let (model, config) = resolve_provider_config(&model, custom_llm_provider)?;
 
         Ok(Self {

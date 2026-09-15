@@ -4,8 +4,6 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::messages::Error;
-
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
@@ -79,7 +77,7 @@ fn string_headers_rejects_non_string_values() {
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
     assert_eq!(
         err,
-        Error::Headers(crate::http_utils::HeaderError {
+        super::Error::Headers(crate::http_utils::HeaderError {
             context: "messages",
             name: "x-count".to_string(),
             actual: "number",
@@ -359,7 +357,7 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
     .await
     .expect_err("missing auth errors");
 
-    assert!(matches!(err, Error::Auth(_)));
+    assert!(matches!(err, super::Error::Auth(_)));
 }
 
 #[tokio::test]
@@ -440,7 +438,7 @@ async fn messages_maps_provider_error_status_to_http_error() {
 
     assert!(matches!(
         err,
-        Error::Transport(crate::transport::Error::Http { status: 401, .. })
+        super::Error::Transport(crate::transport::Error::Http { status: 401, .. })
     ));
 }
 
@@ -458,5 +456,5 @@ async fn messages_rejects_unsupported_provider() {
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
+    assert!(matches!(err, super::Error::InvalidProvider(provider) if provider == "openai"));
 }

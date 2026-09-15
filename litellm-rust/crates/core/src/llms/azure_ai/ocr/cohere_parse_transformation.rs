@@ -1,7 +1,6 @@
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::llms::cohere::ocr::transformation::CohereParseConfig;
 use crate::llms::cohere::ocr::{CohereParams, CohereResponse, validate_document};
-use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
@@ -25,7 +24,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = crate::ocr::wire::decode_request_value::<CohereParams>(
             serde_json::Value::Object(request.optional_params.clone().into()),
             "optional_params",
@@ -36,7 +35,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
                 &request.optional_params,
                 &request.input_sources,
             )
-            .map_err(Error::from)?
+            .map_err(crate::ocr::Error::from)?
         };
         let base = request
             .connection
@@ -45,7 +44,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
             .or_else(|| credential_env(AZURE_AI_API_BASE_ENV))
             .filter(|base| !base.trim().is_empty())
             .ok_or_else(|| {
-                Error::Auth(litellm_auth::Error::ProviderAuthentication(
+                crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication(
                     "Missing Azure AI API Base - Set AZURE_AI_API_BASE or pass api_base".into(),
                 ))
             })?;
@@ -84,12 +83,12 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: CohereResponse,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         CohereParseConfig.transform_ocr_response(request, response)
     }
 }
 
-fn complete_url(base: &str) -> Result<String, Error> {
+fn complete_url(base: &str) -> Result<String, crate::ocr::Error> {
     let mut url = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(invalid_api_base());
@@ -106,8 +105,8 @@ fn complete_url(base: &str) -> Result<String, Error> {
         .map_err(|_| invalid_api_base())
 }
 
-fn invalid_api_base() -> Error {
-    Error::RequestField {
+fn invalid_api_base() -> crate::ocr::Error {
+    crate::ocr::Error::RequestField {
         path: "api_base".into(),
     }
 }

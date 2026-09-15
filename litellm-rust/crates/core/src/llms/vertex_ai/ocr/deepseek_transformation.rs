@@ -110,7 +110,6 @@ mod mapping {
 
     use super::DeepSeekAi;
     use super::types::*;
-    use crate::ocr::Error;
     use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument};
     use crate::routing_utils::model::ProviderModel;
 
@@ -119,9 +118,9 @@ mod mapping {
         provider_model: ProviderModel<DeepSeekAi>,
         document: OcrDocument,
         params: &DeepSeekOcrParams,
-    ) -> Result<DeepSeekOcrRequest, Error> {
+    ) -> Result<DeepSeekOcrRequest, crate::ocr::Error> {
         if document.source().is_empty() {
-            return Err(Error::MissingDocumentUrl);
+            return Err(crate::ocr::Error::MissingDocumentUrl);
         }
         let content = OcrDocument::ImageUrl {
             image_url: document.source().to_string(),
@@ -141,13 +140,13 @@ mod mapping {
     pub(crate) fn transform_ocr_response(
         model: &str,
         response: DeepSeekOcrResponse,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         let content = response
             .choices
             .into_iter()
             .next()
             .and_then(|choice| choice.message.content)
-            .ok_or(Error::EmptyContent)?;
+            .ok_or(crate::ocr::Error::EmptyContent)?;
         let decoded = decode_content(content)?;
         let pages = match decoded.result.pages {
             Some(pages) if !pages.is_empty() => pages
@@ -176,17 +175,18 @@ mod mapping {
         fallback_markdown: String,
     }
 
-    fn decode_content(content: DeepSeekContent) -> Result<DecodedContent, Error> {
+    fn decode_content(content: DeepSeekContent) -> Result<DecodedContent, crate::ocr::Error> {
         let (result, fallback_markdown) = match content {
             DeepSeekContent::Text(text) if text.is_empty() => {
-                return Err(Error::EmptyContent);
+                return Err(crate::ocr::Error::EmptyContent);
             }
             DeepSeekContent::Text(text) => (decode_json_content(&text)?, text),
             DeepSeekContent::Object(object) => {
-                let fallback =
-                    serde_json::to_string(&object).map_err(|_| Error::ResponseField {
+                let fallback = serde_json::to_string(&object).map_err(|_| {
+                    crate::ocr::Error::ResponseField {
                         path: "choices[0].message.content".into(),
-                    })?;
+                    }
+                })?;
                 (Some(object), fallback)
             }
         };
@@ -196,7 +196,7 @@ mod mapping {
         })
     }
 
-    fn decode_json_content(text: &str) -> Result<Option<DeepSeekOcrResult>, Error> {
+    fn decode_json_content(text: &str) -> Result<Option<DeepSeekOcrResult>, crate::ocr::Error> {
         if !text.trim_start().starts_with('{') {
             return Ok(None);
         }
@@ -206,7 +206,7 @@ mod mapping {
         };
         serde_path_to_error::deserialize(value.into_deserializer())
             .map(Some)
-            .map_err(|error| Error::ResponseField {
+            .map_err(|error| crate::ocr::Error::ResponseField {
                 path: format!("choices[0].message.content.{}", error.path()),
             })
     }
@@ -217,7 +217,6 @@ pub(crate) use mapping::{transform_ocr_request, transform_ocr_response};
 
 use super::common_utils::validate_destination;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::prepare::{
     _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
@@ -251,7 +250,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<reqwest::Request, crate::ocr::Error> {
         validate_destination(&request.connection)?;
         let ParsedProviderParams {
             known: params,
@@ -261,7 +260,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
             &request.optional_params,
             &request.input_sources,
         )
-        .map_err(Error::from)?;
+        .map_err(crate::ocr::Error::from)?;
         let authentication = client
             .vertex_auth()
             .validate_environment(
@@ -271,7 +270,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
                 &credential_env,
             )
             .await
-            .map_err(Error::from)?;
+            .map_err(crate::ocr::Error::from)?;
         let location = vertex::get_vertex_ai_location(&config, &credential_env)
             .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         let url = get_complete_url(
@@ -298,15 +297,15 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: DeepSeekOcrResponse,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         mapping::transform_ocr_response(&request.model, response)
     }
 }
 
-pub(crate) fn provider_model(model: &str) -> Result<ProviderModel<DeepSeekAi>, Error> {
+pub(crate) fn provider_model(model: &str) -> Result<ProviderModel<DeepSeekAi>, crate::ocr::Error> {
     RoutedModel::new(model)
         .and_then(RoutedModel::into_provider::<DeepSeekAi>)
-        .map_err(|_| Error::RequestField {
+        .map_err(|_| crate::ocr::Error::RequestField {
             path: "model".into(),
         })
 }
@@ -315,7 +314,7 @@ fn get_complete_url(
     api_base: Option<&str>,
     project: &str,
     location: &str,
-) -> Result<String, Error> {
+) -> Result<String, crate::ocr::Error> {
     let base = api_base
         .map(str::trim)
         .filter(|base| !base.is_empty())
@@ -335,7 +334,7 @@ fn get_complete_url(
             ])
         })
         .map(|url| url.into_string())
-        .map_err(|_| Error::RequestField {
+        .map_err(|_| crate::ocr::Error::RequestField {
             path: "api_base".into(),
         })
 }

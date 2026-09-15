@@ -9,7 +9,6 @@ use reqwest::Url;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use crate::constants::MEDIA_CONNECT_TIMEOUT_SECS;
-use crate::transport::Error as TransportError;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -30,7 +29,7 @@ pub(crate) enum Error {
     #[error("media download timed out")]
     Timeout,
     #[error("{0}")]
-    Transport(#[from] TransportError),
+    Transport(#[from] crate::transport::Error),
 }
 
 #[derive(Clone)]
@@ -119,7 +118,7 @@ impl MediaFetcher {
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(TransportError::from)?;
+                .map_err(crate::transport::Error::from)?;
             if response.status().is_redirection() {
                 if redirects_followed == policy.max_redirects {
                     return Err(Error::TooManyRedirects);
@@ -147,7 +146,11 @@ impl MediaFetcher {
                 .unwrap_or("application/octet-stream")
                 .to_string();
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(TransportError::from)? {
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(crate::transport::Error::from)?
+            {
                 enforce_download_size(bytes.len() as u64 + chunk.len() as u64, policy.max_bytes)?;
                 bytes.extend_from_slice(&chunk);
             }
@@ -177,7 +180,7 @@ impl MediaFetcher {
             .address_resolver
             .resolve(host, port)
             .await
-            .map_err(|error| TransportError::Network(error.to_string()))?;
+            .map_err(|error| crate::transport::Error::Network(error.to_string()))?;
         validate_addresses(&addresses)
     }
 }
