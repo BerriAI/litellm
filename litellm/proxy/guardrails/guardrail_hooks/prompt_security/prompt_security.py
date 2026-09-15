@@ -15,7 +15,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import message_with_slot_texts
+from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_with_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -399,19 +399,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         return inputs
 
     def _extract_texts_from_messages(self, messages: Sequence[Mapping[str, object]]) -> list[str]:
-        """Extract text content from messages."""
-        texts: Final = []
-        for message in messages:
-            content = message.get("content")
-            if isinstance(content, str):
-                texts.append(content)
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        text = item.get("text")
-                        if text:
-                            texts.append(text)
-        return texts
+        return [text for message in messages for text in message_slot_texts(message)]
 
     async def _process_standalone_images(self, images: list[str], user_api_key_alias: str | None) -> None:
         """Process standalone images from inputs (data URLs)."""

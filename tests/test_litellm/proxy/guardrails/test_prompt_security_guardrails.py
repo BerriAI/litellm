@@ -270,6 +270,30 @@ async def test_modify_with_unexpected_message_count_keeps_texts_only(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_modify_keeps_empty_text_parts_as_slots(monkeypatch: pytest.MonkeyPatch):
+    """The chat handler counts an empty text part as a slot, so a modify verdict
+    that echoes the empty part still lines up with the row and its texts."""
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    messages: list[AllMessageValues] = [
+        {"role": "user", "content": [{"type": "text", "text": "Look up 123-45-6789"}, {"type": "text", "text": ""}]}
+    ]
+    inputs = {"texts": ["Look up 123-45-6789", ""], "structured_messages": messages}
+    modified_messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Look up [REDACTED]"}, {"type": "text", "text": ""}]}
+    ]
+
+    with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs, request_data={"messages": messages}, input_type="request"
+        )
+
+    assert result["structured_messages"] == modified_messages
+    assert result["texts"] == ["Look up [REDACTED]", ""]
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_allow_request(monkeypatch: pytest.MonkeyPatch):
     """Test that apply_guardrail allows safe prompts"""
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")

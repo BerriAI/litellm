@@ -373,13 +373,17 @@ def _content_part_text(part: object) -> str | None:
     return text if isinstance(text, str) else None
 
 
-def message_text_slot_count(message: AllMessageValues) -> int:
+def message_slot_texts(message: Mapping[str, object]) -> tuple[str, ...]:
     content: Final = message.get("content")
     if isinstance(content, str):
-        return 1
+        return (content,)
     if isinstance(content, list):
-        return sum(1 for part in content if _content_part_text(part) is not None)
-    return 0
+        return tuple(text for part in content if (text := _content_part_text(part)) is not None)
+    return ()
+
+
+def message_text_slot_count(message: AllMessageValues) -> int:
+    return len(message_slot_texts(message))
 
 
 def _part_with_text(part: object, text: str) -> object:
