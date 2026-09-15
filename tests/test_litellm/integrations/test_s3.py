@@ -31,7 +31,7 @@ def _log_event_kwargs(response_id: str = "chatcmpl-test-id") -> dict:
 
 
 def _run_log_event(
-    callback_params: dict, response_id: str = "chatcmpl-test-id", log_kwargs: dict | None = None
+    callback_params: dict, response_id: str = "chatcmpl-test-id", log_kwargs: dict[str, object] | None = None
 ) -> MagicMock:
     original = litellm.s3_callback_params
     litellm.s3_callback_params = callback_params
@@ -194,7 +194,7 @@ def test_put_object_keeps_the_configured_path_intact_when_only_the_id_has_to_shr
     assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
 
 
-def _uploaded_body(mock_s3_client: MagicMock) -> dict:
+def _uploaded_body(mock_s3_client: MagicMock) -> dict[str, object]:
     return json.loads(mock_s3_client.put_object.call_args.kwargs["Body"])
 
 
