@@ -268,6 +268,12 @@ class CredentialLiteLLMParams(BaseModel):
     # callers see it, breaking Azure deployments configured with
     # ``azure_ad_token`` instead of a static ``api_key`` (#30235).
     azure_ad_token: str | None = None
+    tenant_id: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    azure_scope: str | None = None
+    azure_username: str | None = None
+    azure_password: str | None = None
     ## VERTEX AI ##
     vertex_project: str | None = None
     vertex_location: str | None = None
@@ -715,6 +721,7 @@ class ModelGroupInfo(BaseModel):
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    description: str | None = None
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():

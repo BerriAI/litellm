@@ -20,6 +20,7 @@ from litellm.constants import (
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -1326,6 +1327,33 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
     )
 
     assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
+
+
+def test_get_logging_payload_populates_litellm_call_id_alongside_provider_request_id():
+    """
+    LIT-6302: request_id stays the provider response id, so clients holding the
+    x-litellm-call-id header value could never find their row. The payload now
+    also carries litellm_call_id as its own column for lookups by either id.
+    """
+    call_id = "b980eea9-5cd9-4099-93cd-8291e46c76fd"
+
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": call_id,
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-provider-id",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["request_id"] == "chatcmpl-provider-id"
+    assert payload["litellm_call_id"] == call_id
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -2753,6 +2781,31 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
 
 
 # ── _redact_logged_api_key unit tests ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("original_exception", "expected_error_message"),
+    [
+        (
+            ProxyModelNotFoundError(route="/chat/completions", model_name=_RAW_MODEL_WITH_PROMPT),
+            "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key.",
+        ),
+        (ValueError("provider timed out"), "provider timed out"),
+    ],
+)
+def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_rejection(
+    original_exception: Exception, expected_error_message: str
+):
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
+
+    sanitized: Final = _sanitize_error_information_for_spend_logs(
+        error_information, original_exception=original_exception
+    )
+
+    assert sanitized is not None
+    assert sanitized["error_message"] == expected_error_message
+    assert "medical records" not in json.dumps(sanitized)
+    assert sanitized["error_class"] == type(original_exception).__name__
 
 
 def test_redact_logged_api_key_none_returns_none():

@@ -4,15 +4,27 @@ use crate::error::TransportError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OcrRequestError {
+    #[error("File is empty or could not be read")]
+    EmptyFile,
+    #[error("Invalid MIME type: {0}")]
+    InvalidMimeType(String),
+    #[error(
+        "Cohere Parse only accepts `image_url` documents; document_url and PDF inputs are not supported"
+    )]
+    CohereImageOnly,
     #[error("Invalid `req_format`. Expected 'native' or 'litellm'.")]
     RequestFormat,
     #[error("invalid OCR request field: {path}")]
     RequestField { path: String },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
+    #[error("Document URL is required")]
+    MissingDocumentUrl,
     #[error("invalid OCR document data URI")]
     InvalidDataUri,
-    #[error("Reducto requires a reducto:// id or a data URI")]
+    #[error(
+        "Reducto requires a reducto:// id or a data URI; plain HTTP URLs are not supported, upload the file first"
+    )]
     ReductoSource,
     #[error("inline OCR document exceeds the size limit")]
     InlineDocumentTooLarge,
@@ -34,6 +46,8 @@ pub enum OcrRequestError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OcrResponseError {
+    #[error("OCR response exceeds the size limit of {limit} bytes")]
+    TooLarge { limit: usize },
     #[error("invalid OCR response field: {path}")]
     ResponseField { path: String },
     #[error("OCR response is missing non-empty content")]

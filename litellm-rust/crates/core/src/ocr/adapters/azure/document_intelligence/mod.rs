@@ -10,7 +10,6 @@ use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrResponseFormat};
-use crate::ocr::wire::DecodedOcrResponse;
 use crate::providers::azure_ai::auth::AzureAuthInputs;
 use crate::url_utils::ApiUrl;
 
@@ -32,18 +31,19 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
         let params = map_ocr_params(request)?;
-        let config = AzureAuthInputs::from_sourced_optional_params(
+        let mut config = AzureAuthInputs::from_sourced_optional_params(
             &request.optional_params,
             &request.input_sources,
         )
         .map_err(Error::from)?;
+        config.azure_ad_token_provider = request.azure_ad_token_provider.clone();
         let headers = validate_environment(&request.connection, &config, &credential_env).await?;
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
             .ok_or_else(|| Error::Auth("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into()))?;
         let url = get_complete_url(&endpoint, &request.model, &params)?;
         let body = document_intelligence::transform_ocr_request(request.document.clone())?;
-        transform_request_body(client, request, &url, &headers, body, |_| Ok(())).await
+        transform_request_body(client, request, &url, &headers, false, body, |_| Ok(())).await
     }
 
     fn transform_ocr_response(
@@ -61,7 +61,7 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
         url: &str,
         headers: &[(String, String)],
         request: &LiteLLMOcrRequest,
-    ) -> Result<DecodedOcrResponse<Self::ProviderResponse>, OcrError> {
+    ) -> Result<crate::ocr::wire::DecodedOcrResponse<Self::ProviderResponse>, OcrError> {
         polling::read_operation_response(
             client.polling_http(),
             response,
@@ -69,6 +69,7 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
             headers,
             &request.connection,
             request.response_format()? == OcrResponseFormat::Native,
+            &request.hooks,
         )
         .await
     }

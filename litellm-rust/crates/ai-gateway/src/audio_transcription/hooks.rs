@@ -277,7 +277,7 @@ fn core_error_kind(error: &Error) -> &'static str {
         Error::InvalidProvider(_) => "InvalidProvider",
         Error::InvalidRequest(_) => "InvalidRequest",
         Error::InvalidType { .. } => "InvalidType",
-        Error::MissingField(_) => "MissingField",
+        Error::MissingField(_) | Error::MissingDocumentUrl => "MissingField",
         Error::Http { .. } => "HttpError",
         Error::InvalidResponse(_) => "InvalidResponse",
         Error::Network(_) => "NetworkError",

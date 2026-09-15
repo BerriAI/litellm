@@ -807,7 +807,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         showNeverResets
                         placeholder={budgetDurationPlaceholder}
                         value={value}
-                        onChange={onChange}
+                        onChange={(next) => onChange(next ?? undefined)}
                       />
                     )}
                   </FormField>
