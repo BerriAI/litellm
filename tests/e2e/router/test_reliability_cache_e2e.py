@@ -16,6 +16,7 @@ from e2e_config import (
     PROVIDER_EDGE_ADVERTISE_HOST,
     PROVIDER_EDGE_BIND_HOST,
     REQUEST_TIMEOUT,
+    REMOTE_EDGE,
     unique_marker,
 )
 from lifecycle import ResourceManager
@@ -53,6 +54,7 @@ class TestReliabilityCache:
             bind_host=PROVIDER_EDGE_BIND_HOST,
             advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
             forward_timeout=REQUEST_TIMEOUT,
+            remote=REMOTE_EDGE,
         ) as edge:
             model_id: Final = client.proxy.create_model(
                 model,

@@ -2927,10 +2927,15 @@ jobs:
           command: |
             mkdir -p test-results/provider-replay-harness
             uv run --no-sync pytest -q --noconftest -o addopts= -o pythonpath=tests/e2e -p no:rerunfailures \
-              --junitxml=test-results/provider-replay-harness/junit.xml \
+              --hypothesis-seed=20260915 --junitxml=test-results/provider-replay-harness/junit.xml \
               tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
               tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py \
-              tests/code_coverage_tests/test_provider_replay_harness.py
+              tests/code_coverage_tests/test_provider_replay_harness.py \
+              tests/code_coverage_tests/test_provider_capture.py \
+              tests/code_coverage_tests/test_provider_capture_store.py \
+              tests/code_coverage_tests/test_provider_capture_publication.py \
+              tests/code_coverage_tests/test_provider_capture_state.py \
+              tests/code_coverage_tests/test_provider_edge_control.py
       - store_test_results:
           path: test-results/provider-replay-harness
 

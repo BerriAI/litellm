@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal, assert_never
 
+from capture_policy import canonical_scenario_id
 from fixture_bundle import (
     FreshBundle,
     StaleBundle,
@@ -72,10 +73,18 @@ def deterministic_marker() -> str:
     the Nth marker of a test is a pure function of the test's node id and N, so a
     replay run regenerates exactly the model names, prompts, and tags the record
     run sent and every recorded provider interaction still matches its key."""
-    test_key = current_test_key()
+    test_key: Final = (
+        canonical_scenario_id(current_test_key())
+        if os.environ.get("E2E_PROVIDER_EDGE_CONTROL_URL")
+        else current_test_key()
+    )
     ordinal = _marker_ordinals.get(test_key, 0)
     _marker_ordinals[test_key] = ordinal + 1
     return hashlib.sha1(f"{test_key}#{ordinal}".encode()).hexdigest()[:12]
+
+
+def reset_deterministic_markers(node: str) -> None:
+    _marker_ordinals.pop(canonical_scenario_id(node), None)
 
 
 def fixture_mode_collection_error(mode_raw: str, bundle_dir: Path, *, now: datetime) -> str | None:
