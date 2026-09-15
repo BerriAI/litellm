@@ -21,6 +21,7 @@ class _MockRedisCache:
         pipeline_started: asyncio.Event | None = None,
         allow_pipeline_to_complete: asyncio.Event | None = None,
         should_fail_pipeline: bool = False,
+        pipeline_completed: asyncio.Event | None = None,
         read_started: asyncio.Event | None = None,
         allow_read_to_complete: asyncio.Event | None = None,
     ) -> None:
@@ -29,6 +30,7 @@ class _MockRedisCache:
         self.pipeline_started = pipeline_started
         self.allow_pipeline_to_complete = allow_pipeline_to_complete
         self.should_fail_pipeline = should_fail_pipeline
+        self.pipeline_completed = pipeline_completed
         self.read_started = read_started
         self.allow_read_to_complete = allow_read_to_complete
 
@@ -47,6 +49,8 @@ class _MockRedisCache:
             current = float(self.values.get(key, 0.0) or 0.0)
             self.values[key] = current + float(op["increment_value"])
         self.events.append("increment_pipeline:done")
+        if self.pipeline_completed is not None:
+            self.pipeline_completed.set()
 
     async def async_batch_get_cache(self, key_list: list[str], **kwargs: object) -> dict[str, float | None]:
         self.events.append("batch_get")
@@ -302,3 +306,33 @@ async def test_sync_preserves_spend_recorded_during_redis_io(pause_during: str) 
     assert in_memory_cache.values[_SPEND_KEY] == 180.0
     assert redis_cache.values[_SPEND_KEY] == 180.0
     assert budget_limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancellations", [1, 2])
+async def test_cancelled_flush_does_not_requeue_an_applied_batch(cancellations: int) -> None:
+    pipeline_started = asyncio.Event()
+    pipeline_completed = asyncio.Event()
+    allow_pipeline = asyncio.Event()
+    redis_cache = _MockRedisCache(
+        initial_values={_SPEND_KEY: 0.0},
+        pipeline_started=pipeline_started,
+        pipeline_completed=pipeline_completed,
+        allow_pipeline_to_complete=allow_pipeline,
+    )
+    limiter = _new_router_budget_limiter(redis_cache=redis_cache, redis_increment_operation_queue=[_increment(10.0)])
+    push_task = asyncio.create_task(limiter._push_in_memory_increments_to_redis())
+    await asyncio.wait_for(pipeline_started.wait(), timeout=1)
+    async with limiter._redis_increment_queue_lock:
+        allow_pipeline.set()
+        await asyncio.wait_for(pipeline_completed.wait(), timeout=1)
+        for _ in range(cancellations):
+            push_task.cancel()
+            await asyncio.sleep(0)
+        assert not push_task.done()
+    with pytest.raises(asyncio.CancelledError):
+        await push_task
+    await limiter._push_in_memory_increments_to_redis()
+    assert redis_cache.values[_SPEND_KEY] == 10.0
+    assert limiter.redis_increment_operation_queue == []
+    assert limiter._detached_increment_operations is None

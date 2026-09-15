@@ -432,19 +432,20 @@ class RouterBudgetLimiting(CustomLogger):
             )
             self._detached_increment_operations = None
 
-    async def _finish_increment_pipeline_after_cancellation(
-        self,
-        pipeline_task: asyncio.Task[object],
-    ) -> None:
-        try:
-            await pipeline_task
-        except Exception:
-            verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
-            await self._requeue_detached_increment_operations()
-            return
-        await self._clear_detached_increment_operations()
-
     async def _flush_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
+        flush_task: Final = asyncio.create_task(self._write_queued_increment_operations(redis_cache))
+        try:
+            return await asyncio.shield(flush_task)
+        except asyncio.CancelledError:
+            while not flush_task.done():
+                try:
+                    await asyncio.shield(flush_task)
+                except asyncio.CancelledError:
+                    continue
+            flush_task.result()
+            raise
+
+    async def _write_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
         increment_operations_to_flush: Final = await self._detach_queued_increment_operations()
         if len(increment_operations_to_flush) == 0:
             await self._clear_detached_increment_operations()
@@ -457,20 +458,12 @@ class RouterBudgetLimiting(CustomLogger):
         increment_list: Final = list(  # mutable-ok: Redis pipeline contract requires a list
             increment_operations_to_flush
         )
-        pipeline_task: Final = asyncio.create_task(
-            redis_cache.async_increment_pipeline(
-                increment_list=increment_list,
-            )
-        )
         try:
-            await asyncio.shield(pipeline_task)
+            await redis_cache.async_increment_pipeline(increment_list=increment_list)
         except Exception:
             verbose_router_logger.exception("Error pushing queued Redis increment operations to Redis")
-            await asyncio.shield(self._requeue_detached_increment_operations())
+            await self._requeue_detached_increment_operations()
             return False
-        except asyncio.CancelledError:
-            await asyncio.shield(self._finish_increment_pipeline_after_cancellation(pipeline_task))
-            raise
         await self._clear_detached_increment_operations()
         return True
 
@@ -612,11 +605,7 @@ class RouterBudgetLimiting(CustomLogger):
             return True
 
         async with self._redis_increment_flush_lock:
-            try:
-                return await self._flush_queued_increment_operations(redis_cache)
-            except asyncio.CancelledError:
-                await asyncio.shield(self._requeue_detached_increment_operations())
-                raise
+            return await self._flush_queued_increment_operations(redis_cache)
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -636,11 +625,7 @@ class RouterBudgetLimiting(CustomLogger):
             if self.dual_cache.redis_cache is None:
                 return
             async with self._redis_increment_flush_lock:
-                try:
-                    await self._flush_increments_then_copy_redis_spend()
-                except asyncio.CancelledError:
-                    await asyncio.shield(self._requeue_detached_increment_operations())
-                    raise
+                await self._flush_increments_then_copy_redis_spend()
         except Exception as e:
             log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
 
