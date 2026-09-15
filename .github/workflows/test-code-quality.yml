@@ -186,7 +186,7 @@ jobs:
           version: "0.10.9"
 
       - name: Install dependencies
-        run: uv sync --frozen --extra proxy --python 3.10
+        run: uv sync --frozen --extra proxy --extra cli --python 3.10
 
       - run: uv run --no-sync python --version
 
@@ -195,3 +195,6 @@ jobs:
 
       - name: Check litellm CLI
         run: uv run --no-sync litellm --version
+
+      - name: Check lite CLI
+        run: uv run --no-sync lite version
