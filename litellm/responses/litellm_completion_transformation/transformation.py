@@ -2715,8 +2715,7 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
                 if reasoning_text:
-                    # cast-ok: extra='allow' model accepts dynamic reasoning_content field
-                    cast("dict[str, object]", message_item)["reasoning_content"] = reasoning_text
+                    message_item = message_item.model_copy(update={"reasoning_content": reasoning_text})
                 message_output_items.append(message_item)
         return message_output_items
 
