@@ -2678,6 +2678,84 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     assert result["thinkingConfig"]["includeThoughts"] is False
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.7-flash",
+        "vertex_ai/gemini-3.8-flash",
+        "gemini-3.8-flash-preview",
+    ],
+)
+@pytest.mark.parametrize(
+    ("reasoning_effort", "include_thoughts"),
+    [("minimal", True), ("none", False), ("disable", False)],
+)
+def test_gemini_37_38_flash_floor_minimal_thinking_level(
+    model, reasoning_effort, include_thoughts
+):
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort, model
+    )
+
+    assert result["thinkingLevel"] == "low"
+    assert result["includeThoughts"] is include_thoughts
+
+
+@pytest.mark.parametrize(
+    ("model", "reasoning_effort", "expected_level", "include_thoughts"),
+    [
+        ("gemini-3-flash-preview", "minimal", "minimal", True),
+        ("gemini-3-flash-preview", "none", "minimal", False),
+        ("gemini-3-flash-preview", "disable", "minimal", False),
+        ("gemini-3.6-flash", "minimal", "minimal", True),
+        ("gemini-3.6-flash", "none", "minimal", False),
+        ("gemini-3.6-flash", "disable", "minimal", False),
+        ("gemini-3.5-flash", "minimal", "minimal", True),
+        ("gemini-3.5-flash", "none", "minimal", False),
+        ("gemini-3.5-flash", "disable", "minimal", False),
+        ("gemini-3.8-flash", "medium", "medium", True),
+    ],
+)
+def test_gemini_flash_minimal_thinking_support(
+    model, reasoning_effort, expected_level, include_thoughts
+):
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort, model
+    )
+
+    assert result["thinkingLevel"] == expected_level
+    assert result["includeThoughts"] is include_thoughts
+
+
+def test_gemini_38_flash_feature_flag_uses_low_thinking_level(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_gemini_default_thinking_level_low", True)
+    thinking_param = {"type": "enabled", "budget_tokens": 1024}
+
+    result_38 = VertexGeminiConfig._map_thinking_param(
+        thinking_param, model="gemini-3.8-flash"
+    )
+    result_36 = VertexGeminiConfig._map_thinking_param(
+        thinking_param, model="gemini-3.6-flash"
+    )
+
+    assert result_38["thinkingLevel"] == "low"
+    assert result_36["thinkingLevel"] == "minimal"
+
+
+def test_gemini_38_flash_public_reasoning_effort_none_uses_low():
+    result = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="gemini-3.8-flash",
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {
+        "thinkingLevel": "low",
+        "includeThoughts": False,
+    }
+
+
 def test_reasoning_effort_dict_format_gemini_3():
     """
     Test that reasoning_effort works when passed as dict format from OpenAI Agents SDK.
