@@ -25,13 +25,3 @@ Rules beyond the enabled set were measured against the whole suite and left off 
 Never run the full unit suite (`npx vitest run` with no path). It is 380 files and thousands of tests, it saturates the machine for many minutes, and CI runs it anyway. Run only the test files your change touches, plus any file whose failure your change could plausibly explain, by passing explicit paths
 
 Type tests are `*.test-d.ts` files run by the `types` vitest project (`npm run test:types`). Keep them out of the `src/app/(dashboard)/` route group. Vitest matches a tsc error back to the test file by path, the parentheses break that match, and `ignoreSourceErrors: true` then drops the error as if it came from a source file. The test still collects and still reports as passing, so a `.test-d.ts` under a parenthesized directory is green no matter what it asserts. Confirm any new one has teeth by breaking the type it guards and watching it fail
-
-<!-- BEGIN:nextjs-agent-rules -->
-
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
