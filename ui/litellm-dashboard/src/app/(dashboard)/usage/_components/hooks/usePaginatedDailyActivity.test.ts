@@ -156,3 +156,69 @@ describe("usePaginatedDailyActivity page accumulation", () => {
     expect(result.current.data.metadata.total_spend).toBe(5.5);
   });
 });
+
+describe("usePaginatedDailyActivity failure reporting", () => {
+  const firstPage = { results: [dayOf("2026-08-16", 2)], metadata: { total_pages: 3, page: 1, total_spend: 2 } };
+  const start = new Date("2026-08-10");
+  const end = new Date("2026-08-17");
+
+  it("reports a failed range so partial totals cannot pass as the whole range", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchFn = vi.fn((_token: string, _start: Date, _end: Date, page: number) =>
+      page === 1 ? Promise.resolve(firstPage) : Promise.reject(new Error("page 2 never came back")),
+    );
+
+    const { result } = renderHook(() =>
+      usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, null], enabled: true }),
+    );
+
+    await waitFor(() => expect(result.current.failed).toBe(true), { timeout: 5000 });
+
+    expect(result.current.isFetchingMore).toBe(false);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.data.metadata.total_spend).toBe(2);
+    consoleError.mockRestore();
+  });
+
+  it("stays unfailed when every page arrives", async () => {
+    const pages = [
+      firstPage,
+      { results: [dayOf("2026-08-15", 1)], metadata: { total_pages: 2, page: 2, total_spend: 1 } },
+    ];
+    const fetchFn = vi.fn((_token: string, _start: Date, _end: Date, page: number) =>
+      Promise.resolve({ ...pages[page - 1], metadata: { ...pages[page - 1].metadata, total_pages: 2 } }),
+    );
+
+    const { result } = renderHook(() =>
+      usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, null], enabled: true }),
+    );
+
+    await waitFor(() => expect(result.current.data.metadata.page).toBe(2), { timeout: 5000 });
+
+    expect(result.current.failed).toBe(false);
+  });
+
+  it("clears the failure when a new range is requested, so the banner cannot outlive it", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchFn = vi.fn((...callArgs: unknown[]) => {
+      const [, , , page, filter] = callArgs as [string, Date, Date, number, string | null];
+      if (filter !== "broken")
+        return Promise.resolve({ ...firstPage, metadata: { ...firstPage.metadata, total_pages: 1 } });
+      if (page === 1) return Promise.resolve({ ...firstPage, metadata: { ...firstPage.metadata, total_pages: 2 } });
+      return Promise.reject(new Error("page 2 never came back"));
+    });
+
+    const { result, rerender } = renderHook(
+      ({ filter }: { filter: string | null }) =>
+        usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, filter], enabled: true }),
+      { initialProps: { filter: "broken" as string | null } },
+    );
+
+    await waitFor(() => expect(result.current.failed).toBe(true), { timeout: 5000 });
+
+    rerender({ filter: "healthy" });
+
+    await waitFor(() => expect(result.current.failed).toBe(false), { timeout: 5000 });
+    consoleError.mockRestore();
+  });
+});
