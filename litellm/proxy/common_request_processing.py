@@ -3431,7 +3431,7 @@ class ProxyBaseLLMRequestProcessing:
         logging_obj: Final[LiteLLMLoggingObj | None] = self.data.get("litellm_logging_obj", None)
         _log_llm_api_exception(
             e,
-            logging_obj.litellm_call_id if logging_obj is not None else self.data.get("litellm_call_id"),
+            (logging_obj.litellm_call_id if logging_obj is not None else None) or self.data.get("litellm_call_id"),
         )
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(

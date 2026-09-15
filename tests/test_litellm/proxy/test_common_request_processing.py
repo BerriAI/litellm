@@ -8671,7 +8671,7 @@ class TestErrorLogCarriesCallId:
     x-litellm-call-id response header, so a logged exception can be tied to a
     specific request."""
 
-    async def _invoke(self, data: dict) -> None:
+    async def _invoke(self, data: dict[str, object]) -> None:
         from litellm._logging import verbose_proxy_logger
 
         processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -8707,6 +8707,17 @@ class TestErrorLogCarriesCallId:
         call_id: Final = str(uuid.uuid4())
         with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
             await self._invoke({"litellm_call_id": call_id})
+
+        record: Final = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    async def test_call_id_falls_back_when_logging_obj_has_none(self, caplog: pytest.LogCaptureFixture) -> None:
+        call_id: Final = str(uuid.uuid4())
+        logging_obj: Final = MagicMock()
+        logging_obj.litellm_call_id = None
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            await self._invoke({"litellm_logging_obj": logging_obj, "litellm_call_id": call_id})
 
         record: Final = self._error_record(caplog)
         assert record.litellm_call_id == call_id
