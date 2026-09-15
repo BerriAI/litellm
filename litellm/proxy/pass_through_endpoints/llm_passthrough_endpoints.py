@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_router_model_in_endpoint
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
@@ -1545,6 +1546,26 @@ async def _relay_azure_router_model(
             "put the model group name in the deployments segment"
         }
         raise HTTPException(status_code=400, detail=rejection)
+    return await _relay_router_model(
+        llm_router=llm_router,
+        model=model,
+        endpoint=endpoint,
+        request=request,
+        request_body=request_body,
+        is_streaming_request=is_streaming_request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+async def _relay_router_model(
+    llm_router: litellm.Router,
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: Mapping[str, object],
+    is_streaming_request: bool,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Response:
     try:
         result: Final = await llm_router.allm_passthrough_route(
             model=model,
@@ -1591,6 +1612,52 @@ async def _relay_azure_router_model(
         headers=HttpPassThroughEndpointHelpers.get_response_headers(
             headers=upstream_stream.headers, custom_headers=None
         ),
+    )
+
+
+@router.api_route(
+    "/nvidia_nim/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["NVIDIA NIM Pass-through", "pass-through"],
+)
+async def nvidia_nim_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Relay a native NVIDIA NIM request through a LiteLLM model group.
+
+    `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+    `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+    virtual key auth, model access checks, and spend logging.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    model_group: Final = (
+        nvidia_nim_router_model_in_endpoint(endpoint, llm_router.get_model_names()) if llm_router else None
+    )
+    if llm_router is None or model_group is None:
+        rejection: Final[RelayRejection] = {
+            "error": "no LiteLLM model group in the path; call /nvidia_nim/{model_group}/v1/infer with a model "
+            "from your `model_list` whose `model` starts with `nvidia_nim/`"
+        }
+        raise HTTPException(status_code=400, detail=rejection)
+
+    request_body: Final = await get_request_body(request)
+    is_streaming_request: Final = is_passthrough_request_streaming(request_body)
+    return await open_sse_before_first_byte(
+        _relay_router_model(
+            llm_router=llm_router,
+            model=model_group,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            is_streaming_request=is_streaming_request,
+            user_api_key_dict=user_api_key_dict,
+        ),
+        ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_streaming_request else None),
     )
 
 
