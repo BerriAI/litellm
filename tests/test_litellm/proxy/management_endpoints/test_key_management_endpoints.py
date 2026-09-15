@@ -809,6 +809,76 @@ async def test_update_key_grandfathers_existing_mcp_servers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_key_response_echoes_resolved_object_permission(monkeypatch):
+    """Regression: /key/update must return the resolved object_permission the same
+    way /key/info does. The dashboard spreads the update response over its local
+    key state, so a null object_permission shows "MCP Servers 0" until reload."""
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+        UpdateKeyRequest,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    hashed_token = "c1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    existing_key = LiteLLM_VerificationToken(token=hashed_token, user_id="test-user", object_permission_id=None)
+
+    permission_row = MagicMock()
+    permission_row.object_permission_id = "perm-1"
+    permission_row.model_dump.return_value = {
+        "object_permission_id": "perm-1",
+        "mcp_servers": ["server_a"],
+    }
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission_row)
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(return_value=permission_row)
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.update_data = AsyncMock(
+        return_value={
+            "data": {
+                "token": hashed_token,
+                "user_id": "test-user",
+                "object_permission_id": "perm-1",
+                "object_permission": None,
+            }
+        }
+    )
+
+    _wire_update_key_fn(monkeypatch, existing_key)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_mgr = MagicMock()
+    mock_server = MagicMock()
+    mock_server.server_id = "server_a"
+    mock_mgr.get_registry.return_value = {"server_a": mock_server}
+    mock_mgr.get_allow_all_keys_server_ids.return_value = []
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        mock_mgr,
+    )
+
+    result = await update_key_fn(
+        request=MagicMock(),
+        data=UpdateKeyRequest(
+            key=hashed_token,
+            object_permission=LiteLLM_ObjectPermissionBase(mcp_servers=["server_a"]),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert result["object_permission"]["mcp_servers"] == ["server_a"]
+
+
+@pytest.mark.asyncio
 async def test_update_key_personal_non_admin_denied_access_groups(
     monkeypatch,
 ):
