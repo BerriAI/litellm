@@ -78,6 +78,8 @@ from litellm.proxy.auth.auth_utils import (
     iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
+    request_dispatched_to_pass_through_endpoint,
+    request_dispatched_to_provider_pass_through,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -251,7 +253,6 @@ async def _resolve_router_settings_model_group_alias(
     """Rewrite the requested model through the key's or team's ``router_settings.model_group_alias``
     before the allowlist checks, so they authorize the model group the request is routed to.
     """
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
     if request is None or llm_router is None or not RouteChecks.is_llm_api_route(route=route):
@@ -259,7 +260,7 @@ async def _resolve_router_settings_model_group_alias(
     if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
         return
     request.scope[MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY] = True
-    if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
+    if request_dispatched_to_pass_through_endpoint(request) or request_dispatched_to_provider_pass_through(request):
         return
     requested: Final = request_data.get("model")
     if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
