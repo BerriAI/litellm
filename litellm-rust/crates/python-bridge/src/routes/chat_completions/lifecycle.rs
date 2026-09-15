@@ -1,3 +1,5 @@
+use litellm_core::call_lifecycle::admission::Inspection;
+use litellm_core::chat_completions::ChatCompletionsAdmission;
 use litellm_core::chat_completions::lifecycle::{
     ChatCompletionsRoute, OwnedChatCompletionsRequest,
 };
@@ -15,7 +17,7 @@ impl PythonCompletedRoute for ChatCompletionsRoute {
     const SYNC_CALL_TYPE: PythonCallType = PythonCallType::Completion;
     const ASYNC_CALL_TYPE: PythonCallType = PythonCallType::AsyncCompletion;
 
-    fn admit(request: &Bound<'_, PyDict>) -> PyResult<()> {
+    fn project_admission(request: &Bound<'_, PyDict>) -> PyResult<Self::Admission> {
         let model = required(request, RequestField::Model)?;
         let provider = request.get_item(RequestField::CustomLlmProvider.key(request.py()))?;
         let messages = required(request, RequestField::Messages)?;
@@ -29,26 +31,24 @@ impl PythonCompletedRoute for ChatCompletionsRoute {
             || !exact_optional_object(headers.as_ref())
             || !exact_optional_object(facts.as_ref())
         {
-            return crate::errors::admit(Err(
-                litellm_core::call_lifecycle::admission::AdmissionDecline::Uninspectable,
-            ));
+            return Ok(Inspection::Uninspectable);
         }
         let provider: Option<String> = provider
             .as_ref()
             .map(|value| value.extract::<Option<String>>())
             .transpose()?
             .flatten();
-        crate::errors::admit(litellm_core::chat_completions::admit(
-            &model.extract::<String>()?,
-            provider.as_deref(),
-            from_py(&messages)?,
-            &object(request, RequestField::OptionalParams)?,
-            Some(&object(request, RequestField::ExtraHeaders)?),
-            facts
+        Ok(Inspection::Inspectable(ChatCompletionsAdmission {
+            model: model.extract()?,
+            provider,
+            messages: from_py(&messages)?,
+            params: object(request, RequestField::OptionalParams)?,
+            headers: Some(object(request, RequestField::ExtraHeaders)?),
+            context: facts
                 .map(|value| from_py(&value))
                 .transpose()?
                 .unwrap_or_default(),
-        ))
+        }))
     }
 
     fn project(request: &Bound<'_, PyDict>) -> PyResult<OwnedChatCompletionsRequest> {

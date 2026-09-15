@@ -36,8 +36,15 @@ pub struct ChatCompletionsRoute;
 pub type ChatCompletionsCall = CompletedCall<ChatCompletionsRoute>;
 
 impl CompletedRoute for ChatCompletionsRoute {
+    type Admission = crate::call_lifecycle::admission::Inspection<super::ChatCompletionsAdmission>;
     type Request = OwnedChatCompletionsRequest;
     type Response = ChatCompletionsResponse;
+
+    fn admit(
+        admission: Self::Admission,
+    ) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+        super::admit(admission)
+    }
 
     fn run(
         request: Self::Request,

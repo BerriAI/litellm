@@ -69,28 +69,41 @@ pub struct AdmissionContext {
     pub bedrock_metadata_owned: bool,
 }
 
+pub struct ChatCompletionsAdmission {
+    pub model: String,
+    pub provider: Option<String>,
+    pub messages: Value,
+    pub params: Map<String, Value>,
+    pub headers: Option<Map<String, Value>>,
+    pub context: AdmissionContext,
+}
+
 pub fn admit(
-    model: &str,
-    provider: Option<&str>,
-    messages: Value,
-    params: &Map<String, Value>,
-    headers: Option<&Map<String, Value>>,
-    context: AdmissionContext,
+    inspection: crate::call_lifecycle::admission::Inspection<ChatCompletionsAdmission>,
 ) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
-    use crate::call_lifecycle::admission::AdmissionDecline;
-    let resolved = crate::routing_utils::provider::get_custom_llm_provider(model, provider);
-    let provider = provider.or_else(|| resolved.as_ref().map(|value| value.custom_llm_provider));
-    if context.stream {
+    use crate::call_lifecycle::admission::{AdmissionDecline, Inspection};
+    let Inspection::Inspectable(admission) = inspection else {
+        return Err(AdmissionDecline::Uninspectable);
+    };
+    let resolved = crate::routing_utils::provider::get_custom_llm_provider(
+        &admission.model,
+        admission.provider.as_deref(),
+    );
+    let provider = admission
+        .provider
+        .as_deref()
+        .or_else(|| resolved.as_ref().map(|value| value.custom_llm_provider));
+    if admission.context.stream {
         return Err(AdmissionDecline::Feature("streaming"));
     }
-    if (provider == Some("anthropic") && context.anthropic_user_id)
-        || (provider == Some("bedrock") && context.bedrock_metadata_owned)
+    if (provider == Some("anthropic") && admission.context.anthropic_user_id)
+        || (provider == Some("bedrock") && admission.context.bedrock_metadata_owned)
     {
         return Err(AdmissionDecline::HostOperations);
     }
     #[cfg(feature = "bedrock-auth")]
     if provider == Some("bedrock")
-        && headers.is_some_and(|headers| {
+        && admission.headers.as_ref().is_some_and(|headers| {
             headers
                 .keys()
                 .any(|name| crate::providers::bedrock::aws_base::is_sigv4_computed_header(name))
@@ -100,8 +113,13 @@ pub fn admit(
             "request forwards a header AWS SigV4 computes",
         ));
     }
-    let _ = headers;
-    match chat_completions_decline_reason(model, provider, messages, params) {
+    let _ = admission.headers;
+    match chat_completions_decline_reason(
+        &admission.model,
+        provider,
+        admission.messages,
+        &admission.params,
+    ) {
         Some(reason) => Err(AdmissionDecline::Feature(reason)),
         None => Ok(()),
     }

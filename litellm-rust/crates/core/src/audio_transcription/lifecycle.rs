@@ -36,8 +36,16 @@ pub struct AudioTranscriptionRoute;
 pub type AudioTranscriptionCall = CompletedCall<AudioTranscriptionRoute>;
 
 impl CompletedRoute for AudioTranscriptionRoute {
+    type Admission =
+        crate::call_lifecycle::admission::Inspection<super::AudioTranscriptionAdmission>;
     type Request = OwnedAudioTranscriptionRequest;
     type Response = Value;
+
+    fn admit(
+        admission: Self::Admission,
+    ) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+        super::admit(admission)
+    }
 
     fn run(
         request: Self::Request,

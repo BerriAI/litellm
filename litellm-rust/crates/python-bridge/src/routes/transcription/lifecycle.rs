@@ -1,9 +1,11 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
+use litellm_core::audio_transcription::AudioTranscriptionAdmission;
 use litellm_core::audio_transcription::lifecycle::{
     AudioTranscriptionRoute, OwnedAudioTranscriptionRequest,
 };
+use litellm_core::call_lifecycle::admission::Inspection;
 use litellm_python_interop::from_py_preserving_errors as from_py;
 
 use crate::lifecycle::completed::{self, PythonCompletedRoute};
@@ -16,7 +18,7 @@ impl PythonCompletedRoute for AudioTranscriptionRoute {
     const SYNC_CALL_TYPE: PythonCallType = PythonCallType::Transcription;
     const ASYNC_CALL_TYPE: PythonCallType = PythonCallType::AsyncTranscription;
 
-    fn admit(request: &Bound<'_, PyDict>) -> PyResult<()> {
+    fn project_admission(request: &Bound<'_, PyDict>) -> PyResult<Self::Admission> {
         let model = required(request, RequestField::Model)?;
         let provider = request.get_item(RequestField::CustomLlmProvider.key(request.py()))?;
         let audio_value = required(request, RequestField::Audio)?;
@@ -26,16 +28,14 @@ impl PythonCompletedRoute for AudioTranscriptionRoute {
             || !exact_optional_object(Some(&audio_value))
             || !exact_optional_object(optional_params.as_ref())
         {
-            return crate::errors::admit(Err(
-                litellm_core::call_lifecycle::admission::AdmissionDecline::Uninspectable,
-            ));
+            return Ok(Inspection::Uninspectable);
         }
         let audio = from_py(&audio_value)?;
-        crate::errors::admit(litellm_core::audio_transcription::admit(
-            &model.extract::<String>()?,
-            optional_string(request, RequestField::CustomLlmProvider)?.as_deref(),
-            &audio,
-        ))
+        Ok(Inspection::Inspectable(AudioTranscriptionAdmission {
+            model: model.extract()?,
+            provider: optional_string(request, RequestField::CustomLlmProvider)?,
+            audio,
+        }))
     }
 
     fn project(request: &Bound<'_, PyDict>) -> PyResult<OwnedAudioTranscriptionRequest> {

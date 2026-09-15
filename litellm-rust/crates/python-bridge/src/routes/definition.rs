@@ -347,6 +347,27 @@ mod tests {
                 async_messages_error.to_string(),
                 sync_messages_error.to_string()
             );
+
+            let invalid_audio = PyList::empty(py);
+            let request = PyDict::new(py);
+            request.set_item("model", "bedrock/model").unwrap();
+            request.set_item("audio", &invalid_audio).unwrap();
+            let sync_transcription_error = module
+                .getattr("transcription")
+                .and_then(|function| function.call1((&request, (), PyDict::new(py), py.None())))
+                .expect_err("sync transcription should reject a non-dict audio value");
+            let async_transcription_error = module
+                .getattr("atranscription")
+                .and_then(|function| function.call1((&request, (), PyDict::new(py), py.None())))
+                .expect_err("async transcription should reject a non-dict audio value");
+
+            assert!(
+                sync_transcription_error.is_instance_of::<crate::errors::RustBridgeDeclined>(py)
+            );
+            assert_eq!(
+                async_transcription_error.to_string(),
+                sync_transcription_error.to_string()
+            );
         });
     }
 

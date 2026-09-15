@@ -23,7 +23,7 @@ pub(crate) trait PythonCompletedRoute: CompletedRoute {
     const SYNC_CALL_TYPE: PythonCallType;
     const ASYNC_CALL_TYPE: PythonCallType;
 
-    fn admit(request: &Bound<'_, PyDict>) -> PyResult<()>;
+    fn project_admission(request: &Bound<'_, PyDict>) -> PyResult<Self::Admission>;
     fn project(request: &Bound<'_, PyDict>) -> PyResult<Self::Request>;
 }
 
@@ -242,7 +242,7 @@ pub(crate) fn run<R: PythonCompletedRoute>(
 where
     R::Response: Serialize,
 {
-    R::admit(&request)?;
+    crate::errors::admit(R::admit(R::project_admission(&request)?))?;
     let controls = crate::cache::snapshot(
         py,
         if asynchronous {

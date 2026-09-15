@@ -146,9 +146,13 @@ pub enum CompletedReply<Q> {
 }
 
 pub trait CompletedRoute: Send + Sync + 'static {
+    type Admission;
     type Request: Send + Sync + 'static;
     type Response: Clone + Send + Sync + serde::de::DeserializeOwned + 'static;
 
+    fn admit(
+        admission: Self::Admission,
+    ) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline>;
     fn run(request: Self::Request, hooks: Arc<dyn ProviderHooks>)
     -> WorkflowFuture<Self::Response>;
     fn context(request: &Self::Request) -> CallLifecycleContext;
@@ -473,8 +477,15 @@ mod tests {
     struct TestRoute;
 
     impl CompletedRoute for TestRoute {
+        type Admission = ();
         type Request = ();
         type Response = TestResponse;
+
+        fn admit(
+            (): Self::Admission,
+        ) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+            Ok(())
+        }
 
         fn run((): Self::Request, hooks: Arc<dyn ProviderHooks>) -> WorkflowFuture<Self::Response> {
             Box::pin(async move {

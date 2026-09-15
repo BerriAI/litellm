@@ -34,8 +34,15 @@ pub struct MessagesRoute;
 pub type MessagesCall = CompletedCall<MessagesRoute>;
 
 impl CompletedRoute for MessagesRoute {
+    type Admission = crate::call_lifecycle::admission::Inspection<super::MessagesAdmission>;
     type Request = OwnedMessagesRequest;
     type Response = AnthropicMessagesResponse;
+
+    fn admit(
+        admission: Self::Admission,
+    ) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+        super::admit(admission)
+    }
 
     fn run(
         request: Self::Request,

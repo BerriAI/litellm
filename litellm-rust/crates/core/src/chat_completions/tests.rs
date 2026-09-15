@@ -2,9 +2,18 @@ use serde_json::{Map, Value, json};
 
 use crate::error::Error;
 
+use super::admit;
 use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
 use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
+
+#[test]
+fn uninspectable_request_declines_in_core() {
+    assert_eq!(
+        admit(crate::call_lifecycle::admission::Inspection::Uninspectable),
+        Err(crate::call_lifecycle::admission::AdmissionDecline::Uninspectable)
+    );
+}
 
 fn prepare_chat_completions_call(
     request: ChatCompletionsRequest<'_>,

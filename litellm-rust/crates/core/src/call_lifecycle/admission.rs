@@ -30,3 +30,8 @@ pub enum AdmissionDecline {
     #[strum(to_string = "{0}")]
     Feature(&'static str),
 }
+
+pub enum Inspection<T> {
+    Inspectable(T),
+    Uninspectable,
+}
