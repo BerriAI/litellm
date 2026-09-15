@@ -285,3 +285,76 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
     sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
+
+
+def test_thought_signature_on_separate_thought_part_is_preserved():
+    """Gemini 3+ places the signature on a thought part, not on the functionCall part.
+
+    Regression for the case where `_transform_parts` only looked at the
+    functionCall part and silently dropped the signature, so it was never
+    echoed back on the next turn.
+    """
+    test_signature = "CvsBAdHtim9thoughtPartSignature"
+    parts = [
+        HttpxPartType(thought=True, thoughtSignature=test_signature),
+        HttpxPartType(functionCall={"name": "get_weather", "args": {"city": "Recife"}}),
+    ]
+
+    _, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    assert tools is not None and len(tools) == 1
+    assert (
+        tools[0].get("provider_specific_fields", {}).get("thought_signature")
+        == test_signature
+    )
+
+
+def test_thought_signature_on_function_call_part_still_wins():
+    """A signature on the functionCall part keeps precedence over a pending one."""
+    own_signature = "CvsBAdHtim9onTheCallPart"
+    parts = [
+        HttpxPartType(thought=True, thoughtSignature="CvsBAdHtim9onTheThoughtPart"),
+        HttpxPartType(
+            functionCall={"name": "get_weather", "args": {"city": "Recife"}},
+            thoughtSignature=own_signature,
+        ),
+    ]
+
+    _, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    assert tools is not None and len(tools) == 1
+    assert (
+        tools[0].get("provider_specific_fields", {}).get("thought_signature")
+        == own_signature
+    )
+
+
+def test_pending_thought_signature_is_consumed_once():
+    """In parallel calls only the first function call carries a signature."""
+    test_signature = "CvsBAdHtim9onlyForTheFirstCall"
+    parts = [
+        HttpxPartType(thought=True, thoughtSignature=test_signature),
+        HttpxPartType(functionCall={"name": "get_weather", "args": {"city": "Recife"}}),
+        HttpxPartType(functionCall={"name": "get_time", "args": {"city": "Recife"}}),
+    ]
+
+    _, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    assert tools is not None and len(tools) == 2
+    assert (
+        tools[0].get("provider_specific_fields", {}).get("thought_signature")
+        == test_signature
+    )
+    assert tools[1].get("provider_specific_fields") is None
