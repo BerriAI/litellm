@@ -8298,7 +8298,7 @@ class Router:
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
 
-            if is_caller_timeout_408(litellm_params.get("client_side_timeout"), exception_status):
+            if is_caller_timeout_408(kwargs, exception_status):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "A timeout the caller set caused this 408, not the deployment's health."

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
@@ -973,10 +974,59 @@ class TestTriggerCooldownForFailedDeployment:
                 litellm_router=mock_router,
                 kwargs={"client_side_timeout": True},
                 exception=exc,
+                model_call_details={
+                    "litellm_params": {"client_side_timeout": True, "timeout": 0.5},
+                    "api_call_start_time": datetime.now() - timedelta(seconds=1),
+                    "end_time": datetime.now(),
+                },
             )
 
             mock_set_cooldown.assert_not_called()
             mock_increment.assert_not_called()
+
+    def test_still_cools_down_provider_408_before_caller_deadline(self):
+        """client_side_timeout only records that the caller configured a timeout. A 408
+        that comes back before that deadline was raised by the provider itself, so it is
+        a real health signal and must still cool the deployment down."""
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-deployment"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=60,
+            num_retries=0,
+        )
+        exc = litellm.Timeout(message="timeout", model="gpt-5.6", llm_provider="openai")
+        exc.failed_deployment_id = "fallback-deployment"
+        started = datetime.now()
+
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router,
+            kwargs={"client_side_timeout": True},
+            exception=exc,
+            model_call_details={
+                "litellm_params": {"client_side_timeout": True, "timeout": 30},
+                "api_call_start_time": started,
+                "end_time": started + timedelta(seconds=1),
+            },
+        )
+
+        assert (
+            get_deployment_failures_for_current_minute(
+                litellm_router_instance=router, deployment_id="fallback-deployment"
+            )
+            == 1
+        )
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
+        assert [entry[0] for entry in active] == ["fallback-deployment"]
 
     def test_still_cools_down_408_without_client_side_timeout_flag(self):
         """The client-side-timeout guard is scoped to caller-supplied timeouts only: a

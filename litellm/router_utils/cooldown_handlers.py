@@ -9,6 +9,7 @@ Router cooldown handlers
 import asyncio
 import math
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -639,5 +640,16 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
     return exception_status
 
 
-def is_caller_timeout_408(client_side_timeout: object, exception_status: str | int) -> bool:
-    return bool(client_side_timeout) and cast_exception_status_to_int(exception_status) == 408
+def is_caller_timeout_408(model_call_details: Mapping[str, object], exception_status: str | int) -> bool:
+    """A 408 that arrives before the caller-set timeout could have fired came from the provider."""
+    if cast_exception_status_to_int(exception_status) != 408:
+        return False
+    litellm_params: Final = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, Mapping) or not litellm_params.get("client_side_timeout"):
+        return False
+    timeout: Final = litellm_params.get("timeout")
+    started: Final = model_call_details.get("api_call_start_time") or model_call_details.get("start_time")
+    ended: Final = model_call_details.get("end_time")
+    if not isinstance(timeout, (int, float)) or not isinstance(started, datetime) or not isinstance(ended, datetime):
+        return False
+    return (ended - started).total_seconds() >= timeout
