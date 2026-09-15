@@ -1,13 +1,8 @@
 import base64
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 
@@ -95,9 +90,9 @@ def enc_project(p):  # how client encodes project in urls
 # Constructor / config tests
 # -----------------------------
 def test_init_requires_project_and_token():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='project and access_token are required'):
         GitLabClient({"project": "p"})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='project and access_token are required'):
         GitLabClient({"access_token": "t"})
 
 
@@ -127,7 +122,7 @@ def test_set_ref_updates_effective_ref():
     c = make_client(branch="main")
     c.set_ref("feature/x")
     assert c.ref == "feature/x"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='ref must be a non-empty string'):
         c.set_ref("")
 
 
@@ -193,12 +188,12 @@ def test_get_file_content_permission_errors_are_mapped():
     raw_url = f"https://gitlab.example.com/api/v4/projects/{enc_project('group/sub/repo')}/repository/files/secure%2Ffile.prompt/raw?ref=main"
     # raise_for_status will be called, so return 403 response (not an exception from transport)
     c.http_handler.routes[raw_url] = FakeResponse(status_code=403)
-    with pytest.raises(Exception) as ei:
+    with pytest.raises(Exception, match="Check your GitLab permissions for project 'group") as ei:
         c.get_file_content("secure/file.prompt")
     assert "Access denied" in str(ei.value)
 
     c.http_handler.routes[raw_url] = FakeResponse(status_code=401)
-    with pytest.raises(Exception) as ei2:
+    with pytest.raises(Exception, match='Authentication failed\\. Check your GitLab token and') as ei2:
         c.get_file_content("secure/file.prompt")
     assert "Authentication failed" in str(ei2.value)
 

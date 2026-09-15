@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useChatHistory } from "@/components/chat/useChatHistory";
-import type { ChatMessage, Conversation } from "@/components/chat/types";
+import type { AssistantMessageUpdate, ChatMessage, Conversation } from "@/components/chat/types";
 
 interface ChatShellContextValue {
   accessToken: string;
@@ -20,10 +20,7 @@ interface ChatShellContextValue {
   staleId: boolean;
   createConversation: (model: string) => string;
   appendMessage: (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => void;
-  updateLastAssistantMessage: (
-    conversationId: string,
-    updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>,
-  ) => void;
+  updateLastAssistantMessage: (conversationId: string, updates: AssistantMessageUpdate) => void;
   truncateFromMessage: (conversationId: string, messageId: string) => void;
   deleteConversation: (id: string) => void;
   renameConversation: (id: string, newTitle: string) => void;

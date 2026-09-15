@@ -35,11 +35,16 @@ MOCK_TINYFISH_RESPONSE = {
 
 
 def _make_mock_response(
-    json_data: dict, status_code: int = 200, request_url: str | None = None
+    json_data: dict,
+    status_code: int = 200,
+    request_url: str | None = None,
+    headers: dict | None = None,
 ) -> MagicMock:
     mock = MagicMock()
     mock.status_code = status_code
     mock.json.return_value = json_data
+    # httpx.Headers normalizes keys to lowercase — mirror production behavior.
+    mock.headers = httpx.Headers(headers or {})
     if request_url:
         mock.request = MagicMock()
         mock.request.url = httpx.URL(request_url)
@@ -163,7 +168,7 @@ class TestTinyfishSearch:
 
     @pytest.mark.asyncio
     async def test_fetch_param_round_trip(self):
-        # End-to-end check: caller passes `fetch=...` (JSON-encoded tf-fetch
+        # End-to-end check: caller passes `fetch=...` (JSON-encoded fetch
         # config); param reaches TinyFish on the request side and the nested
         # `fetch` object on each result surfaces back to the SearchResult on the
         # response side. No LiteLLM-side support code is required.
@@ -234,6 +239,58 @@ class TestTinyfishSearch:
         assert len(result.results) == 3
         assert result.results[0].title == "Result 0"
         assert result.results[2].title == "Result 2"
+
+    @pytest.mark.asyncio
+    async def test_top_level_extras_surface_end_to_end(self):
+        # Envelope extras (`query`, `total_results`, `page`) must survive the
+        # full asearch dispatch — proves LiteLLM's entry-point plumbing outside
+        # our transformer doesn't accidentally strip them.
+        os.environ["TINYFISH_API_KEY"] = "sk-tinyfish-test"
+
+        mock_response = _make_mock_response(MOCK_TINYFISH_RESPONSE)
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_get.return_value = mock_response
+
+            response = await litellm.asearch(
+                query="web automation tools",
+                search_provider="tinyfish",
+            )
+
+            assert getattr(response, "query", None) == "web automation tools"
+            assert getattr(response, "total_results", None) == 2
+            assert getattr(response, "page", None) == 0
+
+    @pytest.mark.asyncio
+    async def test_response_headers_surface_end_to_end(self):
+        # Response headers must land on `_hidden_params` after the full
+        # asearch dispatch (both raw and sanitized channels).
+        os.environ["TINYFISH_API_KEY"] = "sk-tinyfish-test"
+
+        mock_response = _make_mock_response(
+            MOCK_TINYFISH_RESPONSE,
+            headers={"X-Request-ID": "req-e2e-1"},
+        )
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_get.return_value = mock_response
+
+            response = await litellm.asearch(
+                query="test",
+                search_provider="tinyfish",
+            )
+
+            raw = response._hidden_params["headers"]
+            add = response._hidden_params["additional_headers"]
+            # httpx lowercases; both channels agree on the value.
+            assert raw["x-request-id"] == "req-e2e-1"
+            assert add["llm_provider-x-request-id"] == "req-e2e-1"
 
     @pytest.mark.asyncio
     async def test_empty_results(self):

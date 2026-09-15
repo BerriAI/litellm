@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Final
 
 from fastapi import HTTPException
 
@@ -20,7 +20,7 @@ def clone_user_api_key_auth_with_team(
     try:
         cloned_auth = user_api_key_auth.model_copy()
     except AttributeError:
-        cloned_auth = user_api_key_auth.copy()  # type: ignore[attr-defined]
+        cloned_auth = user_api_key_auth.copy()
     cloned_auth.team_id = team_id
     return cloned_auth
 
@@ -34,7 +34,7 @@ def is_ui_session_credential(user_api_key_auth: UserAPIKeyAuth) -> bool:
 
 async def resolve_ui_session_team_ids(
     user_api_key_auth: UserAPIKeyAuth,
-) -> List[str]:
+) -> list[str]:
     """Resolve the real team ids backing a UI session token."""
 
     if not is_ui_session_credential(user_api_key_auth):
@@ -52,7 +52,7 @@ async def resolve_ui_session_team_ids(
         return []
 
     try:
-        user_obj = await get_user_object(
+        user_obj: Final = await get_user_object(
             user_id=user_api_key_auth.user_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -70,7 +70,7 @@ async def resolve_ui_session_team_ids(
     if user_obj is None or not user_obj.teams:
         return []
 
-    resolved_team_ids: List[str] = []
+    resolved_team_ids: Final[list[str]] = []
     for team_id in user_obj.teams:
         if team_id and team_id not in resolved_team_ids:
             resolved_team_ids.append(team_id)
@@ -83,7 +83,7 @@ async def admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKey
     on this request's tracing span. None for any other credential (a caller-passed key is never
     widened) and on reload failure, which every caller reads as "no user-level identity available"."""
 
-    user_id = user_api_key_auth.user_id
+    user_id: Final = user_api_key_auth.user_id
     if not is_ui_session_credential(user_api_key_auth) or user_id is None:
         return None
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -91,9 +91,9 @@ async def admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKey
     )
 
     try:
-        admitted = await MCPRequestHandler._reload_admitted_user(user_id)
+        admitted: Final = await MCPRequestHandler.reload_admitted_user(user_id)
     except HTTPException as e:
-        verbose_logger.warning(f"MCP dashboard session: admitted-subject reload failed for {user_id}: {e.detail}")
+        verbose_logger.warning("MCP dashboard session: admitted-subject reload failed for %s: %s", user_id, e.detail)
         return None
     return admitted.model_copy(update={"parent_otel_span": user_api_key_auth.parent_otel_span})
 
@@ -116,24 +116,24 @@ async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
 
     if _user_has_admin_view(user_api_key_auth):
         return user_api_key_auth
-    admitted = await admitted_user_context(user_api_key_auth)
+    admitted: Final = await admitted_user_context(user_api_key_auth)
     return admitted if admitted is not None else user_api_key_auth
 
 
 async def build_effective_auth_contexts(
     user_api_key_auth: UserAPIKeyAuth,
-) -> List[UserAPIKeyAuth]:
+) -> list[UserAPIKeyAuth]:
     """Every auth context a management or listing surface must resolve a UI session token through:
     one per real team backing the session, plus the session user's own admitted identity, so a grant
     made directly to the user row is as visible to the dashboard as it is to a gateway session."""
 
-    resolved_team_ids = await resolve_ui_session_team_ids(user_api_key_auth)
-    team_contexts = (
+    resolved_team_ids: Final = await resolve_ui_session_team_ids(user_api_key_auth)
+    team_contexts: Final = (
         [clone_user_api_key_auth_with_team(user_api_key_auth, team_id) for team_id in resolved_team_ids]
         if resolved_team_ids
         else [user_api_key_auth]
     )
-    admitted_context = await admitted_user_context(user_api_key_auth)
+    admitted_context: Final = await admitted_user_context(user_api_key_auth)
     if admitted_context is None:
         return team_contexts
     return [*team_contexts, admitted_context]

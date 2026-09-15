@@ -11,5 +11,3 @@ class VLLMConfig(HostedVLLMChatConfig):
     """
     VLLM SDK supports the same OpenAI params as hosted_vllm.
     """
-
-    pass

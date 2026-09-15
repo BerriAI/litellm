@@ -134,6 +134,30 @@ class TestBuildWebSearchToolResultBlock:
         assert first["title"] == "LiteLLM Docs"
         assert first["page_age"] == "2025-01-15"
         assert first["encrypted_content"] == ""
+        assert first["snippet"] == "Unified interface for LLMs."
+
+    def test_snippet_carried_for_every_result(self):
+        # The snippet is the only field carrying page text. Losing it leaves the
+        # client and the model with nothing to answer from, forcing a fetch per
+        # result.
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="toolu_abc",
+            search_response=_make_search_response(),
+        )
+        assert [r["snippet"] for r in block["content"]] == [
+            "Unified interface for LLMs.",
+            "Pay-per-use pricing model.",
+        ]
+
+    def test_missing_snippet_degrades_to_empty_string(self):
+        response = SearchResponse(
+            results=[SearchResult(title="T", url="https://x/", snippet="")]
+        )
+        block = WebSearchTransformation.build_web_search_tool_result_block(
+            tool_use_id="toolu_abc",
+            search_response=response,
+        )
+        assert block["content"][0]["snippet"] == ""
 
     def test_handles_none_search_response(self):
         block = WebSearchTransformation.build_web_search_tool_result_block(
@@ -223,11 +247,15 @@ class TestBuildPlanAttachesBlocks:
             )
 
         blocks = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
-        assert isinstance(blocks, list)
-        assert len(blocks) == 1
-        assert blocks[0]["type"] == "web_search_tool_result"
-        assert blocks[0]["tool_use_id"] == "toolu_one"
-        assert blocks[0]["content"][0]["url"] == "https://docs.litellm.ai/"
+        assert isinstance(blocks, tuple)
+        assert [b["type"] for b in blocks] == [
+            "server_tool_use",
+            "web_search_tool_result",
+        ]
+        assert blocks[0]["id"].startswith("srvtoolu_")
+        assert blocks[0]["input"] == {"query": "what is litellm"}
+        assert blocks[1]["tool_use_id"] == blocks[0]["id"]
+        assert blocks[1]["content"][0]["url"] == "https://docs.litellm.ai/"
 
     @pytest.mark.asyncio
     async def test_metadata_does_not_carry_blocks_when_flag_absent(self):
@@ -479,6 +507,9 @@ class TestLegacyPathMatchesNewPath:
                 kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
             )
 
-        assert out["content"][0]["type"] == "web_search_tool_result"
-        assert out["content"][0]["tool_use_id"] == "toolu_legacy"
-        assert out["content"][1]["type"] == "text"
+        assert [b["type"] for b in out["content"]] == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "text",
+        ]
+        assert out["content"][1]["tool_use_id"] == out["content"][0]["id"]
