@@ -30,8 +30,10 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
     ChatCompletionFileObject,
+    ChatCompletionFileObjectFile,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -1068,11 +1070,17 @@ def _azure_image_url_helper(content: ChatCompletionImageObject):
     if isinstance(content["image_url"], str):
         content["image_url"] = {"url": content["image_url"]}
     else:
-        content["image_url"].pop("format", None)
+        content["image_url"] = cast(
+            ChatCompletionImageUrlObject,
+            {k: v for k, v in content["image_url"].items() if k != "format"},
+        )
 
 
 def _azure_file_helper(content: ChatCompletionFileObject) -> None:
-    content.get("file", {}).pop("format", None)
+    content["file"] = cast(
+        ChatCompletionFileObjectFile,
+        {k: v for k, v in content.get("file", {}).items() if k != "format"},
+    )
 
 
 def convert_to_azure_openai_messages(

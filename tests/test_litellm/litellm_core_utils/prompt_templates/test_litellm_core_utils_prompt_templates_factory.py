@@ -298,8 +298,6 @@ def test_convert_to_azure_openai_messages():
 
 
 def test_convert_to_azure_openai_messages_strips_litellm_format_from_file_and_image():
-    """Managed file ids write file.format = MIME type, which Azure rejects"""
-
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_azure_openai_messages,
     )

@@ -310,7 +310,6 @@ class TestAzureToolSchemaCombinatorFlattening:
 
 
 def test_transform_request_strips_litellm_format_from_managed_file_id():
-    """update_messages_with_model_file_ids writes file.format = MIME type, which Azure rejects"""
     import base64
 
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
