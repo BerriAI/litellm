@@ -250,9 +250,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const loading = aggregatedLoading || paginatedResult.loading;
 
+  // Read through the same range stamp as the tiles, so the export is blocked from the first
+  // render of a new range rather than from whenever the fetch effect gets around to running.
   const spendFetchState = {
-    loading,
-    isFetchingMore: paginatedResult.isFetchingMore,
+    coversRange: activeAggregated !== null || paginatedResult.coversRange,
     cancelled: paginatedResult.cancelled,
     failed: paginatedResult.failed,
   };
