@@ -58,7 +58,12 @@ _JUDGE_SUBJECT_LABELS: Final[MappingProxyType[JudgeInputType, str]] = MappingPro
     {"request": "Latest request turn to evaluate", "response": "Assistant response to evaluate"}
 )
 
-_REQUEST_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call)
+_LIFECYCLE_HOOKS: Final[MappingProxyType[JudgeInputType, tuple[GuardrailEventHooks, ...]]] = MappingProxyType(
+    {
+        "request": (GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call, GuardrailEventHooks.logging_only),
+        "response": (GuardrailEventHooks.post_call, GuardrailEventHooks.logging_only),
+    }
+)
 
 _VALID_ON_FAILURE: Final = frozenset({"block", "log"})
 
@@ -316,12 +321,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             )
 
     def _event_type_for(self, input_type: JudgeInputType) -> GuardrailEventHooks | None:
-        """Returns None (log the configured mode as-is) when the active request hook is ambiguous."""
-        if self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
-            return GuardrailEventHooks.logging_only
-        if input_type == "response":
-            return GuardrailEventHooks.post_call
-        configured: Final = tuple(hook for hook in _REQUEST_EVENT_HOOKS if self._event_hook_is_event_type(hook))
+        configured: Final = tuple(hook for hook in _LIFECYCLE_HOOKS[input_type] if self._event_hook_is_event_type(hook))
         return configured[0] if len(configured) == 1 else None
 
 
