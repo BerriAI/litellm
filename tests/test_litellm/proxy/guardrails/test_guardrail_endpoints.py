@@ -683,6 +683,39 @@ async def test_provider_specific_params_includes_embedding_toggle():
 
 
 @pytest.mark.asyncio
+async def test_provider_specific_params_includes_bedrock_streaming_flags():
+    """The Add/Edit Guardrail form only submits params the endpoint advertises, so
+    the Bedrock streaming knobs must be listed or the UI cannot turn off
+    post_call buffering (LIT-7534)."""
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+    bedrock = provider_params["bedrock"]
+
+    assert bedrock["streaming_buffer_until_moderated"]["type"] == "boolean"
+    assert bedrock["streaming_buffer_until_moderated"]["default_value"] is True
+    assert bedrock["streaming_end_of_stream_only"]["type"] == "boolean"
+    assert bedrock["streaming_end_of_stream_only"]["default_value"] is False
+    assert bedrock["streaming_sampling_rate"]["type"] == "number"
+    assert bedrock["streaming_sampling_rate"]["default_value"] == 5
+
+
+@pytest.mark.asyncio
+async def test_provider_specific_params_optional_nested_children_not_required():
+    """The form validates every advertised field but never binds nested children,
+    so a required child under an optional `checks` block makes Save impossible
+    for any Bedrock guardrail that uses guardrailIdentifier instead."""
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+    checks = provider_params["bedrock"]["checks"]
+
+    assert checks["required"] is False
+    assert checks["fields"]["contentFilter"]["fields"]["categories"]["required"] is False
+    assert checks["fields"]["sensitiveInformation"]["fields"]["entities"]["required"] is False
+
+
+@pytest.mark.asyncio
 async def test_provider_specific_params_includes_hide_secrets():
     """hide-secrets lives in the enterprise package so it is not in
     guardrail_class_registry; the endpoint must still advertise it or the
