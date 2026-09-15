@@ -112,8 +112,8 @@ def _collect_rust(fixture: RouteFixture, route: GatewayRouteSpec) -> tuple[Funct
 
 @cache
 def _gateway_trace_binary() -> Path:
-    repo_root: Final = next(parent for parent in Path(__file__).resolve().parents if (parent / "litellm-rust").is_dir())
-    rust_root: Final = repo_root / "litellm-rust"
+    repo_root: Final = next(parent for parent in Path(__file__).resolve().parents if (parent / "Cargo.toml").is_file())
+    target_dir: Final = repo_root / "target"
     completed: Final = subprocess.run(
         (
             "cargo",
@@ -126,16 +126,16 @@ def _gateway_trace_binary() -> Path:
             "--bin",
             "trace-parity-gateway",
             "--target-dir",
-            rust_root / "target",
+            target_dir,
         ),
-        cwd=rust_root,
+        cwd=repo_root,
         capture_output=True,
         text=True,
         check=False,
     )
     if completed.returncode != 0:
         raise RuntimeError(f"Rust gateway trace build failed: {completed.stderr.strip()}")
-    return rust_root / "target" / "debug" / "trace-parity-gateway"
+    return target_dir / "debug" / "trace-parity-gateway"
 
 
 def _collect(

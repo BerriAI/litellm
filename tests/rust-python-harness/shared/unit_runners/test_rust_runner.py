@@ -30,11 +30,10 @@ def test_collects_and_runs_native_tests_and_propagates_failure(
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo is required for compiled inventory tests")
 def test_discovers_compiled_fully_qualified_tests(tmp_path: Path) -> None:
-    workspace: Final = tmp_path / "litellm-rust"
-    source: Final = workspace / "src"
+    source: Final = tmp_path / "src"
     external: Final = source / "ocr" / "external.rs"
     external.parent.mkdir(parents=True)
-    (workspace / "Cargo.toml").write_text(
+    (tmp_path / "Cargo.toml").write_text(
         '[package]\nname = "inventory-fixture"\nversion = "0.1.0"\nedition = "2021"\n[workspace]\n',
         encoding="utf-8",
     )
@@ -50,7 +49,7 @@ def test_discovers_compiled_fully_qualified_tests(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     external.write_text("#[test] fn same_name() {}\n", encoding="utf-8")
-    run_command(("cargo", "generate-lockfile", "--offline"), workspace)
+    run_command(("cargo", "generate-lockfile", "--offline"), tmp_path)
     target: Final = RustTarget(package="inventory-fixture", name="inventory_fixture", kind="lib")
     scope: Final = RustTestScope(target=target, modules=("ocr",))
 

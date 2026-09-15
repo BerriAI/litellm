@@ -141,7 +141,7 @@ docker run --rm -p 4001:4001 \
 
 ```bash
 # config.yaml mode — needs litellm importable in the active python env
-LITELLM_CONFIG_PATH=./crates/ai-gateway/config.yaml \
+LITELLM_CONFIG_PATH=./litellm-rust/crates/ai-gateway/config.yaml \
   cargo run --release -p litellm-ai-gateway --features server,python-config
 
 # env stand-in mode — no python, no config

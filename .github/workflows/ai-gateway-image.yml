@@ -9,6 +9,8 @@ on:
       - "litellm-proxy-extras/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/ai-gateway-image.yml"
   pull_request:
     branches:
@@ -23,6 +25,8 @@ on:
       - "litellm-proxy-extras/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/ai-gateway-image.yml"
 
 permissions:

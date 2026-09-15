@@ -1,17 +1,16 @@
 [workspace]
 members = [
-    "crates/core",
-    "crates/token-counter",
-    "crates/config",
-    "crates/ai-gateway",
-    "crates/python-interop",
-    "crates/python-bridge",
+    "litellm-rust/crates/core",
+    "litellm-rust/crates/token-counter",
+    "litellm-rust/crates/config",
+    "litellm-rust/crates/ai-gateway",
+    "litellm-rust/crates/python-interop",
+    "litellm-rust/crates/python-bridge",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
@@ -19,11 +18,11 @@ repository = "https://github.com/BerriAI/litellm"
 bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
-litellm-core = { path = "crates/core" }
-litellm-token-counter = { path = "crates/token-counter" }
-litellm-config = { path = "crates/config" }
-litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
-litellm-python-interop = { path = "crates/python-interop" }
+litellm-core = { path = "litellm-rust/crates/core" }
+litellm-token-counter = { path = "litellm-rust/crates/token-counter" }
+litellm-config = { path = "litellm-rust/crates/config" }
+litellm-ai-gateway = { path = "litellm-rust/crates/ai-gateway", default-features = false }
+litellm-python-interop = { path = "litellm-rust/crates/python-interop" }
 axum = "0.7"
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }

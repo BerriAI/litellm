@@ -21,6 +21,9 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -51,6 +54,9 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -71,9 +77,6 @@ jobs:
   rust-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: litellm-rust
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -88,8 +91,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            litellm-rust/target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'litellm-rust/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ github.job }}-
 
@@ -123,19 +126,16 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            litellm-rust/target
-          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'litellm-rust/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ github.job }}-
 
       - run: cargo test --workspace --locked
-        working-directory: litellm-rust
 
       - run: cargo test -p litellm-core --features bedrock-auth --locked
-        working-directory: litellm-rust
 
       - run: cargo test -p litellm-ai-gateway --features server --locked
-        working-directory: litellm-rust
 
       - run: uv build --wheel --out-dir dist
 

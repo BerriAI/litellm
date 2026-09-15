@@ -2,8 +2,7 @@
 #
 # Build context is the **repo root** so we can install `litellm` from this repo's
 # source (the gateway loads its model_list via litellm.proxy.read_model_list,
-# which is not in any PyPI release yet) AND build the rust workspace under
-# litellm-rust/.
+# which is not in any PyPI release yet) AND build the Rust workspace.
 #
 #   docker build -f litellm-rust/crates/ai-gateway/Dockerfile -t litellm-ai-gateway .
 #
@@ -21,8 +20,8 @@ ENV PYO3_PYTHON=python3.11
 # rustup reads rust-toolchain.toml from any parent of the working directory, so
 # copying it in is what keeps every cargo call below on the repo's pinned
 # channel rather than on whatever the base image happens to ship.
-COPY rust-toolchain.toml /build/rust-toolchain.toml
-WORKDIR /build/litellm-rust
+COPY rust-toolchain.toml Cargo.toml Cargo.lock /build/
+WORKDIR /build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3 python3-dev python3-pip pkg-config libssl-dev clang \
@@ -30,22 +29,24 @@ RUN apt-get update \
     && cargo install cargo-chef --locked --version 0.1.77
 
 # ---- Planner ----------------------------------------------------------------
-# Produce the dependency recipe from the rust workspace manifests + Cargo.lock.
+# Produce the dependency recipe from the Rust workspace manifests + Cargo.lock.
 FROM chef AS planner
-COPY litellm-rust/ .
+COPY litellm-rust/ /build/litellm-rust/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---- Builder ----------------------------------------------------------------
 FROM chef AS builder
 # Cook (compile) just the dependencies first — this layer is cached and reused
 # whenever only gateway source changes.
-COPY --from=planner /build/litellm-rust/recipe.json recipe.json
+COPY --from=planner /build/recipe.json recipe.json
 RUN cargo chef cook --locked --release \
         -p litellm-ai-gateway --features server,python-config \
         --recipe-path recipe.json
 # Now copy the real sources and build the gateway binary. Deps are already cooked
-# above, so this step only recompiles the gateway crate.
-COPY litellm-rust/ .
+# above, so this step only recompiles the gateway crate. The root manifest and
+# lockfile are re-copied because cook leaves its skeleton versions in place.
+COPY Cargo.toml Cargo.lock /build/
+COPY litellm-rust/ /build/litellm-rust/
 RUN cargo build --locked --release -p litellm-ai-gateway --bin litellm-ai-gateway --features server,python-config
 
 # The root pyproject builds with maturin against litellm-rust/crates/python-bridge,
@@ -87,7 +88,7 @@ RUN wheel="$(ls /tmp/wheels/litellm-*.whl)" \
 
 # The compiled gateway binary (pure-Rust realtime hot path; Python is load-time
 # only).
-COPY --from=builder /build/litellm-rust/target/release/litellm-ai-gateway /usr/local/bin/litellm-ai-gateway
+COPY --from=builder /build/target/release/litellm-ai-gateway /usr/local/bin/litellm-ai-gateway
 
 # Default config.yaml. A real deploy can override this (e.g. mount a Render
 # secret file at the same path) — never bake secrets into the image.
