@@ -2310,3 +2310,118 @@ def _s3_logger_for_region(region_name: str) -> S3Logger:
 )
 def test_build_object_url_uses_partition_dns_suffix(region_name: str, expected_url: str) -> None:
     assert _s3_logger_for_region(region_name)._build_object_url("2025-01-01/key.json") == expected_url
+
+
+def _element(payload: dict, key_suffix: str):
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    return s3BatchLoggingElement(
+        s3_object_key=f"2025-09-14/test-{key_suffix}.json",
+        payload=payload,
+        s3_object_download_filename=f"test-{key_suffix}.json",
+    )
+
+
+def _ok_response():
+    from unittest.mock import MagicMock
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    return response
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_bounds_concurrent_uploads():
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_concurrent_uploads=4,
+    )
+
+    in_flight = 0
+    peak = 0
+    put_calls = 0
+
+    async def fake_put(url, data=None, headers=None):
+        nonlocal in_flight, peak, put_calls
+        in_flight += 1
+        peak = max(peak, in_flight)
+        put_calls += 1
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return _ok_response()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = fake_put
+
+    logger.log_queue = [_element({"i": i}, f"{i}") for i in range(40)]
+
+    await logger.async_send_batch()
+
+    assert peak == 4
+    assert put_calls == 40
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_uploads_single_jsonl_file():
+    import json
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_batch_file_upload=True,
+    )
+
+    calls = []
+
+    async def fake_put(url, data=None, headers=None):
+        calls.append((url, data, headers))
+        return _ok_response()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = fake_put
+
+    payloads = [{"id": "req-1"}, {"id": "req-2"}, {"id": "req-3"}]
+    logger.log_queue = [_element(payload, f"{i}") for i, payload in enumerate(payloads)]
+
+    await logger.async_send_batch()
+
+    assert len(calls) == 1
+    url, data, headers = calls[0]
+    assert url.endswith(".jsonl")
+    assert [json.loads(line) for line in data.splitlines()] == payloads
+    assert headers["Content-Type"] == "application/x-ndjson"
+
+
+@pytest.mark.asyncio
+async def test_flush_queue_preserves_events_added_during_upload():
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    late_element = _element({"id": "late"}, "late")
+    appended = False
+
+    async def fake_put(url, data=None, headers=None):
+        nonlocal appended
+        if not appended:
+            appended = True
+            logger.log_queue.append(late_element)
+        return _ok_response()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = fake_put
+
+    logger.log_queue = [_element({"id": "first"}, "first")]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [late_element]
