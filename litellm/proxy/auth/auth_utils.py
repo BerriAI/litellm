@@ -326,6 +326,11 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # caller-supplied value is the same exfil shape as
     # ``aws_web_identity_token`` on the Bedrock path.
     "azure_ad_token",
+    # xAI SuperGrok OAuth token file. The xAI transformer reads
+    # ``xai_oauth_token_file`` and authenticates as that local account,
+    # so a caller-supplied path is the same credential-selector shape as
+    # ``aws_profile_name`` on the Bedrock path.
+    "xai_oauth_token_file",
     # Endpoint-targeting fields that retarget the outbound request or
     # an observability callback. An attacker-controlled value either
     # exfiltrates the request payload (incl. messages + admin-set

@@ -413,6 +413,29 @@ def _map_openai_exception(
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
             )
+        elif original_exception.status_code == 403:
+            from litellm.llms.xai.oauth import is_xai_spending_limit_error
+
+            if is_xai_spending_limit_error(
+                custom_llm_provider=custom_llm_provider,
+                status_code=original_exception.status_code,
+                error_str=error_str,
+            ):
+                raise RateLimitError(
+                    message=f"RateLimitError: {exception_provider} - {message}",
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                    response=getattr(original_exception, "response", None),
+                    litellm_debug_info=extra_information,
+                )
+            raise APIError(
+                status_code=original_exception.status_code,
+                message=f"APIError: {exception_provider} - {message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                request=getattr(original_exception, "request", None),
+                litellm_debug_info=extra_information,
+            )
         elif original_exception.status_code == 404:
             raise NotFoundError(
                 message=f"NotFoundError: {exception_provider} - {message}",
