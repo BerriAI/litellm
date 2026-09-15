@@ -150,6 +150,12 @@ impl From<crate::AuthError> for Error {
     }
 }
 
+impl From<litellm_auth_aws::Error> for Error {
+    fn from(error: litellm_auth_aws::Error) -> Self {
+        Self::from(crate::AuthError::from(error))
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
