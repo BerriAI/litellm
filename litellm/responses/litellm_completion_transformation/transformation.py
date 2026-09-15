@@ -2708,11 +2708,11 @@ class LiteLLMCompletionResponsesConfig:
                         OutputText(
                             type="output_text",
                             text=reasoning_text,
-                            annotations=[],
+                            annotations=[],  # mutable-ok: fresh annotations list
                         )
                     ]
                     if reasoning_text
-                    else []
+                    else []  # mutable-ok: empty reasoning block
                 )
                 message_content: Final[list] = [  # mutable-ok: fresh output list for the message item
                     *reasoning_block,
