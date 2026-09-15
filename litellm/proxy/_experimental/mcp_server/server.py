@@ -26,14 +26,13 @@ from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG, MCP_PEEKED_BODY_SCOPE_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-    MCP_PEEKED_BODY_SCOPE_KEY,
     MCPRequestHandler,
     _is_mcp_admitted_user_subject,
 )
@@ -3798,6 +3797,14 @@ if MCP_AVAILABLE:
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
+    def _peeked_json_object_body(body: bytes) -> bytes | None:
+        """The peeked bytes when they form a complete JSON-RPC object, else None so a
+        truncated prefix or a batch array fails closed and stays budget-enforced."""
+        try:
+            return body if isinstance(json.loads(body), dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+
     def _is_initialize_request(body: bytes) -> bool:
         """
         Check if the request body is a JSON-RPC initialize method.
@@ -4390,24 +4397,22 @@ if MCP_AVAILABLE:
         """Handle MCP requests through StreamableHTTP."""
         try:
             path: Final[str] = scope.get("path", "")
-            consumed_messages: list[Message] = []
+            consumed_messages: list[Message] = []  # mutable-ok: replay buffer for peeked ASGI messages
             body = b""
             if scope.get("method") == "POST":
                 consumed_messages, body = await _read_request_body_for_routing(receive)
                 if consumed_messages:
                     original_receive: Final = receive
 
-                    async def wrapped_receive():
+                    async def wrapped_receive() -> Message:
                         if consumed_messages:
                             return consumed_messages.pop(0)
                         return await original_receive()
 
-                    receive = wrapped_receive
-                try:
-                    if isinstance(json.loads(body), dict):
-                        scope[MCP_PEEKED_BODY_SCOPE_KEY] = body
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                    receive = wrapped_receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
+                peeked_object_body: Final = _peeked_json_object_body(body)
+                if peeked_object_body is not None:
+                    scope[MCP_PEEKED_BODY_SCOPE_KEY] = peeked_object_body
             is_initialize: Final = _is_initialize_request(body)
             (
                 user_api_key_auth,

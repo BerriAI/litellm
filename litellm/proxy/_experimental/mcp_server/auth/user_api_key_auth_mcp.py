@@ -13,6 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_PEEKED_BODY_SCOPE_KEY
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
@@ -67,8 +68,6 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
-MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
-
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 
 
@@ -78,7 +77,7 @@ def _admission_request(scope: Scope) -> Request:
     request: Final = Request(scope=scope)
     peeked_body: Final[bytes] = scope.get(MCP_PEEKED_BODY_SCOPE_KEY, b"{}")
 
-    async def mock_body():
+    async def mock_body() -> bytes:
         return peeked_body
 
     request.body = mock_body

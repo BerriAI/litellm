@@ -2161,8 +2161,8 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
     send = AsyncMock()
     stateless_called = []
 
-    async def stateless_handle(s, r, se):
-        stateless_called.append(1)
+    async def stateless_handle(s, r, se) -> None:
+        stateless_called.append(1)  # mutable-ok: records the manager the handler dispatched to
 
     with (
         patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
