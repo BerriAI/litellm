@@ -182,6 +182,7 @@ dev = [
     "hypothesis==6.165.10",
     "reportlab==5.0.1",
     "basedpyright==1.39.7",
+    "mypy==1.20.1",
     "keyring==25.7.0",
     "pytest==9.0.3",
     "tomli==2.4.1; python_version < '3.11'",

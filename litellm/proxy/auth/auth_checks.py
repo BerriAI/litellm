@@ -39,6 +39,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -109,7 +110,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import RowT_co
+from litellm.repositories.prisma_protocols import DatabaseClient, RowT_co
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -855,6 +856,7 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
         "/health",
         "/health/services",
         "/health/test_connection",
+        "/auto_router/test_routing",
     }
 )
 
@@ -3180,7 +3182,7 @@ async def _delete_cache_access_object(
 @log_db_metrics
 async def get_access_object(
     access_group_id: str,
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> LiteLLM_AccessGroupTable:
@@ -3926,7 +3928,7 @@ async def get_org_object(
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
-    prisma_client: PrismaClient | None = None,
+    prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> list[str]:
@@ -3984,7 +3986,7 @@ async def _get_resources_from_access_groups(
 
 async def _get_models_from_access_groups(
     access_group_ids: Sequence[str],
-    prisma_client: PrismaClient | None = None,
+    prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> list[str]:
@@ -4483,6 +4485,7 @@ async def can_key_call_model(
     llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
+    prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -4512,6 +4515,7 @@ async def can_key_call_model(
         if key_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=key_access_group_ids,
+                prisma_client=prisma_client,
             )
             if models_from_groups:
                 return _can_object_call_model(
@@ -4640,6 +4644,7 @@ async def can_team_access_model(
     team_object: LiteLLM_TeamTable | None,
     llm_router: Router | None,
     team_model_aliases: dict[str, str] | None = None,
+    prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -4662,12 +4667,13 @@ async def can_team_access_model(
         if team_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
+                prisma_client=prisma_client,
             )
             if models_from_groups:
                 return _can_object_call_model(
                     model=model,
                     llm_router=llm_router,
-                    models=models_from_groups,
+                    models=list(dict.fromkeys([*(team_object.models if team_object else []), *models_from_groups])),
                     team_model_aliases=team_model_aliases,
                     team_id=team_object.team_id if team_object else None,
                     object_type="team",
@@ -4757,7 +4763,7 @@ async def _key_access_group_grants_model(
 
 def can_project_access_model(
     model: str | list[str],
-    project_object: LiteLLM_ProjectTableCachedObj,
+    project_object: LiteLLM_ProjectTable,
     llm_router: Router | None,
 ) -> Literal[True]:
     """
