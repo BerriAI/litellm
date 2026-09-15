@@ -4166,7 +4166,10 @@ async def info_key_fn(
 
     Returns:
     - key: str - The key that was looked up, echoed back as it was passed in
-    - info: dict - The key's row, minus the hashed token
+    - info: dict - The key's row, minus the hashed token. Deleted keys are served from the
+      LiteLLM_DeletedVerificationToken archive and carry deleted_at / deleted_by
+        - status: "active" | "expired" | "revoked" | "deleted" - Derived from blocked, expires and
+          whether the row came from the archive
         - key_alias: str | None - User-friendly key alias
         - spend: float - Amount spent by the key. When budget_duration is set this covers only the
           current budget window, not the key's lifetime
@@ -4220,9 +4223,14 @@ async def info_key_fn(
         hashed_key: str | None = key
         if key is not None:
             hashed_key = _hash_token_if_needed(token=key)
-        key_info = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
+        live_key_info: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
             where={"token": hashed_key},
             include={"litellm_budget_table": True},
+        )
+        key_info: Final = (
+            live_key_info
+            if live_key_info is not None
+            else await _find_deleted_key_info(prisma_client=prisma_client, hashed_key=hashed_key)
         )
         if key_info is None:
             raise ProxyException(
@@ -4231,7 +4239,6 @@ async def info_key_fn(
                 param="key",
                 code=status.HTTP_404_NOT_FOUND,
             )
-
         if (
             await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
@@ -4245,36 +4252,44 @@ async def info_key_fn(
                 detail=f"You are not allowed to access this key's info. Your role={user_api_key_dict.user_role}",
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
-        try:
-            key_info = key_info.model_dump()
-        except Exception:
-            # if using pydantic v1
-            key_info = key_info.dict()  # pyright: ignore[reportDeprecated]  # deliberate pydantic v1 fallback
-        key_token_hash: Final[str | None] = key_info.pop("token")
+        key_info_dict: Final = key_info.model_dump()
+        key_token_hash: Final[str | None] = key_info_dict.pop("token")
+        key_info_dict["status"] = (
+            "deleted" if live_key_info is None else _derive_key_status(key_info_dict, now=datetime.now(timezone.utc))
+        )
 
-        model_max_budget = key_info.get("model_max_budget") or {}
-        budget_table: Final = key_info.get("litellm_budget_table") or {}
+        model_max_budget = key_info_dict.get("model_max_budget") or {}
+        budget_table: Final = key_info_dict.get("litellm_budget_table") or {}
         if not model_max_budget and isinstance(budget_table, dict):
             model_max_budget = budget_table.get("model_max_budget") or {}
         if model_max_budget and key_token_hash:
-            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
+            key_info_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
                 api_key_hash=key_token_hash,
                 model_max_budget=model_max_budget,
                 user_api_key_cache=model_max_budget_limiter.dual_cache,
             )
         budget_limits_usage: Final = await _build_budget_limits_usage(
-            budget_limits=key_info.get("budget_limits"),
+            budget_limits=key_info_dict.get("budget_limits"),
             api_key_hash=key_token_hash,
         )
         if budget_limits_usage is not None:
-            key_info["budget_limits_usage"] = budget_limits_usage
+            key_info_dict["budget_limits_usage"] = budget_limits_usage
 
-        # Attach object_permission if object_permission_id is set
-        key_info = await attach_object_permission_to_dict(key_info, prisma_client)
-
-        return {"key": key, "info": key_info}
+        return {"key": key, "info": await attach_object_permission_to_dict(key_info_dict, prisma_client)}
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+async def _find_deleted_key_info(
+    prisma_client: PrismaClient, hashed_key: str | None
+) -> LiteLLM_DeletedVerificationToken | None:
+    archived_row: Final = await _deleted_verification_token_table(prisma_client).find_first(
+        where={"token": hashed_key},
+        order={"deleted_at": "desc"},
+    )
+    if archived_row is None:
+        return None
+    return LiteLLM_DeletedVerificationToken.model_validate(archived_row.model_dump())
 
 
 def _check_model_access_group(models: list[str] | None, llm_router: Router | None, premium_user: bool) -> Literal[True]:
@@ -6216,6 +6231,25 @@ async def get_member_team_ids(
 
 VALID_EXPIRES_FILTER_VALUES: Final = frozenset({"active", "expired"})
 
+KeyStatus = Literal["active", "expired", "revoked", "deleted"]
+VALID_STATUS_FILTER_VALUES: Final[frozenset[KeyStatus]] = frozenset({"active", "expired", "revoked", "deleted"})
+
+
+class _KeyStatusSource(BaseModel):
+    blocked: bool | None = None
+    expires: datetime | None = None
+
+
+def _derive_key_status(row: Mapping[str, object], now: datetime) -> KeyStatus:
+    """Status of a live key row; mirrors the partition `_build_status_where_clause` applies at query time."""
+    source: Final = _KeyStatusSource.model_validate(row)
+    if source.blocked is True:
+        return "revoked"
+    if source.expires is None:
+        return "active"
+    expires_utc: Final = source.expires if source.expires.tzinfo else source.expires.replace(tzinfo=timezone.utc)
+    return "expired" if expires_utc < now else "active"
+
 
 @router.get(
     "/key/list",
@@ -6252,7 +6286,10 @@ async def list_keys(
     ),
     sort_order: str = Query(default="desc", description="Sort order ('asc' or 'desc')"),
     expand: list[str] | None = Query(None, description="Expand related objects (e.g. 'user')"),
-    status: str | None = Query(None, description="Filter by status (e.g. 'deleted')"),
+    status: str | None = Query(
+        None,
+        description="Filter by status: 'active' (not blocked, not expired), 'expired' (not blocked, past expiry), 'revoked' (blocked) or 'deleted' (archived keys). Omit to return live keys regardless of status.",
+    ),
     project_id: str | None = Query(None, description="Filter keys by project ID"),
     access_group_id: str | None = Query(None, description="Filter keys by access group ID"),
     agent_id: str | None = Query(None, description="Filter keys by agent ID"),
@@ -6270,7 +6307,9 @@ async def list_keys(
 
     Parameters:
         expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
-        status: Optional[str] - Filter by status. Currently supports "deleted" to query deleted keys.
+        status: Optional[str] - Filter by status: "active", "expired", "revoked" (blocked) or "deleted".
+        "deleted" reads the LiteLLM_DeletedVerificationToken archive; the other values partition the
+        live key table, so every live key matches exactly one of them.
 
     Returns:
         {
@@ -6292,11 +6331,10 @@ async def list_keys(
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
-        # Validate status parameter
-        if status is not None and status != "deleted":
+        if status is not None and status not in VALID_STATUS_FILTER_VALUES:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "Invalid status value. Currently only 'deleted' is supported."},
+                detail={"error": "Invalid status value. Supported: 'active', 'expired', 'revoked', 'deleted'."},
             )
 
         if isinstance(expires, str) and expires not in VALID_EXPIRES_FILTER_VALUES:
@@ -6608,6 +6646,23 @@ def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str,
     return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
 
 
+def _not_blocked_where_clause() -> dict[str, object]:
+    return {"OR": [{"blocked": None}, {"blocked": False}]}
+
+
+def _build_status_where_clause(status_filter: str | None, now: datetime) -> dict[str, object] | None:
+    """Live-table clause for a status filter; None when the status needs no clause (deleted rows live elsewhere)."""
+    match status_filter:
+        case "revoked":
+            return {"blocked": True}
+        case "expired":
+            return {"AND": [_not_blocked_where_clause(), _build_expires_where_clause("expired", now)]}
+        case "active":
+            return {"AND": [_not_blocked_where_clause(), _build_expires_where_clause("active", now)]}
+        case _:
+            return None
+
+
 def _build_key_search_where(search: str) -> KeySearchWhere:
     search_where: Final[KeySearchWhere] = {
         "OR": (
@@ -6635,6 +6690,7 @@ def _build_key_filter_conditions(
     use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
+    status_filter: str | None = None,
 ) -> Mapping[str, object]:
     """Build filter conditions for key listing.
 
@@ -6724,6 +6780,8 @@ def _build_key_filter_conditions(
 
     # Apply team_id, project_id and access_group_id as global AND filters so they
     # narrow results across all visibility conditions (own keys, team keys, etc.)
+    now: Final = datetime.now(timezone.utc)
+    status_where: Final = _build_status_where_clause(status_filter, now)
     global_filters: Final[tuple[Mapping[str, object], ...]] = (
         *(
             (
@@ -6741,10 +6799,11 @@ def _build_key_filter_conditions(
         *(({"access_group_ids": {"hasSome": [access_group_id]}},) if access_group_id else ()),
         *(({"agent_id": agent_id},) if agent_id and isinstance(agent_id, str) else ()),
         *(
-            (_build_expires_where_clause(expires_filter, datetime.now(timezone.utc)),)
+            (_build_expires_where_clause(expires_filter, now),)
             if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES
             else ()
         ),
+        *((status_where,) if status_where is not None else ()),
     )
     combined_where: Final[Mapping[str, object]] = {"AND": [where, *global_filters]} if global_filters else where
     verbose_proxy_logger.debug("Filter conditions: %s", combined_where)
@@ -6817,6 +6876,7 @@ async def _list_key_helper(
         use_key_alias_substring_matching=use_key_alias_substring_matching,
         expires_filter=expires_filter,
         search=search,
+        status_filter=status,
     )
 
     # Calculate skip for pagination

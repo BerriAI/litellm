@@ -6018,6 +6018,224 @@ async def test_list_keys_with_invalid_status():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_filter", ["active", "expired", "revoked"])
+async def test_list_keys_accepts_live_status_filters(monkeypatch, status_filter):
+    """LIT-1650: /key/list used to 400 on every status but "deleted"; the live statuses reach the helper."""
+    from unittest.mock import Mock
+
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    helper = AsyncMock(return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    monkeypatch.setattr(key_management_endpoints, "_list_key_helper", helper)
+    await key_management_endpoints.list_keys(
+        request=Mock(),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        status=status_filter,
+    )
+
+    assert helper.await_args is not None
+    assert helper.await_args.kwargs["status"] == status_filter
+
+
+def _status_filter_where(status_filter: str | None) -> Mapping[str, object]:
+    from litellm.proxy.management_endpoints.key_management_endpoints import _build_key_filter_conditions
+
+    return _build_key_filter_conditions(
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        status_filter=status_filter,
+    )
+
+
+def test_build_key_filter_conditions_status_filter_partitions_live_keys():
+    """LIT-1650: active, expired and revoked are disjoint predicates over blocked + expires on the live table."""
+    not_blocked = {"OR": [{"blocked": None}, {"blocked": False}]}
+
+    revoked_where = _status_filter_where("revoked")
+    assert {"blocked": True} in revoked_where["AND"]
+
+    expired_clause = next(clause for clause in _status_filter_where("expired")["AND"] if "AND" in clause)
+    assert expired_clause["AND"][0] == not_blocked
+    assert expired_clause["AND"][1]["AND"][0] == {"expires": {"not": None}}
+    assert "lt" in expired_clause["AND"][1]["AND"][1]["expires"]
+
+    active_clause = next(clause for clause in _status_filter_where("active")["AND"] if "AND" in clause)
+    assert active_clause["AND"][0] == not_blocked
+    assert active_clause["AND"][1]["OR"][0] == {"expires": None}
+    assert "gte" in active_clause["AND"][1]["OR"][1]["expires"]
+
+
+def test_build_key_filter_conditions_deleted_status_adds_no_live_clause():
+    """Deleted rows live in the archive table, so the status must not narrow the live-table query."""
+    assert _status_filter_where("deleted") == _status_filter_where(None)
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper_revoked_status_filters_live_table_on_blocked():
+    """LIT-1650: status="revoked" stays on the live table and narrows it to blocked keys."""
+    mock_prisma_client = AsyncMock()
+    mock_find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    await _list_key_helper(
+        prisma_client=mock_prisma_client,
+        page=1,
+        size=50,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        return_full_object=True,
+        admin_team_ids=None,
+        include_created_by_keys=False,
+        status="revoked",
+    )
+
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_many.assert_not_called()
+    where = mock_find_many.call_args.kwargs["where"]
+    assert {"blocked": True} in where["AND"]
+
+
+def _archived_key_row(token: str, user_id: str) -> MagicMock:
+    row = MagicMock()
+    row.model_dump.return_value = {
+        "id": "archive-row-1",
+        "token": token,
+        "key_alias": "finops-2024",
+        "user_id": user_id,
+        "team_id": None,
+        "blocked": None,
+        "deleted_at": datetime(2024, 11, 15, 10, 0, tzinfo=timezone.utc),
+        "deleted_by": "admin-1",
+    }
+    return row
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_serves_deleted_key_from_archive(monkeypatch):
+    """LIT-1650: /key/info falls back to LiteLLM_DeletedVerificationToken and reports status="deleted"."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    hashed = "hashed_deleted_token"
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(
+        return_value=_archived_key_row(hashed, "user-x")
+    )
+
+    result = await info_key_fn(
+        key=hashed,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
+    )
+
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_first.assert_awaited_once()
+    assert mock_prisma_client.db.litellm_deletedverificationtoken.find_first.await_args.kwargs["where"] == {
+        "token": hashed
+    }
+    info = result["info"]
+    assert info["status"] == "deleted"
+    assert info["key_alias"] == "finops-2024"
+    assert info["deleted_by"] == "admin-1"
+    assert info["deleted_at"] is not None
+    assert "token" not in info
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_archived_key_keeps_owner_authorization(monkeypatch):
+    """An archived key is still scoped: a different internal user gets 403, the owner gets the record."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    hashed = "hashed_deleted_token"
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(
+        return_value=_archived_key_row(hashed, "owner-1")
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await info_key_fn(
+            key=hashed,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, user_id="someone-else", api_key="sk-other"
+            ),
+        )
+    assert exc_info.value.code == "403"
+
+    owner_result = await info_key_fn(
+        key=hashed,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="owner-1", api_key="sk-own"),
+    )
+    assert owner_result["info"]["status"] == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_unknown_key_still_404s(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await info_key_fn(
+            key="hashed_missing",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
+        )
+    assert exc_info.value.code == "404"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocked", "expires", "expected_status"),
+    [
+        (True, None, "revoked"),
+        (True, "2020-01-01T00:00:00Z", "revoked"),
+        (False, "2020-01-01T00:00:00Z", "expired"),
+        (None, datetime(2020, 1, 1, tzinfo=timezone.utc), "expired"),
+        (False, None, "active"),
+        (None, "2999-01-01T00:00:00Z", "active"),
+    ],
+)
+async def test_info_key_fn_reports_live_key_status(monkeypatch, blocked, expires, expected_status):
+    """LIT-1650: live keys carry the same status vocabulary /key/list filters on."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    live_row = MagicMock(spec=LiteLLM_VerificationToken)
+    live_row.model_dump.return_value = {
+        "token": "hashed_live",
+        "user_id": "user-x",
+        "team_id": None,
+        "object_permission_id": None,
+        "blocked": blocked,
+        "expires": expires,
+    }
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=live_row)
+
+    result = await info_key_fn(
+        key="hashed_live",
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
+    )
+
+    assert result["info"]["status"] == expected_status
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_list_keys_non_admin_user_id_auto_set():
     """
     Test that when a non-admin user calls list_keys with user_id=None,
