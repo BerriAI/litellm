@@ -41,6 +41,11 @@ def _make_response_with_citations() -> ModelResponse:
 
 @pytest.mark.parametrize("cache_type", ["local", "disk"])
 def test_cache_round_trip_preserves_provider_specific_fields(cache_type, tmp_path):
+    if cache_type == "disk":
+        # DiskCache is an optional extra (`litellm[caching]`); the default CI
+        # test environment does not install it, so exercise that path only
+        # where the dependency is present.
+        pytest.importorskip("diskcache")
     litellm.cache = Cache(type=cache_type, disk_cache_dir=str(tmp_path / "litellm_cache"))
     try:
         kwargs = {
