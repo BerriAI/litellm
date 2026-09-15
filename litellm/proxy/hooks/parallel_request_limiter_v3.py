@@ -396,6 +396,8 @@ CacheCounterValue: TypeAlias = int | float | str | bytes
 
 CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 
+ReservationWindowIdentity: TypeAlias = tuple[str, str, Literal["redis", "local"]]
+
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
 
 
@@ -542,6 +544,7 @@ class RequestRateLimiterStash:
         default_factory=frozenset
     )
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
+    batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
 
 
@@ -683,6 +686,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._batch_rate_limiter = _PROXY_BatchRateLimiter(
                     internal_usage_cache=self.internal_usage_cache,
                     parallel_request_limiter=self,
+                    time_provider=self._time_provider,
                 )
             except Exception as e:
                 verbose_proxy_logger.debug("Could not load batch rate limiter: %s", e)
@@ -1823,6 +1827,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         applied: Final[list[list[AtomicCounterMeta]]] = []
         statuses: Final[list[RateLimitStatus]] = []
+        reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         raw: list[CacheCounterValue]
 
         for _idx, (keys, args, meta) in enumerate(descriptor_groups):
@@ -1860,11 +1865,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return response
             applied.append(meta)
             statuses.extend(response["statuses"])
+            reservation_windows.update(response.get("reservation_windows", frozenset()))
 
         return RateLimitResponse(
             overall_code="OK",
             statuses=statuses,
-            reservation_windows=frozenset(),
+            reservation_windows=frozenset(reservation_windows),
         )
 
     async def _refund_applied_descriptor_groups(
@@ -4823,6 +4829,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.batch_enqueued_reservation = None
+
+            if stash.batch_tpd_refund_ops:
+                await self.async_increment_reservation_aware_tokens(
+                    pipeline_operations=stash.batch_tpd_refund_ops,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                stash.batch_tpd_refund_ops = ()
 
             if stash.reservation_released:
                 return

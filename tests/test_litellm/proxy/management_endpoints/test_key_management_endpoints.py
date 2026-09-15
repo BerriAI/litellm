@@ -475,6 +475,28 @@ async def test_key_expiration_exact_duration_hours(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_persists_tpd_limit(monkeypatch):
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+    )
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    data_json = GenerateKeyRequest(tpd_limit=250000, rpm_limit=5).model_dump(exclude_none=True)
+    response = await generate_key_helper_fn(request_type="key", **data_json, table_name="key")
+
+    assert response["tpd_limit"] == 250000
+    key_insert = mock_prisma_client.insert_data.await_args_list[-1].kwargs
+    assert key_insert["table_name"] == "key"
+    assert key_insert["data"]["tpd_limit"] == 250000
+    assert key_insert["data"]["rpm_limit"] == 5
+
+
+@pytest.mark.asyncio
 async def test_key_generation_with_object_permission(monkeypatch):
     """Ensure /key/generate correctly handles `object_permission` input by
     1. Creating a record in litellm_objectpermissiontable
@@ -1821,6 +1843,18 @@ async def test_update_key_enable_prompt_caching_folds_into_metadata(flag_value):
 
     assert updated["metadata"]["enable_prompt_caching"] is flag_value
     assert "enable_prompt_caching" not in {k for k in updated if k != "metadata"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tpd_limit", [250000, None])
+async def test_update_key_writes_tpd_limit_as_a_column(tpd_limit):
+    data = UpdateKeyRequest(key="sk-1", tpd_limit=tpd_limit)
+    existing_key = LiteLLM_VerificationToken(token="hashed", tpd_limit=1)
+
+    updated = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+    assert updated["tpd_limit"] == tpd_limit
+    assert "rpm_limit" not in updated
 
 
 @pytest.mark.asyncio

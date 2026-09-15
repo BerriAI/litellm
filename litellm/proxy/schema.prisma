@@ -17,6 +17,7 @@ model LiteLLM_BudgetTable {
   max_parallel_requests Int?
   tpm_limit     BigInt?
   rpm_limit     BigInt?
+  tpd_limit     BigInt?
   model_max_budget Json?
   budget_duration String?
   budget_reset_at DateTime?
@@ -133,6 +134,7 @@ model LiteLLM_TeamTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    tpd_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
     blocked Boolean @default(false)
@@ -203,6 +205,7 @@ model LiteLLM_DeletedTeamTable {
     max_parallel_requests   Int?
     tpm_limit               BigInt?
     rpm_limit               BigInt?
+    tpd_limit               BigInt?
     budget_duration         String?
     budget_reset_at         DateTime?
     blocked                 Boolean  @default(false)
@@ -438,6 +441,7 @@ model LiteLLM_VerificationToken {
     blocked Boolean?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    tpd_limit     BigInt?
     max_budget Float?    
     budget_duration String? 
     budget_reset_at DateTime?
@@ -534,6 +538,7 @@ model LiteLLM_DeletedVerificationToken {
     blocked                 Boolean?
     tpm_limit               BigInt?
     rpm_limit               BigInt?
+    tpd_limit               BigInt?
     max_budget              Float?
     budget_duration         String?
     budget_reset_at         DateTime?
