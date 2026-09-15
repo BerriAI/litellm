@@ -697,8 +697,6 @@ async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monke
 
 @pytest.mark.asyncio
 async def test_converted_stream_cache_hit_replayed_as_plain_object_logs_at_hit_time(monkeypatch):
-    """A converted-stream Anthropic Messages request that hits a non-stream cache entry gets a plain dict back,
-    so the success callbacks must fire now; nothing else will fire them."""
     import litellm
     from litellm.caching.caching import Cache
     from litellm.types.utils import CallTypes
