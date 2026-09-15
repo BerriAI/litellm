@@ -59,6 +59,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_membership,
     get_team_object,
     get_user_object,
+    is_mcp_discovery_request,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
     resolve_and_validate_end_user_id,
@@ -1657,8 +1658,8 @@ async def _user_api_key_auth_builder(
                         llm_router=llm_router,
                         team_id=valid_token.team_id,
                     )
-                    skip_budget_checks = False
-                    if model is not None and llm_router is not None:
+                    skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
+                    if not skip_budget_checks and model is not None and llm_router is not None:
                         from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                         skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
@@ -2098,8 +2099,8 @@ async def _user_api_key_auth_builder(
                 llm_router=llm_router,
                 team_id=valid_token.team_id,
             )
-            skip_budget_checks = False
-            if model is not None and llm_router is not None:
+            skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
+            if not skip_budget_checks and model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
                 skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
