@@ -4,6 +4,7 @@ import base64
 import hashlib
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Final, cast
 
 import pytest
@@ -13,9 +14,10 @@ from botocore.session import get_session
 from botocore.stub import ANY, Stubber
 from capture_policy import ScenarioIdentity, ScenarioOutcome
 from capture_publication import ObjectClient, PointerClient, SnapshotPointer, SnapshotRepository
-from capture_snapshot import CaptureProvenance, ScenarioSnapshot, SnapshotFailure
-from fixture_bundle import Interaction, Manifest, RecordedHttpResponse, RecordedRequest
+from capture_snapshot import CaptureProvenance, ScenarioSnapshot, SnapshotFailure, materialize_snapshot
+from fixture_bundle import Interaction, Manifest, RecordedRequest
 from fixture_profile import StrictIdentity, strict_identity
+from test_provider_capture import successful_response
 
 NOW: Final = datetime(2031, 4, 5, tzinfo=timezone.utc)
 IDENTITY: Final = ScenarioIdentity("test_example.py::test_one", "a" * 64, "synthetic")
@@ -43,9 +45,7 @@ def snapshot_content() -> bytes:
                     request=RecordedRequest(
                         method="post", path="/openai/v1/chat/completions", headers={}, strict_identity=request
                     ),
-                    response=RecordedHttpResponse(
-                        status_code=200, headers={}, body_b64=base64.b64encode(b'{"answer":"blue"}').decode()
-                    ),
+                    response=successful_response(),
                 ),
             ),
             provenance=CaptureProvenance(
@@ -166,3 +166,20 @@ class TestConditionalPublication:
             assert isinstance(result, SnapshotFailure)
             s3.assert_no_pending_responses()
             dynamo.assert_no_pending_responses()
+
+
+def test_materialization_write_failure_removes_partial_bundle_and_can_retry(tmp_path: Path) -> None:
+    snapshot = ScenarioSnapshot.model_validate_json(snapshot_content())
+    first = snapshot.interactions[0]
+    # Force a real filesystem failure after the manifest and first interaction were written.
+    bad_request = first.request.model_copy(update={"method": "x" * 300})
+    broken = snapshot.model_copy(update={"interactions": (first, first.model_copy(update={"request": bad_request}))})
+    destination = tmp_path / "snapshot"
+    with pytest.raises(OSError, match="File name too long"):
+        materialize_snapshot(broken, destination)
+    assert not destination.exists()
+    materialize_snapshot(snapshot, destination)
+    assert len(list(destination.rglob("*.json"))) == 2
+    with pytest.raises(FileExistsError):
+        materialize_snapshot(snapshot, destination)
+    assert len(list(destination.rglob("*.json"))) == 2

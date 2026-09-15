@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -121,6 +122,14 @@ def refresh_due(snapshot: ScenarioSnapshot, *, now: datetime) -> bool:
 
 def materialize_snapshot(snapshot: ScenarioSnapshot, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=False)
+    try:
+        _write_snapshot(snapshot, destination)
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
+
+
+def _write_snapshot(snapshot: ScenarioSnapshot, destination: Path) -> None:
     (destination / "manifest.json").write_text(snapshot.manifest.model_dump_json(), encoding="utf-8")
     scenario_dir: Final = destination / slug_for_test(canonical_scenario_id(snapshot.identity.node))
     scenario_dir.mkdir()

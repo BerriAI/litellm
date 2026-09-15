@@ -124,7 +124,53 @@ def _json_error(body: bytes, *, streaming: bool = False) -> str | None:
         return "provider response did not complete"
     if streaming and value.get("usage") is None:
         return None
-    return _usage_error(value["usage"]) if "usage" in value else None
+    usage_error: Final = _usage_error(value["usage"]) if "usage" in value else None
+    if usage_error is not None or streaming:
+        return usage_error
+    return _completion_error(value)
+
+
+def _completion_error(value: dict[str, JsonValue]) -> str | None:
+    if not all(isinstance(value.get(key), str) and value[key] for key in ("id", "model")):
+        return "completion lacks provider identity"
+    usage: Final = value.get("usage")
+    if not isinstance(usage, dict):
+        return "completion lacks token usage"
+    if value.get("object") == "chat.completion":
+        choices: Final = value.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+            return "completion requires exactly one choice"
+        choice: Final = choices[0]
+        message: Final = choice.get("message")
+        if (
+            type(choice.get("index")) is not int
+            or choice["index"] != 0
+            or choice.get("finish_reason") != "stop"
+            or not isinstance(message, dict)
+            or message.get("role") != "assistant"
+            or not isinstance(message.get("content"), str)
+        ):
+            return "completion lacks a finished assistant message"
+        if not all(key in usage for key in ("prompt_tokens", "completion_tokens", "total_tokens")):
+            return "completion lacks token usage"
+        return None
+    if value.get("type") == "message":
+        content: Final = value.get("content")
+        if (
+            value.get("role") != "assistant"
+            or value.get("stop_reason") not in ("end_turn", "stop_sequence")
+            or not isinstance(content, list)
+            or not content
+            or any(
+                not isinstance(block, dict) or block.get("type") != "text" or not isinstance(block.get("text"), str)
+                for block in content
+            )
+        ):
+            return "completion lacks finished message content"
+        if not all(key in usage for key in ("input_tokens", "output_tokens")):
+            return "completion lacks token usage"
+        return None
+    return "unsupported completion response"
 
 
 def _stream_error(response: RecordedStreamedResponse) -> str | None:

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import threading
+from collections.abc import Generator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,7 +36,7 @@ from fixture_bundle import (
 )
 from fixture_mode import current_test_key
 from provider_edge import REPLAY_MISS_STATUS, RecordEdge, ReplayEdge, ReplaySource, _persist
-from test_provider_edge import CHAT_PATH, call_edge, fake_provider, provider_url, running_edge
+from test_provider_edge import CHAT_PATH, call_edge, provider_url, running_edge
 
 
 @dataclass
@@ -59,8 +63,61 @@ class ScriptedReservations:
         return None
 
 
+def completion_payload(text: str = "blue") -> bytes:
+    return json.dumps(
+        {
+            "id": "chatcmpl-synthetic",
+            "object": "chat.completion",
+            "model": "synthetic",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        }
+    ).encode()
+
+
 def successful_response() -> RecordedHttpResponse:
-    return RecordedHttpResponse(status_code=200, headers={}, body_b64=base64.b64encode(b'{"answer":"blue"}').decode())
+    return RecordedHttpResponse(status_code=200, headers={}, body_b64=base64.b64encode(completion_payload()).decode())
+
+
+class CompletionProvider(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), CompletionHandler)
+        self.hits: list[str] = []
+
+
+class CompletionHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("content-length", "0")
+        self.end_headers()
+
+    def do_POST(self) -> None:
+        assert isinstance(self.server, CompletionProvider)
+        self.rfile.read(int(self.headers.get("content-length", "0")))
+        self.server.hits.append(self.path)
+        payload = completion_payload()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@contextmanager
+def fake_provider() -> Generator[CompletionProvider]:
+    with CompletionProvider() as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 class TestBoundedCapture:
@@ -143,7 +200,7 @@ class TestScenarioIdentity:
 
     @pytest.mark.parametrize("node", ["", "test_cache.py", "../test_cache.py::test_hit", "x/../test.py::test_hit"])
     def test_invalid_scenario_ids_are_rejected(self, node: str) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="scenario must name an E2E test node"):
             canonical_scenario_id(node)
 
     def test_contract_and_profile_change_identity_but_candidate_revision_does_not_key_it(self) -> None:
@@ -350,7 +407,7 @@ def test_persist_must_reach_disk_before_success(tmp_path: Path, disk_failure: bo
     request: Final = RecordedRequest(method="post", path="/openai/v1/chat/completions", headers={})
     assert session.before_attempt() is None
     if disk_failure:
-        with pytest.raises(OSError):
+        with pytest.raises(OSError, match=r"Not a directory|File exists"):
             _persist(backend, session.identity.node, request, successful_response())
     else:
         _persist(backend, session.identity.node, request, successful_response())
@@ -358,3 +415,61 @@ def test_persist_must_reach_disk_before_success(tmp_path: Path, disk_failure: bo
     result: Final = session.finish(ScenarioOutcome(True, True, True))
     assert result.publishable is not disk_failure
     assert result.response_count == (0 if disk_failure else 1)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "empty_choices",
+        "missing_finish",
+        "partial_finish",
+        "missing_message",
+        "missing_usage",
+        "empty_usage",
+        "missing_identity",
+    ],
+)
+def test_incomplete_nonstream_completion_cannot_publish(fault: str) -> None:
+    payload = json.loads(completion_payload())
+    if fault == "empty_choices":
+        payload["choices"] = []
+    elif fault == "missing_finish":
+        del payload["choices"][0]["finish_reason"]
+    elif fault == "partial_finish":
+        payload["choices"][0]["finish_reason"] = "length"
+    elif fault == "missing_message":
+        del payload["choices"][0]["message"]
+    elif fault == "missing_usage":
+        del payload["usage"]
+    elif fault == "empty_usage":
+        payload["usage"] = {}
+    else:
+        del payload["id"]
+    response = RecordedHttpResponse(
+        status_code=200, headers={}, body_b64=base64.b64encode(json.dumps(payload).encode()).decode()
+    )
+    assert publication_error(ScenarioOutcome(True, True, True), (response,)) is not None
+    assert publication_error(ScenarioOutcome(True, True, True), (successful_response(),)) is None
+
+
+@pytest.mark.parametrize("fault", ["empty_content", "missing_stop", "partial_usage", "healthy"])
+def test_anthropic_nonstream_requires_finished_content_and_usage(fault: str) -> None:
+    payload = {
+        "id": "msg-synthetic",
+        "model": "synthetic",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "blue"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 2, "output_tokens": 1},
+    }
+    if fault == "empty_content":
+        payload["content"] = []
+    elif fault == "missing_stop":
+        del payload["stop_reason"]
+    elif fault == "partial_usage":
+        payload["usage"] = {"input_tokens": 2}
+    response = RecordedHttpResponse(
+        status_code=200, headers={}, body_b64=base64.b64encode(json.dumps(payload).encode()).decode()
+    )
+    assert (publication_error(ScenarioOutcome(True, True, True), (response,)) is None) is (fault == "healthy")

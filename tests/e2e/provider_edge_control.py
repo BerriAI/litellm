@@ -53,6 +53,7 @@ class EdgeController:
     _in_flight: int = field(default=0, init=False)
     _recorded_bytes: int = field(default=0, init=False)
     _halted: bool = field(default=False, init=False)
+    _pending_outcome: ScenarioOutcome | None = field(default=None, init=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False)
 
     def __post_init__(self) -> None:
@@ -113,6 +114,10 @@ class EdgeController:
     def end_request(self) -> None:
         with self._lock:
             self._in_flight -= 1
+            if self._in_flight == 0 and self._pending_outcome is not None:
+                outcome = self._pending_outcome
+                self._pending_outcome = None
+                self._complete(outcome)
 
     def before_attempt(self) -> str | None:
         with self._lock:
@@ -196,9 +201,17 @@ class EdgeController:
         outcome: Final = ScenarioOutcome(
             **{phase: dict(self._phases).get(phase, False) for phase in ("setup", "call", "teardown")}
         )
+        if self._in_flight:
+            self._halted = True
+            self._pending_outcome = outcome
+            return ControlReply(ok=False, error="scenario ended with in-flight provider requests")
+        return self._complete(outcome)
+
+    def _complete(self, outcome: ScenarioOutcome) -> ControlReply:
         error: Final = self._finish(outcome)
         self._completed = self._completed | {self.test_key()}
         self._active = None
+        self._session = None
         self._halted = self._halted or error is not None
         if self.outcome_sink is not None:
             self.outcome_sink(self._results)

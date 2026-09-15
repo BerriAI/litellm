@@ -13,6 +13,7 @@ from typing import Final
 
 import pytest
 from capture_policy import SCENARIO_BYTES, ScenarioIdentity, canonical_scenario_id
+from capture_session import CaptureResult
 from capture_store import StoreFailure
 from fixture_bundle import (
     BundleRecorder,
@@ -25,8 +26,8 @@ from fixture_bundle import (
 from provider_edge import REPLAY_MISS_STATUS, _persist, start_provider_edge
 from provider_edge_control import ControlRequest, ControlServer, EdgeController
 from provider_edge_remote import RemoteEdge
-from test_provider_capture import ScriptedReservations, successful_response
-from test_provider_edge import CHAT_PATH, call_edge, fake_provider, provider_url
+from test_provider_capture import ScriptedReservations, completion_payload, fake_provider, successful_response
+from test_provider_edge import CHAT_PATH, call_edge, provider_url
 
 
 @contextmanager
@@ -243,7 +244,7 @@ def test_aggregate_recording_limit_stops_before_second_disk_write(tmp_path: Path
     response: Final = RecordedHttpResponse(
         status_code=200,
         headers={},
-        body_b64=base64.b64encode(b'{"answer":"' + b"x" * (3 * 1024 * 1024) + b'"}').decode(),
+        body_b64=base64.b64encode(completion_payload("x" * (3 * 1024 * 1024))).decode(),
     )
     assert controller.command(ControlRequest(action="begin", node=node)).ok
     assert controller.command(ControlRequest(action="phase", node=node, phase="setup", passed=True)).ok
@@ -257,3 +258,42 @@ def test_aggregate_recording_limit_stops_before_second_disk_write(tmp_path: Path
     assert not controller.command(ControlRequest(action="phase", node=node, phase="teardown", passed=True)).ok
     assert not controller.results[0].publishable
     assert sum(path.stat().st_size for path in recorder.root.rglob("*.json")) < SCENARIO_BYTES
+
+
+def test_inflight_teardown_drains_before_releasing_lease(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class Store(ScriptedReservations):
+        def complete(self, *, scenario_key: str, owner: str, attempt_id: str, successful: bool) -> str | None:
+            events.append("settled")
+            return None
+
+        def release(self, *, scenario_key: str, owner: str) -> StoreFailure | None:
+            events.append("released")
+            return None
+
+    identity = ScenarioIdentity("test_example.py::test_one", "a" * 64, "synthetic")
+    node = canonical_scenario_id(identity.node)
+    recorder = prepare_bundle(tmp_path / "capture", profile="stateless_v1")
+    assert isinstance(recorder, BundleRecorder)
+    saved: list[tuple[CaptureResult, ...]] = []
+    controller = EdgeController(
+        {node: identity}, "owner", 200, store=Store(), recorder=recorder, outcome_sink=saved.append
+    )
+    assert controller.command(ControlRequest(action="begin", node=node)).ok
+    assert controller.command(ControlRequest(action="phase", node=node, phase="setup", passed=True)).ok
+    assert controller.begin_request() is None
+    assert controller.before_attempt() is None
+    assert controller.command(ControlRequest(action="phase", node=node, phase="call", passed=True)).ok
+    ended = controller.command(ControlRequest(action="phase", node=node, phase="teardown", passed=True))
+    assert not ended.ok and ended.error == "scenario ended with in-flight provider requests"
+    assert events == [] and saved == []
+    assert controller.begin_request() == "no active trusted scenario"
+    assert controller.test_key() == node
+    controller.response_finished(successful_response())
+    controller.end_request()
+    assert events == ["settled", "released"]
+    assert len(saved) == 1 and not saved[0][0].publishable
+    assert saved[0][0].error == "scenario lifecycle was rejected"
+    assert controller.command(ControlRequest(action="status")).count == 1
+    assert not controller.command(ControlRequest(action="begin", node=node)).ok
