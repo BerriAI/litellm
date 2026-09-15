@@ -197,9 +197,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict:
         supported = self.get_supported_openai_params(model)
-        for param, value in non_default_params.items():
-            if param in supported:
-                optional_params[param] = value
+        optional_params = {param: value for param, value in non_default_params.items() if param in supported}
         return optional_params
 
     def get_supported_openai_params(self, model):
