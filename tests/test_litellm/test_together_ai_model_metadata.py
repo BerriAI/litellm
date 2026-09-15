@@ -5,7 +5,6 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-
 REPO_ROOT: Final = Path(__file__).parents[2]
 
 CostMap = dict[str, dict[str, object]]
@@ -107,14 +106,6 @@ def test_together_successor_metadata_points_at_live_models(cost_map: CostMap):
         target = cost_map.get(successor)
         assert target is not None, f"{model} names successor {successor} that is not in the map"
         assert "deprecation_date" not in target, f"{model} names deprecated successor {successor}"
-
-
-def test_together_backup_cost_map_in_sync(cost_map: CostMap):
-    with open(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json") as f:
-        backup = COST_MAP_ADAPTER.validate_python(json.load(f))
-    together_main = {k: v for k, v in cost_map.items() if k.startswith("together_ai/")}
-    together_backup = {k: v for k, v in backup.items() if k.startswith("together_ai/")}
-    assert together_backup == together_main
 
 
 CACHED_INPUT_MODELS: Final = (

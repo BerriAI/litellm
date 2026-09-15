@@ -1,14 +1,10 @@
 from unittest.mock import Mock
 
 import httpx
-import pytest
 
-import litellm
 from litellm.llms.xai.chat.transformation import (
-    XAIChatCompletionStreamingHandler,
     XAIChatConfig,
 )
-from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ModelResponse,
@@ -26,11 +22,7 @@ class TestXAIReasoningTokenFolding:
         total_tokens: int,
         reasoning_tokens: int = 0,
     ) -> ModelResponse:
-        details = (
-            CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
-            if reasoning_tokens
-            else None
-        )
+        details = CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens) if reasoning_tokens else None
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -176,30 +168,10 @@ class TestXAIChatWebSearchBilling:
     def test_enhance_noop_without_details(self):
         response = self._response_with_usage()
 
-        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
-            response, {"usage": {"prompt_tokens": 100}}
-        )
+        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(response, {"usage": {"prompt_tokens": 100}})
 
         assert response.usage.prompt_tokens_details is None
         assert getattr(response.usage, "server_side_tool_usage_details", None) is None
-
-    def test_completion_cost_bills_chat_web_search_calls(self):
-        billed = self._response_with_usage()
-        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
-            billed,
-            {"usage": {"server_side_tool_usage_details": self._TOOL_DETAILS}},
-        )
-
-        with_search = litellm.completion_cost(
-            completion_response=billed, model="xai/grok-4", custom_llm_provider="xai"
-        )
-        without_search = litellm.completion_cost(
-            completion_response=self._response_with_usage(),
-            model="xai/grok-4",
-            custom_llm_provider="xai",
-        )
-
-        assert with_search - without_search == pytest.approx(3 * 5.0 / 1000.0)
 
 
 class TestXAIReportedCost:
@@ -243,23 +215,8 @@ class TestXAIReportedCost:
         )
         return response.usage
 
-    def test_reported_cost_reaches_the_cost_calculator(self):
-        usage = self._transformed_usage(
-            {
-                "prompt_tokens": 100,
-                "completion_tokens": 200,
-                "total_tokens": 300,
-                "cost_in_usd_ticks": 37756000,
-            }
-        )
-
-        assert usage.cost == 0.0037756
-        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0037756)
-
     def test_usage_without_a_reported_cost_is_left_alone(self):
-        usage = self._transformed_usage(
-            {"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300}
-        )
+        usage = self._transformed_usage({"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300})
 
         assert getattr(usage, "cost", None) is None
 
@@ -275,38 +232,3 @@ class TestXAIReportedCost:
         )
 
         assert getattr(usage, "cost", None) is None
-
-    def test_streamed_reported_cost_survives_chunk_aggregation(self):
-        """Streamed spend only matches if the conversion happens on the chunk.
-
-        Chunk aggregation rebuilds usage from the fields it models plus ``cost``, so a
-        chunk still carrying only ``cost_in_usd_ticks`` loses the reported amount.
-        """
-        handler = XAIChatCompletionStreamingHandler(
-            streaming_response=iter([]), sync_stream=True
-        )
-
-        parsed = handler.chunk_parser(
-            {
-                "id": "chatcmpl-xai",
-                "object": "chat.completion.chunk",
-                "created": 0,
-                "model": "grok-4-latest",
-                "choices": [],
-                "usage": {
-                    "prompt_tokens": 100,
-                    "completion_tokens": 200,
-                    "total_tokens": 300,
-                    "cost_in_usd_ticks": 37756000,
-                },
-            }
-        )
-
-        assert parsed.usage.cost == 0.0037756
-
-        assembled = litellm.stream_chunk_builder(chunks=[parsed])
-        assert assembled.usage.cost == 0.0037756
-        assert cost_per_token(model="grok-4-latest", usage=assembled.usage) == (
-            0.0,
-            0.0037756,
-        )

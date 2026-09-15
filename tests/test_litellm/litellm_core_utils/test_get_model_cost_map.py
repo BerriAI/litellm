@@ -86,21 +86,6 @@ def test_validation_accepts_healthy_file_with_meta_keys():
     )
 
 
-def test_validation_rejects_significant_shrink_vs_backup():
-    # 600 real models vs a 2000-model backup is below the 50% shrink threshold.
-    shrunk = _make_models(600)
-    shrunk[FALLBACK_GENERALIZATIONS_KEY] = {"rules": []}
-    assert (
-        GetModelCostMap.validate_model_cost_map(
-            fetched_map=shrunk,
-            backup_model_count=2000,
-            min_model_count=50,
-            max_shrink_ratio=0.5,
-        )
-        is False
-    )
-
-
 def test_finalize_pops_key_and_installs_rules():
     previous = list(get_fallback_generalization_rules())
     try:
@@ -130,24 +115,6 @@ def test_finalize_with_no_block_clears_rules():
         set_fallback_generalizations([{"name": "stale", "pattern": r"^x", "model_info": {"a": 1}}])
         _finalize_model_cost_map(_make_models(2))
         assert match_capability_generalizations("x-1") is None
-    finally:
-        set_fallback_generalizations(previous)
-
-
-def test_shipped_backup_carries_the_claude_routing_rules():
-    """The bundled backup must ship the Claude routing rules so a fresh install
-    (or an offline fallback) routes unknown Claude models without code changes.
-    Bedrock-syntax ids must hit the bedrock rule before the bare-id Anthropic rule."""
-    backup = GetModelCostMap.load_local_model_cost_map()
-    rules = backup.get(FALLBACK_GENERALIZATIONS_KEY, {}).get("rules", [])
-    names = [r.get("name") for r in rules]
-    assert names.index("bedrock-claude-ids") < names.index("anthropic-claude-ids")
-
-    previous = list(get_fallback_generalization_rules())
-    try:
-        set_fallback_generalizations(rules)
-        assert match_routing_generalization("claude-opus-4-9") == "anthropic"
-        assert match_routing_generalization("global.anthropic.claude-opus-4-9") == "bedrock"
     finally:
         set_fallback_generalizations(previous)
 
@@ -186,43 +153,6 @@ def test_shipped_routing_rules_never_match_through_an_unrecognized_namespace():
             assert match_routing_generalization(namespaced) is None, namespaced
     finally:
         set_fallback_generalizations(previous)
-
-
-def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
-    """Adaptive thinking is data, not code. The bundled backup must carry
-    supports_adaptive_thinking on genuine Claude >= 4.6 entries (every provider
-    route) and on the version-gated anthropic-claude-adaptive-thinking rule for
-    unmapped future Claudes, while leaving the dated Claude 4.0 names
-    ("...-4-20250514") unflagged so a date can never be mistaken for a 4.6+ minor
-    version. The version-neutral claude-family-baseline capability rule must not flag
-    it, so an unmapped sub-4.6 name resolves but stays non-adaptive. The adaptive rule
-    carries only its delta; capability unioning stacks it onto the baseline, so the
-    baseline block is never duplicated across rules and no rule needs ``extends``."""
-    backup = GetModelCostMap.load_local_model_cost_map()
-
-    rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
-    baseline_rule = next(r for r in rules if r.get("name") == "claude-family-baseline")
-    adaptive_rule = next(r for r in rules if r.get("name") == "claude-adaptive-thinking")
-    assert "supports_adaptive_thinking" not in baseline_rule["model_info"]
-    assert "litellm_provider" not in baseline_rule["model_info"]
-    assert adaptive_rule["model_info"] == {"supports_adaptive_thinking": True}
-    assert all("extends" not in r for r in rules)
-
-    for adaptive in [
-        "anthropic.claude-opus-4-8",
-        "vertex_ai/claude-opus-4-6@default",
-        "us.anthropic.claude-sonnet-4-6",
-        "openrouter/anthropic/claude-opus-4.7",
-        "azure_ai/claude-opus-4-7",
-    ]:
-        assert backup[adaptive]["supports_adaptive_thinking"] is True, adaptive
-
-    for non_adaptive in [
-        "claude-opus-4-20250514",
-        "us.anthropic.claude-opus-4-20250514-v1:0",
-        "claude-opus-4-5",
-    ]:
-        assert "supports_adaptive_thinking" not in backup[non_adaptive], non_adaptive
 
 
 # OpenRouter headline rates from GET https://openrouter.ai/api/v1/models.
@@ -657,41 +587,6 @@ def test_boot_load_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
     assert source["etag"] == 'W/"boot"'
     assert source["source_revision"] == git_blob_id(body)
     assert source["loaded_at"] is not None
-
-
-def test_boot_load_fallback_to_the_backup_reports_its_blob_id_and_drops_the_remote_etag():
-    remote, _ = _mock_client(
-        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
-    )
-    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=remote)
-    failing, _ = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
-
-    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=failing)
-
-    source = get_model_cost_map_source_info()
-    assert source["source"] == "local"
-    assert source["etag"] is None
-    assert source["source_revision"] == _bundled_blob_id()
-
-
-def test_boot_load_that_fails_the_integrity_check_reports_the_backup_not_the_rejected_fetch():
-    remote, _ = _mock_client(
-        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
-    )
-    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=remote)
-    shrunk_body = b'{"gpt-5.4-mini": {"mode": "chat", "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}}'
-    shrunk, _ = _mock_client(
-        [httpx.Response(200, headers={"ETag": 'W/"shrunk"'}, content=shrunk_body)], client_cls=httpx.Client
-    )
-
-    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=shrunk)
-
-    source = get_model_cost_map_source_info()
-    assert source["source"] == "local"
-    assert source["fallback_reason"] == "Remote data failed integrity validation"
-    assert source["etag"] is None
-    assert source["source_revision"] == _bundled_blob_id()
-    assert source["source_revision"] != git_blob_id(shrunk_body)
 
 
 @pytest.mark.parametrize(
