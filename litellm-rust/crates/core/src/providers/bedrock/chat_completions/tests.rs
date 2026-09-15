@@ -123,7 +123,7 @@ fn declines_top_k_because_python_routes_it_by_base_model() {
 }
 
 #[test]
-fn declines_tools_and_other_params_outside_the_allowlist() {
+fn declines_known_features_requiring_python_translation() {
     for param in [
         json!({"tools": []}),
         json!({"tool_choice": {"auto": {}}}),

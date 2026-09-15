@@ -92,10 +92,16 @@ pub(crate) fn project_optional_fields(
     kwargs: &Bound<'_, PyDict>,
     names: &[&str],
 ) -> PyResult<Map<String, Value>> {
-    names
+    let selected: Vec<String> = kwargs
+        .py()
+        .import("litellm.rust_bridge.params")?
+        .getattr("provider_param_names")?
+        .call1((kwargs, names.to_vec()))?
+        .extract()?;
+    selected
         .iter()
         .filter_map(|name| match kwargs.get_item(name) {
-            Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
+            Ok(Some(value)) => Some(from_py(&value).map(|value| (name.clone(), value))),
             Ok(None) => None,
             Err(error) => Some(Err(error)),
         })

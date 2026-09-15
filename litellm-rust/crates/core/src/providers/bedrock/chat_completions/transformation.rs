@@ -216,7 +216,15 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         optional_params: Map<String, Value>,
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
-            body: converse_body(&build_conversation(&messages), &optional_params),
+            body: crate::params::compose_body(
+                &converse_body(&build_conversation(&messages), &optional_params),
+                &optional_params,
+                &SUPPORTED_PARAMS
+                    .iter()
+                    .map(|(_, name)| *name)
+                    .chain(["stream"])
+                    .collect::<Vec<_>>(),
+            )?,
         })
     }
 

@@ -122,14 +122,14 @@ def test_native_lifecycle_core_encodes_python_file_input(
         document={"type": "file", "file": file_input, "mime_type": mime_type},
         api_key="test-key",
         api_base=f"http://127.0.0.1:{server.server_port}",
-        opaque_extension=object(),
+        opaque_extension={"future": [None, False, 0]},
     )
     assert response.pages[0].markdown == "native OCR response"
     assert requests[0]["body"]["document"] == {
         "type": expected_type,
         expected_field: expected_uri,
     }
-    assert "opaque_extension" not in requests[0]["body"]
+    assert requests[0]["body"]["opaque_extension"] == {"future": [None, False, 0]}
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

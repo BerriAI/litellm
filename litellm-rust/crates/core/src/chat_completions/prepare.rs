@@ -40,6 +40,7 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
+    crate::params::body_overrides(&request.optional_params)?;
     let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {

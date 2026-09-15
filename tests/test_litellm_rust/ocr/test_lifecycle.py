@@ -529,7 +529,7 @@ async def test_retained_argument_aliases_and_body_roots_survive_envelope_replace
 ) -> None:
     pages: Final = [0]
     document: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
-    opaque: Final = object()
+    opaque: Final = {"future": [None, False, 0]}
     observed: Final = []
 
     class Observe(Logging):

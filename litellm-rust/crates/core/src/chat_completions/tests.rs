@@ -57,6 +57,64 @@ fn resolves_the_provider_from_the_model_prefix() {
 }
 
 #[test]
+fn extensions_survive_admission_and_provider_mapping() {
+    for model in [
+        "anthropic/claude-sonnet-4-5",
+        "bedrock/anthropic.claude-sonnet-4-5-v1:0",
+    ] {
+        let prepared = prepare_chat_completions_call(request(
+            model,
+            None,
+            json!([{"role":"user", "content":"hi"}]),
+            json!({"future":{"nested":[null,false,0]}, "settings":{"a":1},
+                "extra_body":{"settings":{"b":2}}, "aws_secret_access_key":"not-body"}),
+        ))
+        .unwrap();
+        assert_eq!(prepared.body["future"], json!({"nested":[null,false,0]}));
+        assert_eq!(prepared.body["settings"], json!({"b":2}));
+        assert!(prepared.body.get("extra_body").is_none());
+        assert!(prepared.body.get("aws_secret_access_key").is_none());
+    }
+}
+
+#[test]
+fn overrides_cannot_bypass_chat_capability_checks() {
+    for model in ["anthropic/model", "bedrock/model"] {
+        for fields in [
+            json!({"stream":true}),
+            json!({"tools":[]}),
+            json!({"top_k":10}),
+            json!({"messages":[]}),
+        ] {
+            assert!(matches!(
+                decline(request(
+                    model,
+                    None,
+                    json!([{"role":"user", "content":"hi"}]),
+                    json!({"extra_body":fields})
+                )),
+                Error::Unsupported(_)
+            ));
+        }
+    }
+}
+
+#[test]
+fn invalid_overrides_are_terminal_request_errors() {
+    for value in [json!(false), json!(1), json!([]), json!("invalid")] {
+        assert!(matches!(
+            decline(request(
+                "anthropic/model",
+                None,
+                json!([{"role":"user", "content":"hi"}]),
+                json!({"extra_body":value})
+            )),
+            Error::InvalidRequest(_)
+        ));
+    }
+}
+
+#[test]
 fn strips_an_explicit_provider_prefix_from_the_model() {
     let prepared = prepare_chat_completions_call(request(
         "anthropic/claude-sonnet-4-5",

@@ -160,7 +160,7 @@ fn accepts_an_explicit_stream_false() {
 }
 
 #[test]
-fn declines_any_param_outside_the_allowlist() {
+fn declines_known_features_requiring_python_translation() {
     for param in [
         json!({"tools": []}),
         json!({"tool_choice": {"type": "auto"}}),

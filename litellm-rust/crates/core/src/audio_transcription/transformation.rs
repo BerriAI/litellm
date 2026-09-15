@@ -17,14 +17,7 @@ pub trait AudioTranscriptionProviderConfig: Sync {
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_transcription_params(&self, params: &Map<String, Value>) -> Map<String, Value> {
-        params
-            .iter()
-            .filter(|(key, _)| {
-                self.supported_transcription_params()
-                    .contains(&key.as_str())
-            })
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
+        crate::params::provider_fields(params).into()
     }
 
     fn transform_transcription_request(

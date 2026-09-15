@@ -1,5 +1,5 @@
+use crate::params::OpaqueFields;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 /// A single realtime event exchanged over the WebSocket.
 ///
@@ -13,7 +13,7 @@ pub struct RealtimeEvent {
     #[serde(rename = "type")]
     pub event_type: String,
     #[serde(flatten)]
-    pub data: Map<String, Value>,
+    pub data: OpaqueFields,
 }
 
 /// One or more typed events produced by a realtime transform.
@@ -34,6 +34,7 @@ impl RealtimeTransformResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn event(raw: &str) -> RealtimeEvent {
         serde_json::from_str(raw).expect("valid event json")
@@ -56,5 +57,17 @@ mod tests {
         let parsed = event(r#"{"type":"session.update"}"#);
         let result = RealtimeTransformResult::passthrough(parsed.clone());
         assert_eq!(result.events, vec![parsed]);
+    }
+
+    #[test]
+    fn native_events_do_not_interpret_sdk_extension_names() {
+        let raw = serde_json::json!({"type":"session.update", "extra_body":{"timeout":null}, "future":[false,0]});
+        let parsed: RealtimeEvent = serde_json::from_value(raw.clone()).unwrap();
+        let result =
+            crate::providers::openai::realtime::transformation::transform_realtime_request(
+                &parsed, "model",
+            )
+            .unwrap();
+        assert_eq!(serde_json::to_value(&result.events[0]).unwrap(), raw);
     }
 }

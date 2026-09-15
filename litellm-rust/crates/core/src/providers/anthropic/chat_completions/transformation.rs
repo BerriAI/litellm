@@ -146,7 +146,11 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         optional_params: Map<String, Value>,
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
-            body: anthropic_body(model, &build_conversation(&messages), optional_params),
+            body: crate::params::compose_body(
+                &anthropic_body(model, &build_conversation(&messages), Map::new()),
+                &optional_params,
+                &["stream"],
+            )?,
         })
     }
 

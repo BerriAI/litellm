@@ -61,6 +61,18 @@ fn provider_config_resolves_anthropic_and_azure_ai() {
 }
 
 #[test]
+fn native_message_extensions_survive_at_each_open_schema_boundary() {
+    let body = json!({"model":"claude", "messages":[{"role":"user",
+        "content":[{"type":"text", "text":"hi", "future_block":null,
+            "cache_control":{"type":"ephemeral", "future_cache":false}}], "future_message":0}],
+        "future_request":{"extra_body":{"timeout":null}}});
+    let config = messages_provider_config("anthropic").unwrap();
+    let request = serde_json::from_value(body.clone()).unwrap();
+    let transformed = config.transform_request(request).unwrap();
+    assert_eq!(serde_json::to_value(transformed).unwrap(), body);
+}
+
+#[test]
 fn truncate_error_body_caps_long_payloads() {
     let body = "x".repeat(400);
     let truncated = truncate_error_body(&body);
