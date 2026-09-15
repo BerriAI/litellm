@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { modelAvailableCall } from "@/components/networking";
-import { fetchAvailableModelsForTeam } from "./fetch_models";
+import { modelAvailableCall, modelHubCall } from "@/components/networking";
+import { fetchAutoRouterModels, fetchAvailableModels, fetchAvailableModelsForTeam } from "./fetch_models";
 
 vi.mock("@/components/networking", () => ({
   modelAvailableCall: vi.fn(),
@@ -8,6 +8,7 @@ vi.mock("@/components/networking", () => ({
 }));
 
 const modelAvailableCallMock = vi.mocked(modelAvailableCall);
+const modelHubCallMock = vi.mocked(modelHubCall);
 
 describe("fetchAvailableModelsForTeam", () => {
   beforeEach(() => {
@@ -29,5 +30,72 @@ describe("fetchAvailableModelsForTeam", () => {
     modelAvailableCallMock.mockResolvedValue({ data: [] });
 
     expect(await fetchAvailableModelsForTeam("token", "team-123")).toEqual([]);
+  });
+});
+
+describe("fetchAvailableModels", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("carries the reasoning capabilities the model hub reports for each group", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "smart", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: ["low", "high"] },
+        { model_group: "plain", mode: "chat", supports_reasoning: false },
+      ],
+    });
+
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "plain", mode: "chat" },
+      { model_group: "smart", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: ["low", "high"] },
+    ]);
+  });
+
+  it("preserves absent, unknown, empty, and explicit effort capability states", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "absent", supports_reasoning: true },
+        { model_group: "unknown", supports_reasoning: true, supported_reasoning_efforts: null },
+        { model_group: "empty", supports_reasoning: true, supported_reasoning_efforts: [] },
+        { model_group: "known", supports_reasoning: true, supported_reasoning_efforts: ["low"] },
+      ],
+    });
+
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "absent", supports_reasoning: true },
+      { model_group: "empty", supports_reasoning: true, supported_reasoning_efforts: [] },
+      { model_group: "known", supports_reasoning: true, supported_reasoning_efforts: ["low"] },
+      { model_group: "unknown", supports_reasoning: true, supported_reasoning_efforts: null },
+    ]);
+  });
+
+  it.each([
+    ["an error payload in place of the list", { data: { error: "no access" } }],
+    ["a missing data key", {}],
+    ["no body at all", undefined],
+  ])("returns an empty list on %s rather than throwing", async (_label, response) => {
+    modelHubCallMock.mockResolvedValue(response);
+
+    expect(await fetchAvailableModels("token")).toEqual([]);
+  });
+});
+
+describe("fetchAutoRouterModels", () => {
+  it("intersects destination team access with caller access while retaining model capabilities", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "shared", supports_reasoning: true, supported_reasoning_efforts: ["low"] },
+        { model_group: "other-team-model" },
+      ],
+    });
+    modelAvailableCallMock.mockResolvedValue({ data: [{ id: "shared" }, { id: "team-only-for-other-user" }] });
+
+    expect(await fetchAutoRouterModels("token", "destination")).toEqual([
+      { model_group: "shared", supports_reasoning: true, supported_reasoning_efforts: ["low"] },
+    ]);
+    expect(modelAvailableCallMock).toHaveBeenLastCalledWith("token", "", "", false, "destination");
+    modelAvailableCallMock.mockRejectedValueOnce(new Error("team catalog unavailable"));
+    await expect(fetchAutoRouterModels("token", "destination")).rejects.toThrow("team catalog unavailable");
   });
 });

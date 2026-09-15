@@ -53,6 +53,24 @@ describe("SectionHeader", () => {
     expect(onToggleCollapse).toHaveBeenCalledTimes(1);
   });
 
+  it("reports its collapsed state to assistive technology", () => {
+    const { rerender } = render(
+      <SectionHeader type="input" onCopy={vi.fn()} onToggleCollapse={vi.fn()} isCollapsed={false} />,
+    );
+
+    expect(screen.getByRole("button", { name: /^Input/ })).toHaveAttribute("aria-expanded", "true");
+
+    rerender(<SectionHeader type="input" onCopy={vi.fn()} onToggleCollapse={vi.fn()} isCollapsed={true} />);
+
+    expect(screen.getByRole("button", { name: /^Input/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("names each copy button for the section it belongs to", () => {
+    render(<SectionHeader type="output" onCopy={vi.fn()} onToggleCollapse={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Copy output" })).toBeInTheDocument();
+  });
+
   it("stays inert when no toggle handler is given", async () => {
     const onCopy = vi.fn();
     render(<SectionHeader type="input" onCopy={onCopy} />);

@@ -7,12 +7,13 @@ transformations for the Responses API.
 Source: litellm/llms/xai/responses/transformation.py
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
-
+import httpx
 import pytest
 
 import litellm
+from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
@@ -117,6 +118,67 @@ class TestXAIResponsesAPITransformation:
         assert "filters" in tool
         assert tool["filters"]["allowed_domains"] == ["wikipedia.org", "x.ai"]
         assert tool["enable_image_understanding"] is True
+
+    def test_web_search_nested_filters_preserved(self):
+        """The documented nested 'filters' shape must reach xAI instead of being dropped"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[
+                {
+                    "type": "web_search",
+                    "filters": {"allowed_domains": ["grokipedia.com"], "excluded_domains": ["example.com"]},
+                }
+            ]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        tool = result["tools"][0]
+        assert tool["filters"]["allowed_domains"] == ["grokipedia.com"]
+        assert tool["filters"]["excluded_domains"] == ["example.com"]
+
+    def test_web_search_nested_filters_win_over_flat(self):
+        """Nested filters take precedence when both shapes are sent"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[
+                {
+                    "type": "web_search",
+                    "allowed_domains": ["flat.com"],
+                    "filters": {"allowed_domains": ["nested.com"]},
+                }
+            ]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        assert result["tools"][0]["filters"] == {"allowed_domains": ["nested.com"]}
+
+    def test_web_search_empty_nested_filters_win_over_flat(self):
+        """An explicit empty 'filters' object means unrestricted search, even when stale flat fields are present"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[{"type": "web_search", "allowed_domains": ["flat.com"], "filters": {}}]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        assert result["tools"][0] == {"type": "web_search"}
 
     def test_web_search_search_context_size_removed(self):
         """Test that search_context_size is removed from web_search tools"""
@@ -400,3 +462,94 @@ class TestXAIResponsesWebSearchBilling:
 
         bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
         assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
+
+
+class TestXAIResponsesReportedCost:
+    """xAI reports what it charged; the transformation moves it to where litellm bills from.
+
+    ``ResponseAPILoggingUtils`` copies ``usage.cost`` onto the chat Usage that cost
+    tracking prices, so restating ``cost_in_usd_ticks`` there is what makes /v1/responses
+    bill the reported figure. At 10^10 ticks to the dollar, 37756000 ticks is $0.0037756.
+    """
+
+    @staticmethod
+    def _response_body(usage: dict) -> dict:
+        return {
+            "id": "resp_xai",
+            "object": "response",
+            "created_at": 0,
+            "model": "grok-4-latest",
+            "status": "completed",
+            "output": [],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": usage,
+        }
+
+    def _transformed_usage(self, usage: dict) -> ResponseAPIUsage | None:
+        raw_response = httpx.Response(status_code=200, json=self._response_body(usage))
+
+        response = XAIResponsesAPIConfig().transform_response_api_response(
+            model="grok-4-latest",
+            raw_response=raw_response,
+            logging_obj=Mock(),
+        )
+        return response.usage
+
+    def test_reported_cost_reaches_the_cost_calculator(self):
+        usage = self._transformed_usage(
+            {
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": 37756000,
+            }
+        )
+
+        assert usage.cost == 0.0037756
+
+        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
+
+    def test_streamed_reported_cost_reaches_the_cost_calculator(self):
+        event = XAIResponsesAPIConfig().transform_streaming_response(
+            model="grok-4-latest",
+            parsed_chunk={
+                "type": "response.completed",
+                "sequence_number": 7,
+                "response": self._response_body(
+                    {
+                        "input_tokens": 100,
+                        "output_tokens": 200,
+                        "total_tokens": 300,
+                        "cost_in_usd_ticks": 37756000,
+                    }
+                ),
+            },
+            logging_obj=Mock(),
+        )
+
+        assert isinstance(event, ResponseCompletedEvent)
+        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
+        assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
+
+    def test_usage_without_a_reported_cost_is_left_alone(self):
+        usage = self._transformed_usage(
+            {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300}
+        )
+
+        assert usage.cost is None
+
+    def test_negative_reported_cost_is_not_carried(self):
+        """A caller who can set api_base must not be able to report negative spend."""
+        usage = self._transformed_usage(
+            {
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": -37756000,
+            }
+        )
+
+        assert usage.cost is None

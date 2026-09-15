@@ -1,7 +1,10 @@
+<!-- The whole description's target audience is humans, not AI agents: write it in plain, simple,
+     everyday engineering language, extremely parsable and readable at a glance. This goes double for
+     the TLDR, User Flow, and Caveats sections -->
+
 ## TLDR
 
-<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
-     This section must be extremely human parsable, comprehensible, and readable: its target audience is humans, not AI agents -->
+<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max -->
 
 Problem this solves:
 
@@ -43,6 +46,10 @@ After: the same request comes back with real token counts, so the dashboard show
 ## Relevant issues
 
 <!-- e.g., "Fixes #000" -->
+
+## Affected release
+
+<!-- Only for a fix to a regression in a released or rc version (perf, memory, crash, or behavior): name the version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Leave the section blank otherwise -->
 
 ## Linear ticket
 
@@ -94,7 +101,8 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      For bug fixes: Before shows the reproduction, After shows the same steps passing
      For new features: Before shows the capability missing, After shows it working end-to-end
      If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), make each endpoint its own case, not just one
-     For UI changes: before/after screenshots under the same headings -->
+     For UI changes: before/after screenshots under the same headings
+     If the main use case runs through a coding tool like Claude Code or Codex, drive that tool interactively the way the user does (never `claude -p`, `codex exec`, or curl on its own) and embed before/after screenshots of its pane under the same headings; curl replays and headless runs can follow as extra cases, never as the only proof -->
 
 ## Type
 
@@ -110,8 +118,22 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## Caveats (if any)
 
-<!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
+<!-- Group caveats under severity subheadings (### Severe, ### High, ### Medium, ### Low), with
+     short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
      Call out known limitations, follow-up work, or anything a reviewer should watch out for
+     Include only the tiers that have caveats; drop the empty ones
+     - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
+       it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
+       rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
+       operator must plan around it before rollout
+     - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
+       unsafe to ship as is
+     - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
+     - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
+     Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
+     human reader
+     If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
+     user-observable behavior difference", list it here too with what breaks if it is wrong
      Leave this section empty if there are none -->
 
 ## QA runbook
@@ -134,6 +156,7 @@ Example checklists:
   - [ ] Sanity check: this test makes sense to add and is not hand-wavey (e.g., assert actual expected spend instead of just spend > 0) or potentially flaky
 -->
 
-### Final Attestation
+## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+

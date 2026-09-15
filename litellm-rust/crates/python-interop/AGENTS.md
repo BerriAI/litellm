@@ -1,0 +1,16 @@
+- Target invariants; implementation and runtime validation may lag these rules
+- Keep this crate a small, domain-neutral foundation: Python/Serde conversion and interpreter-boundary utilities
+  - No LiteLLM domain dependencies, route types, callback policy, public API registration or cdylib build features
+  - Generic code alone does not justify extraction: runtime integration stays in `python-bridge/src/execution.rs`, host adaptation in its `lifecycle.rs`
+- Use standard PyO3 ownership and conversion APIs
+  - Prefer `Bound<'py, T>` for attached operations/results, `Py<T>` for retention; binding/unbinding does not copy payloads
+  - Use `pythonize` for selected Serde data, never a JSON-text round trip; share conversion with `Pythonized<T>`
+  - Preserve `PythonizeError`'s standard conversion into `PyErr`; do not stringify original Python exceptions into new `ValueError`s
+  - Keep serializer-panic containment in `Pythonized<T>`: async output conversion can run in an unjoined blocking task and otherwise strand delivery
+- Use `Python::detach` for Rust-only work; Python operations require attachment
+  - Keep diagnostic counters in the consumer; wrapper invocations do not measure every interpreter release
+  - Release exclusive class borrows/locks before Python calls or decrements that can invoke finalizers; expose retained Python edges to GC without calling Python during traversal
+- Keep coroutine driving in the shared Python driver and native adapter
+  - Driver: `litellm/rust_bridge/lifecycle.py`; handle: `python-bridge/src/lifecycle.rs`; native-backed behavior tests: `python-bridge/tests/lifecycle.py`
+- References: [ownership](https://pyo3.rs/v0.29.2/types.html), [conversions](https://pyo3.rs/v0.29.2/conversions/traits.html), [pythonize errors](https://docs.rs/pythonize/0.29.0/src/pythonize/error.rs.html)
+  - [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [re-entry](https://pyo3.rs/v0.29.2/class/call.html), [parallelism](https://pyo3.rs/v0.29.2/parallelism.html), [async delivery source](https://docs.rs/pyo3-async-runtimes/0.29.0/src/pyo3_async_runtimes/generic.rs.html)

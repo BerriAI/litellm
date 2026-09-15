@@ -133,17 +133,17 @@ class MlflowLogger(CustomLogger):
         if final_response:
             end_time_ns: Final = int(end_time.timestamp() * 1e9)
 
-            self._extract_and_set_chat_attributes(span, kwargs, final_response)
-            self._end_span_or_trace(
-                span=span,
-                outputs=final_response,
-                status=SpanStatusCode.OK,
-                end_time_ns=end_time_ns,
-            )
-
-            # Remove the stream_id from the map
-            with self._lock:
-                self._stream_id_to_span.pop(litellm_call_id)
+            try:
+                self._extract_and_set_chat_attributes(span, kwargs, final_response)
+                self._end_span_or_trace(
+                    span=span,
+                    outputs=final_response,
+                    status=SpanStatusCode.OK,
+                    end_time_ns=end_time_ns,
+                )
+            finally:
+                with self._lock:
+                    self._stream_id_to_span.pop(litellm_call_id, None)
 
     def _add_chunk_events(self, span, response_obj):
         from mlflow.entities import SpanEvent
@@ -282,15 +282,15 @@ class MlflowLogger(CustomLogger):
         """End an MLflow span or a trace."""
         if span.parent_id is None:
             self._client.end_trace(
-                trace_id=span.request_id,
+                span.request_id,
                 outputs=outputs,
                 status=status,
                 end_time_ns=end_time_ns,
             )
         else:
             self._client.end_span(
-                trace_id=span.request_id,
-                span_id=span.span_id,
+                span.request_id,
+                span.span_id,
                 outputs=outputs,
                 status=status,
                 end_time_ns=end_time_ns,

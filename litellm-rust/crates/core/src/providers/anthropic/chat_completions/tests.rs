@@ -1,4 +1,5 @@
 use super::*;
+use crate::Error;
 use serde_json::json;
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -19,7 +20,7 @@ fn transform(model: &str, msgs: Value, opts: Value) -> Value {
         .body
 }
 
-fn transform_response(body: Value) -> CoreResult<ChatCompletionsResponse> {
+fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
     ANTHROPIC_CHAT_COMPLETIONS_CONFIG
         .transform_response("claude-sonnet-4-5", ProviderChatResponseData { body })
 }
@@ -390,29 +391,26 @@ fn declines_a_response_carrying_a_non_text_block() {
         "usage": {"input_tokens": 1, "output_tokens": 1}
     }))
     .expect_err("non-text block");
-    assert_eq!(
-        err,
-        CoreError::Unsupported("non-text response content block")
-    );
+    assert_eq!(err, Error::Unsupported("non-text response content block"));
 }
 
 #[test]
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        CoreError::InvalidResponse("messages response is not an object".to_string())
+        Error::InvalidResponse("messages response is not an object".to_string())
     );
     assert_eq!(
         transform_response(json!({"model": "m", "usage": {}})).expect_err("no content"),
-        CoreError::MissingField("content")
+        Error::MissingField("content")
     );
     assert_eq!(
         transform_response(json!({"model": "m", "content": []})).expect_err("no usage"),
-        CoreError::MissingField("usage")
+        Error::MissingField("usage")
     );
     assert_eq!(
         transform_response(json!({"content": [], "usage": {}})).expect_err("no model"),
-        CoreError::MissingField("model")
+        Error::MissingField("model")
     );
 }
 

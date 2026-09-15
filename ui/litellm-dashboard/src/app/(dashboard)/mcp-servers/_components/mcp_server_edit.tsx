@@ -52,6 +52,7 @@ import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
 import { EditServerFormValues, buildEditServerPayload, editPayloadErrorMessage } from "./editServerPayload";
 import { toast } from "@/lib/toast";
+import { getEditToolPreview } from "./editToolPreview";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import {
   MountedFormField,
@@ -282,6 +283,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         credentials: isClientForwardedTokenMode(values.auth_type)
           ? preservedAdminCredentials(values.credentials)
           : values.credentials,
+        issuer: values.issuer,
+        authorization_url: values.authorization_url,
+        token_url: values.token_url,
+        registration_url: values.registration_url,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
         command: values.command,
@@ -445,14 +450,30 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Fetch tools when component mounts for a saved server
+  const toolPreview = getEditToolPreview(allFieldsValue(form), initialValues);
+  const toolPreviewKey = JSON.stringify(toolPreview);
+
   useEffect(() => {
-    if (!mcpServer.server_id || mcpServer.server_id.trim() === "") {
+    const controller = new AbortController();
+    setTools([]);
+    setToolsError(null);
+    setIsLoadingTools(false);
+    if (!accessToken || !mcpServer.server_id) return;
+    if (toolPreview.kind === "incomplete") {
+      setToolsError(toolPreview.message ?? "Complete the URL, authentication, and header settings to load tools.");
       return;
     }
-    fetchTools();
+    setIsLoadingTools(true);
+    const timer = setTimeout(
+      () => fetchTools(() => !controller.signal.aborted),
+      toolPreview.kind === "preview" ? 500 : 0,
+    );
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token]);
+  }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token, toolPreviewKey]);
 
   // Invalidate a token authorized in this edit session once any mint-relevant field diverges from the
   // identity it was minted against (url, auth_type, oauth_flow_type, client creds/scopes, or the
@@ -515,6 +536,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const previewWithStagedInteractiveToken = async (
     isPassthrough: boolean,
     isBrowserHeldTokenMode: boolean,
+    isCurrent: () => boolean,
   ): Promise<boolean> => {
     const stagedToken =
       !isPassthrough && !isBrowserHeldTokenMode && getEffectiveAuthType() === AUTH_TYPE.OAUTH2
@@ -546,6 +568,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         registration_url: values.registration_url,
       };
       const toolsResponse = await testMCPToolsListRequest(accessToken, previewConfig, stagedToken);
+      if (!isCurrent()) return true;
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
       } else {
@@ -553,15 +576,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
+      if (!isCurrent()) return true;
       setTools([]);
       setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
-      setIsLoadingTools(false);
+      if (isCurrent()) setIsLoadingTools(false);
     }
     return true;
   };
 
-  const fetchTools = async () => {
+  const fetchTools = async (isCurrent: () => boolean) => {
     if (!accessToken || !mcpServer.server_id) return;
 
     // OBO/M2M/static auth is attached server-side from the stored credential, so
@@ -570,6 +594,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     // same way the Tools playground does.
     let customHeaders: Record<string, string> | undefined;
     const isPassthrough =
+      toolPreview.kind === "saved" &&
       getMcpOAuthMode({
         auth_type: mcpServer.auth_type,
         oauth2_flow: mcpServer.oauth2_flow,
@@ -577,9 +602,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }) === "passthrough";
     const isBrowserHeldTokenMode = isClientForwardedTokenMode(getEffectiveAuthType());
 
-    if (await previewWithStagedInteractiveToken(isPassthrough, isBrowserHeldTokenMode)) {
+    if (await previewWithStagedInteractiveToken(isPassthrough, isBrowserHeldTokenMode, isCurrent)) {
       return;
     }
+    if (!isCurrent()) return;
     if (isPassthrough || isBrowserHeldTokenMode) {
       const token =
         oauthTokenResponse?.access_token ??
@@ -587,6 +613,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           ? getToken(mcpServer.server_id, userID)?.access_token ?? null
           : null);
       if (!token) {
+        setIsLoadingTools(false);
         setTools([]);
         setToolsError(
           isBrowserHeldTokenMode
@@ -604,7 +631,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     try {
       // include_disabled_tools: configuring the allowlist needs the full server
       // catalog, so tools toggled off still render (as unchecked) instead of vanishing.
-      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id, customHeaders, true);
+      const toolsResponse =
+        toolPreview.kind === "preview"
+          ? await testMCPToolsListRequest(accessToken, {
+              ...toolPreview.config,
+              server_id: mcpServer.server_id,
+              server_name: mcpServer.server_name || mcpServer.alias,
+            })
+          : await listMCPTools(accessToken, mcpServer.server_id, customHeaders, true);
+      if (!isCurrent()) return;
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
@@ -613,10 +648,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
+      if (!isCurrent()) return;
       setTools([]);
       setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
-      setIsLoadingTools(false);
+      if (isCurrent()) setIsLoadingTools(false);
     }
   };
 

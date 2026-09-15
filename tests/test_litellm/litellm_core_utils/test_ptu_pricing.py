@@ -134,6 +134,15 @@ def test_the_search_context_table_is_zeroed_in_place_on_every_deployment():
         assert dict(override[field]) == dict.fromkeys(SEARCH_CONTEXT_SIZES, 0.0)
 
 
+def test_the_maps_grounding_rate_is_zeroed_on_every_deployment():
+    """An absent rate falls back to the Maps default rather than free, so it is written
+    even when the deployment never declared one."""
+    override = _with_flag(_VALID)
+
+    assert override is not None
+    assert override["google_maps_grounding_cost_per_query"] == 0.0
+
+
 def test_a_declared_table_does_not_become_a_scalar():
     """Zeroing it as a plain 0.0 would leave the provider's reader without a table to
     consult, which is the same as absent."""

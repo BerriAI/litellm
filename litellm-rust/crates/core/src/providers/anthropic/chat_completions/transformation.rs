@@ -10,7 +10,7 @@ use crate::chat_completions::types::{
     ProviderChatRequestData, ProviderChatResponseData,
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 use crate::providers::anthropic::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
 };
@@ -27,7 +27,12 @@ use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage
 /// per-model gate inside `transform_request`, the function this route replaces.
 /// Forwarding it would send `top_k` to a model that removed sampling params and
 /// take a 400 after the call, where Python drops it and succeeds.
-const SUPPORTED_PARAMS: &[&str] = &["max_tokens", "temperature", "top_p", "stop_sequences"];
+const SUPPORTED_PARAMS: &[(&str, &str)] = &[
+    ("max_tokens", "max_tokens"),
+    ("temperature", "temperature"),
+    ("top_p", "top_p"),
+    ("stop", "stop_sequences"),
+];
 
 pub struct AnthropicChatCompletionsConfig;
 
@@ -74,7 +79,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
@@ -84,7 +89,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<ChatCompletionsAuth> {
+    ) -> Result<ChatCompletionsAuth, Error> {
         Ok(ChatCompletionsAuth::Header {
             name: "x-api-key",
             value: resolve_anthropic_api_key(api_key, env_lookup)?,
@@ -112,7 +117,8 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         })
     }
 
-    fn supported_params(&self) -> &'static [&'static str] {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
 
@@ -121,7 +127,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
-        unsupported_param(SUPPORTED_PARAMS, &[], optional_params)
+        unsupported_param(self.supported_openai_params(), &[], optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
             // Anthropic rejects a request whose first turn is not a user turn.
             // Python only repairs that under `litellm.modify_params`, which the
@@ -132,30 +138,33 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_request(
         &self,
         model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<ProviderChatRequestData> {
+    ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
             body: anthropic_body(model, &build_conversation(&messages), optional_params),
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_response(
         &self,
         _model: &str,
         response: ProviderChatResponseData,
-    ) -> CoreResult<ChatCompletionsResponse> {
-        let body = response.body.as_object().ok_or_else(|| {
-            CoreError::InvalidResponse("messages response is not an object".into())
-        })?;
+    ) -> Result<ChatCompletionsResponse, Error> {
+        let body = response
+            .body
+            .as_object()
+            .ok_or_else(|| Error::InvalidResponse("messages response is not an object".into()))?;
 
         let content = body
             .get("content")
             .and_then(Value::as_array)
-            .ok_or(CoreError::MissingField("content"))?;
+            .ok_or(Error::MissingField("content"))?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
         // Decline rather than silently dropping it; the host falls back.
@@ -163,7 +172,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             .iter()
             .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
         {
-            return Err(CoreError::Unsupported("non-text response content block"));
+            return Err(Error::Unsupported("non-text response content block"));
         }
         let text: String = content
             .iter()
@@ -173,7 +182,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(CoreError::MissingField("usage"))?;
+            .ok_or(Error::MissingField("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
@@ -181,7 +190,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             model: body
                 .get("model")
                 .and_then(Value::as_str)
-                .ok_or(CoreError::MissingField("model"))?
+                .ok_or(Error::MissingField("model"))?
                 .to_string(),
             choices: vec![ChatCompletionsChoice {
                 index: 0,
