@@ -4,7 +4,7 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -356,7 +356,6 @@ def process_embed_content_response(
     model_response: EmbeddingResponse,
     model: str,
     response_json: dict,
-    resolved_files: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EmbeddingResponse:
     """
     Process Gemini embedContent response (single embedding for multimodal input).

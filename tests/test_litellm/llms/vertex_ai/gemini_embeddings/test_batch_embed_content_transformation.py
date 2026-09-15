@@ -411,12 +411,6 @@ class TestProcessEmbedContentResponseUsage:
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json=response_json,
-            resolved_files={
-                "files/img123": {
-                    "mime_type": "image/png",
-                    "uri": "https://example.com/img123",
-                }
-            },
         )
         assert result.usage.prompt_tokens_details.image_tokens == 258
         assert result.usage.prompt_tokens_details.text_tokens == 0
@@ -443,12 +437,6 @@ class TestProcessEmbedContentResponseUsage:
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json=response_json,
-            resolved_files={
-                "files/clip1": {
-                    "mime_type": "audio/mpeg",
-                    "uri": "https://example.com/clip1",
-                }
-            },
         )
         assert result.usage.prompt_tokens_details.audio_tokens == 64
         assert result.usage.prompt_tokens_details.image_tokens == 0

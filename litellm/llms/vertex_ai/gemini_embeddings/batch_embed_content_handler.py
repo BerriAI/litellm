@@ -268,7 +268,6 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
-                resolved_files=resolved_files,
             )
         else:
             _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
@@ -372,7 +371,6 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
-                resolved_files=resolved_files,
             )
         else:
             _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
