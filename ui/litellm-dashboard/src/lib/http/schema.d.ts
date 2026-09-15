@@ -8499,6 +8499,119 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/teams/{team_id}/members/bulk_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Team Members Action
+         * @description Remove up to 500 members from one team in one call. Same authorization as
+         *     `/team/member_delete`: proxy admins, the team's admins, and admins of the team's
+         *     organization. Each member is named by exactly one of `user_id` or `user_email`;
+         *     unknown body fields are a 422 and an unknown team is a 404.
+         *
+         *     `data` holds one result per requested member, in request order. A row is
+         *     `success: false` with an `error` when it names nobody on the team or repeats an
+         *     earlier row. The roster is rewritten once, under the team's advisory lock, so a
+         *     concurrent member_add is never overwritten from a stale read.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
+         *     ```
+         */
+        post: operations["bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/users/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Create Users Route
+         * @description Create up to 500 internal users in one request, optionally adding each one to teams.
+         *
+         *     Every entry in `users` takes the same fields as `/user/new`, with two differences: `auto_create_key`
+         *     defaults to `false` (opt in per user to also get a virtual key back) and `send_invite_email` is not
+         *     supported. Unknown fields are rejected with 422. Rows are validated together (duplicate ids or emails,
+         *     unknown teams, roles the caller may not grant), inserted in one statement, and each referenced team is
+         *     written once for all of its new members.
+         *
+         *     Rows fail independently: a bad row is reported in `data` with `success: false` and an `error`, and the
+         *     other rows still get created. A user that was created but could not be added to one of its teams is
+         *     reported with `success: true`, `teams` listing where they did land, and `error` naming the failed team.
+         *     The whole request is refused with a 403 problem document only if creating the valid rows would exceed
+         *     the license seat limit.
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X POST "http://localhost:4000/management/v1/users/bulk" \
+         *     -H "Content-Type: application/json" \
+         *     -H "Authorization: Bearer sk-1234" \
+         *     -d '{
+         *         "users": [
+         *             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
+         *             {"user_email": "b@example.com", "user_role": "internal_user", "auto_create_key": true}
+         *         ]
+         *     }'
+         *     ```
+         *
+         *     Returns `data` (one entry per input row, in order, with `user_id`, `user_email`, `success`, `teams`,
+         *     `key`, `error`) and `meta` with `total_requested`, `created` and `failed`.
+         */
+        post: operations["bulk_create_users_route_management_v1_users_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/users/bulk_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Users Action
+         * @description Delete up to 500 users in one call, taking each out of every team it belongs to.
+         *     Same authorization as `/user/delete`: proxy admins may delete anyone, org admins
+         *     only users inside organizations they administer. Unknown body fields are a 422.
+         *
+         *     `data` holds one result per requested `user_id`, in request order. A row is
+         *     `success: false` with an `error` when the id is unknown, repeated in the request,
+         *     or outside the caller's scope. Rows that pass those checks are deleted together,
+         *     in one transaction, so either all of them go or none does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"user_ids": ["user-1", "user-2"]}'
+         *     ```
+         */
+        post: operations["bulk_delete_users_action_management_v1_users_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp": {
         parameters: {
             query?: never;
@@ -24564,6 +24677,172 @@ export interface components {
             budgets: string[];
         };
         /**
+         * BulkDeleteUserRequest
+         * @description Body of `POST /management/v1/users/bulk_delete`.
+         */
+        BulkDeleteUserRequest: {
+            /** User Ids */
+            user_ids: string[];
+        };
+        /**
+         * BulkDeleteUsersResponse
+         * @description `{data: [...]}` with one `UserDeleteResult` per requested user, in request order.
+         */
+        BulkDeleteUsersResponse: {
+            /** Data */
+            data: components["schemas"]["UserDeleteResult"][];
+        };
+        /**
+         * BulkNewUserItem
+         * @description One row of `POST /management/v1/users/bulk`: the `/user/new` body, with keys opt-in and invite emails
+         *     unsupported. Unknown fields are rejected, as on every `/management/v1` request body.
+         */
+        BulkNewUserItem: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Aliases
+             * @default {}
+             */
+            aliases: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: unknown[] | null;
+            /**
+             * Auto Create Key
+             * @default false
+             */
+            auto_create_key: boolean;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /**
+             * Config
+             * @default {}
+             */
+            config: {
+                [key: string]: unknown;
+            } | null;
+            /** Duration */
+            duration?: string | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Metadata
+             * @default {}
+             */
+            metadata: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organizations */
+            organizations?: string[] | null;
+            /**
+             * Permissions
+             * @default {}
+             */
+            permissions: {
+                [key: string]: unknown;
+            } | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Send Invite Email */
+            send_invite_email?: boolean | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number | null;
+            /** Sso User Id */
+            sso_user_id?: string | null;
+            /** Tag Rpm Limit */
+            tag_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Teams */
+            teams?: string[] | components["schemas"]["NewUserRequestTeam"][] | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+            /** User Role */
+            user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** BulkNewUserMeta */
+        BulkNewUserMeta: {
+            /** Created */
+            created: number;
+            /** Failed */
+            failed: number;
+            /** Total Requested */
+            total_requested: number;
+        };
+        /** BulkNewUserRequest */
+        BulkNewUserRequest: {
+            /** Users */
+            users: components["schemas"]["BulkNewUserItem"][];
+        };
+        /**
+         * BulkNewUserResponse
+         * @description `data` holds one result per input row, in input order.
+         */
+        BulkNewUserResponse: {
+            /** Data */
+            data: components["schemas"]["UserCreateResult"][];
+            meta: components["schemas"]["BulkNewUserMeta"];
+        };
+        /**
          * BulkTeamMemberAddRequest
          * @description Request for bulk team member addition
          */
@@ -24599,6 +24878,22 @@ export interface components {
             updated_team?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * BulkTeamMemberDeleteRequest
+         * @description Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`.
+         */
+        BulkTeamMemberDeleteRequest: {
+            /** Members */
+            members: components["schemas"]["TeamMemberRef"][];
+        };
+        /**
+         * BulkTeamMemberDeleteResponse
+         * @description `{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order.
+         */
+        BulkTeamMemberDeleteResponse: {
+            /** Data */
+            data: components["schemas"]["TeamMemberDeleteResult"][];
         };
         /**
          * BulkUpdateKeyRequest
@@ -37366,6 +37661,20 @@ export interface components {
             user_id?: string | null;
         };
         /**
+         * TeamMemberDeleteResult
+         * @description Outcome for one requested member, in request order.
+         */
+        TeamMemberDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
          * TeamMemberInfoResponse
          * @description Response for GET /team/{team_id}/members/me — caller's own membership row.
          */
@@ -37394,6 +37703,16 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMemberRef
+         * @description One member to remove, named by exactly one of `user_id` or `user_email`.
+         */
+        TeamMemberRef: {
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -38139,6 +38458,21 @@ export interface components {
              * @description User IDs that remain blocked after this unblock call
              */
             blocked_users: string[];
+        };
+        /** UpdateCredentialItem */
+        UpdateCredentialItem: {
+            /** Credential Info */
+            credential_info: {
+                [key: string]: unknown;
+            };
+            /** Credential Name */
+            credential_name: string;
+            /** Credential Values */
+            credential_values?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Id */
+            model_id?: string | null;
         };
         /**
          * UpdateCustomerRequest
@@ -39547,6 +39881,44 @@ export interface components {
              * @enum {string}
              */
             severity: "info" | "warning" | "error";
+        };
+        /**
+         * UserCreateResult
+         * @description Outcome for one row of `POST /management/v1/users/bulk`. `teams` lists the teams the user was actually
+         *     added to.
+         */
+        UserCreateResult: {
+            /** Error */
+            error?: string | null;
+            /** Key */
+            key?: string | null;
+            /** Success */
+            success: boolean;
+            /** Teams */
+            teams?: string[] | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
+         * UserDeleteResult
+         * @description Outcome for one requested user, in request order. `teams_removed` lists the teams the user left.
+         */
+        UserDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /**
+             * Teams Removed
+             * @default []
+             */
+            teams_removed: string[];
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /**
          * UserHeaderMapping
@@ -45774,7 +46146,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
         responses: {
@@ -51346,6 +51718,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_create_users_route_management_v1_users_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkNewUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkNewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_users_action_management_v1_users_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Who the caller is acting for; recorded on the audit log entries this call writes. */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteUsersResponse"];
                 };
             };
             /** @description Validation Error */
