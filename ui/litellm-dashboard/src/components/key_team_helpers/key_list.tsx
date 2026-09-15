@@ -22,11 +22,14 @@ export interface Team {
   keys_count?: number;
   members_count?: number;
   members_with_roles: Member[];
+  team_member_permissions?: string[] | null;
   spend: number;
   access_group_ids?: string[];
   access_group_models?: string[];
   access_group_mcp_server_ids?: string[];
   access_group_agent_ids?: string[];
+  // Parent org's model ceiling. undefined = no org / not loaded; [] or ["all-proxy-models"] = no ceiling.
+  organization_models?: string[] | null;
 }
 
 export interface KeyResponse {
