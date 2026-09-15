@@ -674,7 +674,6 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,

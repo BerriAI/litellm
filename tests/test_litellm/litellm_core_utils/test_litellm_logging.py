@@ -29,6 +29,7 @@ from litellm.types.utils import (
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
     TextCompletionResponse,
+    Usage,
 )
 
 
@@ -2174,6 +2175,31 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
 
     assert response_cost is not None
     assert response_cost > 100
+
+
+def test_response_cost_calculator_recomputes_when_hidden_response_cost_is_zero():
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit40100",
+        function_id="lit40100",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    logging_obj.optional_params = {}
+
+    response: Final = ModelResponse(
+        model="gpt-4o",
+        usage=Usage(prompt_tokens=1000, completion_tokens=100),
+    )
+    response._hidden_params["response_cost"] = 0.0
+
+    model_info: Final = litellm.get_model_info("gpt-4o")
+    expected_cost: Final = 1000 * model_info["input_cost_per_token"] + 100 * model_info["output_cost_per_token"]
+
+    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(expected_cost)
 
 
 def test_response_cost_calculator_native_generate_content_body_uses_usage_metadata():
