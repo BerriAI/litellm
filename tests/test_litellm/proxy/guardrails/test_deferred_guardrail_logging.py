@@ -16,14 +16,21 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 
 import asyncio
 import logging
+from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import _dispatch_success_logging
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -52,6 +59,25 @@ def _attach_mock_success_dispatch(mock_logging_obj, async_success_fn):
 
     mock_logging_obj.dispatch_success_handlers = dispatch_success_handlers
     mock_logging_obj.async_success_handler = async_success_fn
+
+
+async def _wait_until(condition: Callable[[], bool]) -> None:
+    """Give the logging worker a bounded window to run what the closure enqueued."""
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+
+
+class _RecordingLogger(CustomLogger):
+    """Keeps what the async success callback was handed, the way a spend logger sees it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.standard_logging_object: StandardLoggingPayload | None = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_object = kwargs["standard_logging_object"]
 
 
 class PostCallGuardrail(CustomGuardrail):
@@ -257,6 +283,120 @@ async def test_deferred_flag_stores_and_executes_closure():
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+@pytest.mark.asyncio
+async def test_deferred_slot_keeps_the_innermost_wrapper_result():
+    """Nested @client wrappers exit through _dispatch_success_logging with one shared logging
+    object. The deferred slot must keep the first stored result, the way the immediate path's
+    has_logged dedupe keeps the first fired task, so the spend log reads usage from the
+    innermost provider-shaped response and never from an outer wrapper's translation of it."""
+    logging_obj: Final = MagicMock()
+    logging_obj._defer_async_logging = True
+    logging_obj._enqueue_deferred_logging = None
+    logging_obj.async_success_handler = AsyncMock()
+    inner_result: Final = object()
+    outer_result: Final = object()
+
+    for result in (inner_result, outer_result):
+        _dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            is_completion_with_fallbacks=False,
+            is_litellm_internal_call=False,
+        )
+
+    logging_obj._enqueue_deferred_logging()
+    await _wait_until(lambda: logging_obj.async_success_handler.await_count > 0)
+
+    logging_obj.async_success_handler.assert_awaited_once()
+    assert logging_obj.async_success_handler.await_args.kwargs["result"] is inner_result
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the_provider_usage(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    """/v1/messages on an Azure gpt-5.4+ deployment with function tools runs three nested
+    wrappers: anthropic_messages, the chat adapter's acompletion, and the Responses bridge
+    acompletion hands the call to, which retags the call as ``responses``. With logging
+    deferred for a post-call guardrail the stored closure must carry the innermost provider
+    response: logging the Anthropic-shaped reply under Responses semantics books this
+    7,336-token prompt as 3 tokens, since Anthropic's input_tokens excludes the cache hit."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(url__regex=r"https://deferred-nested\.openai\.azure\.com/openai/.*responses.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_deferred_nested",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.4-nano",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_deferred_nested",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 7336,
+                    "input_tokens_details": {"cached_tokens": 7333},
+                    "output_tokens": 23,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": 7359,
+                },
+            },
+        )
+    )
+    recorder: Final = _RecordingLogger()
+    logging_obj: Final = Logging(
+        model="azure/gpt-5.4-nano",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="deferred-nested-anthropic-messages",
+        function_id="deferred-nested-anthropic-messages",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj._defer_async_logging = True
+
+    response: Final = await litellm.anthropic_messages(
+        model="azure/gpt-5.4-nano",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+        tools=[
+            {
+                "name": "lookup_volume",
+                "description": "Look up a storage volume by name",
+                "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+            }
+        ],
+        api_key="sk-deferred-nested",
+        api_base="https://deferred-nested.openai.azure.com",
+        api_version="2025-04-01-preview",
+        litellm_logging_obj=logging_obj,
+    )
+    assert response["content"] == [{"type": "text", "text": "Hello!"}]
+    assert response["usage"]["input_tokens"] == 3
+    assert response["usage"]["cache_read_input_tokens"] == 7333
+
+    logging_obj._enqueue_deferred_logging()
+    await _wait_until(lambda: recorder.standard_logging_object is not None)
+
+    assert recorder.standard_logging_object is not None
+    assert recorder.standard_logging_object["prompt_tokens"] == 7336
+    assert recorder.standard_logging_object["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 7333
+    assert recorder.standard_logging_object["response_cost"] == pytest.approx(3 * 2e-7 + 7333 * 2e-8 + 23 * 1.25e-6)
 
 
 # ---------------------------------------------------------------------------
