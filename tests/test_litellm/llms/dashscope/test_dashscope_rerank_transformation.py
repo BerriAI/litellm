@@ -111,6 +111,7 @@ class TestDashScopeRerankRequest:
             "documents",
             "top_n",
             "return_documents",
+            "instruction",
         ]
 
     def test_map_params_drops_unsupported(self):
@@ -347,3 +348,35 @@ class TestProviderConfigManagerDispatch:
             present_version_params=[],
         )
         assert isinstance(cfg, DashScopeRerankConfig)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("provider", ["dashscope", "qwencloud", "qwen_ai_platform"])
+@pytest.mark.parametrize("model", ["qwen3-rerank", "qwen3.7-text-rerank"])
+@pytest.mark.parametrize("instruction", [None, "", "Retrieve semantically similar text."])
+async def test_instruction_reaches_compatible_endpoint(provider, model, is_async, instruction, respx_mock, monkeypatch):
+    import litellm
+
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", "https://rerank.example/compatible-api/v1/reranks")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route = respx_mock.post("https://rerank.example/compatible-api/v1/reranks")
+    route.respond(200, json={"id": "ranking", "results": [{"index": 0, "relevance_score": 0.9}]})
+    kwargs = {
+        "model": f"{provider}/{model}",
+        "query": "question",
+        "documents": ["answer"],
+        "top_n": 1,
+        "return_documents": False,
+        "instruction": instruction,
+        "api_key": "test-key",
+    }
+
+    response = await litellm.arerank(**kwargs) if is_async else litellm.rerank(**kwargs)
+
+    body = json.loads(route.calls[0].request.content)
+    assert body.get("instruct") == instruction
+    assert ("instruct" in body) == (instruction is not None)
+    assert "instruction" not in body
+    assert response.id == "ranking"
+    assert response.results == [{"index": 0, "relevance_score": 0.9}]
