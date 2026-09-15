@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8518,6 +8518,106 @@ class TestAdvisorSubCallCooldown:
             is False
         )
         assert "dep-1" not in self._cooled_down_ids(router)
+
+
+class TestCallerTimeoutCooldown:
+    """A timeout the caller set (the proxy's `timeout` body field or x-litellm-timeout
+    header) comes back as a 408 whatever the deployment's health, so it must neither
+    count toward allowed_fails nor bench the deployment. A 408 without that marker, or
+    one that arrives before the caller's deadline could have fired, is the provider's
+    and keeps cooling the deployment down."""
+
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "slow-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=120,
+            num_retries=0,
+        )
+
+    def _kwargs(self, marker, started=None, ended=None):
+        exception = litellm.Timeout(message="Request timed out", model="gpt-5.6", llm_provider="openai")
+        return {
+            "exception": exception,
+            "api_call_start_time": started,
+            "end_time": ended,
+            "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}, **marker},
+        }
+
+    def _fail_count(self, router):
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        return get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["dep-1"], parent_otel_span=None)
+        return [entry[0] for entry in active]
+
+    @pytest.mark.asyncio
+    async def test_caller_timeout_408_leaves_failure_counter_and_cooldown_untouched(self):
+        router = self._router()
+        started = datetime.now()
+        ended = started + timedelta(seconds=2.05)
+        kwargs = self._kwargs({"client_side_timeout": True, "timeout": 2}, started=started, ended=ended)
+        assert router.deployment_callback_on_failure(kwargs, None, started, ended) is False
+        assert self._fail_count(router) == 0
+        assert self._cooled_down_ids(router) == []
+
+    @pytest.mark.asyncio
+    async def test_provider_timeout_408_still_counts_and_cools_down(self):
+        router = self._router()
+        now = datetime.now()
+        assert router.deployment_callback_on_failure(self._kwargs({}), None, now, now) is True
+        assert self._fail_count(router) == 1
+        assert self._cooled_down_ids(router) == ["dep-1"]
+
+    @pytest.mark.asyncio
+    async def test_provider_408_before_caller_deadline_still_counts_and_cools_down(self):
+        """The marker only says the caller configured a timeout. A 408 that comes back
+        well before that deadline was raised by the provider, so it is a real health
+        signal and must not hide behind the caller's timeout."""
+        router = self._router()
+        started = datetime.now()
+        ended = started + timedelta(seconds=0.4)
+        kwargs = self._kwargs({"client_side_timeout": True, "timeout": 30}, started=started, ended=ended)
+        assert router.deployment_callback_on_failure(kwargs, None, started, ended) is True
+        assert self._fail_count(router) == 1
+        assert self._cooled_down_ids(router) == ["dep-1"]
+
+    @pytest.mark.asyncio
+    async def test_caller_timeout_marker_reaches_failure_callback_end_to_end(self):
+        router = self._router()
+        seen = []
+        recorded = threading.Event()
+
+        def record(kwargs, completion_response, start_time, end_time):
+            seen.append(kwargs)
+            recorded.set()
+
+        litellm.failure_callback.append(record)
+        try:
+            with pytest.raises(litellm.Timeout):
+                await router.acompletion(
+                    model="slow-model",
+                    messages=[{"role": "user", "content": "hello"}],
+                    mock_timeout=True,
+                    timeout=0.001,
+                    client_side_timeout=True,
+                )
+            assert await asyncio.to_thread(recorded.wait, 5)
+        finally:
+            litellm.failure_callback.remove(record)
+        assert seen[0]["litellm_params"]["client_side_timeout"] is True
+        assert self._fail_count(router) == 0
+        assert self._cooled_down_ids(router) == []
 
 
 def test_stream_chunks_have_generated_content_detects_text_and_non_text():
