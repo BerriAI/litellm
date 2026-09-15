@@ -246,7 +246,6 @@ from litellm.types.router import (
     RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
-    RouterNoDeploymentsAvailableError,
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
     RoutingContext,
@@ -8265,6 +8264,8 @@ class Router:
                     "Failure originated from advisor orchestration, not the selected deployment."
                 )
                 return False
+
+            from litellm.types.router import RouterNoDeploymentsAvailableError
 
             if isinstance(exception, RouterNoDeploymentsAvailableError):
                 return False
