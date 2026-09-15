@@ -537,10 +537,9 @@ class ResetBudgetJob:
         )
 
     @staticmethod
-    async def _invalidate_spend_counter(counter_key: str, new_spend: float = 0.0) -> None:
-        """Overwrite a spend counter with the post-reset value (0, or the carried
-        overage when budget rollover is enabled) so a DB-row reset takes effect
-        immediately.
+    async def _invalidate_spend_counter(counter_key: str) -> None:
+        """Drop a spend counter so the next read reseeds from the committed DB
+        row, the only value that includes increments that raced the reset.
 
         Call AFTER the DB write commits. Clearing Redis before the DB
         commit opens a window where get_current_spend reads 0 from Redis
@@ -549,10 +548,10 @@ class ResetBudgetJob:
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_spend, ttl=60)
+            spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_spend, ttl=60)
+                    await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to reset spend counter %s in Redis: %s. "
@@ -737,8 +736,8 @@ class ResetBudgetJob:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
-        for counter_key, new_spend in cascade.counter_resets:
-            await self._invalidate_spend_counter(counter_key, new_spend=new_spend)
+        for counter_key, _ in cascade.counter_resets:
+            await self._invalidate_spend_counter(counter_key)
         for cache_key in cascade.cache_keys:
             await self._invalidate_user_api_key_cache_entry(cache_key)
 
@@ -873,7 +872,7 @@ class ResetBudgetJob:
                 uow.keys.queue_spend_reset(
                     token=k.row.token,
                     budget_reset_at=k.row.budget_reset_at,
-                    spend_decrement=k.spend_decrement if k.spend_decrement > 0.0 else None,
+                    spend_decrement=k.spend_decrement,
                 )
 
     async def _write_user_reset_updates(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
@@ -895,7 +894,7 @@ class ResetBudgetJob:
                 uow.users.queue_spend_reset(
                     user_id=u.row.user_id,
                     budget_reset_at=u.row.budget_reset_at,
-                    spend_decrement=u.spend_decrement if u.spend_decrement > 0.0 else None,
+                    spend_decrement=u.spend_decrement,
                 )
 
     async def _write_team_reset_updates(self, updated_teams: Sequence[_RowReset[LiteLLM_TeamTable]]) -> None:
@@ -917,7 +916,7 @@ class ResetBudgetJob:
                 uow.teams.queue_spend_reset(
                     team_id=t.row.team_id,
                     budget_reset_at=t.row.budget_reset_at,
-                    spend_decrement=t.spend_decrement if t.spend_decrement > 0.0 else None,
+                    spend_decrement=t.spend_decrement,
                 )
 
     def _emit_phase_failure(
@@ -1000,7 +999,7 @@ class ResetBudgetJob:
                     for k in updated_keys:
                         token = getattr(k.row, "token", None)
                         if token:
-                            await self._invalidate_spend_counter(f"spend:key:{token}", new_spend=k.row.spend or 0.0)
+                            await self._invalidate_spend_counter(f"spend:key:{token}")
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
@@ -1111,7 +1110,7 @@ class ResetBudgetJob:
                     for u in updated_users:
                         user_id = getattr(u.row, "user_id", None)
                         if user_id:
-                            await self._invalidate_spend_counter(f"spend:user:{user_id}", new_spend=u.row.spend or 0.0)
+                            await self._invalidate_spend_counter(f"spend:user:{user_id}")
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
                             await self._invalidate_global_proxy_spend_cache()
 
@@ -1226,7 +1225,7 @@ class ResetBudgetJob:
                     for t in updated_teams:
                         team_id = getattr(t.row, "team_id", None)
                         if team_id:
-                            await self._invalidate_spend_counter(f"spend:team:{team_id}", new_spend=t.row.spend or 0.0)
+                            await self._invalidate_spend_counter(f"spend:team:{team_id}")
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
