@@ -715,9 +715,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Affinity"));
-    expect(
-      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
-    ).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -736,7 +734,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+    await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
