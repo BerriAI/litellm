@@ -691,7 +691,14 @@ class Cache:
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in add_cache", e)
+            self._log_add_cache_failure(e)
+
+    def _log_add_cache_failure(self, exc: Exception) -> None:
+        message: Final = "LiteLLM Cache: exception in add_cache"
+        if isinstance(self.cache, RedisCache):
+            log_redis_failure(verbose_logger, logging.ERROR, message, exc)
+            return
+        verbose_logger.error("%s: %s", message, exc)
 
     async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -710,7 +717,7 @@ class Cache:
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in add_cache", e)
+            self._log_add_cache_failure(e)
 
     def _convert_to_cached_embedding(
         self,
@@ -889,7 +896,7 @@ class Cache:
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in add_cache", e)
+            self._log_add_cache_failure(e)
 
     def should_use_cache(self, **kwargs):
         """

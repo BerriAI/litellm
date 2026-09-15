@@ -191,6 +191,7 @@ def _get_model_from_request_context(
     route: str,
     request: Request | None,
     llm_router: Any | None = None,
+    team_id: str | None = None,
 ) -> str | list[str] | None:
     return get_model_from_request(
         request_data=request_data,
@@ -199,6 +200,7 @@ def _get_model_from_request_context(
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
         request=request,
+        team_id=team_id,
     )
 
 
@@ -217,7 +219,7 @@ async def _normalize_claude_model(
         return
     if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
         return
-    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router)
+    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router, valid_token.team_id)
     if not isinstance(requested, str) or requested != request_data.get("model"):
         return
     if not requested.startswith("claude-router-") and not requested.lower().endswith("[1m]"):
@@ -876,6 +878,7 @@ async def _auto_register_jwt_mapping(
     # the NOT NULL @id constraint. Every successful key-creation caller (e.g.
     # /key/generate) passes table_name="key" explicitly.
     key_data: Final = await generate_key_helper_fn(
+        llm_router=None,
         request_type="key",
         table_name="key",
         team_id=team_id,
@@ -996,9 +999,12 @@ async def _resolve_jwt_to_virtual_key(
       - Raises HTTPException: REJECT policy hit, missing claim under
         REJECT/AUTO_REGISTER, or other policy violations.
     """
-    virtual_key_claim_field: Final = jwt_handler.litellm_jwtauth.virtual_key_claim_field
+    raw_issuer: Final = jwt_claims.get(JWTHandler.LITELLM_JWT_ISSUER_CLAIM)
+    normalized_issuer: Final = raw_issuer if isinstance(raw_issuer, str) else None
+    virtual_key_claim_field: Final = jwt_handler.litellm_jwtauth.get_virtual_key_claim_field(normalized_issuer)
     if virtual_key_claim_field is None:
         return None
+    behavior: Final = jwt_handler.litellm_jwtauth.get_unregistered_jwt_client_behavior(normalized_issuer)
 
     claim_value: Final = get_nested_value(
         data=jwt_claims,
@@ -1015,7 +1021,6 @@ async def _resolve_jwt_to_virtual_key(
         # simply by presenting a JWT that omits the configured field. For
         # AUTO_REGISTER there is no stable identity to map without a claim
         # value, so we deny rather than create a sentinel-keyed record.
-        behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
         if behavior in (
             UnregisteredJWTClientBehavior.REJECT,
             UnregisteredJWTClientBehavior.AUTO_REGISTER,
@@ -1030,7 +1035,13 @@ async def _resolve_jwt_to_virtual_key(
         return None
 
     cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value))
-    cached_mapping: Final = await user_api_key_cache.async_get_cache(cache_key)
+    raw_cached_mapping: Final = await user_api_key_cache.async_get_cache(cache_key)
+    sentinel_written_by_this_policy: Final = behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER
+    cached_mapping: Final = (
+        None
+        if raw_cached_mapping == _JWT_PROXY_ADMIN_SENTINEL and not sentinel_written_by_this_policy
+        else raw_cached_mapping
+    )
 
     if cached_mapping == _JWT_PROXY_ADMIN_SENTINEL:
         # Previously resolved to a proxy admin via auth_builder; skip the
@@ -1039,7 +1050,6 @@ async def _resolve_jwt_to_virtual_key(
         return None
 
     if cached_mapping == "__NO_MAPPING__":
-        behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
         if behavior == UnregisteredJWTClientBehavior.REJECT:
             raise HTTPException(
                 status_code=403,
@@ -1102,8 +1112,6 @@ async def _resolve_jwt_to_virtual_key(
         )
 
     # No mapping found (DB miss or no DB) — apply no-match policy.
-    behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
-
     if behavior == UnregisteredJWTClientBehavior.REJECT:
         # Cache the miss before raising so repeated rejections are served from
         # cache and don't re-query the DB on every request.
@@ -1483,7 +1491,7 @@ async def _user_api_key_auth_builder(
                 # unnecessary DB queries in auth_builder
                 do_standard_jwt_auth = True
                 pending_auto_register: _PendingAutoRegister | None = None
-                if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
+                if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
                     # Decode JWT to get claims without running full auth_builder
                     jwt_claims: dict | None
                     if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not is_jwt:
@@ -1647,6 +1655,7 @@ async def _user_api_key_auth_builder(
                         route=route,
                         request=request,
                         llm_router=llm_router,
+                        team_id=valid_token.team_id,
                     )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
@@ -1687,6 +1696,7 @@ async def _user_api_key_auth_builder(
                                     route=route,
                                     request=request,
                                     llm_router=llm_router,
+                                    team_id=valid_token.team_id,
                                 )
                             ),
                         )
@@ -2086,6 +2096,7 @@ async def _user_api_key_auth_builder(
                 route=route,
                 request=request,
                 llm_router=llm_router,
+                team_id=valid_token.team_id,
             )
             skip_budget_checks = False
             if model is not None and llm_router is not None:
@@ -2204,6 +2215,7 @@ async def _user_api_key_auth_builder(
                         route=route,
                         request=request,
                         llm_router=llm_router,
+                        team_id=valid_token.team_id,
                     )
                     current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -2234,6 +2246,7 @@ async def _user_api_key_auth_builder(
                             route=route,
                             request=request,
                             llm_router=llm_router,
+                            team_id=valid_token.team_id,
                         )
                         current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -2477,7 +2490,7 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
@@ -2729,6 +2742,7 @@ async def _run_centralized_common_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=user_api_key_auth_obj.team_id,
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -2845,12 +2859,14 @@ def _should_skip_budget_checks(
     route: str,
     request: Request | None,
     llm_router: Any | None,
+    team_id: str | None = None,
 ) -> bool:
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=team_id,
     )
     if model is not None and llm_router is not None:
         return _is_model_cost_zero(model=model, llm_router=llm_router)
@@ -3296,6 +3312,7 @@ async def _enforce_key_and_fallback_model_access(
             route=route,
             request=request,
             llm_router=llm_router,
+            team_id=valid_token.team_id,
         )
 
         if model is not None:
@@ -3403,6 +3420,7 @@ async def _run_post_custom_auth_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=valid_token.team_id,
     )
     current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -3444,6 +3462,7 @@ async def _run_post_custom_auth_checks(
             route=route,
             request=request,
             llm_router=llm_router,
+            team_id=valid_token.team_id,
         )
         current_models = _get_model_names_for_budget_checks(model=current_model)
 

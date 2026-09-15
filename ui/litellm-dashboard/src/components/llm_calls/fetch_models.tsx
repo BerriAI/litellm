@@ -57,3 +57,16 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
     throw error;
   }
 };
+
+export const fetchAutoRouterModels = async (
+  accessToken: string,
+  teamId: string | null | undefined,
+): Promise<ModelGroup[]> => {
+  if (!teamId) return [];
+  const [callerModels, teamModels] = await Promise.all([
+    fetchAvailableModels(accessToken),
+    fetchAvailableModelsForTeam(accessToken, teamId),
+  ]);
+  const teamNames = new Set(teamModels.map((model) => model.model_group));
+  return callerModels.filter((model) => teamNames.has(model.model_group));
+};
