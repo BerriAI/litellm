@@ -20,9 +20,12 @@ pub enum Error {
     #[error("{0}")]
     Auth(String),
     #[error(
-        "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
+        "Missing {provider} API Key - Set `api_key` or the {environment_variable} environment variable"
     )]
-    MissingApiKey { provider: &'static str },
+    MissingApiKey {
+        provider: &'static str,
+        environment_variable: &'static str,
+    },
     #[error(
         "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
     )]
@@ -144,7 +147,13 @@ impl From<TransportError> for Error {
 impl From<crate::AuthError> for Error {
     fn from(error: crate::AuthError) -> Self {
         match error {
-            crate::AuthError::MissingApiKey { provider } => Self::MissingApiKey { provider },
+            crate::AuthError::MissingApiKey {
+                provider,
+                environment_variable,
+            } => Self::MissingApiKey {
+                provider,
+                environment_variable,
+            },
             error => Self::Auth(error.to_string()),
         }
     }
@@ -172,10 +181,21 @@ mod transport_tests {
     use super::*;
 
     #[test]
-    fn missing_auth_key_preserves_provider_in_public_error() {
+    fn missing_auth_key_preserves_guidance_in_public_error() {
+        let error = Error::from(crate::AuthError::MissingApiKey {
+            provider: "Vertex",
+            environment_variable: "GOOGLE_APPLICATION_CREDENTIALS",
+        });
         assert_eq!(
-            Error::from(crate::AuthError::MissingApiKey { provider: "Vertex" }),
-            Error::MissingApiKey { provider: "Vertex" }
+            error,
+            Error::MissingApiKey {
+                provider: "Vertex",
+                environment_variable: "GOOGLE_APPLICATION_CREDENTIALS",
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "Missing Vertex API Key - Set `api_key` or the GOOGLE_APPLICATION_CREDENTIALS environment variable"
         );
     }
 

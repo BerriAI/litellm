@@ -32,7 +32,12 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| Error::from(AuthError::MissingOpenAiResponsesApiKey))
+        .ok_or_else(|| {
+            Error::from(AuthError::MissingApiKey {
+                provider: "OpenAI",
+                environment_variable: OPENAI_API_KEY_ENV,
+            })
+        })
 }
 
 async fn dial_upstream(

@@ -58,7 +58,12 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::from(AuthError::MissingOpenAiRealtimeApiKey))
+        .ok_or_else(|| {
+            Error::from(AuthError::MissingApiKey {
+                provider: "OpenAI",
+                environment_variable: OPENAI_API_KEY_ENV,
+            })
+        })
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.

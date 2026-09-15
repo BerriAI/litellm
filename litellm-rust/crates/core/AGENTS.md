@@ -5,3 +5,5 @@ A route module owns everything the call needs: types, the provider template trai
 Not here: serving HTTP (axum routes, extractors), config file reading, rollout state, databases, or host-specific callback execution. Core owns lifecycle sequencing and callback payload construction; hosts execute the selected integrations. Env reads are limited to credential fallback in a route's `prepare.rs`.
 
 Routes (messages, ocr, realtime) and providers (anthropic, mistral, openai) are modules, not crates.
+
+Provider ports mirror the Python path under `litellm/llms/`, but they use Rust structure rather than copying Python inheritance. Keep provider transformation files flat by default: imports, constants and wire types, concrete configs and trait implementations, private helpers, then one test module. Add a production submodule only when it creates a real privacy, conditional compilation, or reuse boundary. Share behavior with private functions or explicit delegation; add a provider-specific base trait only when callers need that interface.

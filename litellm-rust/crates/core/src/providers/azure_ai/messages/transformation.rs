@@ -32,7 +32,12 @@ pub fn resolve_azure_api_key(
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::from(crate::AuthError::MissingAzureApiKey))
+        .ok_or_else(|| {
+            Error::from(crate::AuthError::MissingApiKey {
+                provider: "Azure",
+                environment_variable: AZURE_API_KEY_ENV,
+            })
+        })
 }
 
 pub fn complete_azure_anthropic_url(
@@ -272,10 +277,12 @@ mod tests {
             resolve_azure_api_key(Some("  "), &with_env).unwrap(),
             "sk-env"
         );
-        assert!(matches!(
-            resolve_azure_api_key(None, &|_| None).expect_err("missing key"),
-            Error::Auth(_)
-        ));
+        assert_eq!(
+            resolve_azure_api_key(None, &|_| None)
+                .expect_err("missing key")
+                .to_string(),
+            "Missing Azure API Key - Set `api_key` or the AZURE_API_KEY environment variable"
+        );
     }
 
     #[test]
