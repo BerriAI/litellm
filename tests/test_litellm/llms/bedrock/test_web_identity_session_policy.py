@@ -37,6 +37,9 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import TypeAdapter
+
+from litellm.llms.bedrock.base_aws_llm import WebIdentitySessionPolicy, _SessionPolicyStatement
 
 # Actions the Claude Platform on AWS service is documented to call.
 # Source: AWS IAM action reference + the #27678 surface area.
@@ -89,15 +92,18 @@ def _captured_policy_document() -> str:
     return kwargs["Policy"]
 
 
-def _captured_policy() -> dict:
-    return json.loads(_captured_policy_document())
+_SESSION_POLICY_ADAPTER: Final = TypeAdapter(WebIdentitySessionPolicy)
 
 
-def _granted_actions(policy: dict) -> frozenset[str]:
+def _captured_policy() -> WebIdentitySessionPolicy:
+    return _SESSION_POLICY_ADAPTER.validate_python(json.loads(_captured_policy_document()))
+
+
+def _granted_actions(policy: WebIdentitySessionPolicy) -> frozenset[str]:
     return frozenset(action for stmt in policy["Statement"] for action in stmt["Action"])
 
 
-def _statement_by_sid(policy: dict, sid: str) -> dict:
+def _statement_by_sid(policy: WebIdentitySessionPolicy, sid: str) -> _SessionPolicyStatement:
     for stmt in policy["Statement"]:
         if stmt.get("Sid") == sid:
             return stmt
@@ -111,7 +117,6 @@ class TestWebIdentitySessionPolicyShape:
     def test_policy_parses_as_valid_iam_document(self):
         policy = _captured_policy()
         assert policy["Version"] == "2012-10-17"
-        assert isinstance(policy["Statement"], list)
         assert len(policy["Statement"]) >= 2
 
     def test_bedrock_statement_actions_preserved(self):
@@ -146,16 +151,7 @@ class TestClaudePlatformActionsCovered:
 
     @pytest.mark.parametrize("action", sorted(_CLAUDE_PLATFORM_ACTIONS))
     def test_claude_platform_action_present(self, action: str):
-        policy = _captured_policy()
-        # Action may live in any Statement — search across all.
-        all_actions: set = set()
-        for stmt in policy["Statement"]:
-            stmt_actions = stmt.get("Action")
-            if isinstance(stmt_actions, str):
-                all_actions.add(stmt_actions)
-            elif isinstance(stmt_actions, list):
-                all_actions.update(stmt_actions)
-        assert action in all_actions, (
+        assert action in _granted_actions(_captured_policy()), (
             f"{action} missing from session policy — "
             f"bedrock/claude_platform/* requests will 403 on OIDC auth"
         )
@@ -188,15 +184,7 @@ class TestBedrockMantleActionsCovered:
     action" even when the role's identity policy grants it."""
 
     def test_bedrock_mantle_create_inference_present(self):
-        policy = _captured_policy()
-        all_actions: set = set()
-        for stmt in policy["Statement"]:
-            stmt_actions = stmt.get("Action")
-            if isinstance(stmt_actions, str):
-                all_actions.add(stmt_actions)
-            elif isinstance(stmt_actions, list):
-                all_actions.update(stmt_actions)
-        assert "bedrock-mantle:CreateInference" in all_actions, (
+        assert "bedrock-mantle:CreateInference" in _granted_actions(_captured_policy()), (
             "bedrock-mantle:CreateInference missing from session policy — "
             "bedrock_mantle/* requests will 403 on OIDC/WIF auth"
         )
