@@ -273,7 +273,11 @@ async def _resolve_router_settings_model_group_alias(
     target: Final = resolve_model_group_alias(settings.get("model_group_alias"), requested)
     if target is None or target == requested:
         return
-    verbose_proxy_logger.debug("router_settings.model_group_alias resolved %s -> %s before auth", requested, target)
+    verbose_proxy_logger.debug(
+        "router_settings.model_group_alias resolved %s -> %s before auth",
+        requested.replace("\r", "").replace("\n", ""),
+        target.replace("\r", "").replace("\n", ""),
+    )
     request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
     rewrite_request_model(request_data, request, target)
 
