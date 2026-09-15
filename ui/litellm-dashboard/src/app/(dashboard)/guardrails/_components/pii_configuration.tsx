@@ -77,6 +77,9 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
       return;
     }
 
+    if (selectedCategories.length > 0 && !selectedCategories.includes("Custom")) {
+      setSelectedCategories([...selectedCategories, "Custom"]);
+    }
     onEntitySelect(normalizedEntityName);
     onActionSelect(normalizedEntityName, "MASK");
   };
