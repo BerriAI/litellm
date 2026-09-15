@@ -122,7 +122,7 @@ async fn configs_build_complete_requests_and_share_mistral_normalization() {
         .prepare_request(&direct, &client)
         .await
         .unwrap();
-    let vertex_http = VertexAIOCRConfig::default()
+    let vertex_http = VertexAIOCRConfig
         .prepare_request(&vertex, &client)
         .await
         .unwrap();
@@ -153,7 +153,7 @@ async fn configs_build_complete_requests_and_share_mistral_normalization() {
         .transform_ocr_response(&direct, serde_json::from_value(payload.clone()).unwrap())
         .unwrap()
         .into_json();
-    let vertex_response = VertexAIOCRConfig::default()
+    let vertex_response = VertexAIOCRConfig
         .transform_ocr_response(&vertex, serde_json::from_value(payload).unwrap())
         .unwrap()
         .into_json();

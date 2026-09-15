@@ -1,5 +1,4 @@
-use crate::AuthError;
-use crate::auth::error::AuthConfigurationError;
+use crate::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialPlacement {
@@ -16,23 +15,19 @@ impl CredentialPlacement {
     }
 }
 
-pub(crate) fn apply_credential(
+pub fn apply_credential(
     headers: Vec<(String, String)>,
     credential: &str,
     placement: CredentialPlacement,
-) -> Result<Vec<(String, String)>, AuthError> {
+) -> Result<Vec<(String, String)>, Error> {
     if credential.trim().is_empty() {
-        return Err(AuthError::Configuration(
-            AuthConfigurationError::EmptyCredential,
-        ));
+        return Err(Error::EmptyCredential);
     }
     if headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case(placement.header_name()))
     {
-        return Err(AuthError::Configuration(
-            AuthConfigurationError::DuplicateHeader(placement.header_name()),
-        ));
+        return Err(Error::DuplicateHeader(placement.header_name()));
     }
     let value = match placement {
         CredentialPlacement::Bearer => format!("Bearer {credential}"),

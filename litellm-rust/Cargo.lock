@@ -1926,6 +1926,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-auth"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "subtle",
+ "thiserror 2.0.19",
+ "tokio",
+ "veil",
+]
+
+[[package]]
+name = "litellm-auth-aws"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-sts",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
+ "aws-types",
+ "litellm-auth",
+ "moka",
+ "reqwest 0.12.28",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-auth-azure"
+version = "0.1.0"
+dependencies = [
+ "azure_core",
+ "azure_identity",
+ "litellm-auth",
+ "moka",
+ "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "litellm-auth-gcp"
+version = "0.1.0"
+dependencies = [
+ "gcp_auth",
+ "litellm-auth",
+ "moka",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
@@ -1939,19 +1996,14 @@ dependencies = [
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
- "aws-config",
- "aws-credential-types",
- "aws-sdk-sts",
- "aws-sigv4",
- "aws-smithy-runtime-api",
- "aws-types",
- "azure_core",
- "azure_identity",
  "base64 0.22.1",
  "bytes",
  "data-url",
  "futures-util",
- "gcp_auth",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-auth-azure",
+ "litellm-auth-gcp",
  "mime_guess",
  "moka",
  "rand 0.8.7",
@@ -1963,7 +2015,6 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2 0.10.9",
- "strum",
  "subtle",
  "thiserror 2.0.19",
  "tokio",

@@ -1,4 +1,3 @@
-use crate::auth::error::MissingCredential;
 use crate::error::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{
@@ -33,7 +32,7 @@ pub fn resolve_azure_api_key(
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::from(crate::AuthError::from(MissingCredential::AzureApiKey)))
+        .ok_or_else(|| Error::from(crate::AuthError::MissingAzureApiKey))
 }
 
 pub fn complete_azure_anthropic_url(
@@ -43,7 +42,7 @@ pub fn complete_azure_anthropic_url(
     let api_base = non_empty(api_base)
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::from(crate::AuthError::from(MissingCredential::AzureApiBase)))?;
+        .ok_or_else(|| Error::from(crate::AuthError::MissingAzureApiBase))?;
 
     let api_base = api_base.trim_end_matches('/');
 

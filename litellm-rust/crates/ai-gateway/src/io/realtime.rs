@@ -16,7 +16,6 @@ use std::time::Duration;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use litellm_core::AuthError;
-use litellm_core::auth::error::MissingCredential;
 use litellm_core::error::Error;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
@@ -59,7 +58,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::from(AuthError::from(MissingCredential::OpenAiRealtimeApiKey)))
+        .ok_or_else(|| Error::from(AuthError::MissingOpenAiRealtimeApiKey))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.

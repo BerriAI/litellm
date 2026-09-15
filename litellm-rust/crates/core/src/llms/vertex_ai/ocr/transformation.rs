@@ -1,6 +1,5 @@
 use super::common_utils::validate_destination;
 use crate::Error;
-use crate::auth::vertex::{self, VertexConfig};
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
@@ -10,6 +9,7 @@ use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
+use litellm_auth_gcp::{self as vertex, VertexConfig};
 const DEFAULT_LOCATION: &str = "us-central1";
 
 #[derive(Clone, Debug, Default)]

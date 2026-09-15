@@ -1,5 +1,9 @@
 [workspace]
 members = [
+    "crates/auth",
+    "crates/auth-aws",
+    "crates/auth-azure",
+    "crates/auth-gcp",
     "crates/core",
     "crates/token-counter",
     "crates/config",
@@ -20,6 +24,10 @@ bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 litellm-core = { path = "crates/core" }
+litellm-auth = { path = "crates/auth" }
+litellm-auth-aws = { path = "crates/auth-aws" }
+litellm-auth-azure = { path = "crates/auth-azure" }
+litellm-auth-gcp = { path = "crates/auth-gcp" }
 litellm-token-counter = { path = "crates/token-counter" }
 litellm-config = { path = "crates/config" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }

@@ -4,7 +4,6 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use litellm_core::AuthError;
 use litellm_core::Error;
-use litellm_core::auth::error::MissingCredential;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
@@ -33,7 +32,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| Error::from(AuthError::from(MissingCredential::OpenAiResponsesApiKey)))
+        .ok_or_else(|| Error::from(AuthError::MissingOpenAiResponsesApiKey))
 }
 
 async fn dial_upstream(

@@ -20,5 +20,5 @@ pub mod router;
 pub mod routing_utils;
 mod url_utils;
 
-pub use auth::AuthError;
+pub use auth::Error as AuthError;
 pub use error::Error;
