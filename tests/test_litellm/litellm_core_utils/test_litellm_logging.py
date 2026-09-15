@@ -1877,13 +1877,14 @@ def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
     assert logging_obj.model_call_details.get("guardrail_hook_ran") is True
 
 
-def test_get_user_agent_tags():
+@pytest.mark.parametrize("header_name", ["user-agent", "User-Agent", "USER-AGENT"])
+def test_get_user_agent_tags(header_name):
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     tags = StandardLoggingPayloadSetup._get_user_agent_tags(
         proxy_server_request={
             "headers": {
-                "user-agent": "litellm/0.1.0",
+                header_name: "litellm/0.1.0",
             }
         }
     )
