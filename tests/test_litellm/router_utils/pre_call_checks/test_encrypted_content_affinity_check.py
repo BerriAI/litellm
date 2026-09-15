@@ -1196,6 +1196,12 @@ async def test_affinity_raises_service_unavailable_when_origin_cooled_for_non_42
     # avoid an authenticated-caller probing oracle.
     assert "deployment-a-cooled" not in str(excinfo.value)
     assert excinfo.value.status_code == 503
+    # The pinned request cannot use deployment-b, so the router must be told not
+    # to treat it as a reason to retry immediately, and given a back-off to wait.
+    assert getattr(excinfo.value, "no_compatible_deployment_available", False) is True
+    retry_after = excinfo.value.response.headers.get("retry-after")
+    assert retry_after is not None
+    assert 1 <= int(retry_after) <= 60
 
 
 @pytest.mark.asyncio
@@ -1256,6 +1262,7 @@ async def test_affinity_raises_rate_limit_with_retry_after_when_origin_cooled_fo
 
     assert "deployment-a-cooled-429" not in str(excinfo.value)
     assert excinfo.value.status_code == 429
+    assert getattr(excinfo.value, "no_compatible_deployment_available", False) is True
     retry_after = excinfo.value.response.headers.get("retry-after")
     assert retry_after is not None
     assert 1 <= int(retry_after) <= 60
@@ -1304,6 +1311,10 @@ async def test_affinity_raises_service_unavailable_when_origin_filtered_without_
         )
 
     assert excinfo.value.status_code == 503
+    assert getattr(excinfo.value, "no_compatible_deployment_available", False) is True
+    # No cooldown entry means no remaining window to advertise, so the router
+    # falls back to its own exponential back-off.
+    assert excinfo.value.response.headers.get("retry-after") is None
 
 
 @pytest.mark.asyncio

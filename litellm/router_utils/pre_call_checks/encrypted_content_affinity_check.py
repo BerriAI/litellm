@@ -287,10 +287,13 @@ class EncryptedContentAffinityCheck(CustomLogger):
         routed group (an auto-router tier change, a model switch with no peer, a
         removed deployment, or an unknown/forged marker), the encrypted reasoning is
         stripped and the request dispatches with its readable history instead. The
-        429/503 split mirrors the originating cooldown's status:
-        a 429-induced cooldown surfaces as 429 (with ``Retry-After`` set to the
-        remaining cooldown window) so OpenAI-compatible clients back off and
-        retry after the deployment is eligible again.
+        429/503 split mirrors the originating cooldown's status: a 429-induced
+        cooldown surfaces as 429 (with ``Retry-After`` set to the remaining cooldown
+        window) so OpenAI-compatible clients back off and retry after the deployment
+        is eligible again. Both carry that ``Retry-After`` whenever the remaining
+        window is known, and both are marked ``no_compatible_deployment_available``
+        so router retries wait the window out instead of instantly failing over to a
+        deployment that cannot decrypt this conversation.
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
@@ -389,10 +392,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
         # an authenticated caller forging encrypted-content markers cannot use the
         # error surface to enumerate which deployment IDs exist on this router.
         cooldown: Final = await self._get_origin_cooldown(model_id=model_id, parent_otel_span=parent_otel_span)
+        unavailable_origin_error: Exception
 
         if cooldown is not None and str(cooldown.get("status_code")) == "429":
             retry_after: Final = self._cooldown_seconds_remaining(cooldown)
-            return RateLimitError(
+            unavailable_origin_error = RateLimitError(
                 message=(
                     "The deployment that produced this encrypted_content is "
                     f"rate-limited (cooling down for ~{retry_after}s), and no "
@@ -408,17 +412,37 @@ class EncryptedContentAffinityCheck(CustomLogger):
                     request=httpx.Request("POST", "https://litellm.ai/"),
                 ),
             )
+        else:
+            # Router._time_to_sleep_before_retry reads Retry-After off the raised
+            # error, so a cooldown that was not caused by a 429 has to advertise
+            # the same remaining window. Without it the retries fall back to
+            # generic exponential back-off, which starts below a typical
+            # cooldown_time and can be spent before the originating deployment is
+            # eligible again.
+            cooldown_retry_after: Final = None if cooldown is None else self._cooldown_seconds_remaining(cooldown)
+            unavailable_origin_error = ServiceUnavailableError(
+                message=(
+                    "The deployment that produced this encrypted_content is "
+                    "currently unavailable (likely cooled down), and no deployment "
+                    "on the same encryption boundary is configured. Retry later or "
+                    "configure a deployment with the same (api_base, api_key)."
+                ),
+                llm_provider="",
+                model=model,
+                response=httpx.Response(
+                    status_code=503,
+                    headers=({} if cooldown_retry_after is None else {"retry-after": str(cooldown_retry_after)}),
+                    request=httpx.Request("POST", "https://litellm.ai/"),
+                ),
+            )
 
-        return ServiceUnavailableError(
-            message=(
-                "The deployment that produced this encrypted_content is "
-                "currently unavailable (likely cooled down), and no deployment "
-                "on the same encryption boundary is configured. Retry later or "
-                "configure a deployment with the same (api_base, api_key)."
-            ),
-            llm_provider="",
-            model=model,
-        )
+        # Read by Router._time_to_sleep_before_retry. This request is pinned to
+        # the originating deployment, so the healthy deployments still left in the
+        # model group are not usable alternatives for it and an immediate retry
+        # can only raise this same error again. Waiting is the only thing that can
+        # help, so the router must not take its instant-failover shortcut.
+        setattr(unavailable_origin_error, "no_compatible_deployment_available", True)
+        return unavailable_origin_error
 
     async def _get_origin_cooldown(
         self,
