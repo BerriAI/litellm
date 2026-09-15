@@ -55,6 +55,18 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
 _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+def _validate_responses_required_fields(data: Mapping[str, object]) -> None:
+    if "input" in data:
+        return
+    raise ProxyException(
+        message="Missing required parameter: 'input'.",
+        type="invalid_request_error",
+        param="input",
+        code=400,
+        openai_code="missing_required_parameter",
+    )
+
+
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
     if key != "format" or not isinstance(value, dict):
         return value
@@ -244,6 +256,7 @@ async def responses_api(
     )
 
     data = await _read_request_body(request=request)
+    _validate_responses_required_fields(data)
 
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
