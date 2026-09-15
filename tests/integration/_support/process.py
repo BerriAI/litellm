@@ -62,10 +62,28 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str])
     output.mkdir(parents=True, exist_ok=True)
     with (output / f"owned-proxy-{uuid.uuid4().hex}.log").open("w") as log:
         process: Final = subprocess.Popen(
-            [sys.executable, "-m", "integration._support.proxy", "--config", "tests/integration/proxy_config.yaml",
-             "--host", "127.0.0.1", "--port", str(port), "--num_workers", "1", "--telemetry", "False",
-             "--use_prisma_db_push", "--enforce_prisma_migration_check"],
-            cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+            [
+                sys.executable,
+                "-m",
+                "integration._support.proxy",
+                "--config",
+                "tests/integration/proxy_config.yaml",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--num_workers",
+                "1",
+                "--telemetry",
+                "False",
+                "--use_prisma_db_push",
+                "--enforce_prisma_migration_check",
+            ],
+            cwd=root,
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         try:
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=15, trust_env=False) as client:

@@ -55,7 +55,8 @@ def test_generated_zero_null_and_omitted_prices_follow_independent_arithmetic(ga
                 assert response.headers.get("x-litellm-response-cost") in (None, "0", "0.0")
             rows: Final = eventually(
                 lambda: read_rows(
-                    'SELECT spend, metadata, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+                    "SELECT spend, metadata, prompt_tokens, "
+                    'completion_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
                     (response.json()["id"],),
                 ),
                 lambda values: len(values) == 1,

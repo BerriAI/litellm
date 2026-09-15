@@ -21,17 +21,26 @@ class PartitionConnection:
     db: Prisma
 
 
-@pytest.mark.covers("other.database.partitions.lock_wait_outlives_transaction_default", "other.database.partitions.repeat_preserves_rows")
+@pytest.mark.covers(
+    "other.database.partitions.lock_wait_outlives_transaction_default",
+    "other.database.partitions.repeat_preserves_rows",
+)
 async def test_real_partition_ddl_survives_witnessed_lock_and_is_idempotent() -> None:
     schema: Final = f"integration_{uuid.uuid4().hex}"
     url: Final = os.environ["DATABASE_URL"]
     parsed: Final = urlsplit(url)
-    scoped_url: Final = urlunsplit(parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema})))
+    scoped_url: Final = urlunsplit(
+        parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema}))
+    )
     parent: Final = sql.Identifier(schema, "LiteLLM_SpendLogs")
     with psycopg.connect(url, autocommit=True) as setup:
         setup.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
         try:
-            setup.execute(sql.SQL('CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL) PARTITION BY RANGE ("startTime")').format(parent))
+            setup.execute(
+                sql.SQL(
+                    'CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL) PARTITION BY RANGE ("startTime")'
+                ).format(parent)
+            )
             database: Final = Prisma(datasource={"url": scoped_url})
             await database.connect()
             try:
@@ -39,12 +48,15 @@ async def test_real_partition_ddl_survives_witnessed_lock_and_is_idempotent() ->
                 with psycopg.connect(url) as blocker:
                     blocker.execute(sql.SQL("LOCK TABLE {} IN ACCESS SHARE MODE").format(parent))
                     blocker_pid: Final = blocker.info.backend_pid
-                    operation: Final = asyncio.create_task(manager.ensure_partitions(PartitionConnection(database), lambda: 7000))
+                    operation: Final = asyncio.create_task(
+                        manager.ensure_partitions(PartitionConnection(database), lambda: 7000)
+                    )
                     wait_deadline: Final = time.monotonic() + 3
                     try:
                         while True:
                             witnesses: Final = read_rows(
-                                "SELECT a.pid, extract(epoch FROM clock_timestamp()-a.query_start)::double precision AS age "
+                                "SELECT a.pid, extract(epoch FROM "
+                                "clock_timestamp()-a.query_start)::double precision AS age "
                                 "FROM pg_stat_activity a WHERE %s = ANY(pg_blocking_pids(a.pid)) "
                                 "AND a.wait_event_type = 'Lock' AND a.query LIKE 'CREATE TABLE IF NOT EXISTS%%'",
                                 (blocker_pid,),
@@ -71,11 +83,12 @@ async def test_real_partition_ddl_survives_witnessed_lock_and_is_idempotent() ->
                 catalog: Final = read_rows(
                     "SELECT child.relname FROM pg_inherits i JOIN pg_class child ON child.oid=i.inhrelid "
                     "JOIN pg_class parent ON parent.oid=i.inhparent JOIN pg_namespace n ON n.oid=parent.relnamespace "
-                    "WHERE n.nspname=%s AND parent.relname='LiteLLM_SpendLogs'", (schema,),
+                    "WHERE n.nspname=%s AND parent.relname='LiteLLM_SpendLogs'",
+                    (schema,),
                 )
                 assert catalog == [{"relname": ensured[0]}]
                 now: Final = datetime.now(timezone.utc).replace(tzinfo=None)
-                setup.execute(sql.SQL('INSERT INTO {} VALUES (%s, %s)').format(parent), ("retained", now))
+                setup.execute(sql.SQL("INSERT INTO {} VALUES (%s, %s)").format(parent), ("retained", now))
                 assert await manager.ensure_partitions(PartitionConnection(database), lambda: 7000) == ensured
                 assert setup.execute(sql.SQL("SELECT request_id FROM {}").format(parent)).fetchall() == [("retained",)]
             finally:
