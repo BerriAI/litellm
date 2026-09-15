@@ -85,8 +85,7 @@ class ComponentExecution:
             case ExecutionDecision.RUST_REQUIRED:
                 required: Final = binding.native.load()
                 return RouteUnavailable(self.component) if required is None else NativeRoute(required)
-            case _:
-                assert_never(self.decision)
+        return assert_never(self.decision)
 
 
 @dataclass(frozen=True, slots=True)
