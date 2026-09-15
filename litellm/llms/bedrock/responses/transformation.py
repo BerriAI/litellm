@@ -1,7 +1,7 @@
 """Amazon Bedrock Runtime - native OpenAI Responses API.
 
 AWS serves the OpenAI models on ``bedrock-runtime`` through an OpenAI-compatible
-surface at ``https://bedrock-runtime.{region}.amazonaws.com/openai/v1/responses``,
+surface at ``https://bedrock-runtime.{region}.{dns_suffix}/openai/v1/responses``,
 alongside Converse. Without this config the ``bedrock`` provider has no Responses
 config at all, so ``/v1/responses`` falls back to the Chat Completions bridge and
 the request is translated into Converse. A realistic Codex session does not
@@ -86,7 +86,11 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
             or litellm_params.get("aws_bedrock_runtime_endpoint")
             or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
         )
-        host: Final = (override or f"https://bedrock-runtime.{region}.amazonaws.com").rstrip("/")
+        # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other
+        # suffixes in GovCloud/ISO, so defer to the shared endpoint builder.
+        host: Final = (
+            override or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
+        ).rstrip("/")
         if host.endswith(BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH):
             return host
         base: Final = next(
