@@ -269,7 +269,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
 
 @pytest.mark.asyncio
 async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_failure(
-    redis_update_buffer, mock_redis_cache
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
 ):
     from litellm.proxy._types import Litellm_EntityType
     from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
