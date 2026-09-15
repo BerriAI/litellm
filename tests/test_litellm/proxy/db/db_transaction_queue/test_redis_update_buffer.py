@@ -267,6 +267,51 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
 
 
 @pytest.mark.asyncio
+async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_failure(
+    redis_update_buffer, mock_redis_cache
+):
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+        DailySpendUpdateQueue,
+    )
+    from litellm.proxy.db.db_transaction_queue.spend_update_queue import (
+        SpendUpdateQueue,
+    )
+
+    member_key = "organization_id::org-1::user_id::user-1"
+    pod_json = json.dumps({"org_member_list_transactions": {member_key: 0.25}})
+    mock_redis_cache.async_lpop_pipeline = AsyncMock(
+        return_value=[[pod_json, pod_json], None, None, None, None, None, None]
+    )
+
+    (db_spend, *_rest) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    assert db_spend is not None
+    assert db_spend["org_member_list_transactions"] == {member_key: 0.5}
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis went away"))
+    spend_queue = SpendUpdateQueue()
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.ORGANIZATION_MEMBER,
+            "entity_id": member_key,
+            "response_cost": 1.5,
+        }
+    )
+    await redis_update_buffer.store_in_memory_spend_updates_in_redis(
+        spend_update_queue=spend_queue,
+        daily_spend_update_queue=DailySpendUpdateQueue(),
+        daily_team_spend_update_queue=DailySpendUpdateQueue(),
+        daily_org_spend_update_queue=DailySpendUpdateQueue(),
+        daily_end_user_spend_update_queue=DailySpendUpdateQueue(),
+        daily_agent_spend_update_queue=DailySpendUpdateQueue(),
+    )
+
+    restored_spend = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert restored_spend["org_member_list_transactions"] == {member_key: 1.5}
+
+
+@pytest.mark.asyncio
 async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
     """When redis_cache is None, should return all Nones"""
     buffer = RedisUpdateBuffer(redis_cache=None)
