@@ -4,26 +4,29 @@ Using LiteLLM with Pydantic AI
 This script demonstrates how to use LiteLLM's proxy and Router with Pydantic AI agents.
 
 Prerequisites:
-    pip install litellm pydantic-ai
+    pip install litellm "pydantic-ai-slim[openai]"
 
 Steps:
     1. (Option A) Start the LiteLLM proxy server and point Pydantic AI at it
-    2. (Option B) Use LiteLLM Router directly with Pydantic AI's completion
+    2. (Option B) Use LiteLLM Router directly (native LiteLLM failover, no proxy server)
 
 For Option A, first run:
-    litellm --config litellm_config.yaml --port 4000
+    export LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
+    litellm --config litellm_config.yaml --port 4000 --host 127.0.0.1
 """
 
 import os
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 
 # ============================================================
 # Option A: LiteLLM Proxy Server
 # ============================================================
 # The proxy exposes an OpenAI-compatible endpoint at http://localhost:4000/v1
-# which Pydantic AI's openai provider can consume directly.
+# which Pydantic AI consumes through OpenAIProvider/OpenAIChatModel.
 #
 # Save this as litellm_config.yaml:
 #
@@ -41,22 +44,34 @@ from pydantic_ai import Agent, RunContext
 #       model: gemini/gemini-2.0-flash
 #       api_key: os.environ/GEMINI_API_KEY
 # general_settings:
-#   master_key: sk-litellm-test
+#   master_key: os.environ/LITELLM_MASTER_KEY
 #
-# Start the proxy:
-#   litellm --config litellm_config.yaml --port 4000
+# Start the proxy bound to localhost only (the default 0.0.0.0 listens on all
+# interfaces — don't expose this example proxy publicly, anyone with the key
+# could send requests through it):
+#   export LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
+#   litellm --config litellm_config.yaml --port 4000 --host 127.0.0.1
 
 
 PROXY_BASE_URL = "http://localhost:4000/v1"
-PROXY_API_KEY = "sk-litellm-test"
+# Same key you started the proxy with. Generate a strong one per the comment
+# above instead of hardcoding a secret here.
+PROXY_API_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-test")
+
+
+def proxy_model(model_name: str) -> OpenAIChatModel:
+    """Build a Pydantic AI model routed through the local LiteLLM proxy."""
+    return OpenAIChatModel(
+        model_name,
+        provider=OpenAIProvider(
+            base_url=PROXY_BASE_URL,
+            api_key=PROXY_API_KEY,
+        ),
+    )
 
 
 def basic_usage():
-    agent = Agent(
-        "openai:gpt-4o",
-        base_url=PROXY_BASE_URL,
-        api_key=PROXY_API_KEY,
-    )
+    agent = Agent(proxy_model("gpt-4o"))
     result = agent.run_sync("What is the capital of France?")
     print("Basic usage:", result.data)
 
@@ -68,9 +83,7 @@ def structured_output():
         population: int
 
     agent = Agent(
-        "openai:gpt-4o",
-        base_url=PROXY_BASE_URL,
-        api_key=PROXY_API_KEY,
+        proxy_model("gpt-4o"),
         result_type=list[City],
         system_prompt="List the 3 largest cities in Europe with their countries and populations.",
     )
@@ -84,9 +97,7 @@ def tool_usage():
         return f"The weather in {city} is sunny, 72 degrees F."
 
     agent = Agent(
-        "openai:gpt-4o",
-        base_url=PROXY_BASE_URL,
-        api_key=PROXY_API_KEY,
+        proxy_model("gpt-4o"),
         tools=[get_weather],
     )
     result = agent.run_sync("What is the weather in Paris?")
@@ -94,19 +105,11 @@ def tool_usage():
 
 
 def switch_models():
-    claude_agent = Agent(
-        "openai:claude-sonnet",
-        base_url=PROXY_BASE_URL,
-        api_key=PROXY_API_KEY,
-    )
+    claude_agent = Agent(proxy_model("claude-sonnet"))
     result = claude_agent.run_sync("Explain quantum computing in one sentence.")
     print(f"[Claude]: {result.data}")
 
-    gemini_agent = Agent(
-        "openai:gemini-pro",
-        base_url=PROXY_BASE_URL,
-        api_key=PROXY_API_KEY,
-    )
+    gemini_agent = Agent(proxy_model("gemini-pro"))
     result = gemini_agent.run_sync("Explain quantum computing in one sentence.")
     print(f"[Gemini]: {result.data}")
 
@@ -114,6 +117,8 @@ def switch_models():
 # ============================================================
 # Option B: LiteLLM Router (Direct Python, no proxy server)
 # ============================================================
+# This path uses LiteLLM's Router natively (failover / load balancing across
+# providers) without running a proxy server and without a Pydantic AI Agent.
 
 
 def router_usage():
