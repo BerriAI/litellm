@@ -2538,6 +2538,23 @@
         "interactions": true
       }
     },
+    "vispark": {
+      "display_name": "Vispark (`vispark`)",
+      "url": "https://lab.vispark.in/#vision",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "vercel_ai_gateway": {
       "display_name": "Vercel AI Gateway (`vercel_ai_gateway`)",
       "url": "https://docs.litellm.ai/docs/providers/vercel_ai_gateway",
