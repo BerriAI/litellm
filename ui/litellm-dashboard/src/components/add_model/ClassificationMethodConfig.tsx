@@ -433,6 +433,15 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
+  if (classifierType === "capability") {
+    return (
+      <p className="text-sm text-muted-foreground">
+        This router uses capability forecasting. Configure its classifier, threshold, and calibration through YAML or
+        the API. Saving preserves those settings
+      </p>
+    );
+  }
+
   return (
     <>
       <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />

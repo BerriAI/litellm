@@ -164,6 +164,32 @@ const STORED_LLM = {
   classifier_context_per_turn_chars: 300,
 };
 
+describe("capability classifier configuration", () => {
+  it("preserves the judge and calibrated policy through an untouched dashboard edit", () => {
+    const stored = {
+      tiers: { SIMPLE: ["efficient-model"], REASONING: ["capable-model"] },
+      classifier_type: "capability" as const,
+      classifier_llm_config: { model: "judge", timeout_ms: 30000, temperature: 0 },
+      capability_classifier_config: {
+        efficient_tier: "SIMPLE",
+        capable_tier: "REASONING",
+        base_threshold: 0.66,
+        max_output_tokens: 512,
+        response_format: "json_object",
+        calibration: { version: "fitted-v1", slope: 0.15, intercept: 0.19 },
+      },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, null);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.classifier_type).toBe("capability");
+    expect(saved.classifier_llm_config).toEqual(stored.classifier_llm_config);
+    expect(saved.capability_classifier_config).toEqual(stored.capability_classifier_config);
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("custom_dimensions");
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
   it("round-trips an untouched edit without changing the classifier context values", () => {
     const formValue = {
