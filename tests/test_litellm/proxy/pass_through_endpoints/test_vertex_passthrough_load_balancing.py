@@ -1,12 +1,17 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
+from starlette.datastructures import Headers, State
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     VertexAIPassThroughHandler,
     _base_vertex_proxy_route,
     _upstream_headers_for_vertex_route,
+)
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    HttpPassThroughEndpointHelpers,
 )
 from litellm.types.router import DeploymentTypedDict
 
@@ -758,3 +763,75 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         assert (
             "gemini-3-pro" in target_url
         ), f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
+
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment():
+    """The router deployment that rewrote the upstream URL is the one the logging kwargs must name, so
+    the Prometheus model_id label (and SpendLogs.model_id) on a Vertex passthrough success reads the
+    deployment's id instead of "" (LIT-1761)."""
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+    mock_request.state = State()
+    mock_handler = MagicMock()
+    mock_handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
+
+    mock_router = MagicMock()
+    mock_router.get_available_deployment_for_pass_through.return_value = {
+        "model_name": "gemini-3.8-flash",
+        "litellm_params": {
+            "model": "vertex_ai/gemini-3.8-flash",
+            "vertex_project": "p",
+            "vertex_location": "global",
+            "use_in_pass_through": True,
+        },
+        "model_info": {"id": "vertex-gemini-38-flash-dep"},
+    }
+
+    async def relay_returning_logging_kwargs(
+        request: Request, fastapi_response: object, user_api_key_dict: UserAPIKeyAuth
+    ) -> dict:
+        return HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            passthrough_logging_payload=MagicMock(),
+            logging_obj=MagicMock(),
+            _parsed_body={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+            litellm_call_id="lit-1761-call-id",
+        )
+
+    with (
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ),
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ) as mock_pt_router,
+        patch(  # test-quality-ok: the route offers no injection point for its header preparation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+            return_value=({}, False, "p", "global"),
+        ),
+        patch(  # test-quality-ok: the relay is captured here to read the logging kwargs, the route offers no seam
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=relay_returning_logging_kwargs,
+        ),
+        patch(  # test-quality-ok: the route calls auth directly rather than through Depends
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            new_callable=AsyncMock,
+            return_value=UserAPIKeyAuth(api_key="hashed-key"),
+        ),
+    ):
+        mock_pt_router.get_vertex_credentials.return_value = MagicMock()
+
+        logging_kwargs = await _base_vertex_proxy_route(
+            endpoint="v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            get_vertex_pass_through_handler=mock_handler,
+        )
+
+    assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"

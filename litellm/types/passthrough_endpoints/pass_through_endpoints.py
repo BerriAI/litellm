@@ -11,6 +11,10 @@ LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY: Final = "litellm_pass_through_custom
 # exact byte/string body, such as AWS SigV4-signed requests.
 LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY: Final = "litellm_pass_through_raw_body"
 
+# Request.state key carrying the `model_info` of the router deployment a provider
+# route resolved (e.g. Vertex), so logging attributes the call to that deployment.
+LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_through_deployment_model_info"
+
 # Attribute set on the FastAPI endpoint function of every user-defined pass-through
 # route. Auth reads it off the dispatched endpoint (``request.scope["endpoint"]``) to
 # decide whether a request body ``model`` names an upstream model rather than a
