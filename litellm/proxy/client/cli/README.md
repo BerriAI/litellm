@@ -580,12 +580,14 @@ What the command changed is recorded in `~/.litellm/claude_configure_state.json`
 `lite configure claude`, `lite login --config-claude`, `lite up` and `lite autoroute up` also install a status line (`~/.litellm/statusline.py`, registered as `statusLine` in `~/.claude/settings.json` unless you already run one) that shows which model the auto-router actually served the last turn and, once the proxy has recorded the session, what the session cost against the router's savings baseline:
 
 ```
-claude-auto · Routed to: claude-haiku-4-5  -63% vs Claude Opus 5
-LiteLLM       ████████░░░░░░░░░░░░░░░░  $0.14
+Routed to: claude-haiku-4-5  -63% vs Claude Opus 5
+claude-auto   ████████░░░░░░░░░░░░░░░░  $0.14
 Claude Opus 5 ████████████████████████  $0.38
 ```
 
-The routed model comes from Claude Code's own transcript, so it only names the tier model when the auto-router deployment sets `return_raw_model_name: true` (the `lite autoroute` wizard does); otherwise it shows the alias you requested. The cost lines come from `GET /auto_router/session?session_id=...`, which any virtual key may call for its own sessions, and are cached for five seconds under a per-user `$TMPDIR/litellm-statusline-<uid>` directory. The baseline is the priciest model in the router's hardest tier, the same counterfactual the auto-router's savings reports use. `lite unconfigure claude` removes the `statusLine` entry only while it still points at that script.
+After the first response, the status line uses the latest routed model recorded by `GET /auto_router/session?session_id=...`, so it can show the tier model even when the transcript contains the router alias. If no session record is available, it falls back to Claude Code's transcript. Session records and costs are cached for five seconds under a per-user `$TMPDIR/litellm-statusline-<uid>` directory. The gateway records turns asynchronously, so the display can briefly lag a completed turn. Any virtual key may read its own sessions. The baseline is the priciest model in the router's hardest tier, the same counterfactual the auto-router's savings reports use. `lite unconfigure claude` removes the `statusLine` entry only while it still points at that script
+
+After upgrading the CLI, rerun your original `lite configure claude` command with the same gateway, key and model choice to refresh `~/.litellm/statusline.py`. Keep any explicit `--model` value: omitting it removes the earlier model pin. Package upgrades alone do not refresh this installed copy
 
 `lite codex` registers the same script as a Codex `Stop` hook for the launch, so after each turn Codex prints the same block as a system message. Codex asks once to trust the hook; the answer is remembered for later launches.
 

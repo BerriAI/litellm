@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3983,10 +3984,15 @@ def test_claude_code_marketplace_routes_open_to_internal_users(route):
 
 
 @pytest.mark.parametrize("user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
-def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(user_role):
-    valid_token = UserAPIKeyAuth(api_key="hash-of-caller", user_role=user_role)
-    request = MagicMock(spec=Request)
-    request.query_params = {"session_id": "sess-1"}
+@pytest.mark.parametrize("allowed_routes", [None, ["llm_api_routes"]])
+def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(
+    user_role: str | None, allowed_routes: list[str] | None
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(api_key="hash-of-caller", user_role=user_role, allowed_routes=allowed_routes)
+    request: Final = Request({"type": "http", "method": "GET", "query_string": b"session_id=sess-1"})
+
+    assert RouteChecks.should_call_route("/auto_router/session", valid_token, request) is True
+    assert RouteChecks.is_llm_api_route("/auto_router/session") is False
 
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=None,
@@ -4005,3 +4011,36 @@ def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_
             valid_token=valid_token,
             request_data={},
         )
+
+
+@pytest.mark.parametrize(
+    "route,method,allowed_routes",
+    [
+        ("/auto_router/session", method, ["llm_api_routes"])
+        for method in ("POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", None)
+    ]
+    + [
+        (route, "GET", ["llm_api_routes"])
+        for route in (
+            "/auto_router/benchmarks",
+            "/auto_router/test_routing",
+            "/auto_router/validate_complexity_router_config",
+            "/auto_router/session/other",
+            "/auto_router/sessions",
+        )
+    ]
+    + [
+        ("/auto_router/session", "GET", allowed_routes)
+        for allowed_routes in (["/v1/messages"], ["info_routes"], ["openai_routes"])
+    ],
+)
+def test_auto_router_session_read_grant_rejects_other_methods_paths_and_scopes(
+    route: str, method: str | None, allowed_routes: list[str]
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(api_key="hash-of-caller", allowed_routes=allowed_routes)
+    request: Final = Request({"type": "http", "method": method}) if method is not None else None
+
+    with pytest.raises(HTTPException) as error:
+        RouteChecks.should_call_route(route, valid_token, request)
+
+    assert error.value.status_code == 403

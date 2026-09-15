@@ -2180,6 +2180,32 @@ describe("KeyEditView", () => {
       expect(onSubmitMock.mock.calls[0][0].tags).toEqual(["test-tag", "typed-tag"]);
     });
 
+    it("moves a tags array typed into the metadata JSON into the Tags control on blur", async () => {
+      renderForPayload(vi.fn().mockResolvedValue(undefined));
+      await screen.findByRole("button", { name: /save changes/i });
+
+      const metadata = screen.getByLabelText("Metadata");
+      fireEvent.change(metadata, { target: { value: '{"tags": ["pilot-tag"], "env": "non-prod"}' } });
+      fireEvent.blur(metadata);
+
+      expect(await screen.findByText("pilot-tag")).toBeInTheDocument();
+      expect(metadata).toHaveValue('{\n  "env": "non-prod"\n}');
+    });
+
+    it("carries a tags array typed into the metadata JSON into the payload even without a blur", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      fireEvent.change(screen.getByLabelText("Metadata"), { target: { value: '{"tags": ["pilot-tag"]}' } });
+      fireEvent.submit(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({ tags: ["test-tag", "pilot-tag"], metadata: "{}" });
+    });
+
     const pickFromCombobox = async (inputLabel: RegExp | string, optionName: RegExp | string) => {
       await userEvent.click(screen.getByLabelText(inputLabel));
       await userEvent.click(await screen.findByRole("option", { name: optionName }));

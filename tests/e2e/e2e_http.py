@@ -16,9 +16,11 @@ requests itself imports.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Final, Generator, Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
+from typing import Final, Generic, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
@@ -36,8 +38,8 @@ class Headers(BaseModel):
 
 class AuthHeaders(Headers):
     # litellm accepts either; set whichever the call needs, leave the other None.
-    authorization: str | None = None
-    x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key")
+    authorization: str | None = Field(default=None, repr=False)
+    x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key", repr=False)
 
 
 class AnthropicHeaders(AuthHeaders):
@@ -168,6 +170,7 @@ class StreamingResponse(BaseModel):
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
     stream_done: bool = False
+    stream_done_positions: tuple[int, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -292,6 +295,22 @@ def _params(params: BaseModel | None) -> dict[str, str]:
 
 TRANSIENT_STATUSES: frozenset[int] = frozenset({529})
 RETRY_ATTEMPTS: int = 3
+_QUALIFICATION: Final[ContextVar[bool]] = ContextVar("e2e_qualification", default=False)
+
+
+def retry_attempts(default: int) -> int:
+    return 1 if _QUALIFICATION.get() else default
+
+
+@contextmanager
+def without_retries() -> Generator[None]:
+    token: Final = _QUALIFICATION.set(True)
+    try:
+        yield
+    finally:
+        _QUALIFICATION.reset(token)
+
+
 RETRY_BACKOFF_SECONDS: float = 0.5
 
 
@@ -319,7 +338,7 @@ def request_with_retry[T: RetryableResponse](
     hang should surface as a hang instead of doubling the wall clock. Every
     retry prints, so flakiness stays visible in the run log instead of
     vanishing into green."""
-    for attempt in range(1, RETRY_ATTEMPTS):
+    for attempt in range(1, retry_attempts(RETRY_ATTEMPTS)):
         resp = issue()
         if resp.status_code not in TRANSIENT_STATUSES:
             return resp
@@ -414,6 +433,7 @@ def get_external[R: BaseModel](
     url: str,
     *,
     response_type: type[R],
+    headers: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
     """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
@@ -422,7 +442,7 @@ def get_external[R: BaseModel](
     try:
         resp = requests.get(
             url,
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/json", **(_headers(headers) if headers is not None else {})},
             timeout=timeout,
         )
     except requests.RequestException as exc:
@@ -628,6 +648,7 @@ def streaming_outcome(
         stream_events=[payload for payload, _ in events],
         stream_event_arrivals=[arrived for _, arrived in events],
         stream_done=any(payload == _SSE_DONE for payload, _ in payloads),
+        stream_done_positions=tuple(index for index, (payload, _) in enumerate(payloads) if payload == _SSE_DONE),
         stream_error=next(
             (line.decode(errors="replace")[:300] for line, _ in stamped if _is_stream_error_line(line)),
             None,

@@ -585,7 +585,7 @@ async def new_user(
             teams = check_if_default_team_set()
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
-        response: Final = await generate_key_helper_fn(request_type="user", **data_json)
+        response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
