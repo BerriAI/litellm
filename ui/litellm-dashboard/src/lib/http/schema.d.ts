@@ -27496,6 +27496,11 @@ export interface components {
              */
             total_latency_ms: number;
             /**
+             * Total Latency Requests
+             * @default 0
+             */
+            total_latency_requests: number;
+            /**
              * Total Pages
              * @default 1
              */
@@ -37089,10 +37094,16 @@ export interface components {
             gateway_injected_caching_savings_spend: number;
             /**
              * Latency Ms
-             * @description Summed duration of successful requests, in ms
+             * @description Summed duration of the successful requests counted in latency_requests, in ms
              * @default 0
              */
             latency_ms: number;
+            /**
+             * Latency Requests
+             * @description Successful requests whose duration is included in latency_ms
+             * @default 0
+             */
+            latency_requests: number;
             /**
              * Prompt Caching Savings Spend
              * @default 0

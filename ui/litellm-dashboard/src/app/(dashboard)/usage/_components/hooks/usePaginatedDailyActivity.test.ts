@@ -44,6 +44,7 @@ describe("sumMetadata", () => {
       total_cache_creation_input_tokens: 1,
       total_flat_cost: 1,
       total_latency_ms: 1,
+      total_latency_requests: 1,
     };
     const merged = sumMetadata(page, page);
 

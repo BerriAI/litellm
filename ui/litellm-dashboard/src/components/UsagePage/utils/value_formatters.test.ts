@@ -64,7 +64,7 @@ describe("valueFormatterSpend", () => {
 });
 
 describe("formatAvgLatency", () => {
-  it("divides the summed duration by the successful request count", () => {
+  it("divides the summed duration by the count of requests that carry a duration", () => {
     expect(formatAvgLatency(4500, 3)).toBe("1.50 s");
     expect(formatAvgLatency(1000, 4)).toBe("250 ms");
   });
@@ -83,7 +83,8 @@ describe("formatAvgLatency", () => {
     expect(formatAvgLatency(0, 3)).toBe("-");
   });
 
-  it("shows a dash for a response that predates the latency column", () => {
+  it("shows a dash for a response that predates the latency columns", () => {
     expect(formatAvgLatency(undefined, 3)).toBe("-");
+    expect(formatAvgLatency(4500, undefined)).toBe("-");
   });
 });

@@ -3115,6 +3115,11 @@
               "title": "Total Latency Ms",
               "type": "integer"
             },
+            "total_latency_requests": {
+              "default": 0,
+              "title": "Total Latency Requests",
+              "type": "integer"
+            },
             "total_pages": {
               "default": 1,
               "title": "Total Pages",
@@ -3630,8 +3635,14 @@
             },
             "latency_ms": {
               "default": 0,
-              "description": "Summed duration of successful requests, in ms",
+              "description": "Summed duration of the successful requests counted in latency_requests, in ms",
               "title": "Latency Ms",
+              "type": "integer"
+            },
+            "latency_requests": {
+              "default": 0,
+              "description": "Successful requests whose duration is included in latency_ms",
+              "title": "Latency Requests",
               "type": "integer"
             },
             "prompt_caching_savings_spend": {

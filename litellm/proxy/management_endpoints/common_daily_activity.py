@@ -112,6 +112,9 @@ class DailySpendRecord(Protocol):
     def latency_ms(self) -> int: ...
 
     @property
+    def latency_requests(self) -> int: ...
+
+    @property
     def successful_requests(self) -> int: ...
 
     @property
@@ -166,6 +169,7 @@ class _GroupingSetsRow(SimpleNamespace):
     successful_requests: int | None
     failed_requests: int | None
     latency_ms: int | None
+    latency_requests: int | None
 
 
 class _EntityRollupRow(_GroupingSetsRow):
@@ -222,6 +226,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
     existing_metrics.latency_ms += record.latency_ms or 0
+    existing_metrics.latency_requests += record.latency_requests or 0
     return existing_metrics
 
 
@@ -773,7 +778,8 @@ def _build_aggregated_sql_query(
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests,
-            SUM(latency_ms)::bigint AS latency_ms
+            SUM(latency_ms)::bigint AS latency_ms,
+            SUM(latency_requests)::bigint AS latency_requests
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -853,7 +859,8 @@ def _build_entity_rollup_sql_query(
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests,
-            SUM(latency_ms)::bigint AS latency_ms
+            SUM(latency_ms)::bigint AS latency_ms,
+            SUM(latency_requests)::bigint AS latency_requests
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -993,6 +1000,7 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
         latency_ms=record.latency_ms or 0,
+        latency_requests=record.latency_requests or 0,
     )
 
 
@@ -1255,6 +1263,7 @@ async def get_daily_activity(
                 total_gateway_injected_caching_savings_spend=metadata_metrics.gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
                 total_latency_ms=metadata_metrics.latency_ms,
+                total_latency_requests=metadata_metrics.latency_requests,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
@@ -1433,6 +1442,7 @@ async def get_daily_activity_aggregated(
                 ].gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
                 total_latency_ms=aggregated["totals"].latency_ms,
+                total_latency_requests=aggregated["totals"].latency_requests,
                 page=1,
                 total_pages=1,
                 has_more=False,

@@ -144,6 +144,9 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["latency_ms"] = (payload.get("latency_ms", 0) or 0) + daily_transaction.get(
                         "latency_ms", 0
                     )
+                    daily_transaction["latency_requests"] = (
+                        payload.get("latency_requests", 0) or 0
+                    ) + daily_transaction.get("latency_requests", 0)
 
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)

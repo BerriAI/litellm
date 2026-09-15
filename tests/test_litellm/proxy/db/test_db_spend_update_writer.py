@@ -2750,19 +2750,18 @@ async def test_daily_transaction_internal_call_keeps_spend_but_not_request_count
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("request_status", "metadata", "expected_latency_ms"),
+    ("request_status", "metadata", "request_duration_ms", "expected_latency_ms", "expected_latency_requests"),
     [
-        ("success", {}, 1234),
-        ("failure", {}, 0),
-        ("success", {"internal_call_origin": "shadow_eval_judge"}, 0),
+        ("success", {}, 1234, 1234, 1),
+        ("success", {}, 0, 0, 1),
+        ("success", {}, None, 0, 0),
+        ("failure", {}, 1234, 0, 0),
+        ("success", {"internal_call_origin": "shadow_eval_judge"}, 1234, 0, 0),
     ],
 )
-async def test_daily_transaction_latency_counts_only_requests_the_caller_saw_succeed(
-    request_status, metadata, expected_latency_ms
+async def test_daily_transaction_latency_counts_only_measured_requests_the_caller_saw_succeed(
+    request_status, metadata, request_duration_ms, expected_latency_ms, expected_latency_requests
 ):
-    """The rollup stores summed duration over successful requests, so the dashboard's
-    average is latency_ms / successful_requests. A failed or internal call has no
-    successful request to divide by and must not inflate the numerator."""
     writer = DBSpendUpdateWriter()
     mock_prisma = MagicMock()
     mock_prisma.get_request_status = MagicMock(return_value=request_status)
@@ -2780,7 +2779,7 @@ async def test_daily_transaction_latency_counts_only_requests_the_caller_saw_suc
             "prompt_tokens": 100,
             "completion_tokens": 10,
             "spend": 0.05,
-            "request_duration_ms": 1234,
+            "request_duration_ms": request_duration_ms,
             "metadata": json.dumps(metadata),
         },
         prisma_client=mock_prisma,
@@ -2789,6 +2788,7 @@ async def test_daily_transaction_latency_counts_only_requests_the_caller_saw_suc
 
     assert transaction is not None
     assert transaction["latency_ms"] == expected_latency_ms
+    assert transaction["latency_requests"] == expected_latency_requests
 
 
 def _deadlock_error():

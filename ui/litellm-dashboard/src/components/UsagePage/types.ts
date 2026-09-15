@@ -15,6 +15,7 @@ export interface SpendMetrics {
   gateway_injected_caching_savings_spend?: number;
   autorouter_savings_spend?: number;
   latency_ms?: number;
+  latency_requests?: number;
 }
 
 export type DailyData = {
@@ -79,6 +80,7 @@ export interface ModelActivityData {
   total_cache_read_input_tokens: number;
   total_cache_creation_input_tokens: number;
   total_latency_ms: number;
+  total_latency_requests: number;
   total_tokens: number;
   prompt_tokens: number;
   completion_tokens: number;
@@ -98,6 +100,7 @@ export interface ModelActivityData {
       cache_read_input_tokens: number;
       cache_creation_input_tokens: number;
       latency_ms: number;
+      latency_requests: number;
     };
   }[];
 }

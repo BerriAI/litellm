@@ -5216,6 +5216,7 @@ class BaseDailySpendTransaction(TypedDict):
     successful_requests: int
     failed_requests: int
     latency_ms: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
+    latency_requests: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):

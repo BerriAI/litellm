@@ -2177,6 +2177,8 @@ class DBSpendUpdateWriter:
 
             is_internal_call: Final = bool(_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
             is_counted_success: Final = not is_internal_call and request_status == "success"
+            raw_duration_ms: Final = payload.get("request_duration_ms") if is_counted_success else None
+            measured_duration_ms: Final[int | None] = raw_duration_ms if isinstance(raw_duration_ms, int) else None
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
             savings_spend: Final = compute_savings_spend(
@@ -2212,7 +2214,8 @@ class DBSpendUpdateWriter:
                 api_requests=0 if is_internal_call else 1,
                 successful_requests=1 if is_counted_success else 0,
                 failed_requests=1 if not is_internal_call and request_status != "success" else 0,
-                latency_ms=(payload.get("request_duration_ms") or 0) if is_counted_success else 0,
+                latency_ms=measured_duration_ms or 0,
+                latency_requests=0 if measured_duration_ms is None else 1,
                 cache_read_input_tokens=cache_read_input_tokens,
                 cache_creation_input_tokens=extract_cache_creation_tokens(usage_obj),
                 compression_saved_tokens=compression_saved_tokens,

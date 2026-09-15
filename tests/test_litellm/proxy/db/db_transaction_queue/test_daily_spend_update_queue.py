@@ -105,9 +105,7 @@ async def test_add_multiple_updates(daily_spend_update_queue):
 @pytest.mark.asyncio
 async def test_aggregated_daily_spend_update_empty(daily_spend_update_queue):
     """Test aggregating updates from an empty queue"""
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     assert result == {}
 
 
@@ -127,9 +125,7 @@ async def test_get_aggregated_daily_spend_update_transactions_single_key():
     updates = [{test_key: test_transaction}]
 
     # Test aggregation
-    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-        updates
-    )
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
 
     assert len(result) == 1
     assert test_key in result
@@ -162,9 +158,7 @@ async def test_get_aggregated_daily_spend_update_transactions_multiple_keys():
     updates = [{test_key1: test_transaction1}, {test_key2: test_transaction2}]
 
     # Test aggregation
-    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-        updates
-    )
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
 
     assert len(result) == 2
     assert test_key1 in result
@@ -210,18 +204,40 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
         "latency_ms": 0,
+        "latency_requests": 0,
     }
 
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
 
     # Test aggregation
-    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-        updates
-    )
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
 
     assert len(result) == 1
     assert test_key in result
     assert result[test_key] == expected_transaction
+
+
+def test_latency_sum_and_sample_count_add_up_across_a_legacy_payload():
+    test_key = "user1_2026-09-15_key123_gpt-5_openai"
+    base = {
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+    updates = [
+        {test_key: {**base, "latency_ms": 1200, "latency_requests": 1}},
+        {test_key: {**base}},
+        {test_key: {**base, "latency_ms": 300, "latency_requests": 1}},
+    ]
+
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
+
+    assert result[test_key]["successful_requests"] == 3
+    assert result[test_key]["latency_ms"] == 1500
+    assert result[test_key]["latency_requests"] == 2
 
 
 @pytest.mark.asyncio
@@ -263,6 +279,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
         "latency_ms": 0,
+        "latency_requests": 0,
     }
 
     # Add updates to queue
@@ -270,9 +287,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
     await daily_spend_update_queue.add_update({test_key: test_transaction2})
 
     # Flush and get aggregated transactions
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
 
     assert len(result) == 1
     assert test_key in result
@@ -280,9 +295,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
 
 
 @pytest.mark.asyncio
-async def test_queue_max_size_triggers_aggregation(
-    monkeypatch, daily_spend_update_queue
-):
+async def test_queue_max_size_triggers_aggregation(monkeypatch, daily_spend_update_queue):
     """Test that reaching MAX_SIZE_IN_MEMORY_QUEUE triggers aggregation"""
     # Override MAX_SIZE_IN_MEMORY_QUEUE for testing
     litellm._turn_on_debug()
@@ -306,9 +319,7 @@ async def test_queue_max_size_triggers_aggregation(
     assert daily_spend_update_queue.update_queue.qsize() == 1
 
     # Verify the aggregated values
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     assert result[test_key]["spend"] == 6.0
     assert result[test_key]["prompt_tokens"] == 600
     assert result[test_key]["completion_tokens"] == 300
@@ -425,9 +436,7 @@ async def test_cache_token_fields_aggregation(daily_spend_update_queue):
 
 
 @pytest.mark.asyncio
-async def test_queue_size_reduction_with_large_volume(
-    monkeypatch, daily_spend_update_queue
-):
+async def test_queue_size_reduction_with_large_volume(monkeypatch, daily_spend_update_queue):
     """Test that queue size is actually reduced when dealing with many items"""
     # Set a smaller MAX_SIZE for testing
     monkeypatch.setattr(daily_spend_update_queue, "MAX_SIZE_IN_MEMORY_QUEUE", 10)
@@ -468,9 +477,7 @@ async def test_queue_size_reduction_with_large_volume(
     assert daily_spend_update_queue.update_queue.qsize() <= 10
 
     # Verify total costs are correct
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     print("RESULT", json.dumps(result, indent=4))
 
     assert result[user1_key]["spend"] == 200 * 0.5  # 10.0
@@ -543,6 +550,7 @@ async def test_every_optional_daily_metric_aggregates(daily_spend_update_queue):
     paths, so the driver reads as zero on the dashboard however much it saved.
     """
     test_key = "user1_2023-01-01_key123_claude-haiku-4-5_anthropic"
+
     def _numeric(annotation):
         # additive metrics may be declared NotRequired[float] for rows queued by a pod
         # running the previous release, so unwrap before matching

@@ -798,6 +798,7 @@ model LiteLLM_DailyUserSpend {
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
   latency_ms          BigInt      @default(0)
+  latency_requests    BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -835,6 +836,7 @@ model LiteLLM_DailyOrganizationSpend {
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
   latency_ms          BigInt      @default(0)
+  latency_requests    BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -872,6 +874,7 @@ model LiteLLM_DailyEndUserSpend {
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
   latency_ms          BigInt      @default(0)
+  latency_requests    BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -908,6 +911,7 @@ model LiteLLM_DailyAgentSpend {
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
   latency_ms          BigInt      @default(0)
+  latency_requests    BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
   @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
@@ -944,6 +948,7 @@ model LiteLLM_DailyTeamSpend {
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
   latency_ms          BigInt      @default(0)
+  latency_requests    BigInt      @default(0)
   ptu_flat_cost       Float    @default(0.0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
@@ -983,6 +988,7 @@ model LiteLLM_DailyTagSpend {
   successful_requests BigInt      @default(0)
   failed_requests     BigInt      @default(0)
   latency_ms          BigInt      @default(0)
+  latency_requests    BigInt      @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 

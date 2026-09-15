@@ -11,9 +11,9 @@ export function valueFormatter(number: number) {
   return number.toString();
 }
 
-export function formatAvgLatency(totalLatencyMs: number | undefined, successfulRequests: number): string {
-  if (!totalLatencyMs || totalLatencyMs <= 0 || successfulRequests <= 0) return "-";
-  const avgMs = totalLatencyMs / successfulRequests;
+export function formatAvgLatency(totalLatencyMs: number | undefined, latencyRequests: number | undefined): string {
+  if (!totalLatencyMs || totalLatencyMs <= 0 || !latencyRequests || latencyRequests <= 0) return "-";
+  const avgMs = totalLatencyMs / latencyRequests;
   if (avgMs >= 1000) return `${(avgMs / 1000).toFixed(2)} s`;
   return `${Math.round(avgMs)} ms`;
 }

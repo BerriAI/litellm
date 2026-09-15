@@ -120,6 +120,7 @@ const createMockModelActivityData = (label: string, overrides: Partial<ModelActi
   total_cache_read_input_tokens: 1000,
   total_cache_creation_input_tokens: 500,
   total_latency_ms: 0,
+  total_latency_requests: 0,
   top_api_keys: [],
   top_models: [],
   daily_data: [
@@ -153,6 +154,7 @@ const GPT_35_MODEL_DATA: ModelActivityData = {
   total_cache_read_input_tokens: 500,
   total_cache_creation_input_tokens: 250,
   total_latency_ms: 0,
+  total_latency_requests: 0,
   top_api_keys: [],
   top_models: [],
   daily_data: [
@@ -412,9 +414,13 @@ describe("ActivityMetrics", () => {
     expect(zeroElements.length).toBeGreaterThan(0);
   });
 
-  it("shows each model's average latency per successful request", () => {
+  it("averages each model's latency over the requests that carry a measured duration", () => {
     const modelWithLatency: Record<string, ModelActivityData> = {
-      "gpt-4": createMockModelActivityData("GPT-4", { total_successful_requests: 4, total_latency_ms: 5000 }),
+      "gpt-4": createMockModelActivityData("GPT-4", {
+        total_successful_requests: 10,
+        total_latency_ms: 5000,
+        total_latency_requests: 4,
+      }),
     };
 
     render(<ActivityMetrics modelMetrics={modelWithLatency} />);
@@ -423,12 +429,13 @@ describe("ActivityMetrics", () => {
     expect(screen.getByText("1.25 s")).toBeInTheDocument();
   });
 
-  it("shows a dash for latency when the model has no successful requests", () => {
+  it("shows a dash for latency when no request in the range carries a measured duration", () => {
     const modelWithOnlyFailures: Record<string, ModelActivityData> = {
       "gpt-4": createMockModelActivityData("GPT-4", {
-        total_successful_requests: 0,
+        total_successful_requests: 40,
         total_failed_requests: 100,
         total_latency_ms: 0,
+        total_latency_requests: 0,
       }),
     };
 
@@ -1427,21 +1434,18 @@ describe("processActivityData", () => {
     expect(result["gpt-4"].total_cache_creation_input_tokens).toBe(0);
   });
 
-  it("sums each model's latency across days and keeps it on the daily rows", () => {
-    const dayWithLatency = (date: string, latency_ms: number, successful_requests: number): DailyData => ({
-      date,
-      metrics: { ...EMPTY_SPEND_METRICS, api_requests: successful_requests, successful_requests, latency_ms },
-      breakdown: {
-        ...EMPTY_BREAKDOWN,
-        models: {
-          "gpt-5": {
-            metrics: { ...EMPTY_SPEND_METRICS, api_requests: successful_requests, successful_requests, latency_ms },
-            metadata: {},
-            api_key_breakdown: {},
-          },
+  it("sums each model's latency and measured request count across days and keeps them on the daily rows", () => {
+    const dayWithLatency = (date: string, latency_ms: number, latency_requests: number): DailyData => {
+      const metrics = { ...EMPTY_SPEND_METRICS, api_requests: 3, successful_requests: 3, latency_ms, latency_requests };
+      return {
+        date,
+        metrics,
+        breakdown: {
+          ...EMPTY_BREAKDOWN,
+          models: { "gpt-5": { metrics, metadata: {}, api_key_breakdown: {} } },
         },
-      },
-    });
+      };
+    };
 
     const result = processActivityData(
       { results: [dayWithLatency("2025-01-01", 3000, 2), dayWithLatency("2025-01-02", 1500, 1)] },
@@ -1449,8 +1453,10 @@ describe("processActivityData", () => {
     );
 
     expect(result["gpt-5"].total_latency_ms).toBe(4500);
-    expect(result["gpt-5"].total_successful_requests).toBe(3);
+    expect(result["gpt-5"].total_latency_requests).toBe(3);
+    expect(result["gpt-5"].total_successful_requests).toBe(6);
     expect(result["gpt-5"].daily_data.map((day) => day.metrics.latency_ms)).toEqual([3000, 1500]);
+    expect(result["gpt-5"].daily_data.map((day) => day.metrics.latency_requests)).toEqual([2, 1]);
   });
 
   it("treats a model response without the latency column as zero latency", () => {
@@ -1467,7 +1473,9 @@ describe("processActivityData", () => {
     );
 
     expect(result["gpt-5"].total_latency_ms).toBe(0);
+    expect(result["gpt-5"].total_latency_requests).toBe(0);
     expect(result["gpt-5"].daily_data[0].metrics.latency_ms).toBe(0);
+    expect(result["gpt-5"].daily_data[0].metrics.latency_requests).toBe(0);
   });
 
   it("should handle empty breakdown gracefully", () => {

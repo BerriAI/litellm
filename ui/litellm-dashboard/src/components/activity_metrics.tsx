@@ -66,7 +66,7 @@ const ModelSection = ({
           <CardContent>
             <p className="text-sm text-muted-foreground">Avg Latency</p>
             <h3 className="text-lg font-medium text-foreground">
-              {formatAvgLatency(metrics.total_latency_ms, metrics.total_successful_requests)}
+              {formatAvgLatency(metrics.total_latency_ms, metrics.total_latency_requests)}
             </h3>
             <p className="text-sm text-muted-foreground">per successful request</p>
           </CardContent>
@@ -481,6 +481,7 @@ export const processActivityData = (
           total_cache_read_input_tokens: 0,
           total_cache_creation_input_tokens: 0,
           total_latency_ms: 0,
+          total_latency_requests: 0,
           top_api_keys: [],
           top_models: [],
           daily_data: [],
@@ -497,6 +498,7 @@ export const processActivityData = (
       modelMetrics[model].total_cache_read_input_tokens += modelData.metrics.cache_read_input_tokens || 0;
       modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics.cache_creation_input_tokens || 0;
       modelMetrics[model].total_latency_ms += modelData.metrics.latency_ms || 0;
+      modelMetrics[model].total_latency_requests += modelData.metrics.latency_requests || 0;
 
       // Add daily data
       modelMetrics[model].daily_data.push({
@@ -512,6 +514,7 @@ export const processActivityData = (
           cache_read_input_tokens: modelData.metrics.cache_read_input_tokens || 0,
           cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0,
           latency_ms: modelData.metrics.latency_ms || 0,
+          latency_requests: modelData.metrics.latency_requests || 0,
         },
       });
     });

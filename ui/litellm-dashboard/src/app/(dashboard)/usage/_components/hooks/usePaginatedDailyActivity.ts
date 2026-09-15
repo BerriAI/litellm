@@ -31,6 +31,7 @@ const SUMMABLE_METADATA_KEYS = [
   "total_cache_creation_input_tokens",
   "total_flat_cost",
   "total_latency_ms",
+  "total_latency_requests",
 ] as const;
 
 interface DailyActivityResponse {

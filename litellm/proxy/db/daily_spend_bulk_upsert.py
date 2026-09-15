@@ -58,6 +58,7 @@ _COUNTER_COLUMNS: Final = (
     "cache_creation_input_tokens",
     "compression_saved_tokens",
     "latency_ms",
+    "latency_requests",
 )
 _SPEND_COLUMNS: Final = (
     "spend",
