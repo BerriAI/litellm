@@ -11,10 +11,13 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.constants import MID_STREAM_CONTINUATION_KWARG
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_assistant_prefill
+
+# Marks a fallback re-entry as a mid-stream continuation. Router sets it (via a
+# lazy import) and this filter reads it; kept here to avoid a module-level cycle.
+MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 
 _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 

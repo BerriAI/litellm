@@ -2414,8 +2414,8 @@ class CustomStreamWrapper:
         # Shared by the sync, async, and non-aiohttp iteration sites so answer
         # text and the disqualifying-content latch stay in step across all three.
         get: Final = getattr(delta, "get", None)
-        content: Final = get("content", "") if callable(get) else ""
-        self.response_uptil_now += content or ""
+        content: Final = get("content") if callable(get) else None
+        self.response_uptil_now += content if isinstance(content, str) else ""
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
 

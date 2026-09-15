@@ -62,7 +62,6 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
-    MID_STREAM_CONTINUATION_KWARG,
     OUTPUT_TOKEN_CEILING_PARAMS,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -2853,6 +2852,10 @@ class Router:
                     )
                     initial_kwargs["original_function"] = self._acompletion
                     if continue_after_content:
+                        from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+                            MID_STREAM_CONTINUATION_KWARG,
+                        )
+
                         initial_kwargs["messages"] = self._build_completion_continuation_input(
                             messages, e.generated_content
                         )
@@ -3634,6 +3637,10 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
+            from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+                MID_STREAM_CONTINUATION_KWARG,
+            )
+
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
             input_kwargs.pop(MID_STREAM_CONTINUATION_KWARG, None)
