@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -14,7 +14,8 @@ from litellm.llms.base_llm.passthrough.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import StandardPassThroughResponseObject
+from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import LlmProviders, StandardPassThroughResponseObject
 
 if TYPE_CHECKING:
     from httpx import URL, Response
@@ -25,6 +26,16 @@ if TYPE_CHECKING:
 
 
 API_VERSION_SEGMENT: Final = re.compile(r"^v\d+$")
+NVIDIA_NIM_MODEL_PREFIX: Final = f"{LlmProviders.NVIDIA_NIM.value}/"
+
+
+def nvidia_nim_model_groups(deployments: Iterable[DeploymentTypedDict] | None) -> frozenset[str]:
+    return frozenset(
+        deployment["model_name"]
+        for deployment in deployments or ()
+        if deployment["litellm_params"].get("custom_llm_provider") == LlmProviders.NVIDIA_NIM.value
+        or deployment["litellm_params"].get("model", "").startswith(NVIDIA_NIM_MODEL_PREFIX)
+    )
 
 
 def nvidia_nim_router_model_in_endpoint(endpoint: str, router_models: Collection[str]) -> str | None:
