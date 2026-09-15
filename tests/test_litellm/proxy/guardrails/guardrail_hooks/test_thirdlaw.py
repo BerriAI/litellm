@@ -1203,11 +1203,10 @@ async def test_a_responses_error_event_continues_the_streams_sequence_numbering(
     assert out[0].sequence_number == 12
 
 
-async def test_delta_text_missing_from_the_terminal_body_is_reported_unscanned(
-    caplog: pytest.LogCaptureFixture,
-):
+async def test_delta_text_missing_from_the_terminal_body_is_posted_beside_it():
     """Reasoning summaries reach the client through deltas some providers never repeat in the
-    finished body, so a scan of that body alone would not have seen them."""
+    finished body. A scan of that body alone would miss them, so they ride along in their own
+    field and the body itself stays the shape the non-streaming route posts."""
     chunks = _responses_stream_chunks()
     chunks.insert(
         2,
@@ -1216,17 +1215,56 @@ async def test_delta_text_missing_from_the_terminal_body_is_reported_unscanned(
             item_id="rs_1",
             output_index=0,
             summary_index=0,
-            delta="thinking about sk-other-leak",
+            delta="thinking about ",
+        ),
+    )
+    chunks.insert(
+        3,
+        ReasoningSummaryTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+            item_id="rs_1",
+            output_index=0,
+            summary_index=0,
+            delta="sk-other-leak",
         ),
     )
     g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
-    with caplog.at_level("WARNING"):
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    posted = _sent_payload(g)
+    assert posted["streamed_deltas_not_in_body"] == ["thinking about sk-other-leak"]
+    assert "choices" not in posted["response_body"]
+    assert posted["response_body"]["output"][0]["content"][0]["text"] == "the secret is sk-leak"
+
+
+async def test_the_deltas_field_is_omitted_when_the_body_already_carries_every_delta():
+    """Only text the body does not account for goes beside it; a clean turn posts no field at all,
+    so the service sees the same payload shape it did before the field existed."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_responses_stream_chunks()),
+            request_data=_request_data(),
+        )
+    )
+    assert "streamed_deltas_not_in_body" not in _sent_payload(g)
+
+
+async def test_the_deltas_field_never_appears_on_a_chat_or_messages_stream():
+    """Only a /v1/responses turn can leave delta text out of its body; the other surfaces fold
+    every delta into what they post."""
+    for chunks in (_stream_chunks(), _anthropic_sse_frames()):
+        g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
         await _collect(
             g.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
             )
         )
-    assert "1 streamed delta field(s) are absent" in caplog.text
+        assert "streamed_deltas_not_in_body" not in _sent_payload(g)
 
 
 @pytest.mark.parametrize("typo", ["fail_close", "failopen", "FAIL_OPEN", ""])

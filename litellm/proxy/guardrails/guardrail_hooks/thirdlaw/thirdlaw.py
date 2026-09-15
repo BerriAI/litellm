@@ -362,6 +362,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         wire_event: _WireEvent,
         request_data: dict[str, object],  # mutable-ok: proxy-shared request dict, forwarded to base-class helpers
         response_body: Mapping[str, object] | None,
+        streamed_deltas: Sequence[str] | None = None,
     ) -> ThirdlawGuardrailRequest:
         dynamic_params: Final = _JSON_DICT_ADAPTER.validate_python(
             self.get_guardrail_dynamic_request_body_params(request_data)
@@ -374,6 +375,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             request_headers=_outbound_request_headers(request_data, self.raw_value_header_names),
             request_body=_request_body(request_data, prefer_snapshot=wire_event != "pre_call"),
             response_body=response_body,
+            streamed_deltas_not_in_body=tuple(streamed_deltas) if streamed_deltas else None,
             additional_provider_specific_params=combined_params or None,
         )
 
@@ -421,6 +423,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         wire_event: _WireEvent,
         request_data: dict[str, object],  # mutable-ok: proxy-shared request dict; trace records land in it
         response_body: Mapping[str, object] | None = None,
+        streamed_deltas: Sequence[str] | None = None,
     ) -> ThirdlawGuardrailResponse | None:
         """POST the full payload to ThirdLaw and return its decision.
 
@@ -431,7 +434,10 @@ class ThirdlawGuardrail(CustomGuardrail):
         """
         started_at: Final = datetime.now(timezone.utc)
         payload: Final = self._build_wire_request(
-            wire_event=wire_event, request_data=request_data, response_body=response_body
+            wire_event=wire_event,
+            request_data=request_data,
+            response_body=response_body,
+            streamed_deltas=streamed_deltas,
         )
         try:
             http_response: Final = await self.async_handler.post(
@@ -684,19 +690,21 @@ class ThirdlawGuardrail(CustomGuardrail):
     @staticmethod
     def _assembled_responses_stream_response(collected: Sequence[object]) -> ResponsesAPIResponse | None:
         """The finished Responses body, which is the shape the non-streaming route already posts."""
-        body: Final = final_responses_api_response(collected)
-        if body is None:
-            return None
-        unscanned: Final = responses_deltas_absent_from_body(collected, body)
-        if unscanned:
-            # The client already received this text, so the scan is narrower than the turn. The
-            # wire contract carries one whole body, which cannot express the difference.
-            verbose_proxy_logger.warning(
-                "ThirdLaw guardrail: %d streamed delta field(s) are absent from the terminal "
-                "/v1/responses body and were not scanned",
-                len(unscanned),
-            )
-        return body
+        return final_responses_api_response(collected)
+
+    @staticmethod
+    def _streamed_deltas_not_in_body(
+        collected: Sequence[object], assembled: _AssembledStream, surface: StreamSurface
+    ) -> tuple[str, ...]:
+        """Delta text the client already received that the scanned body does not carry.
+
+        Reasoning summaries and tool-call arguments reach a /v1/responses client through delta
+        events some providers never repeat in the terminal body. Posting them beside the body
+        lets the scan cover the whole turn without widening the body contract.
+        """
+        if surface is not StreamSurface.RESPONSES or not isinstance(assembled, ResponsesAPIResponse):
+            return ()
+        return responses_deltas_absent_from_body(collected, assembled)
 
     @staticmethod
     def _assembled_chat_stream_response(collected: Sequence[object]) -> ModelResponse | None:
@@ -796,6 +804,7 @@ class ThirdlawGuardrail(CustomGuardrail):
                 wire_event="post_call",
                 request_data=request_data,
                 response_body=_response_payload(assembled),
+                streamed_deltas=self._streamed_deltas_not_in_body(collected, assembled, surface),
             )
         except Exception as error:  # noqa: BLE001  # after keepalive flush a raise cannot reach the client; send a frame
             flushed_frames: Final = (
@@ -1015,6 +1024,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             wire_event="post_call",
             request_data=request_data,
             response_body=_response_payload(assembled),
+            streamed_deltas=self._streamed_deltas_not_in_body(collected, assembled, surface),
         )
         if final_decision is None:
             return
