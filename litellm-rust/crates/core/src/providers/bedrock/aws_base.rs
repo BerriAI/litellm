@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::caching::in_memory_cache::InMemoryCache;
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_sigv4::http_request::{
@@ -197,7 +197,7 @@ pub fn classify_auth(
 pub async fn resolve_credentials(
     config: AwsAuthConfig,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> CoreResult<Credentials> {
+) -> Result<Credentials, Error> {
     let resolved = config.clone().with_environment(env_lookup);
     let flow = classify_auth(config, env_lookup);
     match flow {
@@ -244,9 +244,10 @@ pub async fn resolve_credentials(
             let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
                 .profile_name(name)
                 .build();
-            provider.provide_credentials().await.map_err(|error| {
-                CoreError::Auth(format!("AWS profile credentials failed: {error}"))
-            })
+            provider
+                .provide_credentials()
+                .await
+                .map_err(|error| Error::Auth(format!("AWS profile credentials failed: {error}")))
         }
         AwsAuthFlow::AssumeRole { role, session_name } => {
             if is_already_running_as_role(&role, &resolved).await? {
@@ -260,7 +261,7 @@ pub async fn resolve_credentials(
                         .build()
                         .await;
                 let credentials = provider.provide_credentials().await.map_err(|error| {
-                    CoreError::Auth(format!("AWS default credentials failed: {error}"))
+                    Error::Auth(format!("AWS default credentials failed: {error}"))
                 })?;
                 set_cached_credentials(
                     key,
@@ -301,7 +302,7 @@ pub async fn resolve_credentials(
             provider
                 .provide_credentials()
                 .await
-                .map_err(|error| CoreError::Auth(format!("AWS role credentials failed: {error}")))
+                .map_err(|error| Error::Auth(format!("AWS role credentials failed: {error}")))
         }
         AwsAuthFlow::WebIdentity {
             token,
@@ -325,13 +326,13 @@ pub async fn resolve_credentials(
                 .send()
                 .await
                 .map_err(|error| {
-                    CoreError::Auth(format!("AWS web identity credentials failed: {error}"))
+                    Error::Auth(format!("AWS web identity credentials failed: {error}"))
                 })?;
             let credentials = response.credentials().ok_or_else(|| {
-                CoreError::Auth("AWS web identity response had no credentials".to_string())
+                Error::Auth("AWS web identity response had no credentials".to_string())
             })?;
             let expiration = SystemTime::try_from(*credentials.expiration()).map_err(|error| {
-                CoreError::Auth(format!("AWS web identity expiration was invalid: {error}"))
+                Error::Auth(format!("AWS web identity expiration was invalid: {error}"))
             })?;
             Ok(Credentials::new(
                 credentials.access_key_id(),
@@ -350,9 +351,10 @@ pub async fn resolve_credentials(
                 aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
                     .build()
                     .await;
-            let credentials = provider.provide_credentials().await.map_err(|error| {
-                CoreError::Auth(format!("AWS default credentials failed: {error}"))
-            })?;
+            let credentials = provider
+                .provide_credentials()
+                .await
+                .map_err(|error| Error::Auth(format!("AWS default credentials failed: {error}")))?;
             set_cached_credentials(
                 key,
                 credentials.clone(),
@@ -363,7 +365,7 @@ pub async fn resolve_credentials(
     }
 }
 
-async fn is_already_running_as_role(role: &str, config: &AwsAuthConfig) -> CoreResult<bool> {
+async fn is_already_running_as_role(role: &str, config: &AwsAuthConfig) -> Result<bool, Error> {
     if role_identity(role).is_none() {
         return Ok(false);
     }
@@ -437,7 +439,7 @@ pub fn sign_bedrock_post(
     region: &str,
     credentials: &Credentials,
     signing_time: SystemTime,
-) -> CoreResult<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, String>, Error> {
     let identity: Identity = credentials.clone().into();
     let params = v4::SigningParams::builder()
         .identity(&identity)
@@ -447,14 +449,14 @@ pub fn sign_bedrock_post(
         .settings(SigningSettings::default())
         .build()
         .map(SigningParams::from)
-        .map_err(|error| CoreError::Auth(format!("AWS signing parameters failed: {error}")))?;
+        .map_err(|error| Error::Auth(format!("AWS signing parameters failed: {error}")))?;
     let header_refs = headers
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()));
     let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
-        .map_err(|error| CoreError::Auth(format!("AWS signable request failed: {error}")))?;
+        .map_err(|error| Error::Auth(format!("AWS signable request failed: {error}")))?;
     let (instructions, _) = sign(request, &params)
-        .map_err(|error| CoreError::Auth(format!("AWS request signing failed: {error}")))?
+        .map_err(|error| Error::Auth(format!("AWS request signing failed: {error}")))?
         .into_parts();
     Ok(instructions
         .headers()

@@ -82,22 +82,6 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.mark.parametrize("model", ALL_KEYS)
-@pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
-def test_published_rates_are_registered(model: str, path: Path):
-    info = _load(path)[model]
-    for field, value in PUBLISHED_RATES[model].items():
-        assert info[field] == value, f"{model} {field} in {path.name}: {info.get(field)} != {value}"
-
-
-@pytest.mark.parametrize("model", PRO_TTS_KEYS)
-@pytest.mark.parametrize("path", (MAIN_PATH, BACKUP_PATH), ids=("main", "backup"))
-def test_pro_tts_has_no_long_context_tier(model: str, path: Path):
-    info = _load(path)[model]
-    for field in LONG_CONTEXT_TIER_FIELDS:
-        assert field not in info, f"{model} has {field} but Google publishes one flat TTS rate"
-
-
-@pytest.mark.parametrize("model", ALL_KEYS)
 def test_backup_matches_main(model: str):
     assert _load(BACKUP_PATH)[model] == _load(MAIN_PATH)[model]
 

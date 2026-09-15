@@ -520,8 +520,15 @@ ContentBlockContentBlockDict = ToolUseBlock | TextBlock | ChatCompletionThinking
 ContentBlockStart = ContentBlockStartToolUse | ContentBlockStartText
 
 
+class AnthropicStopDetails(TypedDict, total=False):
+    type: ReadOnly[Literal["refusal"]]
+    category: ReadOnly[str | None]
+    explanation: ReadOnly[str | None]
+
+
 class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
+    stop_details: ReadOnly[AnthropicStopDetails]
 
 
 class ServerToolUsage(TypedDict, total=False):
@@ -658,7 +665,7 @@ class AnthropicOutputTokensDetails(BaseModel):
     thinking_tokens: int | None = None
 
 
-AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
+AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"]
 
 
 class AnthropicResponse(BaseModel):
@@ -739,6 +746,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
+    PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

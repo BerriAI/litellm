@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
+    LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -22,6 +23,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.auth.handle_jwt import (
     JWKS_FETCH_ATTEMPTS,
     STALE_CACHE_KEY_PREFIX,
@@ -31,6 +33,7 @@ from litellm.proxy.auth.handle_jwt import (
     JWTHandler,
     NoMatchingJWTPublicKeyError,
 )
+from litellm.types.agents import AgentResponse
 
 
 @pytest.mark.asyncio
@@ -1253,6 +1256,57 @@ async def test_find_team_with_model_access_model_group(monkeypatch):
 
     assert team_id == "team-1"
     assert team_obj.team_id == "team-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_aliases",
+    ['{"fast": "gpt-4o"}', {"fast": "gpt-4o"}],
+    ids=["json-string", "dict"],
+)
+async def test_find_team_with_model_access_resolves_team_model_alias(monkeypatch, model_aliases):
+    """LIT-5858: a JWT team that grants `gpt-4o` under the alias `fast` must resolve a request
+    for `fast`. The JWT path used to pass `team_model_aliases=None`, so every alias request 403'd."""
+    import sys
+    import types
+
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    router = Router(model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}])
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    team = LiteLLM_TeamTable(
+        team_id="team-aliases",
+        models=["gpt-4o"],
+        litellm_model_table=LiteLLM_ModelTable(model_aliases=model_aliases, created_by="admin", updated_by="admin"),
+    )
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team
+
+    monkeypatch.setattr("litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object)
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    user_api_key_cache = DualCache()
+
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-aliases"},
+        requested_model="fast",
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+    )
+
+    assert team_id == "team-aliases"
+    assert team_obj is team
 
 
 @pytest.mark.asyncio
@@ -6734,3 +6788,180 @@ async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_fla
     }
     assert mock_patch.call_args.kwargs["teams_ids_to_add_user_to"] == []
     assert user.teams == []
+
+
+def _entra_agent_registry() -> AgentRegistry:
+    registry = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="canonical-agent-id",
+            agent_name="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+            agent_card_params={"name": "research-agent", "url": "http://localhost:9999/a2a", "version": "1.0.0"},
+            litellm_params={"require_trace_id_on_calls_by_agent": True},
+        )
+    )
+    return registry
+
+
+def _entra_agent_jwt_handler(agent_id_jwt_field: str | None) -> JWTHandler:
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(user_id_jwt_field="sub", agent_id_jwt_field=agent_id_jwt_field),
+    )
+    return jwt_handler
+
+
+@pytest.mark.parametrize(
+    "claim_value",
+    ["canonical-agent-id", "2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21"],
+    ids=["matches_agent_id", "matches_agent_name"],
+)
+def test_resolve_agent_id_returns_canonical_agent_id(claim_value: str):
+    """An Entra app token's azp claim binds to the registered agent by id or by name and yields its canonical id."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "azp": claim_value},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved == "canonical-agent-id"
+
+
+def test_resolve_agent_id_reads_nested_claim():
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="entra.client_id")
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "entra": {"client_id": "canonical-agent-id"}},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved == "canonical-agent-id"
+
+
+def test_resolve_agent_id_rejects_claim_for_unregistered_agent():
+    """A configured agent claim naming no registered agent fails closed with 403 instead of falling back to an unbound identity."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token={"sub": "sp-object-id-1234", "azp": "00000000-0000-0000-0000-000000000000"},
+            agent_registry=_entra_agent_registry(),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        {"sub": "sp-object-id-1234"},
+        {"sub": "sp-object-id-1234", "azp": ""},
+        {"sub": "sp-object-id-1234", "azp": ["canonical-agent-id"]},
+    ],
+    ids=["claim_absent", "claim_empty", "claim_not_a_string"],
+)
+def test_resolve_agent_id_returns_none_when_claim_unusable(token: dict):
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    assert (
+        JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler, jwt_valid_token=token, agent_registry=_entra_agent_registry()
+        )
+        is None
+    )
+
+
+def test_resolve_agent_id_ignores_claim_when_field_not_configured():
+    """Without agent_id_jwt_field an azp claim (even an unknown one) leaves JWT auth behaviour unchanged."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field=None)
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "azp": "00000000-0000-0000-0000-000000000000"},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved is None
+
+
+def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandler, str]:
+    """A JWTHandler that verifies RS256 tokens against a pre-cached JWKS, plus a signed Entra-style app token."""
+    jwks_url = "https://login.microsoftonline.test/discovery/v2.0/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    private_key, jwk = _get_rsa_key_and_jwk(kid="entra-kid")
+    cache = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(agent_id_jwt_field="azp"),
+    )
+    token = _encode_rsa_jwt(
+        private_key,
+        issuer="https://login.microsoftonline.test/lit7664-tenant/v2.0",
+        audience="api://litellm",
+        kid="entra-kid",
+        extra_claims={"sub": "sp-object-id-1234", "azp": azp, "scope": scope},
+    )
+    return jwt_handler, token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_admin_token", [False, True], ids=["standard_jwt", "proxy_admin_jwt"])
+async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_admin_token: bool):
+    """auth_builder carries the resolved agent id into JWTAuthBuilderResult on both the admin and standard paths."""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+        scope=LiteLLM_JWTAuth().admin_jwt_scope if is_admin_token else "",
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+
+    result = await JWTAuthManager.auth_builder(
+        api_key=token,
+        jwt_handler=jwt_handler,
+        request_data={"model": "gpt-5.6"},
+        general_settings={"enforce_rbac": False},
+        route="/key/info" if is_admin_token else "/chat/completions",
+        prisma_client=None,
+        user_api_key_cache=None,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+    assert result["is_proxy_admin"] is is_admin_token
+    assert result["agent_id"] == "canonical-agent-id"
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_check(monkeypatch):
+    """An unknown agent claim is rejected even when the token would otherwise be a proxy admin."""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="00000000-0000-0000-0000-000000000000",
+        scope=LiteLLM_JWTAuth().admin_jwt_scope,
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.auth_builder(
+            api_key=token,
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-5.6"},
+            general_settings={"enforce_rbac": False},
+            route="/key/info",
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
