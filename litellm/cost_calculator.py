@@ -1133,6 +1133,24 @@ def _decisions_usage(usage: DecisionsUsage | OpenAIDecisionUsage) -> Usage:
         prompt_tokens_details=_decisions_prompt_tokens_details(usage),
     )
 
+def _get_transcription_usage_duration(completion_response: object) -> float | None:
+    usage_object: Final = (
+        completion_response.get("usage")
+        if isinstance(completion_response, dict)
+        else getattr(completion_response, "usage", None)
+    )
+    usage_type: Final = (
+        usage_object.get("type") if isinstance(usage_object, dict) else getattr(usage_object, "type", None)
+    )
+    if usage_type != "duration":
+        return None
+    seconds: Final = (
+        usage_object.get("seconds") if isinstance(usage_object, dict) else getattr(usage_object, "seconds", None)
+    )
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds < 0:
+        return None
+    return float(seconds)
+
 
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
@@ -1736,9 +1754,14 @@ def completion_cost(
                     # the response attribute (for verbose_json responses that
                     # naturally include duration from the provider).
                     _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
+                    provider_duration = _get_transcription_usage_duration(completion_response)
+                    audio_transcription_file_duration = (
+                        provider_duration
+                        if provider_duration is not None
+                        else _hidden.get(
+                            "audio_transcription_duration",
+                            getattr(completion_response, "duration", 0.0),
+                        )
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
@@ -3079,6 +3102,7 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
+_TRANSLATION_CLOSED_EVENT_TYPE: Final = "session.closed"
 
 
 class _LiveResponsePayload(BaseModel):
@@ -3345,6 +3369,11 @@ def handle_realtime_stream_cost_calculation(
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
     )
+    translation_cost: Final = handle_realtime_translation_cost_calculation(
+        results=results,
+        custom_llm_provider=custom_llm_provider,
+        litellm_model_name=litellm_model_name,
+    )
     live_lifecycle_event_types: Final = frozenset({"session.started", "session.usage.updated", "session.closed"})
     live_session_started: Final = any(result["type"] == "session.started" for result in results)
     live_session_closed: Final = any(result["type"] == "session.closed" for result in results)
@@ -3401,12 +3430,13 @@ def handle_realtime_stream_cost_calculation(
     input_cost: Final = input_cost_per_token + live_response_input_cost
     output_cost: Final = output_cost_per_token + live_response_output_cost
     total_cost: Final = (
-        input_cost + output_cost + transcription_cost + live_voice_cost + audio_duration_cost + text_message_cost
+        input_cost + output_cost + transcription_cost + translation_cost + live_voice_cost + audio_duration_cost + text_message_cost
     )
     additional_costs: Final = tuple(
         (cost_name, cost)
         for cost_name, cost in (
             ("transcription_cost", transcription_cost),
+            ("translation_cost", translation_cost),
             ("live_voice_cost", live_voice_cost),
             ("audio_duration_cost", audio_duration_cost),
             ("text_message_cost", text_message_cost),
@@ -3425,6 +3455,33 @@ def handle_realtime_stream_cost_calculation(
     )
 
     return total_cost
+
+
+def handle_realtime_translation_cost_calculation(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+) -> float:
+    output_seconds = 0.0  # rebind-ok: duration is accumulated across translation close events
+    for result in results:
+        if result.get("type") != _TRANSLATION_CLOSED_EVENT_TYPE:
+            continue
+        usage = result.get("usage")
+        if isinstance(usage, dict) and isinstance(usage.get("output_seconds"), (int, float)):
+            output_seconds += float(usage["output_seconds"])
+    if output_seconds <= 0:
+        return 0.0
+    try:
+        model_info: Final = litellm.get_model_info(
+            model=litellm_model_name,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception:  # noqa: BLE001  # unknown model metadata should yield zero translation cost
+        return 0.0
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    if not isinstance(output_cost_per_second, (int, float)):
+        return 0.0
+    return output_seconds * output_cost_per_second
 
 
 def handle_realtime_transcription_cost_calculation(

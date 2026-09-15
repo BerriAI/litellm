@@ -119,9 +119,7 @@ def patched_transcription(monkeypatch):
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-    monkeypatch.setattr(
-        proxy_server, "check_file_size_under_limit", lambda **kwargs: True
-    )
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
 
     async def _form_data(request):
         from starlette.datastructures import FormData, UploadFile
@@ -151,6 +149,47 @@ def patched_transcription_error(monkeypatch, patched_transcription):
 
     monkeypatch.setattr(proxy_server, "route_request", _raise)
     yield
+
+
+@pytest.fixture
+def patched_transcription_stream(monkeypatch, patched_transcription):
+    class _FakeEvent:
+        def model_dump_json(self):
+            return '{"type":"transcript.text.done","text":"hello world"}'
+
+    class _FakeAsyncStream:
+        def __init__(self):
+            self.closed = False
+
+        def __aiter__(self):
+            async def _events():
+                yield _FakeEvent()
+
+            return _events()
+
+        async def aclose(self):
+            self.closed = True
+
+    async def _form_data(request):
+        from starlette.datastructures import FormData, UploadFile
+
+        upload = UploadFile(
+            filename="audio.mp3",
+            file=io.BytesIO(b"\x00\x01\x02"),
+        )
+        return FormData([("file", upload), ("model", "gpt-transcribe"), ("stream", "true")])
+
+    stream = _FakeAsyncStream()
+
+    async def _llm_call():
+        return stream
+
+    async def _fake_route_request(*args, **kwargs):
+        return _llm_call()
+
+    monkeypatch.setattr(proxy_server, "get_form_data", _form_data)
+    monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)
+    yield stream
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
@@ -254,3 +293,15 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
+def test_audio_transcription_stream_returns_sse(client, auth_as, patched_transcription_stream, path):
+    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data = {"model": "gpt-transcribe", "stream": "true"}
+    with auth_as():
+        response = client.post(path, files=files, data=data)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text == 'data: {"type":"transcript.text.done","text":"hello world"}\n\n'
+    assert patched_transcription_stream.closed is True

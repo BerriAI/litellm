@@ -2269,6 +2269,14 @@ class Router:
         self.acreate_realtime_transcription_session = self.factory_function(
             litellm.acreate_realtime_transcription_session, call_type="acreate_realtime_transcription_session"
         )
+        self.acreate_realtime_translation_client_secret = self.factory_function(
+            litellm.acreate_realtime_translation_client_secret,
+            call_type="acreate_realtime_translation_client_secret",
+        )
+        self.arealtime_translation_calls = self.factory_function(
+            litellm.arealtime_translation_calls,
+            call_type="arealtime_translation_calls",
+        )
         self._aresponses_websocket = self.factory_function(
             litellm._aresponses_websocket, call_type="_aresponses_websocket"
         )
@@ -7358,6 +7366,8 @@ class Router:
             "acreate_realtime_client_secret",
             "arealtime_calls",
             "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_translation_calls",
             "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -7625,6 +7635,8 @@ class Router:
                 "acreate_realtime_client_secret",
                 "arealtime_calls",
                 "acreate_realtime_transcription_session",
+                "acreate_realtime_translation_client_secret",
+                "arealtime_translation_calls",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
