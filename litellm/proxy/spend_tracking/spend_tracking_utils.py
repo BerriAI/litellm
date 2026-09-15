@@ -230,6 +230,24 @@ def _get_spend_logs_metadata(
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 
 
+def get_provider_response_id(response_obj: Mapping[str, object], kwargs: Mapping[str, object]) -> str | None:
+    """The id the provider minted for this response: the response's own, else the one the standard
+    logging payload resolved. Never the proxy's call id, which is not a provider identity."""
+    standard_logging_payload: Final = kwargs.get("standard_logging_object")
+    candidate_ids: Final = (
+        response_obj.get("id"),
+        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidate_ids
+            if isinstance(candidate, str) and candidate and candidate != kwargs.get("litellm_call_id")
+        ),
+        None,
+    )
+
+
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
@@ -394,7 +412,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
-    raw_response_id: Final = response_obj_dict.get("id")
+    provider_response_id: Final = get_provider_response_id(response_obj_dict, kwargs)
     standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
@@ -530,7 +548,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
         ),
         litellm_call_id=litellm_call_id,
-        response_id=raw_response_id if isinstance(raw_response_id, str) else None,
+        response_id=provider_response_id,
         router_metadata=_get_router_metadata_for_spend_log(
             metadata=metadata,
             requested_model=_model_group,
