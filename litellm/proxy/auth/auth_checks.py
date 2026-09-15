@@ -4659,7 +4659,7 @@ async def can_team_access_model(
                 return _can_object_call_model(
                     model=model,
                     llm_router=llm_router,
-                    models=models_from_groups,
+                    models=list(dict.fromkeys([*(team_object.models if team_object else []), *models_from_groups])),
                     team_model_aliases=team_model_aliases,
                     team_id=team_object.team_id if team_object else None,
                     object_type="team",
