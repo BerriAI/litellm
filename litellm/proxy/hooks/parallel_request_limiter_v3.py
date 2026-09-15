@@ -2899,7 +2899,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         requested_model: str,
         rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
     ) -> int | None:
-        """Team per-model limit this key inherits: None when the key sets its own limit for the model."""
         team_limits: Final = get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", rate_limit_key)
         team_limit: Final = team_limits.get(requested_model) if team_limits else None
         if team_limit is None:
@@ -2915,7 +2914,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         requested_model: str | None,
         descriptors: list[RateLimitDescriptor],
     ) -> None:
-        """Add the team's per-model descriptor for the metrics the key does not override itself."""
         if requested_model is None:
             return
         team_rpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, requested_model, "model_rpm_limit")

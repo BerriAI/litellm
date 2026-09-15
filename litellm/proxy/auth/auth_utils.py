@@ -980,12 +980,6 @@ def get_key_own_model_rate_limit(
     user_api_key_dict: UserAPIKeyAuth,
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
 ) -> dict[str, int] | None:
-    """
-    Per-model limit the key sets on itself: key metadata first, then model_max_budget.
-
-    Unlike get_key_model_rpm_limit / get_key_model_tpm_limit this never falls back to the
-    team, so callers can tell a key override apart from an inherited team limit.
-    """
     if user_api_key_dict.metadata:
         result: Final = user_api_key_dict.metadata.get(rate_limit_key)
         if result:
