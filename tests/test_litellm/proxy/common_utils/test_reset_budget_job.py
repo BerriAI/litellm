@@ -26,7 +26,9 @@ from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 def _row_matches_where(row: Any, where: Dict[str, Any]) -> bool:
     """Evaluate the small prisma where-subset the reset job reads with:
     attribute equality (including None), {"in": [...]} and {"gt": number}.
-    Canned rows that don't model a field skip that predicate."""
+    Canned rows that don't model a field skip that predicate: real prisma
+    rows always carry every column, so an absent attribute here means the
+    fixture simply doesn't exercise that field."""
     for key, predicate in where.items():
         if not hasattr(row, key):
             continue
@@ -623,18 +625,37 @@ def test_enduser_budget_read_only_fetches_rows_with_spend(reset_budget_job, mock
 
     The budget-linked end-user read used to load every customer on the expiring
     tier and then run two cache round trips per row, so a large zero-spend
-    population paid that cost on every expiry for nothing. The read now filters
-    spend > 0, matching the sibling NULL-budget path and every other cascade
-    read.
+    population paid that cost on every expiry for nothing. A zero-spend
+    customer on the tier must never be selected by the reset, while a
+    positive-spend customer on the same tier is reset.
     """
     budget = _budget_row(budget_id="shared-tier", budget_duration="1d")
     mock_prisma_client.data["budget"] = [budget]
+    cust_due = types.SimpleNamespace(
+        spend=1.0,
+        litellm_budget_table=budget,
+        user_id="cust-due",
+        budget_id="shared-tier",
+    )
+    cust_zero_spend = types.SimpleNamespace(
+        spend=0.0,
+        litellm_budget_table=budget,
+        user_id="cust-zero",
+        budget_id="shared-tier",
+    )
+    mock_prisma_client.data["enduser"] = [cust_due, cust_zero_spend]
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    reads = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    assert reads, "the budget-linked end-user read must go through the repository"
-    assert reads[0]["where"] == {"budget_id": {"in": ["shared-tier"]}, "spend": {"gt": 0}}
+    writes = _batch_writes(mock_prisma_client, "enduser")
+    assert writes, "the positive-spend end user must be reset"
+    for write in writes:
+        assert _row_matches_where(cust_zero_spend, write["where"]) is False, (
+            "a zero-spend end user must never fall inside a reset write"
+        )
+    assert any(_row_matches_where(cust_due, write["where"]) for write in writes), (
+        "the positive-spend end user must be covered by the reset writes"
+    )
 
 
 def test_budget_table_reset_writes_nothing_when_no_budget_is_due(reset_budget_job, mock_prisma_client):

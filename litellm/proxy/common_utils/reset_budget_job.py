@@ -607,9 +607,8 @@ class ResetBudgetJob:
             return ()
 
     async def _collect_endusers_to_reset(self, budget_ids: Sequence[str]) -> tuple[_EndUserRow, ...]:
-        # Rows with spend == 0 have nothing to reset, so reading them would only
-        # feed the per-row cache invalidation loop with no-op work on every
-        # expiry; the sibling NULL-budget path below applies the same filter.
+        # zero-spend rows have nothing to reset; reading them would only feed the
+        # per-row cache invalidation loop with no-op work on every expiry
         linked: Final[Sequence[_EndUserRow] | None] = await self._with_db_retry(
             lambda: EndUserRepository(self.prisma_client).table.find_many(
                 where={"budget_id": {"in": list(budget_ids)}, "spend": {"gt": 0}}
