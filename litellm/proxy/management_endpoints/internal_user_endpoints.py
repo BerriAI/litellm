@@ -17,17 +17,21 @@ import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+from litellm.proxy.auth.password_policy import validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
     user_object_permission_id_cache_key,
@@ -76,6 +80,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
     UserListResponse,
+    UserSearchWhere,
     UserUpdateResult,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
@@ -83,6 +88,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTITLEMENTS_METADATA_KEY,
     SCIM_ROLES_METADATA_KEY,
 )
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -93,6 +99,8 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
+_USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
+_USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
 def _user_table(
@@ -154,9 +162,10 @@ def _team_membership_table(
     return team_membership_table
 
 
-def _hash_password_in_dict(data: dict) -> None:
-    """Hash password field in-place if present."""
+def _hash_password_in_dict(data: dict, general_settings: Mapping[str, object]) -> None:
+    """Validate and hash password field in-place if present."""
     if "password" in data and data["password"] is not None:
+        validate_password_policy(data["password"], general_settings)
         data["password"] = hash_password(data["password"])
 
 
@@ -424,6 +433,11 @@ async def add_new_user_to_default_team(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> tuple[str, ...]:
+    user_row: Final = await _user_table(prisma_client).find_unique(where={"user_id": user_id})
+    return tuple(user_row.teams) if user_row is not None else ()
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -464,7 +478,6 @@ async def new_user(
     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-    - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -500,7 +513,7 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import _license_check, prisma_client
+        from litellm.proxy.proxy_server import _license_check, general_settings, prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -548,13 +561,13 @@ async def new_user(
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
         data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
-        _hash_password_in_dict(data_json)
+        _hash_password_in_dict(data_json, general_settings)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
-        response: Final = await generate_key_helper_fn(request_type="user", **data_json)
+        response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
@@ -578,6 +591,11 @@ async def new_user(
             )
 
         user_id: Final = cast(str | None, response.get("user_id", None))
+        attached_team_ids: Final = (
+            await _fetch_user_team_ids(user_id=user_id, prisma_client=prisma_client)
+            if user_id is not None and (_team_id is not None or teams is not None)
+            else None
+        )
 
         if organization_ids is not None and user_id is not None:
             await _add_user_to_organizations(
@@ -594,6 +612,8 @@ async def new_user(
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
+        if attached_team_ids is not None:
+            response_dict["teams"] = list(attached_team_ids)
 
         new_user_response: Final = NewUserResponse.model_validate(response_dict)
 
@@ -1233,9 +1253,16 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k == "max_budget":
-            if "max_budget" in fields_set:
+        if k in ("max_budget", "budget_duration"):
+            if k in fields_set:
                 non_default_values[k] = v
+        elif k == "model_max_budget":
+            if k in fields_set:
+                try:
+                    _USER_MODEL_BUDGET_ADAPTER.validate_python({} if v is None else v)
+                except ValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                non_default_values[k] = {} if v is None else v
         elif (
             v is not None
             and v
@@ -1255,8 +1282,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
         validate_budget_duration(non_default_values["budget_duration"])
-        non_default_values["budget_reset_at"] = get_budget_reset_time(
-            budget_duration=non_default_values["budget_duration"]
+        non_default_values["budget_reset_at"] = (
+            get_budget_reset_time(budget_duration=non_default_values["budget_duration"])
+            if non_default_values["budget_duration"] is not None
+            else None
         )
 
     if "max_budget" not in non_default_values:
@@ -1405,7 +1434,7 @@ async def _update_single_user_helper(
 
     Returns the updated user data or raises an exception on failure.
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import general_settings, litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise Exception("Not connected to DB!")
@@ -1420,7 +1449,7 @@ async def _update_single_user_helper(
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
     non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values)
+    _hash_password_in_dict(non_default_values, general_settings)
 
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
@@ -1448,7 +1477,7 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1531,6 +1560,12 @@ async def _update_single_user_helper(
         )
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
+
+        if "model_max_budget" in non_default_values:
+            await evict_and_broadcast(
+                cache_keys=(non_default_values["user_id"],),
+                user_api_key_cache=user_api_key_cache,
+            )
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(
@@ -1615,7 +1650,6 @@ async def user_update(
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-        - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -1786,7 +1820,7 @@ async def bulk_user_update(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -1851,8 +1885,21 @@ async def bulk_user_update(
             # Perform bulk database update
             await UserRepository(prisma_client).table.update_many(
                 where={},
-                data=non_default_values,  # Update all users
+                data=(
+                    {**non_default_values, "model_max_budget": json.dumps(non_default_values["model_max_budget"])}
+                    if "model_max_budget" in non_default_values
+                    else non_default_values
+                ),
             )
+
+            if "model_max_budget" in non_default_values:
+                for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
+                    await asyncio.gather(
+                        *(
+                            evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
+                            for user in all_users_in_db[start : start + _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE]
+                        )
+                    )
 
             # Create individual success results
             for user in all_users_in_db:
@@ -2066,6 +2113,22 @@ async def _authorize_user_list_request(
     return ",".join(allowed_org_ids)
 
 
+_NO_SEARCH_WHERE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _user_search_where(search: str | None) -> Mapping[str, object]:
+    """Prisma predicate for `/user/list?search=`: user_id or user_email contains it, case-insensitive."""
+    if not search:
+        return _NO_SEARCH_WHERE
+    search_where: Final[UserSearchWhere] = {
+        "OR": (
+            {"user_id": {"contains": search, "mode": "insensitive"}},
+            {"user_email": {"contains": search, "mode": "insensitive"}},
+        )
+    }
+    return search_where
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
@@ -2077,6 +2140,10 @@ async def get_users(
     user_ids: str | None = fastapi.Query(default=None, description="Get list of users by user_ids"),
     sso_user_ids: str | None = fastapi.Query(default=None, description="Get list of users by sso_user_id"),
     user_email: str | None = fastapi.Query(default=None, description="Filter users by partial email match"),
+    search: str | None = fastapi.Query(
+        default=None,
+        description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
+    ),
     team: str | None = fastapi.Query(default=None, description="Filter users by team id"),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(default=25, ge=1, le=100, description="Number of items per page"),
@@ -2107,6 +2174,8 @@ async def get_users(
             Get list of users by sso_ids. Comma separated list of sso_ids.
         user_email: Optional[str]
             Filter users by partial email match
+        search: Optional[str]
+            Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
         team: Optional[str]
             Filter users by team id. Will match if user has this team in their teams array.
         page: int
@@ -2183,7 +2252,11 @@ async def get_users(
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_id_list}}}
 
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
-    where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
+    where: Final[Mapping[str, object]] = {
+        key: value
+        for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+        if value is not None
+    }
 
     # Build order_by conditions
 
@@ -2192,14 +2265,14 @@ async def get_users(
     )
 
     users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await UserRepository(prisma_client).table.find_many(
-        where=where_conditions,
+        where=where,
         skip=skip,
         take=page_size,
         order=(order_by if order_by else {"created_at": "desc"}),  # Default to created_at desc if no sort specified
     )
 
     # Get total count of user rows
-    total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where_conditions)
+    total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where)
 
     # Get key count for each user
     user_key_counts: Final = await get_user_key_counts(prisma_client, [user.user_id for user in users])

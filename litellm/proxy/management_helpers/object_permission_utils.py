@@ -5,10 +5,13 @@ organizations, teams, and keys.
 
 import json
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -103,6 +106,11 @@ async def prepare_object_permission_upsert(
         if existing_object_permission is not None
         else {}
     )
+    await reject_ambiguous_mcp_tool_permission_keys(
+        new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
+        existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
+        prisma_client=prisma_client,
+    )
     merged: Final[dict[str, object]] = {
         **existing_fields,
         **new_object_permission,
@@ -194,6 +202,12 @@ async def _set_object_permission(
         k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"
     }
 
+    await reject_ambiguous_mcp_tool_permission_keys(
+        new_mcp_tool_permissions=clean_data.get("mcp_tool_permissions"),
+        existing_mcp_tool_permissions=None,
+        prisma_client=prisma_client,
+    )
+
     # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
     if "mcp_tool_permissions" in clean_data:
         clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
@@ -226,7 +240,7 @@ def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
 
 
 async def _get_db_mcp_servers_by_identifiers(
-    identifiers: set[str],
+    identifiers: AbstractSet[str],
     prisma_client: PrismaClient | None,
 ) -> "Sequence[prisma_models.LiteLLM_MCPServerTable]":
     if prisma_client is None or not identifiers:
@@ -245,7 +259,7 @@ async def _get_db_mcp_servers_by_identifiers(
 
 
 async def _resolve_mcp_server_identifiers_to_ids(
-    identifiers: set[str],
+    identifiers: AbstractSet[str],
     prisma_client: PrismaClient | None,
 ) -> dict[str, set[str]]:
     """
@@ -284,6 +298,59 @@ async def _resolve_mcp_server_identifiers_to_ids(
                 resolved[identifier].add(server_id)
 
     return resolved
+
+
+_MCP_TOOL_PERMISSIONS_ADAPTER: Final = TypeAdapter(dict[str, list[str] | None])
+
+
+def _mcp_tool_permission_entries(raw: object) -> Mapping[str, frozenset[str]]:
+    parsed: Final[Mapping[str, Sequence[str] | None]] = (
+        _MCP_TOOL_PERMISSIONS_ADAPTER.validate_json(raw)
+        if isinstance(raw, str)
+        else _MCP_TOOL_PERMISSIONS_ADAPTER.validate_python(raw)
+        if isinstance(raw, Mapping)
+        else MappingProxyType({})
+    )
+    return MappingProxyType({identifier: frozenset(tools or ()) for identifier, tools in parsed.items()})
+
+
+async def reject_ambiguous_mcp_tool_permission_keys(
+    new_mcp_tool_permissions: object,
+    existing_mcp_tool_permissions: object,
+    prisma_client: PrismaClient | None,
+) -> None:
+    """
+    A name or alias shared by several MCP servers cannot key ``mcp_tool_permissions``:
+    the read path unions the entry into every match, so no edit can narrow one of
+    those servers without also changing the other. An exact server_id is never
+    ambiguous, even when another server uses that string as its alias. Entries the
+    row already stores with the same tool list are left alone, so unrelated edits
+    to such an entity still succeed.
+
+    Raises HTTPException(400) naming the colliding servers.
+    """
+    requested: Final = _mcp_tool_permission_entries(new_mcp_tool_permissions)
+    stored: Final = _mcp_tool_permission_entries(existing_mcp_tool_permissions)
+    resolved: Final = await _resolve_mcp_server_identifiers_to_ids(
+        identifiers=frozenset(identifier for identifier, tools in requested.items() if stored.get(identifier) != tools),
+        prisma_client=prisma_client,
+    )
+    collisions: Final = "; ".join(
+        f"'{identifier}' matches MCP servers {sorted(server_ids)}"
+        for identifier, server_ids in sorted(resolved.items())
+        if identifier not in server_ids and len(server_ids) > 1
+    )
+    if not collisions:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+            "error": (
+                f"Ambiguous mcp_tool_permissions key: {collisions}. "
+                "Key tool permissions by server_id when servers share a name or alias."
+            )
+        },
+    )
 
 
 def _drop_stale_object_permission_mcp_servers(

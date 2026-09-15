@@ -22,6 +22,17 @@ pub struct ChatCompletionsRequest<'a> {
     pub timeout: Option<Duration>,
 }
 
+pub(super) struct ResolvedChatCompletionsRequest<'a> {
+    pub(super) model: String,
+    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) messages: Vec<ChatMessage>,
+    pub(super) optional_params: Map<String, Value>,
+    pub(super) api_key: Option<&'a str>,
+    pub(super) api_base: Option<&'a str>,
+    pub(super) extra_headers: Option<Map<String, Value>>,
+    pub(super) timeout: Option<Duration>,
+}
+
 pub(super) struct ProviderChatCompletionsRequest {
     pub(super) model: String,
     pub(super) config: &'static dyn ChatCompletionsProviderConfig,

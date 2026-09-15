@@ -6,6 +6,7 @@ per-request `healthy_only` query parameter and the proxy-wide
 (`model_info_v1`).
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -275,7 +276,7 @@ async def test_model_info_v1_healthy_only_hides_unhealthy_deployments(
         litellm_model_id=None,
         healthy_only=True,
     )
-    assert [m["model_name"] for m in response["data"]] == ["gpt-4"]
+    assert [m["model_name"] for m in json.loads(response.body)["data"]] == ["gpt-4"]
 
 
 @pytest.mark.asyncio
@@ -286,7 +287,7 @@ async def test_model_info_v1_general_setting_hides_unhealthy_deployments(patched
         user_api_key_dict=_admin_key(),
         litellm_model_id=None,
     )
-    assert [m["model_name"] for m in response["data"]] == ["gpt-4"]
+    assert [m["model_name"] for m in json.loads(response.body)["data"]] == ["gpt-4"]
 
 
 @pytest.mark.asyncio
@@ -297,7 +298,7 @@ async def test_model_info_v1_default_keeps_unhealthy_deployments(
         user_api_key_dict=_admin_key(),
         litellm_model_id=None,
     )
-    assert [m["model_name"] for m in response["data"]] == ["gpt-4", "claude-sonnet"]
+    assert [m["model_name"] for m in json.loads(response.body)["data"]] == ["gpt-4", "claude-sonnet"]
     patched_model_info_v1.async_get_fully_unhealthy_model_names.assert_not_awaited()
 
 
@@ -318,4 +319,4 @@ async def test_model_info_v1_litellm_model_id_lookup_ignores_health_filter(patch
         user_api_key_dict=_admin_key(),
         litellm_model_id="unhealthy-id",
     )
-    assert [m["model_name"] for m in response["data"]] == ["claude-sonnet"]
+    assert [m["model_name"] for m in json.loads(response.body)["data"]] == ["claude-sonnet"]

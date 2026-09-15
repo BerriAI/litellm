@@ -177,19 +177,13 @@ class DatabricksBase:
         # Default: just litellm
         return f"litellm/{version}"
 
-    def _get_api_base(self, api_base: str | None) -> str:
-        """
-        Get the Databricks API base URL.
-
-        If not provided, attempts to get it from the Databricks SDK.
-        """
+    def _get_api_base(self, api_base: str | None, use_ai_gateway: bool = False) -> str:
         if api_base is None:
             try:
                 from databricks.sdk import WorkspaceClient
 
                 databricks_client: Final = WorkspaceClient()
                 api_base = f"{databricks_client.config.host}/serving-endpoints"
-                return api_base
             except ImportError:
                 raise DatabricksException(
                     status_code=400,
@@ -198,6 +192,18 @@ class DatabricksBase:
                         "or install the databricks-sdk Python library."
                     ),
                 )
+
+        if not use_ai_gateway:
+            return api_base
+
+        normalized_api_base: Final = api_base.rstrip("/")
+        if normalized_api_base.endswith("/ai-gateway/mlflow/v1"):
+            return normalized_api_base
+        if normalized_api_base.endswith("/serving-endpoints"):
+            return f"{normalized_api_base.removesuffix('/serving-endpoints')}/ai-gateway/mlflow/v1"
+        api_base_parts: Final = urlsplit(normalized_api_base)
+        if api_base_parts.path in ("", "/"):
+            return f"{normalized_api_base}/ai-gateway/mlflow/v1"
         return api_base
 
     def _get_oauth_m2m_token(

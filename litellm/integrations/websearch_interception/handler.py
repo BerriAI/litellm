@@ -10,9 +10,9 @@ import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Never, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
 
-from typing_extensions import ReadOnly
+from typing_extensions import Never, ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -419,7 +419,6 @@ class WebSearchInterceptionLogger(CustomLogger):
         if call_type in (CallTypes.responses, CallTypes.aresponses):
             return self._convert_responses_tools(kwargs=kwargs, tools=tools)
 
-        # Check if any tool is a web search tool (native or already LiteLLM standard)
         has_websearch: Final = any(is_web_search_tool(t) for t in tools)
 
         if not has_websearch:

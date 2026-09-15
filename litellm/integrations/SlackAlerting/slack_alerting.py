@@ -673,7 +673,7 @@ class SlackAlerting(CustomBatchLogger):
         Create a standard message for a budget alert
         """
         _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
-        _all_fields_as_dict.pop("token")
+        _all_fields_as_dict.pop("token", None)
         msg = ""
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
@@ -1955,11 +1955,10 @@ Model Info:
         if not thresholds_enabled and not anomalies_enabled:
             return
 
-        if prisma_client is None:
-            from litellm.proxy.proxy_server import prisma_client as global_prisma_client
+        from litellm.proxy.proxy_server import prisma_client as global_prisma_client
 
-            prisma_client = global_prisma_client  # rebind-ok: fall back to the proxy's global client
-        if prisma_client is None:
+        client: Final = prisma_client if prisma_client is not None else global_prisma_client
+        if client is None:
             return
 
         from litellm.integrations.SlackAlerting.user_spend_alerts import (
@@ -1970,7 +1969,7 @@ Model Info:
         try:
             today: Final = datetime.datetime.now(datetime.timezone.utc).date()
             rows: Final = await fetch_user_spend_rows(
-                prisma_client=prisma_client,
+                prisma_client=client,
                 today=today,
                 baseline_days=self.alerting_args.spend_anomaly_baseline_days,
             )

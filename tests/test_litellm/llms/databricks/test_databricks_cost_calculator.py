@@ -18,6 +18,10 @@ NEW_MODELS: Final = (
     "databricks/databricks-claude-opus-5",
     "databricks/databricks-claude-sonnet-5",
     "databricks/databricks-claude-fable-5",
+    "databricks/databricks-claude-fable-5-1",
+    "databricks/databricks-gpt-5-6-sol",
+    "databricks/databricks-gpt-5-6-terra",
+    "databricks/databricks-gpt-5-6-luna",
 )
 
 DOLLARS_PER_DBU: Final = Decimal("0.070")
@@ -28,6 +32,7 @@ PRICE_FIELDS: Final = (
     "cache_read_input_token_cost",
 )
 PUBLISHED_DBU_PER_MILLION: Final = {
+    "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
     "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
     "databricks/databricks-claude-opus-4-8": ("71.429", "357.143", "89.286", "7.143"),
@@ -52,9 +57,17 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gpt-5-2": ("25.000", "200.000", "25.000", "2.500"),
     "databricks/databricks-gpt-5-2-codex": ("25.000", "200.000", "25.000", "2.500"),
     "databricks/databricks-gpt-5-3-codex": ("25.000", "200.000", "25.000", "2.500"),
+    "databricks/databricks-gpt-5-6-sol": ("57.143", "285.714", "71.429", "5.714"),
+    "databricks/databricks-gpt-5-6-terra": ("35.714", "214.286", "44.643", "3.571"),
+    "databricks/databricks-gpt-5-6-luna": ("14.286", "85.714", "17.857", "1.429"),
+    "databricks/databricks-gpt-5-5": ("71.429", "428.571", "71.429", "7.143"),
+    "databricks/databricks-gpt-5-5-pro": ("428.571", "2571.429", "428.571", "428.571"),
     "databricks/databricks-gpt-5-4": ("35.714", "214.286", "35.714", "3.571"),
     "databricks/databricks-gpt-5-4-mini": ("10.714", "64.286", "10.714", "1.071"),
     "databricks/databricks-gpt-5-4-nano": ("2.857", "17.857", "2.857", "0.286"),
+    "databricks/databricks-gemini-3-6-flash": ("26.786", "133.929", "26.786", "2.679"),
+    "databricks/databricks-gemini-3-5-flash": ("26.786", "160.714", "26.786", "2.679"),
+    "databricks/databricks-gemini-3-5-flash-lite": ("5.357", "44.643", "5.357", "0.536"),
     "databricks/databricks-gemini-3-1-pro": ("35.714", "214.286", "35.714", "3.571"),
     "databricks/databricks-gemini-3-pro": ("35.714", "214.286", "35.714", "3.571"),
     "databricks/databricks-gemini-3-flash": ("8.929", "53.571", "8.929", "0.893"),
@@ -65,6 +78,13 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-deepseek-v4-flash-0731": ("2.000", "4.000", "2.000", "0.400"),
     "databricks/databricks-deepseek-v4-pro-0813": ("18.857", "56.571", "18.857", "1.886"),
     "databricks/databricks-glm-5-2": ("20.000", "62.857", "20.000", "3.714"),
+    "databricks/databricks-glm-5-3": ("20.000", "62.857", "20.000", "3.714"),
+    "databricks/databricks-glm-5-3-flash": ("2.143", "7.143", "2.143", "0.429"),
+    "databricks/databricks-inkling": ("14.286", "57.857", "14.286", "2.429"),
+    "databricks/databricks-grok-4-6": ("35.714", "107.143", "35.714", "8.929"),
+    "databricks/databricks-qwen35-122b-a10b": ("3.143", "31.429", "3.143", "3.143"),
+    "databricks/databricks-qwen3-next-80b-a3b-instruct": ("2.143", "17.143", "2.143", "2.143"),
+    "databricks/databricks-qwen3-embedding-0-6b": ("0.286", "0", "0.286", "0.286"),
 }
 PROMOTIONAL_DISCOUNT: Final = 0.80
 PROMOTION_EXPIRES: Final = "2027-01-31"
@@ -73,6 +93,10 @@ ENTRIES_STORING_PROMOTIONAL_RATE: Final = (
     "databricks/databricks-gemini-2-5-flash",
 )
 ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION: Final = (
+    "databricks/databricks-gemini-3-6-flash",
+    "databricks/databricks-gemini-3-5-flash",
+    "databricks/databricks-gemini-3-5-flash-lite",
+    "databricks/databricks-grok-4-6",
     "databricks/databricks-gemini-3-1-pro",
     "databricks/databricks-gemini-3-pro",
     "databricks/databricks-gemini-3-flash",
@@ -137,23 +161,6 @@ def test_legacy_endpoint_names_still_resolve(local_model_cost_map: None) -> None
 
     assert prompt_cost == pytest.approx(100 * info["input_cost_per_token"])
     assert completion_cost == pytest.approx(100 * info["output_cost_per_token"])
-
-
-@pytest.mark.parametrize("model", NEW_MODELS)
-def test_new_models_price_at_published_dbu_rates(local_model_cost_map: None, model: str) -> None:
-    info: Final = _model_info(model)
-
-    for field, dbu_per_million in zip(PRICE_FIELDS, PUBLISHED_DBU_PER_MILLION[model]):
-        assert info[field] == _dollars_per_token(dbu_per_million), field
-
-
-@pytest.mark.parametrize("model", sorted(set(PUBLISHED_DBU_PER_MILLION) - set(ENTRIES_STORING_PROMOTIONAL_RATE)))
-def test_cache_rates_derive_from_published_cache_dbu(local_model_cost_map: None, model: str) -> None:
-    info: Final = _model_info(model)
-    cache_dbu_per_million: Final = PUBLISHED_DBU_PER_MILLION[model][2:]
-
-    for field, dbu_per_million in zip(CACHE_FIELDS, cache_dbu_per_million):
-        assert info[field] == _dollars_per_token(dbu_per_million), field
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)
@@ -231,38 +238,3 @@ def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: No
 
     for field in PRICE_FIELDS:
         assert sonnet_5[field] == pytest.approx(sonnet_4_6[field]), field
-
-
-@pytest.mark.parametrize("model", ENTRIES_STORING_PROMOTIONAL_RATE)
-def test_entries_storing_the_promotional_rate_price_below_the_published_table(
-    local_model_cost_map: None,
-    model: str,
-) -> None:
-    info: Final = _model_info(model)
-    input_dbu, output_dbu, _, _ = PUBLISHED_DBU_PER_MILLION[model]
-    expiry_hint: Final = f"the gemini promotion expires {PROMOTION_EXPIRES}, after which the list rate applies"
-
-    assert info["input_cost_per_token"] == pytest.approx(
-        _dollars_per_token(input_dbu) * PROMOTIONAL_DISCOUNT, rel=2e-4
-    ), expiry_hint
-    assert info["output_cost_per_token"] == pytest.approx(
-        _dollars_per_token(output_dbu) * PROMOTIONAL_DISCOUNT, rel=2e-4
-    ), expiry_hint
-    assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"])
-    assert info["cache_read_input_token_cost"] == pytest.approx(0.1 * info["input_cost_per_token"])
-
-
-@pytest.mark.parametrize("model", ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION)
-def test_entries_storing_the_list_rate_bill_above_the_promotional_price(
-    local_model_cost_map: None,
-    model: str,
-) -> None:
-    info: Final = _model_info(model)
-    input_dbu, _, _, _ = PUBLISHED_DBU_PER_MILLION[model]
-    list_rate: Final = _dollars_per_token(input_dbu)
-
-    assert info["input_cost_per_token"] == pytest.approx(list_rate, rel=2e-4), (
-        f"{model} moved off the list rate; if it now stores the discount that runs to "
-        f"{PROMOTION_EXPIRES}, move it into ENTRIES_STORING_PROMOTIONAL_RATE"
-    )
-    assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"])

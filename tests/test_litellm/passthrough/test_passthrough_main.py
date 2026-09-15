@@ -873,3 +873,118 @@ def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj(
 
     assert captured_litellm_params.get("allm_passthrough_route") is True
     assert LitellmLogging._is_sync_litellm_request(captured_litellm_params) is False
+
+
+FOUNDRY_BASE = "https://my-resource.services.ai.azure.com"
+
+
+def _foundry_parse_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        content=b'{"id":"parse-1","pages":[]}',
+        request=httpx.Request("POST", f"{FOUNDRY_BASE}/providers/cohere/v2/parse"),
+    )
+
+
+def test_azure_ai_relay_reaches_the_deployment_with_its_own_credential():
+    """
+    Regression for LIT-7022: azure_ai had no passthrough config, so every
+    /azure_ai/<router-model>/<native-path> relay raised "Provider azure_ai not found"
+    before a request was built.
+    """
+    client = HTTPHandler()
+
+    with patch.object(client.client, "send", return_value=_foundry_parse_response()) as mock_send:
+        response = llm_passthrough_route(
+            model="azure_ai/Cohere-parse-v5",
+            endpoint="Cohere-parse-v5/providers/cohere/v2/parse",
+            method="POST",
+            custom_llm_provider="azure_ai",
+            api_base=FOUNDRY_BASE,
+            api_key="deployment-key",
+            json={"model": "Cohere-parse-v5", "document": {"type": "image_url", "image_url": "https://x/y.png"}},
+            client=client,
+            litellm_logging_obj=MagicMock(),
+        )
+
+    sent = mock_send.call_args.kwargs["request"]
+    assert str(sent.url) == f"{FOUNDRY_BASE}/providers/cohere/v2/parse"
+    assert sent.headers["api-key"] == "deployment-key"
+    assert json.loads(sent.content)["model"] == "Cohere-parse-v5"
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_router_relays_azure_ai_model_through_the_deployment_api_base():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "foundry-parse",
+                "litellm_params": {
+                    "model": "azure_ai/Cohere-parse-v5",
+                    "api_base": FOUNDRY_BASE,
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+    async_client = AsyncHTTPHandler()
+
+    with patch.object(async_client.client, "send", AsyncMock(return_value=_foundry_parse_response())) as mock_send:
+        response = await router.allm_passthrough_route(
+            model="foundry-parse",
+            method="POST",
+            endpoint="foundry-parse/providers/cohere/v2/parse",
+            json={"model": "foundry-parse", "document": {"type": "image_url", "image_url": "https://x/y.png"}},
+            client=async_client,
+        )
+
+    sent = mock_send.call_args.kwargs["request"]
+    assert str(sent.url) == f"{FOUNDRY_BASE}/providers/cohere/v2/parse"
+    assert sent.headers["api-key"] == "deployment-key"
+    assert json.loads(sent.content)["model"] == "Cohere-parse-v5"
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_router_relays_an_openai_model_on_a_foundry_base_as_azure_ai(monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "foundry-gpt",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": FOUNDRY_BASE,
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+    async_client = AsyncHTTPHandler()
+    upstream = httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        content=(
+            b'{"id":"chatcmpl-1","object":"chat.completion","model":"gpt-5.4-mini",'
+            b'"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi"}}],'
+            b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+        ),
+        request=httpx.Request("POST", f"{FOUNDRY_BASE}/models/chat/completions"),
+    )
+
+    with patch.object(async_client.client, "send", AsyncMock(return_value=upstream)) as mock_send:
+        await router.allm_passthrough_route(
+            model="foundry-gpt",
+            method="POST",
+            endpoint="foundry-gpt/models/chat/completions",
+            request_query_params={"api-version": "2024-05-01-preview"},
+            json={"model": "foundry-gpt", "messages": [{"role": "user", "content": "hi"}]},
+            client=async_client,
+        )
+
+    sent = mock_send.call_args.kwargs["request"]
+    assert str(sent.url) == f"{FOUNDRY_BASE}/models/chat/completions?api-version=2024-05-01-preview"
+    assert sent.headers["api-key"] == "deployment-key"
+    assert json.loads(sent.content)["model"] == "gpt-5.4-mini"

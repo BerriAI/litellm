@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -50,6 +51,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "vertex_ai"
+
+    def inlines_remote_media(self, media: RemoteMedia) -> bool:
+        return inline_remote_image_urls(media)
 
     def should_strip_billing_metadata(self) -> bool:
         return True
@@ -176,6 +180,10 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         # Restore original model name for any other processing
         model = original_model
+
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model=original_model, optional_params=optional_params, custom_llm_provider="vertex_ai"
+        )
 
         return optional_params
 
