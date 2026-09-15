@@ -90,14 +90,14 @@ pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyRe
 
 pub(crate) fn project_optional_fields(
     kwargs: &Bound<'_, PyDict>,
-    names: &[&str],
+    route: &crate::params::RouteParamSpec<'_>,
+    policy: &crate::params::RequestParamPolicy,
 ) -> PyResult<Map<String, Value>> {
-    let selected: Vec<String> = kwargs
-        .py()
-        .import("litellm.rust_bridge.params")?
-        .getattr("provider_param_names")?
-        .call1((kwargs, names.to_vec()))?
-        .extract()?;
+    let keys: Vec<String> = kwargs.keys().extract()?;
+    let selected: Vec<String> = keys
+        .into_iter()
+        .filter(|name| policy.includes(name, route))
+        .collect();
     selected
         .iter()
         .filter_map(|name| match kwargs.get_item(name) {

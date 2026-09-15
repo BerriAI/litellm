@@ -9,7 +9,7 @@ from litellm.ocr.input import convert_file_document_to_url_document, get_mime_ty
 from litellm.rust_bridge.bindings import native_exception_types
 from litellm.rust_bridge.configuration import rust_ocr_enabled
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
-from litellm.rust_bridge.ocr_lifecycle import select
+from litellm.rust_bridge.ocr_lifecycle import invoke, select
 
 __all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
 
@@ -52,7 +52,7 @@ def ocr(
     if native is not None:
         try:
             return cast(  # cast-ok: False selects the synchronous result
-                OCRResponse, native(request, args, kwargs, False)
+                OCRResponse, invoke(native, request, args, kwargs, False)
             )
         except _decline_types():
             pass
@@ -68,7 +68,7 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
     if native is not None:
         try:
             return await cast(  # cast-ok: True selects the asynchronous result
-                Awaitable[OCRResponse], native(request, args, kwargs, True)
+                Awaitable[OCRResponse], invoke(native, request, args, kwargs, True)
             )
         except _decline_types():
             pass

@@ -24,6 +24,73 @@ pytestmark = pytest.mark.requires_rust_extension
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_provider_selection_preserves_route_hook_timing_and_reads_sdk_registry(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    from litellm.types.utils import all_litellm_params
+
+    control_name: Final = "test_projection_host_control"
+    host_object: Final = object()
+
+    class ChangeInputs(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            all_litellm_params.append(control_name)
+            kwargs[control_name] = host_object
+            kwargs["future_added"] = False
+            kwargs["future_replaced"] = {"after": 0}
+            kwargs.pop("future_removed")
+
+    litellm.callbacks.append(ChangeInputs())
+    try:
+        if asynchronous:
+            await call_aocr(ocr_server, future_replaced="before", future_removed=True)
+        else:
+            call_ocr(ocr_server, future_replaced="before", future_removed=True)
+    finally:
+        if control_name in all_litellm_params:
+            all_litellm_params.remove(control_name)
+
+    assert len(ocr_server.requests) == 1
+    request: Final = ocr_server.requests[0]
+    assert not request.headers.get("user-agent", "").startswith("python-httpx")
+    if asynchronous:
+        assert request.body["future_added"] is False
+        assert request.body["future_replaced"] == {"after": 0}
+        assert "future_removed" not in request.body
+    else:
+        assert "future_added" not in request.body
+        assert request.body["future_replaced"] == "before"
+        assert request.body["future_removed"] is True
+    assert control_name not in request.body
+
+
+def test_unstarted_native_call_releases_registry_cycle(
+    ocr_server: RecordingServer,
+) -> None:
+    from litellm.ocr.main import _public_request
+    from litellm.rust_bridge import _native
+
+    ocr_server.expected_requests = 0
+
+    class Registry(list[str]):
+        owner: object
+
+    def create() -> weakref.ReferenceType[Registry]:
+        registry: Final = Registry(["callbacks"])
+        kwargs: Final = {"model": "mistral/mistral-ocr-latest", "document": {}}
+        coroutine: Final = _native._ocr_lifecycle(_public_request("aocr", (), kwargs), (), kwargs, True, registry)
+        registry.owner = coroutine
+        return weakref.ref(registry)
+
+    reference: Final = create()
+    with pytest.warns(RuntimeWarning, match="coroutine 'drive' was never awaited"):
+        gc.collect()
+    assert reference() is None
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["deployment", "failure"])
 async def test_cancellation_during_failure_obeys_phase_policy(ocr_server: RecordingServer, phase: str) -> None:
     ocr_server.enqueue(ResponseSpec(body={"message": "provider failure"}, status=500))
@@ -594,7 +661,7 @@ def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_serv
     def create():
         file: Final = File()
         kwargs: Final = {"model": "mistral/mistral-ocr-latest", "document": {"type": "file", "file": file}}
-        coroutine: Final = _native._ocr_lifecycle(_public_request("aocr", (), kwargs), (), kwargs, True)
+        coroutine: Final = _native._ocr_lifecycle(_public_request("aocr", (), kwargs), (), kwargs, True, [])
         file.owner = coroutine
         coroutine.close()
         return weakref.ref(file)

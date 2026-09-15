@@ -7,6 +7,7 @@ mod execution;
 mod function_trace;
 mod lifecycle;
 mod marshal;
+mod params;
 mod routes;
 mod token_counter;
 

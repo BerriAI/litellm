@@ -15,6 +15,17 @@ use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
 use crate::errors::RustBridgeDeclined;
 use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
 
+const BOUND_PARAM_NAMES: &[&str] = &[
+    "model",
+    "document",
+    "api_key",
+    "api_base",
+    "timeout",
+    "extra_headers",
+    "custom_llm_provider",
+    "input_sources",
+];
+
 pub(super) struct ProjectedOcrFields {
     pub boundary_request: Py<PyAny>,
     pub document: Py<PyAny>,
@@ -114,6 +125,7 @@ pub(super) fn project_request(
     py: Python<'_>,
     request: &Bound<'_, PyAny>,
     kwargs: &Bound<'_, PyDict>,
+    policy: &crate::params::RequestParamPolicy,
 ) -> PyResult<ProjectedOcrCall> {
     let boundary_request = request.clone().unbind();
     let arguments = OcrArguments { request, kwargs };
@@ -125,7 +137,11 @@ pub(super) fn project_request(
     let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
-    let optional_params = project_optional_fields(kwargs, &names)?;
+    let route = crate::params::RouteParamSpec {
+        bound: BOUND_PARAM_NAMES,
+        consumed: &names,
+    };
+    let optional_params = project_optional_fields(kwargs, &route, policy)?;
     let input_sources = request_input_sources(
         kwargs,
         names

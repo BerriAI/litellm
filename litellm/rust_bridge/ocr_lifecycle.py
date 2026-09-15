@@ -1,21 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
+from litellm.types.utils import all_litellm_params
 
 
 class NativeOcrLifecycle(Protocol):
     def __call__(
         self,
         request: LiteLLMOcrRequest,
-        args: Sequence[object],
-        kwargs: Mapping[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
         asynchronous: bool,
+        sdk_reserved_param_names: list[str],
     ) -> OCRResponse | Awaitable[OCRResponse]: ...
 
 
@@ -38,6 +40,16 @@ def _binding(value: object) -> NativeOcrLifecycle | None:
 
 
 NATIVE_OCR_LIFECYCLE: Final = NativeBinding("_ocr_lifecycle", validate=_binding)
+
+
+def invoke(
+    native: NativeOcrLifecycle,
+    request: LiteLLMOcrRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    asynchronous: bool,
+) -> OCRResponse | Awaitable[OCRResponse]:
+    return native(request, args, kwargs, asynchronous, all_litellm_params)
 
 
 def select(request: LiteLLMOcrRequest) -> NativeOcrLifecycle | None:

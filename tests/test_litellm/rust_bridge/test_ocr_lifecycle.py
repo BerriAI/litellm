@@ -64,7 +64,11 @@ def test_public_binding_keeps_positional_fields_and_defaults_out_of_native_hook_
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
         asynchronous: bool,
+        sdk_reserved_param_names: list[str],
     ) -> OCRResponse:
+        from litellm.types.utils import all_litellm_params
+
+        assert sdk_reserved_param_names is all_litellm_params
         captured.append((request, args, kwargs, asynchronous))
         return OCRResponse(pages=[], model=request.model)
 
@@ -94,6 +98,7 @@ def test_public_binding_keeps_keyword_model_and_document_in_native_hook_kwargs()
         args: tuple[object, ...],
         kwargs: Mapping[str, object],
         asynchronous: bool,
+        sdk_reserved_param_names: list[str],
     ) -> OCRResponse:
         assert args == ()
         captured.append(kwargs)

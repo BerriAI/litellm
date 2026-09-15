@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use litellm_core::auth::ResolvedCredential;
 use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest, OcrPreCallRequest};
@@ -21,7 +21,10 @@ struct PythonOcrHost {
 }
 
 enum OcrHostData {
-    Unprojected { request: Py<PyAny> },
+    Unprojected {
+        request: Py<PyAny>,
+        sdk_reserved_param_names: Py<PyList>,
+    },
     Projected(Box<ProjectedOcrHost>),
     Released,
 }
@@ -186,10 +189,17 @@ impl PythonRoute for PythonOcrHost {
     fn invoke(&mut self, py: Python<'_>, operation: OcrHostOperation) -> PyResult<OcrHostResult> {
         Ok(match operation {
             OcrHostOperation::ProjectRequest => {
-                let OcrHostData::Unprojected { request } = &self.data else {
+                let OcrHostData::Unprojected {
+                    request,
+                    sdk_reserved_param_names,
+                } = &self.data
+                else {
                     return Err(missing_state());
                 };
-                let projected = project_request(py, request.bind(py), self.state.kwargs.bind(py))?;
+                let policy =
+                    crate::params::RequestParamPolicy::extract(sdk_reserved_param_names.bind(py))?;
+                let projected =
+                    project_request(py, request.bind(py), self.state.kwargs.bind(py), &policy)?;
                 let has_token_provider = projected.fields.azure_ad_token_provider.is_some();
                 let request = projected.request;
                 self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {
@@ -227,7 +237,7 @@ impl PythonRoute for PythonOcrHost {
                 }
                 let error = self.state.error.as_ref().ok_or_else(missing_state)?;
                 let (request, provider) = match &self.data {
-                    OcrHostData::Unprojected { request } => (request.bind(py), ""),
+                    OcrHostData::Unprojected { request, .. } => (request.bind(py), ""),
                     OcrHostData::Projected(projected) => (
                         projected.fields.boundary_request.bind(py),
                         projected.fields.provider,
@@ -250,7 +260,13 @@ impl PythonRoute for PythonOcrHost {
     }
     fn traverse(&self, visit: &pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
         match &self.data {
-            OcrHostData::Unprojected { request } => visit.call(request),
+            OcrHostData::Unprojected {
+                request,
+                sdk_reserved_param_names,
+            } => {
+                visit.call(request)?;
+                visit.call(sdk_reserved_param_names)
+            }
             OcrHostData::Projected(projected) => {
                 visit.call(&projected.fields.boundary_request)?;
                 visit.call(&projected.fields.document)?;
@@ -282,6 +298,7 @@ fn _ocr_lifecycle(
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
+    sdk_reserved_param_names: Bound<'_, PyList>,
 ) -> PyResult<Py<PyAny>> {
     let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
     let call = admitted_call(OcrCall::admit(
@@ -301,6 +318,7 @@ fn _ocr_lifecycle(
         )?,
         data: OcrHostData::Unprojected {
             request: request.unbind(),
+            sdk_reserved_param_names: sdk_reserved_param_names.unbind(),
         },
     };
     run_call(py, call, host)
