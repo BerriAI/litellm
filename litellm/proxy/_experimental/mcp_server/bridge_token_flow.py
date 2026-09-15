@@ -198,7 +198,9 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     return loaded if isinstance(loaded, str) else None
 
 
-async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResolutionFailure":
+async def load_active_user_by_id(
+    user_id: str, *, sso_user_id: str | None = None, user_email: str | None = None
+) -> "LiteLLM_UserTable | _KeyResolutionFailure":
     """Load a live litellm user by id, returning the record when the user is active or a precise
     failure otherwise. The interactive DCR client authenticates via SSO, so its refresh envelope seals a
     user subject; renewing it must re-check the user is still live (present and not SCIM-deactivated) so a
@@ -232,6 +234,8 @@ async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResol
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
+            sso_user_id=sso_user_id,
+            user_email=user_email,
         )
     except (ProxyException, HTTPException):
         return "no_active_key"
@@ -352,7 +356,7 @@ async def _extract_jwt_user_id(token: str) -> str | None:
                 return None if await _key_owner_scim_deactivated(mapped) else _active_key_user_id(mapped)
             if mapped is not None:
                 return None
-        user_id, _, valid_email = await JWTAuthManager.get_user_info(jwt_handler, claims)
+        user_id, user_email, valid_email = await JWTAuthManager.get_user_info(jwt_handler, claims)
         object_id: Final = jwt_handler.get_object_id(token=claims, default_value=None)
         owner_id: Final = (
             object_id
@@ -361,7 +365,7 @@ async def _extract_jwt_user_id(token: str) -> str | None:
         )
         if not owner_id or valid_email is False:
             return None
-        owner: Final = await load_active_user_by_id(owner_id)
+        owner: Final = await load_active_user_by_id(owner_id, sso_user_id=owner_id, user_email=user_email)
         return None if isinstance(owner, str) else owner.user_id
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
