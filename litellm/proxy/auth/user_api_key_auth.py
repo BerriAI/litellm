@@ -191,6 +191,7 @@ def _get_model_from_request_context(
     route: str,
     request: Request | None,
     llm_router: Any | None = None,
+    team_id: str | None = None,
 ) -> str | list[str] | None:
     return get_model_from_request(
         request_data=request_data,
@@ -199,6 +200,7 @@ def _get_model_from_request_context(
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
         request=request,
+        team_id=team_id,
     )
 
 
@@ -217,7 +219,7 @@ async def _normalize_claude_model(
         return
     if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
         return
-    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router)
+    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router, valid_token.team_id)
     if not isinstance(requested, str) or requested != request_data.get("model"):
         return
     if not requested.startswith("claude-router-") and not requested.lower().endswith("[1m]"):
@@ -265,6 +267,17 @@ class _UserModelBudgetLimiter(Protocol):
 class _TokenTeamModels(Protocol):
     @property
     def team_models(self) -> list[str]: ...
+
+
+class _RawCacheRead(Protocol):
+    async def async_get_cache(self, *, key: str) -> object: ...
+
+
+def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
+    """View an untyped cache object's ``async_get_cache`` as returning ``object``
+    instead of ``Any``, so a caller can ``isinstance``-narrow it without paying
+    the ``reportAny`` cost of the underlying (unannotated) cache implementation."""
+    return cache
 
 
 def _token_team_models(valid_token: _TokenTeamModels) -> list[str]:
@@ -535,6 +548,9 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.rpm_limit is not None:
         end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
 
+    if budget_info.tpd_limit is not None:
+        end_user_params["end_user_tpd_limit"] = budget_info.tpd_limit
+
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
 
@@ -619,6 +635,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_tpm_limit = end_user_params["end_user_tpm_limit"]
     if end_user_params.get("end_user_rpm_limit") is not None:
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
+    if end_user_params.get("end_user_tpd_limit") is not None:
+        valid_token.end_user_tpd_limit = end_user_params["end_user_tpd_limit"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
@@ -835,6 +853,7 @@ class _PendingAutoRegister(NamedTuple):
     claim_field: str
     claim_value: str
     cache_key: str
+    jwt_issuer: str | None = None
 
 
 async def _auto_register_jwt_mapping(
@@ -846,10 +865,12 @@ async def _auto_register_jwt_mapping(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging,
     cache_key: str,
+    jwt_issuer: str | None = None,
     team_id: str | None = None,
     user_id: str | None = None,
     org_id: str | None = None,
     end_user_id: str | None = None,
+    agent_id: str | None = None,
 ) -> UserAPIKeyAuth | None:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
@@ -876,11 +897,13 @@ async def _auto_register_jwt_mapping(
     # the NOT NULL @id constraint. Every successful key-creation caller (e.g.
     # /key/generate) passes table_name="key" explicitly.
     key_data: Final = await generate_key_helper_fn(
+        llm_router=None,
         request_type="key",
         table_name="key",
         team_id=team_id,
         user_id=user_id,
         organization_id=org_id,
+        agent_id=agent_id,
         metadata={
             "auto_registered": True,
             "jwt_claim_field": virtual_key_claim_field,
@@ -895,6 +918,7 @@ async def _auto_register_jwt_mapping(
     try:
         await prisma_client.db.litellm_jwtkeymapping.create(
             data={
+                "jwt_issuer": jwt_issuer or "",
                 "jwt_claim_name": virtual_key_claim_field,
                 "jwt_claim_value": claim_value,
                 "token": token_hash,
@@ -929,6 +953,7 @@ async def _auto_register_jwt_mapping(
                 jwt_claim_name=virtual_key_claim_field,
                 jwt_claim_value=claim_value,
                 prisma_client=prisma_client,
+                jwt_issuer=jwt_issuer,
             )
             if token_hash is None:
                 # The winner's mapping vanished between the unique-constraint
@@ -971,6 +996,43 @@ async def _auto_register_jwt_mapping(
         auto_registered_key.end_user_id = end_user_id
         auto_registered_key.api_key = auto_registered_key.token
     return auto_registered_key
+
+
+async def _lookup_jwt_mapping_token_hash(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    virtual_key_claim_field: str,
+    claim_value: str,
+    normalized_issuer: str | None,
+    cache_key: str,
+    ttl: float,
+) -> str | None:
+    issuer_scoped: Final = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=claim_value,
+        prisma_client=prisma_client,
+        jwt_issuer=normalized_issuer,
+    )
+    if issuer_scoped is not None:
+        await user_api_key_cache.async_set_cache(key=cache_key, value=issuer_scoped, ttl=ttl)
+        return issuer_scoped
+    if normalized_issuer is None:
+        return None
+    # Another issuer may have already resolved (and cached) this same
+    # global mapping -- check its cache entry before re-querying the DB.
+    global_cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, claim_value)
+    cached_global: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=global_cache_key)
+    if isinstance(cached_global, str) and cached_global != "__NO_MAPPING__":
+        return cached_global
+    global_row: Final = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=claim_value,
+        prisma_client=prisma_client,
+        jwt_issuer=None,
+    )
+    if global_row is not None:
+        await user_api_key_cache.async_set_cache(key=global_cache_key, value=global_row, ttl=ttl)
+    return global_row
 
 
 async def _resolve_jwt_to_virtual_key(
@@ -1031,7 +1093,7 @@ async def _resolve_jwt_to_virtual_key(
             )
         return None
 
-    cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value))
+    cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value), normalized_issuer)
     raw_cached_mapping: Final = await user_api_key_cache.async_get_cache(cache_key)
     sentinel_written_by_this_policy: Final = behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER
     cached_mapping: Final = (
@@ -1071,6 +1133,7 @@ async def _resolve_jwt_to_virtual_key(
                 claim_field=virtual_key_claim_field,
                 claim_value=str(claim_value),
                 cache_key=cache_key,
+                jwt_issuer=normalized_issuer,
             )
         return None
     elif cached_mapping is not None:
@@ -1084,21 +1147,30 @@ async def _resolve_jwt_to_virtual_key(
         )
 
     # Resolve the mapping from DB, or treat prisma_client=None as a definitive
-    # miss (no DB → no mapping can exist → apply no-match policy below).
-    token_hash: str | None = None
-    if prisma_client is not None:
-        token_hash = await get_jwt_key_mapping_object(
-            jwt_claim_name=virtual_key_claim_field,
-            jwt_claim_value=str(claim_value),
+    # miss (no DB → no mapping can exist → apply no-match policy below). An
+    # issuer-scoped row wins; falling back to the global (no-issuer) row keeps
+    # mappings created before issuer scoping existed working for every issuer.
+    # Each tier is cached under ITS OWN key (the global tier under the
+    # issuer-less cache key, not under `cache_key`/this issuer's key) so that
+    # updating or deleting either row invalidates exactly the cache entries it
+    # can affect. Caching a global-row hit under the requesting issuer's key
+    # would leave every OTHER issuer that had fallen back to that same global
+    # mapping serving its stale token until TTL after the row changes.
+    token_hash: Final = (
+        await _lookup_jwt_mapping_token_hash(
             prisma_client=prisma_client,
-        )
-
-    if token_hash is not None:
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=token_hash,
+            user_api_key_cache=user_api_key_cache,
+            virtual_key_claim_field=virtual_key_claim_field,
+            claim_value=str(claim_value),
+            normalized_issuer=normalized_issuer,
+            cache_key=cache_key,
             ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
         )
+        if prisma_client is not None
+        else None
+    )
+
+    if token_hash is not None:
         return IdentityStore.key_from_principal(
             await IdentityStore(
                 prisma_client,
@@ -1139,6 +1211,7 @@ async def _resolve_jwt_to_virtual_key(
             claim_field=virtual_key_claim_field,
             claim_value=str(claim_value),
             cache_key=cache_key,
+            jwt_issuer=normalized_issuer,
         )
 
     # FALLBACK_TEAM_MAPPING (default): cache the miss and return None so the
@@ -1564,6 +1637,7 @@ async def _user_api_key_auth_builder(
                     org_id: Final = result["org_id"]
                     team_membership: Final[LiteLLM_TeamMembership | None] = result.get("team_membership", None)
                     jwt_claims = result.get("jwt_claims", None)
+                    agent_id: Final[str | None] = result.get("agent_id")
 
                     if is_proxy_admin:
                         # Proxy admins authenticate via auth_builder (full
@@ -1589,6 +1663,7 @@ async def _user_api_key_auth_builder(
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
                             jwt_claims=jwt_claims,
+                            agent_id=agent_id,
                             **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                         )
 
@@ -1609,6 +1684,7 @@ async def _user_api_key_auth_builder(
                         user_rpm_limit=(user_object.rpm_limit if user_object is not None else None),
                         user_model_max_budget=(user_object.model_max_budget if user_object is not None else None),
                         jwt_claims=jwt_claims,
+                        agent_id=agent_id,
                         **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                     )
 
@@ -1628,10 +1704,12 @@ async def _user_api_key_auth_builder(
                             parent_otel_span=parent_otel_span,
                             proxy_logging_obj=proxy_logging_obj,
                             cache_key=pending_auto_register.cache_key,
+                            jwt_issuer=pending_auto_register.jwt_issuer,
                             team_id=team_id,
                             user_id=user_id,
                             org_id=org_id,
                             end_user_id=end_user_id,
+                            agent_id=agent_id,
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
@@ -1652,6 +1730,7 @@ async def _user_api_key_auth_builder(
                         route=route,
                         request=request,
                         llm_router=llm_router,
+                        team_id=valid_token.team_id,
                     )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
@@ -1692,6 +1771,7 @@ async def _user_api_key_auth_builder(
                                     route=route,
                                     request=request,
                                     llm_router=llm_router,
+                                    team_id=valid_token.team_id,
                                 )
                             ),
                         )
@@ -2015,6 +2095,7 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_id = end_user_params.get("end_user_id")
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         if valid_token is not None:
@@ -2091,6 +2172,7 @@ async def _user_api_key_auth_builder(
                 route=route,
                 request=request,
                 llm_router=llm_router,
+                team_id=valid_token.team_id,
             )
             skip_budget_checks = False
             if model is not None and llm_router is not None:
@@ -2209,6 +2291,7 @@ async def _user_api_key_auth_builder(
                         route=route,
                         request=request,
                         llm_router=llm_router,
+                        team_id=valid_token.team_id,
                     )
                     current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -2239,6 +2322,7 @@ async def _user_api_key_auth_builder(
                             route=route,
                             request=request,
                             llm_router=llm_router,
+                            team_id=valid_token.team_id,
                         )
                         current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -2288,6 +2372,7 @@ async def _user_api_key_auth_builder(
                         spend=valid_token.team_spend,
                         tpm_limit=valid_token.team_tpm_limit,
                         rpm_limit=valid_token.team_rpm_limit,
+                        tpd_limit=valid_token.team_tpd_limit,
                         blocked=valid_token.team_blocked,
                         models=token_team_models,
                         metadata=valid_token.team_metadata,
@@ -2441,6 +2526,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         spend=valid_token.team_spend,
         tpm_limit=valid_token.team_tpm_limit,
         rpm_limit=valid_token.team_rpm_limit,
+        tpd_limit=valid_token.team_tpd_limit,
         blocked=valid_token.team_blocked,
         models=token_team_models,
         metadata=valid_token.team_metadata,
@@ -2482,7 +2568,7 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
@@ -2734,6 +2820,7 @@ async def _run_centralized_common_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=user_api_key_auth_obj.team_id,
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -2850,12 +2937,14 @@ def _should_skip_budget_checks(
     route: str,
     request: Request | None,
     llm_router: Any | None,
+    team_id: str | None = None,
 ) -> bool:
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=team_id,
     )
     if model is not None and llm_router is not None:
         return _is_model_cost_zero(model=model, llm_router=llm_router)
@@ -3301,6 +3390,7 @@ async def _enforce_key_and_fallback_model_access(
             route=route,
             request=request,
             llm_router=llm_router,
+            team_id=valid_token.team_id,
         )
 
         if model is not None:
@@ -3408,6 +3498,7 @@ async def _run_post_custom_auth_checks(
         route=route,
         request=request,
         llm_router=llm_router,
+        team_id=valid_token.team_id,
     )
     current_models = _get_model_names_for_budget_checks(model=current_model)
 
@@ -3449,6 +3540,7 @@ async def _run_post_custom_auth_checks(
             route=route,
             request=request,
             llm_router=llm_router,
+            team_id=valid_token.team_id,
         )
         current_models = _get_model_names_for_budget_checks(model=current_model)
 

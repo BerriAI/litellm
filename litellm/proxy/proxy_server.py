@@ -274,6 +274,8 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
@@ -475,9 +477,10 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_spend_event
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.list_api.common import (
-    PROBLEM_TYPE_BASE,
     ManagementProblem,
+    ValidationErrorDetail,
     problem_response,
+    request_validation_problem,
 )
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
@@ -600,7 +603,6 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
-from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -928,6 +930,7 @@ def cleanup_router_config_variables():
         user_custom_auth_path, \
         user_custom_key_generate, \
         user_custom_key_update, \
+        user_custom_key_policy, \
         user_custom_sso, \
         user_custom_ui_sso_sign_in_handler, \
         use_background_health_checks, \
@@ -945,6 +948,7 @@ def cleanup_router_config_variables():
     user_custom_auth_path = None
     user_custom_key_generate = None
     user_custom_key_update = None
+    user_custom_key_policy = None
     TEAM_METADATA_VALIDATOR_REGISTRY.set(None)
     TEAM_METADATA_SCHEMA_REGISTRY.set(())
     user_custom_sso = None
@@ -1787,27 +1791,13 @@ class _ExceptionRow(TypedDict, total=False):
     exception_counts: Mapping[str, int]
 
 
-class _ValidationErrorDetail(TypedDict):
-    loc: tuple[int | str, ...]
-    msg: str
-
-
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        _close_dangling_otel_server_span(request, 400, exc=exc)
-        validation_errors: Final[Sequence[_ValidationErrorDetail]] = exc.errors()
-        return problem_response(
-            ProblemDetail(
-                type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
-                title="Invalid query parameter",
-                status=400,
-                detail="; ".join(
-                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in validation_errors
-                )
-                or "The request query parameters are invalid.",
-            )
-        )
+        validation_errors: Final[Sequence[ValidationErrorDetail]] = exc.errors()
+        problem: Final = request_validation_problem(validation_errors)
+        _close_dangling_otel_server_span(request, problem.status, exc=exc)
+        return problem_response(problem)
     _close_dangling_otel_server_span(request, 422, exc=exc)
     return JSONResponse(
         status_code=422,
@@ -2369,6 +2359,7 @@ user_custom_key_generate = None
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
 user_custom_key_update = None
+user_custom_key_policy = None
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -3072,7 +3063,7 @@ async def _reconcile_budget_reservation_for_counter_update(
     budget_reservation: dict | None,
     response_cost: float | None,
 ) -> set[str]:
-    if budget_reservation is None:
+    if budget_reservation is None or budget_reservation.get("finalized") is True:
         return set()
 
     from litellm.proxy.spend_tracking.budget_reservation import (
@@ -4256,6 +4247,7 @@ _DB_OVERLAY_REMOTE_MODULE_STR_FIELDS: Final[dict[str, tuple[str, ...]]] = {
         "custom_auth",
         "custom_key_generate",
         "custom_key_update",
+        "custom_key_policy",
         "custom_team_metadata_validate",
         "custom_sso",
         "custom_ui_sso_sign_in_handler",
@@ -5405,6 +5397,7 @@ class ProxyConfig:
             user_custom_auth_path, \
             user_custom_key_generate, \
             user_custom_key_update, \
+            user_custom_key_policy, \
             user_custom_sso, \
             user_custom_ui_sso_sign_in_handler, \
             use_background_health_checks, \
@@ -5948,6 +5941,10 @@ class ProxyConfig:
             custom_key_update: Final = general_settings.get("custom_key_update", None)
             if custom_key_update is not None:
                 user_custom_key_update = get_instance_fn(value=custom_key_update, config_file_path=config_file_path)
+
+            custom_key_policy: Final = general_settings.get("custom_key_policy", None)
+            if custom_key_policy is not None:
+                user_custom_key_policy = get_instance_fn(value=custom_key_policy, config_file_path=config_file_path)
 
             custom_team_metadata_validate: Final = general_settings.get("custom_team_metadata_validate", None)
             TEAM_METADATA_VALIDATOR_REGISTRY.set(
@@ -9528,6 +9525,9 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        jwt_handler.bind_agent_lookup(global_agent_registry)
 
     @classmethod
     def _add_proxy_budget_to_db(cls):
@@ -9553,6 +9553,7 @@ class ProxyStartupEvent:
         gate the first duration window.
         """
         await generate_key_helper_fn(
+            llm_router=llm_router,
             request_type="user",
             table_name="user",
             user_id=LITELLM_PROXY_BUDGET_NAME,
@@ -11908,6 +11909,13 @@ async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth
     )
 
 
+async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth) -> None:
+    release_like_http_disconnect: Final = (
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect  # pyright: ignore[reportPrivateUsage]  # shared
+    )
+    await release_like_http_disconnect(user_api_key_dict)
+
+
 async def _reject_realtime_session(
     websocket: WebSocket,
     user_api_key_dict: UserAPIKeyAuth,
@@ -11927,6 +11935,7 @@ async def _reject_realtime_session(
         await websocket.close(code=code, reason=reason)
     finally:
         await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 @app.websocket("/openai/v1/realtime")
@@ -12030,6 +12039,9 @@ async def realtime_websocket_endpoint(
             websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
         )
         return
+    except BaseException:
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
 
     # Phase 2: route to upstream LLM.
     try:
@@ -12059,12 +12071,10 @@ async def realtime_websocket_endpoint(
         except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
     finally:
-        from litellm.litellm_core_utils.realtime_streaming import (
-            REALTIME_SESSION_SUCCESS_LOGGED_KEY,
-        )
-
         if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
             await _release_realtime_budget_reservation(user_api_key_dict)
+            if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):
+                await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 ######################################################################
@@ -16302,6 +16312,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     global master_key, general_settings
 
     response: Final = await generate_key_helper_fn(
+        llm_router=llm_router,
         request_type="key",
         **{
             "user_role": user_obj.user_role,
@@ -17476,6 +17487,16 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "options": ("5m", "1h"),
         "tab": "prompt_caching",
         "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
+    },
+    "openai_system_messages_first": {
+        "type": "Boolean",
+        "tab": "prompt_caching",
+        "description": (
+            "Moves system and developer messages to the front of the messages array on OpenAI and "
+            "Azure OpenAI chat completions requests, keeping their relative order. OpenAI's prompt cache "
+            "matches on the exact prefix, so a system message that arrives mid-conversation otherwise "
+            "breaks the cached prefix on every turn."
+        ),
     },
     "budget_rollover": {  # mutable-ok: registry literal, frozen with its siblings below
         "type": "Boolean",

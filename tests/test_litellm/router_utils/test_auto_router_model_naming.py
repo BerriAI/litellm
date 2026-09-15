@@ -218,6 +218,22 @@ def test_config_check_ignores_the_model_entirely():
             {
                 "model": "auto_router/complexity_router",
                 "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a", "REASONING": "b"},
+                    "classifier_type": "capability",
+                    "classifier_llm_config": {"model": "clf"},
+                    "capability_classifier_config": {
+                        "efficient_tier": "SIMPLE",
+                        "capable_tier": "REASONING",
+                        "base_threshold": 0.5,
+                    },
+                },
+            },
+            (("a", "tier"), ("b", "tier"), ("clf", "classifier")),
+        ),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
                     "tiers": {"SIMPLE": "a"},
                     "classifier_llm_config": {"model": "clf"},
                 },
