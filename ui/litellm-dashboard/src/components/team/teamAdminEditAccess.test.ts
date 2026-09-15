@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseSupportedTeamAdminEditableFields,
   parseTeamAdminEditableFields,
-  resolveTeamEditAccess,
+  parseTeamEditAccess,
 } from "./teamAdminEditAccess";
 
 describe("parseTeamAdminEditableFields", () => {
@@ -48,22 +48,28 @@ describe("parseSupportedTeamAdminEditableFields", () => {
   });
 });
 
-describe("resolveTeamEditAccess", () => {
-  it("does not restrict callers who edit as proxy or org admin", () => {
-    expect(resolveTeamEditAccess(false, { team_admin_editable_team_fields: [] })).toEqual({ kind: "unrestricted" });
+describe("parseTeamEditAccess", () => {
+  it.each([
+    ["unrestricted", { kind: "unrestricted" }],
+    ["team_admin_disabled", { kind: "team_admin_disabled" }],
+    ["none", { kind: "none" }],
+  ])("passes the proxy's %s verdict through", (_kind, verdict) => {
+    expect(parseTeamEditAccess(verdict)).toEqual(verdict);
   });
 
-  it("disables editing for a team admin when no field is enabled", () => {
-    expect(resolveTeamEditAccess(true, { team_admin_editable_team_fields: [] })).toEqual({
-      kind: "team_admin_disabled",
-    });
-    expect(resolveTeamEditAccess(true, undefined)).toEqual({ kind: "team_admin_disabled" });
-  });
-
-  it("hands a team admin the enabled fields", () => {
-    expect(resolveTeamEditAccess(true, { team_admin_editable_team_fields: ["tpm_limit"] })).toEqual({
+  it("hands a team admin the fields the proxy enabled", () => {
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual({
       kind: "team_admin",
       editableFields: new Set(["tpm_limit"]),
     });
+  });
+
+  it.each([
+    ["the proxy sent nothing", undefined],
+    ["the kind is unknown", { kind: "owner" }],
+    ["a team admin verdict lacks its field list", { kind: "team_admin" }],
+    ["the field list holds a non-string", { kind: "team_admin", editable_fields: [7] }],
+  ])("fails closed to no access when %s", (_label, value) => {
+    expect(parseTeamEditAccess(value)).toEqual({ kind: "none" });
   });
 });

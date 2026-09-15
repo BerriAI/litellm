@@ -312,7 +312,7 @@ const seedDefaultMocks = () => {
     isError: false,
   } as any);
   mockUseUISettings.mockReturnValue({
-    data: { values: { team_admin_editable_team_fields: [] } },
+    data: { values: {} },
     isLoading: false,
   } as any);
   mockUseKeys.mockReturnValue({
@@ -666,19 +666,9 @@ describe("TeamInfoView", () => {
       });
     });
 
-    it("shows edit tabs when the fetched team data marks the session user as team admin, even without the is_team_admin prop", async () => {
+    it("shows edit tabs when the proxy reports the session user may edit, even without the is_team_admin prop", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
-        createMockTeamData({
-          members_with_roles: [
-            {
-              user_id: "user-1",
-              user_email: "admin@test.com",
-              role: "admin",
-              spend: 0,
-              budget_id: "budget1",
-            },
-          ],
-        }),
+        createMockTeamData({ caller_edit_access: { kind: "team_admin_disabled" } }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={false} is_proxy_admin={false} />);
@@ -1788,9 +1778,11 @@ describe("TeamInfoView", () => {
       authState.userRole = "Internal User";
     });
 
-    it("tells a team admin to ask a proxy admin when no team field is enabled for them", async () => {
+    it("tells a team admin to ask a proxy admin when the proxy reports no team field is enabled for them", async () => {
       const user = userEvent.setup({ delay: null });
-      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ caller_edit_access: { kind: "team_admin_disabled" } }),
+      );
 
       renderWithProviders(<TeamInfoView {...teamAdminProps} />);
 
@@ -1804,13 +1796,26 @@ describe("TeamInfoView", () => {
       expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    it("opens the form for a team admin once a proxy admin has enabled a field", async () => {
-      mockUseUISettings.mockReturnValue({
-        data: { values: { team_admin_editable_team_fields: ["tpm_limit"] } },
-        isLoading: false,
-      } as any);
+    it("opens the form for a team admin once the proxy reports an enabled field", async () => {
       const user = userEvent.setup({ delay: null });
-      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ caller_edit_access: { kind: "team_admin", editable_fields: ["tpm_limit"] } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("opens the form when the proxy reports unrestricted access although the props only mark a team admin", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ caller_edit_access: { kind: "unrestricted" } }),
+      );
 
       renderWithProviders(<TeamInfoView {...teamAdminProps} />);
 
@@ -1824,7 +1829,9 @@ describe("TeamInfoView", () => {
     it("never gates a proxy admin on the team admin field list", async () => {
       authState.userRole = "Admin";
       const user = userEvent.setup({ delay: null });
-      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ caller_edit_access: { kind: "unrestricted" } }),
+      );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 

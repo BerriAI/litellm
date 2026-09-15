@@ -1,7 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
@@ -50,7 +49,8 @@ import { useFieldArray } from "react-hook-form";
 import { z } from "zod/v4";
 import GuardrailsSelect from "./GuardrailsSelect";
 import {
-  resolveTeamEditAccess,
+  type CallerEditAccess,
+  parseTeamEditAccess,
   TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION,
   TEAM_ADMIN_EDITING_DISABLED_TITLE,
 } from "./teamAdminEditAccess";
@@ -294,6 +294,7 @@ export interface TeamData {
     guardrails?: string[];
     policies?: string[];
     object_permission?: ObjectPermission | null;
+    caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string | null;
@@ -312,7 +313,6 @@ export interface TeamInfoProps {
   accessToken: string | null;
   is_team_admin: boolean;
   is_proxy_admin: boolean;
-  is_org_admin?: boolean;
   userModels: string[];
   editTeam: boolean;
   premiumUser?: boolean;
@@ -528,7 +528,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   accessToken,
   is_team_admin,
   is_proxy_admin,
-  is_org_admin = false,
   userModels,
   editTeam,
   premiumUser = false,
@@ -571,24 +570,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole, userId } = useAuthorized();
+  const { userRole } = useAuthorized();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
-  const { data: uiSettingsData } = useUISettings();
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
-
-  // Check if user is org admin for this team's organization
-  const isOrgAdminForTeam = useMemo(() => {
-    const teamOrgId = teamData?.team_info?.organization_id;
-    if (!teamOrgId || !userId) return false;
-    const org = userOrganizations.find((o) => o.organization_id === teamOrgId);
-    return org?.members?.some((m: any) => m.user_id === userId && m.user_role === "org_admin") ?? false;
-  }, [teamData, userOrganizations, userId]);
 
   // Models currently selected in the team edit form, used to scope the per-model
   // rate limit dropdown to models this team actually has access to.
@@ -613,22 +603,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return unfurlWildcardModelsInList(selected, userModels);
   }, [watchedModels, teamData, userModels]);
 
-  const isTeamAdminFromTeamData = useMemo(
-    () =>
-      teamData?.team_info?.members_with_roles?.some(
-        (member) => member.user_id != null && member.user_id === userId && member.role === "admin",
-      ) ?? false,
-    [teamData, userId],
-  );
-
-  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
-  const viewerIsProxyAdmin = is_proxy_admin || isProxyAdminRole(userRole);
-  const viewerIsOrgAdmin = is_org_admin || isOrgAdminForTeam;
-  const editsAsTeamAdmin = canEditTeam && !viewerIsProxyAdmin && !viewerIsOrgAdmin;
-  const teamEditAccess = useMemo(
-    () => resolveTeamEditAccess(editsAsTeamAdmin, uiSettingsData?.values),
-    [editsAsTeamAdmin, uiSettingsData],
-  );
+  const teamEditAccess = useMemo(() => parseTeamEditAccess(teamData?.team_info?.caller_edit_access), [teamData]);
+  const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);

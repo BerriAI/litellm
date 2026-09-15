@@ -14877,3 +14877,65 @@ async def test_resolve_team_access_ranks_proxy_admin_then_org_admin_then_team_ad
         assert await _resolve_team_access(team_obj=team, user_api_key_dict=outsider) is None
         org_lookup.return_value = True
         assert await _resolve_team_access(team_obj=team, user_api_key_dict=roster_admin) == "org_admin"
+
+
+_ROSTER_ADMIN_CALLER = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin-1")
+_MEMBER_CALLER = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="member-1")
+
+
+@pytest.mark.parametrize(
+    "caller, org_admin, enabled_fields, expected",
+    [
+        pytest.param(_PROXY_ADMIN_CALLER, False, (), {"kind": "unrestricted"}, id="proxy-admin"),
+        pytest.param(
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="viewer"),
+            False,
+            ("tpm_limit",),
+            {"kind": "none"},
+            id="proxy-admin-viewer",
+        ),
+        pytest.param(_ROSTER_ADMIN_CALLER, True, (), {"kind": "unrestricted"}, id="org-admin-who-is-also-team-admin"),
+        pytest.param(_ROSTER_ADMIN_CALLER, False, (), {"kind": "team_admin_disabled"}, id="team-admin-nothing-enabled"),
+        pytest.param(
+            _ROSTER_ADMIN_CALLER,
+            False,
+            ("tpm_limit",),
+            {"kind": "team_admin", "editable_fields": ["tpm_limit"]},
+            id="team-admin-field-enabled",
+        ),
+        pytest.param(_MEMBER_CALLER, False, ("tpm_limit",), {"kind": "none"}, id="plain-member"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, enabled_fields, expected):
+    """The dashboard gates its edit form on this field instead of guessing the caller's role from the org list,
+    which is premium-gated and can be empty for a dual-role org admin."""
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1",
+        organization_id="org-1",
+        members_with_roles=[Member(user_id="admin-1", role="admin"), Member(user_id="member-1", role="user")],
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
+        patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])),  # test-quality-ok: no seam on team_info
+        patch.object(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
+            team_endpoints, "_is_user_org_admin_for_team", AsyncMock(return_value=org_admin)
+        ),
+        _team_admin_may_edit(*enabled_fields),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=caller,
+        )
+
+    assert response["team_info"].caller_edit_access.model_dump(mode="json") == expected

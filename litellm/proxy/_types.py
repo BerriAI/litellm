@@ -4436,6 +4436,29 @@ class TeamInfoMember(Member):
     user_alias: str | None = None
 
 
+class TeamEditUnrestricted(BaseModel):
+    kind: Literal["unrestricted"] = "unrestricted"
+
+
+class TeamEditAsTeamAdmin(BaseModel):
+    kind: Literal["team_admin"] = "team_admin"
+    editable_fields: tuple[str, ...]
+
+
+class TeamEditAsTeamAdminDisabled(BaseModel):
+    kind: Literal["team_admin_disabled"] = "team_admin_disabled"
+
+
+class TeamEditNone(BaseModel):
+    kind: Literal["none"] = "none"
+
+
+TeamEditAccess = Annotated[
+    TeamEditUnrestricted | TeamEditAsTeamAdmin | TeamEditAsTeamAdminDisabled | TeamEditNone,
+    Field(discriminator="kind"),
+]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     members_with_roles: tuple[TeamInfoMember, ...] = ()
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
@@ -4447,6 +4470,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
+    caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
 class TeamInfoResponseObject(TypedDict):

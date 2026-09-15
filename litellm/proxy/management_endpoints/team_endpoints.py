@@ -33,8 +33,8 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, JsonValue
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import BaseModel, JsonValue, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -72,6 +72,11 @@ from litellm.proxy._types import (
     SpecialProxyStrings,
     TeamAccessGroupModelGrant,
     TeamAddMemberResponse,
+    TeamEditAccess,
+    TeamEditAsTeamAdmin,
+    TeamEditAsTeamAdminDisabled,
+    TeamEditNone,
+    TeamEditUnrestricted,
     TeamInfoMember,
     TeamInfoResponseObject,
     TeamInfoResponseObjectTeamTable,
@@ -486,6 +491,33 @@ async def _verify_team_access(
     """Raise 403 unless the caller is a proxy admin, an org admin for the team's org, or a team admin."""
     if await _resolve_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict) is None:
         _raise_team_access_denied()
+
+
+_GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
+
+
+def _general_settings() -> Mapping[str, object]:
+    from litellm.proxy import proxy_server
+
+    return _GENERAL_SETTINGS.validate_python(cast(object, proxy_server.general_settings))
+
+
+def _caller_edit_access(role: TeamAccessRole | None, general_settings: Mapping[str, object]) -> TeamEditAccess:
+    """What the caller may change on /team/update, reported on /team/info so the dashboard never re-derives it."""
+    match role:
+        case "proxy_admin" | "org_admin":
+            return TeamEditUnrestricted()
+        case "team_admin":
+            permitted: Final = resolve_team_admin_editable_fields(
+                general_settings, SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+            )
+            if not permitted:
+                return TeamEditAsTeamAdminDisabled()
+            return TeamEditAsTeamAdmin(editable_fields=tuple(sorted(permitted)))
+        case None:
+            return TeamEditNone()
+        case _:
+            assert_never(role)
 
 
 class TeamMemberBudgetHandler:
@@ -2057,7 +2089,6 @@ async def update_team(
     try:
         from litellm.proxy.management_helpers.audit_logs import is_audit_logging_enabled
         from litellm.proxy.proxy_server import (
-            general_settings,
             litellm_proxy_admin_name,
             llm_router,
             prisma_client,
@@ -2123,7 +2154,7 @@ async def update_team(
                     data=data,
                     existing=existing_team,
                     permitted=resolve_team_admin_editable_fields(
-                        general_settings, SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+                        _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
                     ),
                 )
             )
@@ -4549,10 +4580,9 @@ async def team_info(
             )
         team_table: Final = LiteLLM_TeamTable.model_validate(team_info.model_dump())
         await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_table)
+        access_role: Final = await _resolve_team_access(team_obj=team_table, user_api_key_dict=user_api_key_dict)
         organization_models: Final[list[str] | None] = (
-            _parent_organization_models(team_info)
-            if await _resolve_team_access(team_obj=team_table, user_api_key_dict=user_api_key_dict) is not None
-            else None
+            _parent_organization_models(team_info) if access_role is not None else None
         )
 
         ## GET ALL KEYS ##
@@ -4615,6 +4645,7 @@ async def team_info(
             update={  # mutable-ok: pydantic update payload
                 "members_with_roles": hydrated_members,
                 "organization_models": organization_models,
+                "caller_edit_access": _caller_edit_access(access_role, _general_settings()),
             }
         )
 
