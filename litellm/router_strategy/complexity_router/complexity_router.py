@@ -103,7 +103,7 @@ from .config import (
     CustomDimension,
     TierDefinition,
 )
-from .llm_v2 import LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
+from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
 
 if TYPE_CHECKING:
@@ -1017,16 +1017,41 @@ class ClassificationOutcome(NamedTuple):
     ]
     classifier_cost: float | None = None
     capability_forecast: CapabilityClassifierForecast | None = None
+    llm_v2_forecast: LLMV2Decision | None = None
 
 
 def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
     return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
 
 
-def _with_capability_forecast(
+def _with_llm_v2_forecast(
+    decision: StandardLoggingRoutingDecision, forecast: LLMV2Decision
+) -> StandardLoggingRoutingDecision:
+    """Preserve full numeric precision for both solver forecasts and the applied policy."""
+    enriched: Final[StandardLoggingRoutingDecision] = {
+        **decision,
+        "classifier_efficient_p_solve": forecast.verdict.forecasts.efficient.p_solve,
+        "classifier_capable_p_solve": forecast.verdict.forecasts.capable.p_solve,
+        "classifier_max_quality_gap": forecast.max_quality_gap,
+        "classifier_prompt_version": LLM_V2_PROMPT_VERSION,
+    }
+    if forecast.calibration_version is None:
+        return enriched
+    calibrated: Final[StandardLoggingRoutingDecision] = {
+        **enriched,
+        "classifier_calibrated_efficient_p_solve": forecast.efficient,
+        "classifier_calibrated_capable_p_solve": forecast.capable,
+        "classifier_calibration_version": forecast.calibration_version,
+    }
+    return calibrated
+
+
+def _with_classifier_forecast(
     decision: StandardLoggingRoutingDecision, outcome: ClassificationOutcome
 ) -> StandardLoggingRoutingDecision:
-    """Attach the validated capability verdict and applied threshold to its decision record."""
+    """Attach validated forecasts and their applied policy to the routing decision."""
+    if outcome.llm_v2_forecast is not None:
+        return _with_llm_v2_forecast(decision, outcome.llm_v2_forecast)
     forecast: Final = outcome.capability_forecast
     if forecast is None:
         return decision
@@ -2347,6 +2372,7 @@ class ComplexityRouter(CustomLogger):
             signals=decision.signals,
             cause="llm_v2_classifier",
             classifier_cost=classifier_cost,
+            llm_v2_forecast=decision,
         )
 
     async def _call_classifier_model(
@@ -4474,5 +4500,5 @@ class ComplexityRouter(CustomLogger):
             model=routed_model,
             messages=messages if has_original_messages else None,
             litellm_params=tier_litellm_params,
-            routing_decision=_with_capability_forecast(routing_decision, outcome),
+            routing_decision=_with_classifier_forecast(routing_decision, outcome),
         )

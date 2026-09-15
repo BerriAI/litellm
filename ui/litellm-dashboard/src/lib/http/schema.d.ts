@@ -37068,22 +37068,34 @@ export interface components {
              * @enum {string}
              */
             cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Calibrated Capable P Solve */
+            classifier_calibrated_capable_p_solve?: number;
+            /** Classifier Calibrated Efficient P Solve */
+            classifier_calibrated_efficient_p_solve?: number;
             /** Classifier Calibrated P Solve */
             classifier_calibrated_p_solve?: number;
             /** Classifier Calibration Version */
             classifier_calibration_version?: string;
             /** Classifier Capability Boundary */
             classifier_capability_boundary?: string;
+            /** Classifier Capable P Solve */
+            classifier_capable_p_solve?: number;
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Crux */
             classifier_crux?: string;
+            /** Classifier Efficient P Solve */
+            classifier_efficient_p_solve?: number;
+            /** Classifier Max Quality Gap */
+            classifier_max_quality_gap?: number;
             /** Classifier Model */
             classifier_model?: string;
             /** Classifier P Solve */
             classifier_p_solve?: number;
             /** Classifier Primary Rule */
             classifier_primary_rule?: string;
+            /** Classifier Prompt Version */
+            classifier_prompt_version?: string;
             /** Classifier Threshold */
             classifier_threshold?: number;
             /** Context Escalated */
