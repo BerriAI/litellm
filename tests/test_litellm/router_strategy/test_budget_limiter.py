@@ -21,12 +21,16 @@ class _MockRedisCache:
         pipeline_started: asyncio.Event | None = None,
         allow_pipeline_to_complete: asyncio.Event | None = None,
         should_fail_pipeline: bool = False,
+        read_started: asyncio.Event | None = None,
+        allow_read_to_complete: asyncio.Event | None = None,
     ) -> None:
         self.values = initial_values
         self.events: list[str] = []
         self.pipeline_started = pipeline_started
         self.allow_pipeline_to_complete = allow_pipeline_to_complete
         self.should_fail_pipeline = should_fail_pipeline
+        self.read_started = read_started
+        self.allow_read_to_complete = allow_read_to_complete
 
     async def async_increment_pipeline(
         self, increment_list: list[RedisPipelineIncrementOperation], **kwargs: object
@@ -46,7 +50,12 @@ class _MockRedisCache:
 
     async def async_batch_get_cache(self, key_list: list[str], **kwargs: object) -> dict[str, float | None]:
         self.events.append("batch_get")
-        return {key: self.values.get(key) for key in key_list}
+        snapshot = {key: self.values.get(key) for key in key_list}
+        if self.read_started is not None:
+            self.read_started.set()
+        if self.allow_read_to_complete is not None:
+            await self.allow_read_to_complete.wait()
+        return snapshot
 
 
 class _MockInMemoryCache:
@@ -256,3 +265,40 @@ async def test_should_requeue_increments_when_flush_is_cancelled_and_redis_fails
     assert redis_cache.values[_SPEND_KEY] == 0.0
     assert budget_limiter.redis_increment_operation_queue == [_increment(10.0)]
     assert budget_limiter._detached_increment_operations is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause_during", ["write", "read"])
+async def test_sync_preserves_spend_recorded_during_redis_io(pause_during: str) -> None:
+    io_started = asyncio.Event()
+    allow_io_to_complete = asyncio.Event()
+    redis_cache = _MockRedisCache(
+        initial_values={_SPEND_KEY: 100.0},
+        pipeline_started=io_started if pause_during == "write" else None,
+        allow_pipeline_to_complete=allow_io_to_complete if pause_during == "write" else None,
+        read_started=io_started if pause_during == "read" else None,
+        allow_read_to_complete=allow_io_to_complete if pause_during == "read" else None,
+    )
+    in_memory_cache = _MockInMemoryCache(initial_values={_SPEND_KEY: 160.0})
+    budget_limiter = _new_router_budget_limiter(
+        redis_cache=redis_cache,
+        in_memory_cache=in_memory_cache,
+        redis_increment_operation_queue=[_increment(60.0)],
+        provider_budget_config={"openai": BudgetConfig(time_period="1d", budget_limit=175.0)},
+    )
+
+    sync_task = asyncio.create_task(budget_limiter._sync_in_memory_spend_with_redis())
+    await asyncio.wait_for(io_started.wait(), timeout=1)
+    await budget_limiter._increment_spend_in_current_window(_SPEND_KEY, 20.0, 86400)
+    allow_io_to_complete.set()
+    await sync_task
+
+    assert in_memory_cache.values[_SPEND_KEY] == 180.0
+    assert redis_cache.values[_SPEND_KEY] == 160.0
+    assert budget_limiter.redis_increment_operation_queue == [_increment(20.0)]
+
+    await budget_limiter._sync_in_memory_spend_with_redis()
+
+    assert in_memory_cache.values[_SPEND_KEY] == 180.0
+    assert redis_cache.values[_SPEND_KEY] == 180.0
+    assert budget_limiter.redis_increment_operation_queue == []
