@@ -13521,3 +13521,60 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     assert response.tokenizer_type == "huggingface_tokenizer"
     assert response.total_tokens > 0
     assert_loop_stayed_free(took, lags)
+
+
+async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
+    from tokenizers import Tokenizer
+
+    from litellm import Router
+    from litellm.types.router import DeploymentTypedDict
+
+    claude_tokenizer: Final = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    loads: Final[list[tuple[str, str, str | None]]] = []
+
+    class CountingHubTokenizer:
+        @staticmethod
+        def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
+            loads.append((identifier, revision, token))
+            return claude_tokenizer
+
+    def deployment(model_name: str, revision: str, auth_token: str | None) -> DeploymentTypedDict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
+            "model_info": {
+                "custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": revision, "auth_token": auth_token}
+            },
+        }
+
+    monkeypatch.setattr(litellm.utils, "Tokenizer", CountingHubTokenizer)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                deployment("self-hosted", "main", None),
+                deployment("self-hosted-pinned", "v2", None),
+                deployment("self-hosted-private", "main", "hf_test_token"),
+            ]
+        ),
+    )
+    litellm.utils._select_custom_tokenizer_helper.cache_clear()
+    try:
+        responses: Final = [
+            await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            for _ in range(3)
+        ]
+        assert loads == [("my-org/tokenizer", "main", None)]
+        assert all(response.tokenizer_type == "huggingface_tokenizer" for response in responses)
+        assert len({response.total_tokens for response in responses}) == 1
+        assert responses[0].total_tokens > 0
+
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        assert loads == [
+            ("my-org/tokenizer", "main", None),
+            ("my-org/tokenizer", "v2", None),
+            ("my-org/tokenizer", "main", "hf_test_token"),
+        ]
+    finally:
+        litellm.utils._select_custom_tokenizer_helper.cache_clear()
