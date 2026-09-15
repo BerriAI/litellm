@@ -42,6 +42,17 @@ def rust_enabled() -> bool:
     )
 
 
+def rust_ocr_enabled() -> bool:
+    environment: Final = _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME))
+    if environment is False:
+        return False
+    return resolve_rust_enabled(
+        process_override=_CONFIGURATION.override,
+        environment_override=environment,
+        release_default=True,
+    )
+
+
 def reset_rust_configuration() -> None:
     _CONFIGURATION.override = None
 
