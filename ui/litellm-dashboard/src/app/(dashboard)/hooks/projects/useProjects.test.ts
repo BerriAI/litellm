@@ -129,4 +129,24 @@ describe("useProjects", () => {
     expect(result.current.isFetched).toBe(false);
     expect(global.fetch).not.toHaveBeenCalled();
   });
+
+  it("should not fetch when the caller passes enabled=false, even for an eligible role", () => {
+    (global.fetch as any).mockResolvedValue({ ok: true, json: async () => mockProjects });
+    const { result } = renderHook(() => useProjects(false), { wrapper: makeWrapper(queryClient) });
+    expect(result.current.isFetched).toBe(false);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("should fetch once the caller flips enabled back to true", async () => {
+    (global.fetch as any).mockResolvedValue({ ok: true, json: async () => mockProjects });
+    const { result, rerender } = renderHook(({ enabled }: { enabled: boolean }) => useProjects(enabled), {
+      wrapper: makeWrapper(queryClient),
+      initialProps: { enabled: false },
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalled();
+  });
 });

@@ -32,12 +32,12 @@ const SUMMABLE_METADATA_KEYS = [
   "total_flat_cost",
 ] as const;
 
-interface DailyActivityResponse {
+export interface DailyActivityResponse {
   results: DailyData[];
   metadata: Record<string, any>;
 }
 
-type FetchPageFn = (...args: any[]) => Promise<DailyActivityResponse>;
+export type FetchPageFn = (...args: any[]) => Promise<DailyActivityResponse>;
 
 interface UsePaginatedDailyActivityParams {
   /** The API call function (e.g., userDailyActivityCall). */

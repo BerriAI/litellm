@@ -4,6 +4,7 @@ import type { ColumnFiltersState, PaginationState, SortingState } from "@tanstac
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
+import type { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { teamListScopeUserId } from "../../utils/roles";
 import { defaultPageSize } from "../constants";
 import { LOGS_SORT_FIELD_MAP, type LogEntry, type LogsSortField } from "./columns";
@@ -21,6 +22,7 @@ export interface PaginatedResponse {
 
 export const LOG_FILTER_IDS = {
   TEAM_ID: "team_id",
+  PROJECT_ID: "project_id",
   STATUS: "status",
   CACHE_STATUS: "cache_hit",
   KEY_ALIAS: "key_alias",
@@ -38,6 +40,7 @@ export const LOG_FILTER_IDS = {
 
 export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
+  [LOG_FILTER_IDS.PROJECT_ID]: "Project",
   [LOG_FILTER_IDS.STATUS]: "Status",
   [LOG_FILTER_IDS.CACHE_STATUS]: "Cache",
   [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
@@ -97,6 +100,21 @@ export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: stri
   if (typeof entry?.value !== "string") return undefined;
   const trimmed = entry.value.trim();
   return trimmed === "" ? undefined : trimmed;
+};
+
+export const resolveLogFilterDisplayValue = (
+  columnId: string,
+  rawValue: string,
+  teams: readonly Team[],
+  projects: readonly ProjectResponse[] | undefined,
+): string => {
+  if (columnId === LOG_FILTER_IDS.TEAM_ID) {
+    return teams.find((team) => team.team_id === rawValue)?.team_alias || rawValue;
+  }
+  if (columnId === LOG_FILTER_IDS.PROJECT_ID) {
+    return projects?.find((project) => project.project_id === rawValue)?.project_alias || rawValue;
+  }
+  return rawValue;
 };
 
 export function useLogFilterLogic({
@@ -176,6 +194,7 @@ export function useLogFilterLogic({
         params: {
           api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
+          project_id: getFilterValue(columnFilters, LOG_FILTER_IDS.PROJECT_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
           search: getFilterValue(columnFilters, LOG_FILTER_IDS.SEARCH),
           session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),

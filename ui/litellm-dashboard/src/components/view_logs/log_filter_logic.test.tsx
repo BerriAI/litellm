@@ -13,9 +13,11 @@ import {
   LIVE_TAIL_INTERVAL_MS,
   LOG_FILTER_IDS,
   LOGS_WINDOW_TICK_MS,
+  resolveLogFilterDisplayValue,
   useLogFilterLogic,
   type PaginatedResponse,
 } from "./log_filter_logic";
+import type { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
 vi.mock("../networking", () => ({
   uiSpendLogsCall: vi.fn(),
@@ -79,6 +81,7 @@ describe("useLogFilterLogic", () => {
     const cases: ReadonlyArray<{ id: string; value: string; param: string }> = [
       { id: LOG_FILTER_IDS.KEY_HASH, value: "sk-hash-1", param: "api_key" },
       { id: LOG_FILTER_IDS.TEAM_ID, value: "team-1", param: "team_id" },
+      { id: LOG_FILTER_IDS.PROJECT_ID, value: "project-1", param: "project_id" },
       { id: LOG_FILTER_IDS.REQUEST_ID, value: "req-1", param: "request_id" },
       { id: LOG_FILTER_IDS.SESSION_ID, value: "sess-1", param: "session_id" },
       { id: LOG_FILTER_IDS.END_USER, value: "end-user-1", param: "end_user" },
@@ -274,6 +277,46 @@ describe("getFilterValue", () => {
     expect(getFilterValue(filters, "key_hash")).toBeUndefined();
     expect(getFilterValue(filters, "status")).toBeUndefined();
     expect(getFilterValue(filters, "missing")).toBeUndefined();
+  });
+});
+
+describe("resolveLogFilterDisplayValue", () => {
+  const teams = [
+    { team_id: "team-1", team_alias: "Payments Team" },
+    { team_id: "team-2", team_alias: "" },
+  ] as Team[];
+  const projects = [
+    { project_id: "f7e457ae-9fd6-4ed2-a94b-12d495a6d14e", project_alias: "Growth Experiments" },
+    { project_id: "project-no-alias", project_alias: null },
+  ] as ProjectResponse[];
+
+  it("resolves a team_id filter to its team_alias", () => {
+    expect(resolveLogFilterDisplayValue(LOG_FILTER_IDS.TEAM_ID, "team-1", teams, projects)).toBe("Payments Team");
+  });
+
+  it("resolves a project_id filter to its project_alias", () => {
+    expect(
+      resolveLogFilterDisplayValue(LOG_FILTER_IDS.PROJECT_ID, "f7e457ae-9fd6-4ed2-a94b-12d495a6d14e", teams, projects),
+    ).toBe("Growth Experiments");
+  });
+
+  it("falls back to the raw id when the team is unknown or has no alias", () => {
+    expect(resolveLogFilterDisplayValue(LOG_FILTER_IDS.TEAM_ID, "team-2", teams, projects)).toBe("team-2");
+    expect(resolveLogFilterDisplayValue(LOG_FILTER_IDS.TEAM_ID, "team-missing", teams, projects)).toBe("team-missing");
+  });
+
+  it("falls back to the raw id when the project is unknown, has no alias, or the list has not loaded", () => {
+    expect(resolveLogFilterDisplayValue(LOG_FILTER_IDS.PROJECT_ID, "project-no-alias", teams, projects)).toBe(
+      "project-no-alias",
+    );
+    expect(resolveLogFilterDisplayValue(LOG_FILTER_IDS.PROJECT_ID, "project-missing", teams, projects)).toBe(
+      "project-missing",
+    );
+    expect(resolveLogFilterDisplayValue(LOG_FILTER_IDS.PROJECT_ID, "project-1", teams, undefined)).toBe("project-1");
+  });
+
+  it("passes through filters that carry no id-to-name mapping unchanged", () => {
+    expect(resolveLogFilterDisplayValue(LOG_FILTER_IDS.KEY_HASH, "sk-hash-1", teams, projects)).toBe("sk-hash-1");
   });
 });
 

@@ -70,12 +70,12 @@ const fetchProjects = async (accessToken: string): Promise<ProjectResponse[]> =>
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export const useProjects = () => {
+export const useProjects = (enabled: boolean = true) => {
   const { accessToken, userRole } = useAuthorized();
 
   return useQuery<ProjectResponse[]>({
     queryKey: projectKeys.list({}),
     queryFn: async () => fetchProjects(accessToken!),
-    enabled: Boolean(accessToken) && projectReaderRoles.includes(userRole!),
+    enabled: enabled && Boolean(accessToken) && projectReaderRoles.includes(userRole!),
   });
 };

@@ -45,6 +45,10 @@ function SettingRow({
   );
 }
 
+function toStringArrayOrNull(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : null;
+}
+
 export default function UISettings() {
   const { accessToken } = useAuthorized();
   const { data, isLoading, isError, error } = useUISettings();
@@ -434,7 +438,7 @@ export default function UISettings() {
 
             <Separator />
             <PageVisibilitySettings
-              enabledPagesInternalUsers={values.enabled_ui_pages_internal_users}
+              enabledPagesInternalUsers={toStringArrayOrNull(values.enabled_ui_pages_internal_users)}
               enabledPagesPropertyDescription={enabledPagesProperty?.description}
               isUpdating={isUpdating}
               onUpdate={handleUpdatePageVisibility}

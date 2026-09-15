@@ -24,6 +24,7 @@ const ADMIN_ONLY_CAPABILITIES: Capability[] = [
   "viewPrompts",
   "viewOrganizationUsage",
   "viewAgentUsage",
+  "viewProjectUsage",
 ];
 
 const PROXY_ADMIN_ONLY_PAGE_CAPABILITIES: Capability[] = [
@@ -88,6 +89,30 @@ describe("hasCapability for organization admins", () => {
   it("does not let the org-admin allowance reopen the proxy-admin-only viewGlobalSpend gate", () => {
     expect(hasCapability(SESSION_ROLE_AN_ORG_ADMIN_ACTUALLY_CARRIES, "viewGlobalSpend", true)).toBe(false);
     expect(hasCapability("Org Admin", "viewGlobalSpend", true)).toBe(false);
+  });
+});
+
+const SESSION_ROLE_A_TEAM_ADMIN_ACTUALLY_CARRIES = "Internal User";
+
+describe("hasCapability for team admins", () => {
+  it.each(NON_ADMIN_ROLES)("grants viewProjectUsage to a team admin whose session role is %s", (role) => {
+    expect(hasCapability(role, "viewProjectUsage", false, true)).toBe(true);
+  });
+
+  it("leaves viewProjectUsage denied when the caller is not a team admin", () => {
+    expect(hasCapability(SESSION_ROLE_A_TEAM_ADMIN_ACTUALLY_CARRIES, "viewProjectUsage", false, false)).toBe(false);
+    expect(hasCapability(SESSION_ROLE_A_TEAM_ADMIN_ACTUALLY_CARRIES, "viewProjectUsage")).toBe(false);
+  });
+
+  it.each(ADMIN_ONLY_CAPABILITIES.filter((capability) => capability !== "viewProjectUsage"))(
+    "leaves %s denied for a team admin whose session role is not otherwise entitled",
+    (capability) => {
+      expect(hasCapability(SESSION_ROLE_A_TEAM_ADMIN_ACTUALLY_CARRIES, capability, false, true)).toBe(false);
+    },
+  );
+
+  it("does not let the team-admin allowance reopen the proxy-admin-only viewGlobalSpend gate", () => {
+    expect(hasCapability(SESSION_ROLE_A_TEAM_ADMIN_ACTUALLY_CARRIES, "viewGlobalSpend", false, true)).toBe(false);
   });
 });
 
