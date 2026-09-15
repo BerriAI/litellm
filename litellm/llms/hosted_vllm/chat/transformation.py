@@ -11,7 +11,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
-from litellm.litellm_core_utils.reasoning_content_utils import normalize_reasoning_content
+from litellm.litellm_core_utils.reasoning_content_utils import (
+    normalize_reasoning_content,
+    should_normalize_reasoning_content,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -151,14 +154,16 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: provider request contract
-        optional_params: dict,  # mutable-ok: provider request contract
-        litellm_params: dict,  # mutable-ok: provider request contract
-        headers: dict,  # mutable-ok: provider request contract
-    ) -> dict:  # mutable-ok: provider request contract
+        optional_params: dict[str, object],  # mutable-ok: provider request contract
+        litellm_params: dict[str, object],  # mutable-ok: provider request contract
+        headers: dict[str, str],  # mutable-ok: provider request contract
+    ) -> dict[str, object]:  # mutable-ok: provider request contract
         request_messages: Final = normalize_reasoning_content(
             messages,
             forward=litellm_params.get("forward_reasoning_content") is True,
-            normalize=litellm_params.get("reasoning_content_field") == "reasoning",
+            normalize=should_normalize_reasoning_content(
+                litellm_params.get("reasoning_content_field"), model=model, provider="hosted_vllm"
+            ),
         )
         return super().transform_request(model, request_messages, optional_params, litellm_params, headers)
 
@@ -166,10 +171,10 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: provider request contract
-        optional_params: dict,  # mutable-ok: provider request contract
-        litellm_params: dict,  # mutable-ok: provider request contract
-        headers: dict,  # mutable-ok: provider request contract
-    ) -> dict:  # mutable-ok: provider request contract
+        optional_params: dict[str, object],  # mutable-ok: provider request contract
+        litellm_params: dict[str, object],  # mutable-ok: provider request contract
+        headers: dict[str, str],  # mutable-ok: provider request contract
+    ) -> dict[str, object]:  # mutable-ok: provider request contract
         return await super().async_transform_request(
             model, deepcopy(messages), optional_params, litellm_params, headers
         )

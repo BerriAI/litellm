@@ -6,7 +6,20 @@ from typing import (
     cast,  # noqa: TID251  # Preserves arbitrary provider fields without lossy TypedDict validation.
 )
 
+from litellm.exceptions import BadRequestError
 from litellm.types.llms.openai import AllMessageValues
+
+
+def should_normalize_reasoning_content(field: object, *, model: str, provider: str) -> bool:
+    if field is None or field == "reasoning_content":
+        return False
+    if field == "reasoning":
+        return True
+    raise BadRequestError(
+        message="reasoning_content_field must be reasoning_content or reasoning",
+        model=model,
+        llm_provider=provider,
+    )
 
 
 def normalize_reasoning_content(

@@ -586,7 +586,6 @@ async def test_reasoning_field_sdk_router_final_wire(
                 ("legacy", {}),
                 ("normalized", {"reasoning_content_field": "reasoning"}),
                 ("explicit-default", {"reasoning_content_field": "reasoning_content"}),
-                ("unknown", {"reasoning_content_field": "unknown"}),
             )
         ],
         num_retries=0,
@@ -604,7 +603,7 @@ async def test_reasoning_field_sdk_router_final_wire(
             },
         )
         for alias, field in (
-            ("normalized", "reasoning"), ("legacy", None), ("explicit-default", "reasoning_content"), ("unknown", "unknown")
+            ("normalized", "reasoning"), ("legacy", None), ("explicit-default", "reasoning_content")
         ):
             kwargs: Final = (
                 {"model": alias, "messages": messages}
@@ -640,13 +639,14 @@ async def test_reasoning_field_sdk_router_final_wire(
             assert "reasoning_content_field" not in payload
             assert "forward_reasoning_content" not in payload
             assert messages == original
-        assert route.call_count == 4
+        assert route.call_count == 3
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize("provider", ["deepinfra", "together_ai", None])
-async def test_reasoning_field_does_not_apply_to_inherited_provider(provider: str | None, is_async: bool):
+@pytest.mark.parametrize("field", ["reasoning", "invalid-selector"])
+async def test_reasoning_field_does_not_apply_to_inherited_provider(provider: str | None, is_async: bool, field: str):
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
     config: Final = OpenAIGPTConfig()
@@ -657,8 +657,41 @@ async def test_reasoning_field_does_not_apply_to_inherited_provider(provider: st
         "messages": messages,
         "optional_params": {},
         "headers": {},
-        "litellm_params": {"custom_llm_provider": provider, "reasoning_content_field": "reasoning"},
+        "litellm_params": {"custom_llm_provider": provider, "reasoning_content_field": field},
     }
     result: Final = await config.async_transform_request(**kwargs) if is_async else config.transform_request(**kwargs)
     assert result["messages"] == original
+    assert messages == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("via_router", [False, True])
+@pytest.mark.parametrize("bridge", [False, True])
+@pytest.mark.parametrize("field", ["reasonig", ""])
+@pytest.mark.parametrize("forward", [False, True])
+async def test_invalid_reasoning_field_fails_before_http(
+    provider, is_async, via_router, bridge, field, forward, monkeypatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    messages = [{"role": "user", "content": "Hello"}]
+    original = deepcopy(messages)
+    params = {
+        "model": f"{provider}/reasoning-test", "api_key": "test-key",
+        "api_base": "https://invalid-reasoning-field.invalid/v1",
+        "reasoning_content_field": field, "forward_reasoning_content": forward,
+        **({"use_chat_completions_api": True} if bridge else {}),
+    }
+    router = litellm.Router(model_list=[{"model_name": "invalid-field", "litellm_params": params}], num_retries=0)
+    client = router if via_router else litellm
+    kwargs = {**({"model": "invalid-field"} if via_router else params), "input" if bridge else "messages": messages}
+    method = (client.aresponses if is_async else client.responses) if bridge else (client.acompletion if is_async else client.completion)
+    with respx.mock(assert_all_called=False) as mock:
+        with pytest.raises(litellm.BadRequestError) as error:
+            await method(**kwargs) if is_async else method(**kwargs)
+        assert error.value.status_code == 400
+        assert "reasoning_content_field must be reasoning_content or reasoning" in str(error.value)
+        assert "reasonig" not in str(error.value)
+        assert len(mock.calls) == 0
     assert messages == original
