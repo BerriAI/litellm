@@ -2365,7 +2365,7 @@ def batch_cost_calculator(
             tokens * rate
             for tokens, rate in zip(
                 (
-                    max(cast(int, usage.prompt_tokens) - audio_tokens - image_tokens - video_tokens, 0),
+                    max((usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens, 0),
                     audio_tokens,
                     image_tokens,
                     video_tokens,
