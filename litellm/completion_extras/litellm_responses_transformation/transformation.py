@@ -654,20 +654,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     @staticmethod
     def _merge_message_content_part(
         content: object, merged_message_texts: list[str], merged_annotations: list[object]
-    ) -> bool:
-        """Merge one message content part into the merged choice state.
-
-        Returns False for a verbatim repeat of already-merged text (#41109).
-        """
+    ) -> None:
+        """Merge one message content part into the merged choice state."""
         response_text = getattr(content, "text", "")
-        if response_text and response_text in merged_message_texts:
-            return False
-        # Extract annotations from content if present
+        merged_message_texts.append(response_text if response_text else "")
         raw_annotations = getattr(content, "annotations", None)
         annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(raw_annotations)
-        merged_message_texts.append(response_text if response_text else "")
         merged_annotations.extend(annotations or [])
-        return True
 
     @staticmethod
     def _typed_tool_call_dict(item: object, tool_call_index: int) -> "Mapping[str, object] | None":
@@ -724,10 +717,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         index = 0
         reasoning_content: str | None = None
         pending_reasoning_item: _BuiltReasoningItem | None = None
-        # gpt-5.4+ occasionally emits more than one `message` output item per turn
-        # (#37299); with n=1 those must merge into a single choice instead of
-        # producing extra choices a chat client will never read, and a verbatim
-        # repeat must not double the text the consumer sees (#41109)
+        # gpt-5.4+ emits duplicate `message` output items per turn (#37299): with
+        # n=1 they merge into one choice, and a verbatim repeat of everything
+        # already merged must not double the text the consumer sees (#41109)
         merged_message_texts: list[str] = []  # mutable-ok: merges message items into one choice
         merged_annotations: list[object] = []  # mutable-ok: concatenates annotations of merged items
         merged_reasoning_content: str | None = None
@@ -748,21 +740,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
 
             elif isinstance(item, ResponseOutputMessage):
+                item_text = "".join(getattr(content, "text", "") or "" for content in item.content)
+                if item_text and item_text == "".join(merged_message_texts):
+                    continue  # verbatim repeat of everything already merged (#41109)
                 for content in item.content:
-                    added = LiteLLMResponsesTransformationHandler._merge_message_content_part(
+                    LiteLLMResponsesTransformationHandler._merge_message_content_part(
                         content, merged_message_texts, merged_annotations
                     )
-                    if added:
-                        merged_reasoning_content, merged_reasoning_item = (
-                            LiteLLMResponsesTransformationHandler._adopt_pending_reasoning(
-                                reasoning_content,
-                                pending_reasoning_item,
-                                merged_reasoning_content,
-                                merged_reasoning_item,
-                            )
+                    merged_reasoning_content, merged_reasoning_item = (
+                        LiteLLMResponsesTransformationHandler._adopt_pending_reasoning(
+                            reasoning_content,
+                            pending_reasoning_item,
+                            merged_reasoning_content,
+                            merged_reasoning_item,
                         )
-                        reasoning_content = None  # flush
-                        pending_reasoning_item = None  # flush
+                    )
+                    reasoning_content = None  # flush
+                    pending_reasoning_item = None  # flush
 
             elif (
                 tool_call_dict := LiteLLMResponsesTransformationHandler._typed_tool_call_dict(item, tool_call_index)

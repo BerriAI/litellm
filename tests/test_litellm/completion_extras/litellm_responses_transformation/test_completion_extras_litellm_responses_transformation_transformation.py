@@ -4366,3 +4366,51 @@ def test_convert_response_output_message_plus_tool_call_keeps_shape():
     assert choices[1].message.tool_calls is not None
     assert choices[1].finish_reason == "tool_calls"
     assert choices[1].index == 1
+
+
+def test_convert_response_output_keeps_repeated_text_and_annotations_within_parts():
+    """Identical text in separate content parts is valid output: every part is
+    merged with its annotations, and only a whole-item verbatim repeat of
+    everything already merged is dropped (#41109)."""
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    annotation = {"type": "url_citation", "url": "https://example.com/a", "title": "a", "start_index": 0, "end_index": 1}
+    repeated = ResponseOutputMessage(
+        id="msg_1",
+        content=[
+            ResponseOutputText(annotations=[annotation], text="No.", type="output_text", logprobs=[]),
+            ResponseOutputText(annotations=[], text="No.", type="output_text", logprobs=[]),
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    choices = handler._convert_response_output_to_choices([repeated])
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "No.No."
+    assert choices[0].message.annotations is not None
+    assert len(choices[0].message.annotations) == 1
+
+
+def test_convert_response_output_keeps_partial_repeat_item():
+    """A later item that only repeats part of the merged text is new content and
+    must survive, matching the streaming bridge's behavior."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    choices = handler._convert_response_output_to_choices(
+        [_message_item("msg_1", "let me check the schedule"), _message_item("msg_2", "let me check")]
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "let me check the schedulelet me check"
