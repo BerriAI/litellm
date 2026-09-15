@@ -43,7 +43,6 @@ FETCH_TIMEOUT_SECONDS: Final = 3
 BAR_WIDTH: Final = 24
 BAR_FULL: Final = "\u2588"
 BAR_EMPTY: Final = "\u2591"
-SEPARATOR: Final = " \u00b7 "
 TRANSCRIPT_SCAN_LIMIT_BYTES: Final = 4 * 1024 * 1024
 CLAUDE_BASE_URL_ENV_KEYS: Final = ("ANTHROPIC_BASE_URL",)
 CLAUDE_API_KEY_ENV_KEYS: Final = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
@@ -315,11 +314,8 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
         return f"{code}{text}{RESET}" if use_color else text
 
     routed: Final = paint(BOLD, f"Routed to: {model}")
-    if session is None:
+    if session is None or session.baseline_model is None or session.baseline_spend <= 0:
         return routed
-    header: Final = f"{session.router_name}{SEPARATOR}{routed}"
-    if session.baseline_model is None or session.baseline_spend <= 0:
-        return header
     reference: Final = baseline_label(session.baseline_model, config_dir)
     pct: Final = (session.baseline_spend - session.spend) / session.baseline_spend * 100
     delta: Final = paint(LITELLM_COLOR, f"{'-' if pct >= 0 else '+'}{abs(round(pct))}% vs {reference}")
@@ -335,7 +331,7 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
         f"{paint(DIM, f'${amount:.2f}')}"
         for label, amount, color in rows
     )
-    return "\n".join((f"{header}  {delta}", *lines))
+    return "\n".join((f"{routed}  {delta}", *lines))
 
 
 def color_enabled(env: Mapping[str, str]) -> bool:

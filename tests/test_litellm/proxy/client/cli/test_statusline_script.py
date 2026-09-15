@@ -252,7 +252,7 @@ class TestRender:
     def test_savings_header_and_bars_against_the_routers_baseline(self, config_dir):
         text = render("claude-sonnet-5", RECORDED, config_dir, use_color=False, bar_width=10)
         assert text.splitlines() == [
-            "claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5",
+            "Routed to: claude-sonnet-5  -63% vs Claude Opus 5",
             "claude-auto   ████░░░░░░ $0.14",
             "Claude Opus 5 ██████████ $0.38",
         ]
@@ -330,7 +330,7 @@ class TestRender:
         assert "+25% vs Claude Opus 5" in render("m", dearer, config_dir, use_color=False)
 
     def test_without_a_baseline_only_the_routed_line_shows(self, config_dir):
-        assert render("m", RECORDED._replace(baseline_model=None), config_dir, False) == "claude-auto · Routed to: m"
+        assert render("m", RECORDED._replace(baseline_model=None), config_dir, False) == "Routed to: m"
         assert render("m", None, config_dir, False) == "Routed to: m"
 
     def test_color_wraps_the_same_text(self, config_dir):
@@ -352,7 +352,7 @@ class TestClaudeCodeMode:
             return Fetched(RECORDED, definitive=True)
 
         text: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
-        assert text.startswith("claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5\n")
+        assert text.startswith("Routed to: claude-sonnet-5  -63% vs Claude Opus 5\n")
         assert text.splitlines()[1].startswith("claude-auto ")
 
     def test_a_discovered_display_name_labels_the_sessions_model(
@@ -364,7 +364,7 @@ class TestClaudeCodeMode:
             return Fetched(session, definitive=True)
 
         text: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
-        assert text.startswith("claude-auto · Routed to: Claude Opus 5  -63% vs Claude Opus 5\n")
+        assert text.startswith("Routed to: Claude Opus 5  -63% vs Claude Opus 5\n")
 
     def test_an_unrecorded_session_degrades_to_the_routed_line(self, tmp_path, transcript, config_dir):
         assert _run(_payload(transcript), _env(tmp_path, config_dir), lambda c, s: Fetched(None, True)) == (
@@ -420,7 +420,7 @@ class TestCodexMode:
 
         out = _run({"hook_event_name": "Stop", "session_id": SESSION_ID, "transcript_path": "/nope"}, env, fetch)
         message = json.loads(out)["systemMessage"]
-        assert message.splitlines()[1] == "claude-auto · Routed to: claude-sonnet-5  -63% vs Claude Opus 5"
+        assert message.splitlines()[1] == "Routed to: claude-sonnet-5  -63% vs Claude Opus 5"
         assert message.splitlines()[2].startswith("claude-auto ")
         assert message.startswith("\n")
         assert seen == [Credentials("http://127.0.0.1:4000", "sk-codex")]
