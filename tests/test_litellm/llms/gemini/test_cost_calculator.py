@@ -452,6 +452,8 @@ def test_map_traffic_type_to_service_tier(
     )
 
 
+# Alias targets are the `modelVersion` returned by
+# POST https://generativelanguage.googleapis.com/v1beta/models/<alias>:generateContent on 2026-09-15
 @pytest.mark.parametrize(
     "alias,target",
     [
