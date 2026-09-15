@@ -2426,7 +2426,7 @@ class TestPerMessageRewriteWriteBack:
 
     @pytest.mark.asyncio
     async def test_texts_only_per_message_answer_is_rejected_by_name(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
         guardrail = _per_message_redactor()
         data = _tool_replay_request()
@@ -2453,7 +2453,7 @@ class TestPerMessageRewriteWriteBack:
 
     @pytest.mark.asyncio
     async def test_texts_only_per_message_answer_over_a_string_input_is_rejected_by_name(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
         guardrail = _per_message_redactor()
         data = _string_input_request()

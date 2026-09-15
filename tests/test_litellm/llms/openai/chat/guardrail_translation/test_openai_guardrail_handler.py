@@ -1917,7 +1917,7 @@ class TestPerMessageTextWriteBack:
 
     @pytest.mark.asyncio
     async def test_fewer_texts_than_extracted_over_a_tool_message_is_rejected(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
         handler = OpenAIChatCompletionsHandler()
         original_messages = [

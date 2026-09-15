@@ -413,7 +413,14 @@ def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> 
     return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
 
 
-def unappliable_request_rewrite(guardrail_name: str | None) -> Exception:
-    from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+class UnappliableRequestRewrite(Exception):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(
+            f"Guardrail '{guardrail_name}' rewrote the request in a way this endpoint cannot apply, "
+            "so the request was rejected rather than sent unrewritten"
+        )
+        self.guardrail_name: Final = guardrail_name
 
+
+def unappliable_request_rewrite(guardrail_name: str | None) -> UnappliableRequestRewrite:
     return UnappliableRequestRewrite(guardrail_name or "unknown")

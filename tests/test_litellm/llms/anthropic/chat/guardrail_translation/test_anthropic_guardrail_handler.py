@@ -2296,7 +2296,7 @@ class TestPerMessageTextWriteBack:
 
     @pytest.mark.asyncio
     async def test_one_text_per_row_over_a_system_prompt_is_rejected_by_name(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
         data = {
             "model": "claude-sonnet-4-5",

@@ -38,16 +38,27 @@ class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
 
 
+def _inputs_with_structured_messages(
+    inputs: GenericGuardrailAPIInputs, rewritten_messages: Sequence[AllMessageValues] | None
+) -> GenericGuardrailAPIInputs:
+    if rewritten_messages is None:
+        return inputs
+    patched: Final[GenericGuardrailAPIInputs] = {
+        **inputs,
+        "structured_messages": list(rewritten_messages),  # mutable-ok: the TypedDict field is declared as a list
+    }
+    return patched
+
+
 def _inputs_with_modifications(
     inputs: GenericGuardrailAPIInputs,
     modified_texts: list[str],
     rewritten_messages: Sequence[AllMessageValues] | None,
 ) -> GenericGuardrailAPIInputs:
-    texts_patch: Final[GenericGuardrailAPIInputs] = {"texts": modified_texts} if modified_texts else {}
-    messages_patch: Final[GenericGuardrailAPIInputs] = (
-        {"structured_messages": list(rewritten_messages)} if rewritten_messages is not None else {}
-    )
-    return {**inputs, **texts_patch, **messages_patch}
+    if not modified_texts:
+        return _inputs_with_structured_messages(inputs, rewritten_messages)
+    with_texts: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": modified_texts}
+    return _inputs_with_structured_messages(with_texts, rewritten_messages)
 
 
 class _ProtectVerdict(TypedDict, total=False):
