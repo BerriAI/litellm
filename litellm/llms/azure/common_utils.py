@@ -5,7 +5,8 @@ import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
-from functools import lru_cache
+from functools import lru_cache, partial
+from time import monotonic
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
 
@@ -29,6 +30,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+_AZURE_AD_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
 _LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
 
 
@@ -282,6 +284,7 @@ def get_azure_ad_token_from_oidc(
             "azure_tenant_id": azure_tenant_id,
             "azure_authority_host": azure_authority_host,
             "oidc_token": oidc_token,
+            "scope": scope,
         }
     )
 
@@ -289,6 +292,7 @@ def get_azure_ad_token_from_oidc(
     if azure_ad_token_access_token is not None:
         return azure_ad_token_access_token
 
+    request_started_at: Final = monotonic()
     with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
         req_token: Final = client.post(
             f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
@@ -317,13 +321,32 @@ def get_azure_ad_token_from_oidc(
     if azure_ad_token_expires_in is None:
         raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
 
-    azure_ad_cache.set_cache(
-        key=azure_ad_token_cache_key,
-        value=azure_ad_token_access_token,
-        ttl=azure_ad_token_expires_in,
+    cache_ttl: Final = (
+        azure_ad_token_expires_in - _AZURE_AD_TOKEN_EXPIRY_MARGIN_SECONDS - (monotonic() - request_started_at)
     )
+    if cache_ttl > 0:
+        azure_ad_cache.set_cache(
+            key=azure_ad_token_cache_key,
+            value=azure_ad_token_access_token,
+            ttl=cache_ttl,
+        )
 
     return azure_ad_token_access_token
+
+
+def get_azure_ad_token_provider_from_oidc(
+    azure_ad_token: str,
+    azure_client_id: str | None,
+    azure_tenant_id: str | None,
+    scope: str | None,
+) -> Callable[[], str]:
+    return partial(
+        get_azure_ad_token_from_oidc,
+        azure_ad_token=azure_ad_token,
+        azure_client_id=azure_client_id,
+        azure_tenant_id=azure_tenant_id,
+        scope=scope,
+    )
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
@@ -703,15 +726,22 @@ class BaseAzureLLM(BaseOpenAILLM):
                 scope=scope,
             )
 
-        if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
-            verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
-            azure_ad_token = get_azure_ad_token_from_oidc(
+        oidc_token_provider: Final = (
+            get_azure_ad_token_provider_from_oidc(
                 azure_ad_token=azure_ad_token,
                 azure_client_id=client_id,
                 azure_tenant_id=tenant_id,
                 scope=scope,
             )
-        elif not api_key and azure_ad_token_provider is None and litellm.enable_azure_ad_token_refresh is True:
+            if azure_ad_token is not None and azure_ad_token.startswith("oidc/")
+            else None
+        )
+        if (
+            oidc_token_provider is None
+            and not api_key
+            and azure_ad_token_provider is None
+            and litellm.enable_azure_ad_token_refresh is True
+        ):
             verbose_logger.debug(
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
@@ -733,8 +763,8 @@ class BaseAzureLLM(BaseOpenAILLM):
             "api_key": api_key,
             "azure_endpoint": api_base,
             "api_version": api_version,
-            "azure_ad_token": azure_ad_token,
-            "azure_ad_token_provider": azure_ad_token_provider,
+            "azure_ad_token": None if oidc_token_provider is not None else azure_ad_token,
+            "azure_ad_token_provider": azure_ad_token_provider or oidc_token_provider,
         }
         # init http client + SSL Verification settings
         if is_async is True:
@@ -796,14 +826,14 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 if azure_ad_token.startswith("oidc/"):
-                    azure_ad_token = get_azure_ad_token_from_oidc(
+                    azure_client_params["azure_ad_token_provider"] = get_azure_ad_token_provider_from_oidc(
                         azure_ad_token=azure_ad_token,
                         azure_client_id=client_id,
                         azure_tenant_id=tenant_id,
                         scope=scope,
                     )
-
-                azure_client_params["azure_ad_token"] = azure_ad_token
+                else:
+                    azure_client_params["azure_ad_token"] = azure_ad_token
             if azure_ad_token_provider is not None:
                 azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
 
