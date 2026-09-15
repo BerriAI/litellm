@@ -665,11 +665,11 @@ class TestParseVerdict:
         assert triage_module.parse_verdict(raw)["verdict"] == "pass"
 
     def test_should_raise_for_unparseable_text(self, triage_module):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='could not extract JSON from LLM response: not even close to'):
             triage_module.parse_verdict("not even close to json")
 
     def test_should_raise_for_empty(self, triage_module):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='empty LLM response'):
             triage_module.parse_verdict("")
 
 

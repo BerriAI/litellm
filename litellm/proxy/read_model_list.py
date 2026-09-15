@@ -9,7 +9,8 @@ effects.
 Instead we reuse ``ProxyConfig.get_config`` — the actual config reader — so the
 gateway inherits the same heavy lifting the proxy does: ``include:`` merging,
 ``os.environ/`` + secret-manager resolution, and DB-stored models (when a DB is
-configured). It has no proxy-setup side effects. Returns the resolved
+configured). Its only proxy-setup side effect is bringing up the configured
+secret manager, which is what makes that resolution work. Returns the resolved
 ``model_list``; the Rust side deserializes each entry into its ``Deployment``.
 """
 

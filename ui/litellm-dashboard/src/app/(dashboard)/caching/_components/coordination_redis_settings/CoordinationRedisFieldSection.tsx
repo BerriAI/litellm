@@ -29,7 +29,7 @@ const CoordinationRedisFieldSection: React.FC<CoordinationRedisFieldSectionProps
 
   return (
     <div className="space-y-6">
-      <Heading className="text-sm font-medium text-gray-900">{title}</Heading>
+      <Heading className="text-sm font-medium text-foreground">{title}</Heading>
       <div className={`grid ${gridCols}`}>
         {fields.map((field) => (
           <CoordinationRedisFormField

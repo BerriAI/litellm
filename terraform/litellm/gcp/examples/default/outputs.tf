@@ -38,6 +38,31 @@ output "redis_endpoint" {
   value       = module.litellm.redis_endpoint
 }
 
+output "redis_host" {
+  description = "Memorystore Redis host."
+  value       = module.litellm.redis_host
+}
+
+output "redis_port" {
+  description = "Memorystore Redis port."
+  value       = module.litellm.redis_port
+}
+
+output "redis_server_ca_pem" {
+  description = "Memorystore server CA PEM."
+  value       = module.litellm.redis_server_ca_pem
+}
+
+output "db_username" {
+  description = "Cloud SQL application username."
+  value       = module.litellm.db_username
+}
+
+output "db_name" {
+  description = "Cloud SQL database name."
+  value       = module.litellm.db_name
+}
+
 output "gcs_bucket" {
   description = "GCS bucket name."
   value       = module.litellm.gcs_bucket
@@ -51,6 +76,11 @@ output "master_key_secret_id" {
 output "db_password_secret_id" {
   description = "Secret Manager resource ID holding the Cloud SQL app-user password."
   value       = module.litellm.db_password_secret_id
+}
+
+output "runtime_service_account_email" {
+  description = "Runtime service account email."
+  value       = module.litellm.runtime_service_account_email
 }
 
 output "migration_run_command" {

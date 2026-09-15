@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   all_admin_roles,
   effectiveSessionRole,
+  hasProxyWideSpendView,
   isAdminRole,
+  spendScopeUserId,
   isOrgAdminForAnyOrg,
   isOrgAdminSessionRole,
   isProxyAdminRole,
@@ -323,6 +325,51 @@ describe("roles", () => {
       expect(all_admin_roles).not.toContain(effectiveSessionRole("org_admin"));
       expect(isAdminRole(effectiveSessionRole("org_admin"))).toBe(false);
       expect(teamListScopeUserId(effectiveSessionRole("org_admin"), SESSION_USER_ID)).toBeNull();
+    });
+  });
+
+  describe("spendScopeUserId", () => {
+    const SESSION_USER_ID = "user-1234";
+
+    it.each(["proxy_admin", "proxy_admin_viewer"])(
+      "drops the user id for %s, whom the daily-activity endpoints let read every user's spend",
+      (rawRole) => {
+        expect(hasProxyWideSpendView(effectiveSessionRole(rawRole))).toBe(true);
+        expect(spendScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBeNull();
+      },
+    );
+
+    it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"])(
+      "accepts %s in either the session-role or raw spelling, since all_admin_roles carries both",
+      (role) => {
+        expect(spendScopeUserId(role, SESSION_USER_ID)).toBeNull();
+      },
+    );
+
+    it.each(["internal_user", "internal_user_viewer", "internal_viewer", "app_user"])(
+      "scopes %s to its own user id, which is the only one the endpoint authorizes",
+      (rawRole) => {
+        expect(spendScopeUserId(effectiveSessionRole(rawRole), SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      },
+    );
+
+    it("scopes an unknown or absent role rather than asking for the whole proxy", () => {
+      expect(spendScopeUserId(null, SESSION_USER_ID)).toBe(SESSION_USER_ID);
+      expect(spendScopeUserId("Undefined Role", SESSION_USER_ID)).toBe(SESSION_USER_ID);
+    });
+
+    // The backend's user_api_key_has_admin_view covers PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY only,
+    // so an org admin asking for the whole proxy is silently narrowed to its own rows and the
+    // figures would read as the key's total. Both spellings have to scope, unlike teamListScopeUserId.
+    it.each(["org_admin", "Org Admin"])("scopes %s, whom the backend does not grant an admin view", (role) => {
+      expect(hasProxyWideSpendView(role)).toBe(false);
+      expect(spendScopeUserId(role, SESSION_USER_ID)).toBe(SESSION_USER_ID);
+    });
+
+    it("differs from all_admin_roles by exactly org admin, which is the whole point of not reusing it", () => {
+      const scopedByAllAdminRoles = all_admin_roles.filter((role) => spendScopeUserId(role, SESSION_USER_ID) !== null);
+
+      expect(scopedByAllAdminRoles).toEqual(["org_admin"]);
     });
   });
 });

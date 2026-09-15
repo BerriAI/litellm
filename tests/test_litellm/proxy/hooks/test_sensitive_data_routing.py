@@ -6,6 +6,7 @@ This feature allows guardrails to route requests to a different model
 All subsequent requests in the same session are routed to the same model.
 """
 
+import logging
 import asyncio
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,12 +14,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     get_session_id_from_request_data,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import InternalUsageCache
 from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
     SENSITIVE_ROUTING_CACHE_PREFIX,
@@ -227,7 +230,7 @@ class TestCustomGuardrailSensitiveDataRouting:
 
         request_data = {"model": "gpt-4"}
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Cannot route sensitive data without a session_id\\. Ensure') as exc_info:
             guardrail.raise_sensitive_data_route_exception(
                 route_to_model="on-premise-model",
                 request_data=request_data,
@@ -1034,3 +1037,35 @@ class TestPreCallHookDeferredRouting:
         metrics_kwargs = prom._record_guardrail_metrics.call_args.kwargs
         assert metrics_kwargs["status"] == "intervened"
         assert metrics_kwargs["error_type"] is None
+
+
+class _OpenBreakerRedis:
+    def __init__(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+        for _ in range(3):
+            self._circuit_breaker.record_failure()
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_keeps_session_routing_in_memory_without_a_warning(caplog):
+    cache = DualCache(redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    handler = _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=InternalUsageCache(cache))
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await handler.set_session_routing("quiet-session", "safe-model")
+        routed = await handler._get_routed_model("quiet-session", None)
+
+    assert routed == "safe-model"
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)

@@ -21,10 +21,7 @@ from litellm.llms.litellm_proxy.skills import (
     code_execution_handler,
     get_litellm_code_execution_tool,
 )
-from litellm.proxy.hooks.litellm_skills.main import (
-    SkillsInjectionHook,
-    skills_injection_hook,
-)
+from litellm.proxy.hooks.litellm_skills.main import SkillsInjectionHook
 
 __all__ = [
     "LITELLM_CODE_EXECUTION_TOOL",
@@ -35,5 +32,4 @@ __all__ = [
     "SkillsSandboxExecutor",
     "code_execution_handler",
     "get_litellm_code_execution_tool",
-    "skills_injection_hook",
 ]
