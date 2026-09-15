@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
+from fastapi import Request
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -113,6 +114,14 @@ def stored_credentials_present() -> bool:
         llm_router.model_list or []  # pyright: ignore[reportUnknownMemberType]  # Router.model_list is declared bare `list`; elements are validated by the TypeAdapter
     )
     return any((d.get("model_info") or {}).get("db_model") is True for d in deployments)
+
+
+def request_http_method(request: Request) -> str:
+    try:
+        method: Final = request.method
+    except (KeyError, AttributeError):
+        return ""
+    return method if isinstance(method, str) else ""
 
 
 def master_key_lockout_action(

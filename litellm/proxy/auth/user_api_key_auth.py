@@ -84,6 +84,7 @@ from litellm.proxy.auth.master_key_policy import (
     insecure_master_key_reason,
     master_key_lockout_action,
     master_key_lockout_exception,
+    request_http_method,
     stored_credentials_present,
 )
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
@@ -1362,15 +1363,11 @@ async def _user_api_key_auth_builder(
         _lockout_reason: Final = insecure_master_key_reason(
             master_key, alternative_auth_enabled=alternative_auth_enabled(general_settings)
         )
-        try:
-            _request_method: Final = request.method
-        except (KeyError, AttributeError):
-            _request_method = ""
         if (
             _lockout_reason is not None
             and master_key_lockout_action(
                 route=route,
-                method=_request_method if isinstance(_request_method, str) else "",
+                method=request_http_method(request),
                 reason=_lockout_reason,
                 stored_credentials_present=stored_credentials_present(),
             )
