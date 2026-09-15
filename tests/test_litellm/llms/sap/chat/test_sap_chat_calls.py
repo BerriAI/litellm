@@ -204,3 +204,83 @@ async def test_sap_chat_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+@pytest.mark.asyncio
+async def test_sap_chat_forwards_extra_headers(
+    respx_mock,
+    sap_api_response,
+    fake_token_creator,
+    fake_deployment_url,
+):
+    """`extra_headers` must be forwarded on the outgoing request without leaking into the body."""
+    import litellm
+
+    litellm.disable_aiohttp_transport = True
+    with (
+        patch(
+            "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.chat.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        route = respx_mock.post(f"{fake_deployment_url}/v2/completion")
+        route.respond(json=sap_api_response)
+
+        await litellm.acompletion(
+            model="sap/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            extra_headers={"X-Custom-Header": "custom-value"},
+        )
+
+        request = route.calls[0].request
+
+        assert request.headers.get("X-Custom-Header") == "custom-value"
+
+        assert request.headers.get("Authorization") == "Bearer FAKE_TOKEN"
+        assert request.headers.get("AI-Resource-Group") == "fake-group"
+        assert request.headers.get("AI-Client-Type") == "LiteLLM"
+
+        assert b"X-Custom-Header" not in request.content
+        assert b"extra_headers" not in request.content
+
+
+@pytest.mark.asyncio
+async def test_sap_chat_extra_headers_cannot_override_required(
+    respx_mock,
+    sap_api_response,
+    fake_token_creator,
+    fake_deployment_url,
+):
+    """Required SAP headers win over a conflicting `extra_headers` entry so auth/routing stays correct."""
+    import litellm
+
+    litellm.disable_aiohttp_transport = True
+    with (
+        patch(
+            "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.chat.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        route = respx_mock.post(f"{fake_deployment_url}/v2/completion")
+        route.respond(json=sap_api_response)
+
+        await litellm.acompletion(
+            model="sap/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            extra_headers={"AI-Resource-Group": "attacker-group", "X-Trace-Id": "abc123"},
+        )
+
+        request = route.calls[0].request
+
+        assert request.headers.get("AI-Resource-Group") == "fake-group"
+        assert request.headers.get("X-Trace-Id") == "abc123"
