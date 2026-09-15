@@ -63,7 +63,12 @@ def _success_kwargs(preset_cache_key: str | None = "preset-key") -> dict:
         "litellm_params": {
             "api_base": "https://api.openai.com",
             "preset_cache_key": preset_cache_key,
-            "proxy_server_request": {"body": {"messages": [{"role": "user", "content": _BIG_PROMPT}]}},
+            "proxy_server_request": {
+                "url": "http://litellm:4000/v1/chat/completions?api-version=2026-01-01",
+                "method": "POST",
+                "headers": {"authorization": "Bearer sk-secret"},
+                "body": {"messages": [{"role": "user", "content": _BIG_PROMPT}]},
+            },
             "metadata": {
                 "user_api_key": "hash-1",
                 "user_api_key_user_id": "user-1",
@@ -110,7 +115,9 @@ def test_event_is_compact_and_omits_bodies_by_default():
     decoded: Final = json.loads(line)
     assert "messages" not in decoded["standard_logging_object"]
     assert "response" not in decoded["standard_logging_object"]
-    assert decoded["litellm_params"]["proxy_server_request"] is None
+    assert decoded["litellm_params"]["proxy_server_request"] == {"url": "/v1/chat/completions", "method": "POST"}
+    assert b"sk-secret" not in line
+    assert b"api-version" not in line
 
 
 def test_event_carries_bodies_when_spend_logs_store_them():
