@@ -5334,3 +5334,55 @@ def test_realtime_models_bill_cached_text_and_audio_at_their_cache_read_rates(
 
     prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=custom_llm_provider)
     assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_audio_tokens_with_per_token_rate_skip_per_second_audio_charge() -> None:
+    """A model listing both audio rates bills audio once, at the per-token rate."""
+    model_info: ModelInfo = {
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_audio_token": 6.5e-6,
+        "input_cost_per_audio_per_second": 0.00016,
+    }
+    usage = Usage(
+        prompt_tokens=64,
+        completion_tokens=0,
+        total_tokens=64,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=0,
+            audio_tokens=64,
+            audio_length_seconds=2.0,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="some-embedding-model",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+    assert prompt_cost == pytest.approx(64 * 6.5e-6)
+
+
+def test_audio_seconds_still_billed_when_no_per_token_audio_rate() -> None:
+    model_info: ModelInfo = {
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_audio_per_second": 0.00016,
+    }
+    usage = Usage(
+        prompt_tokens=64,
+        completion_tokens=0,
+        total_tokens=64,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=0,
+            audio_tokens=64,
+            audio_length_seconds=2.0,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="some-embedding-model",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+    assert prompt_cost == pytest.approx(2.0 * 0.00016)

@@ -956,8 +956,11 @@ def _calculate_input_cost(
     )
 
     ### AUDIO COST
+    audio_cost_key: Final = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
+    audio_billed_per_token: Final = bool(prompt_tokens_details["audio_tokens"]) and (
+        _get_cost_per_unit(model_info, audio_cost_key, None) is not None
+    )
     if prompt_tokens_details["audio_tokens"]:
-        audio_cost_key: Final = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
         prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
 
     ### IMAGE TOKEN COST
@@ -1011,7 +1014,7 @@ def _calculate_input_cost(
         )
 
     ### AUDIO LENGTH COST
-    if prompt_tokens_details["audio_length_seconds"]:
+    if prompt_tokens_details["audio_length_seconds"] and not audio_billed_per_token:
         prompt_cost += calculate_cost_component(
             model_info,
             "input_cost_per_audio_per_second",

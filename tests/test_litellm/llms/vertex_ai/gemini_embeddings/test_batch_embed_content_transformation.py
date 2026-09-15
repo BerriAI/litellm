@@ -465,7 +465,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(2.0 * 0.00016)
+        assert prompt_cost == pytest.approx(64 * 6.5e-6)
 
     def test_video_plus_audio_does_not_double_bill_text(self):
         """Video+audio responses must not get video tokens reassigned to text."""
@@ -499,5 +499,5 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
-        assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)
+        # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 64 audio tokens at 6.5e-6
+        assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 64 * 6.5e-6)
