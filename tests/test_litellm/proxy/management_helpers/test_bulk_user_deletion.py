@@ -611,6 +611,26 @@ async def test_bulk_member_delete_by_id_removes_the_members_email_only_roster_en
 
 
 @pytest.mark.asyncio
+async def test_bulk_member_delete_by_id_of_a_non_member_leaves_a_same_email_users_roster_entry():
+    team = LiteLLM_TeamTable(
+        team_id="t1",
+        members_with_roles=[
+            Member(user_id=None, user_email="shared@example.com", role="user"),
+            Member(user_id="keep", user_email="keep@example.com", role="user"),
+        ],
+    )
+    outsider = _UserRow(user_id="outsider", user_email="shared@example.com", teams=[])
+    member = _UserRow(user_id="member", user_email="shared@example.com", teams=["t1"])
+    prisma = _FakePrisma(users=[outsider, member, _user("keep", "t1")], teams=[team])
+
+    results = await _remove(prisma, "t1", [{"user_id": "outsider"}])
+
+    assert [(r.success, r.error) for r in results] == [(False, "User not found in team")]
+    assert _roster(prisma, "t1") == [None, "keep"]
+    assert prisma.db.litellm_usertable.rows["member"].teams == ["t1"]
+
+
+@pytest.mark.asyncio
 async def test_bulk_member_delete_rejects_unknown_team_and_unauthorized_callers():
     prisma = _FakePrisma(users=[_user("u1", "t1")], teams=[_team("t1", "u1")])
 
