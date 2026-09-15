@@ -96,7 +96,6 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
-    mask_credentials_in_payload,
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
@@ -623,20 +622,6 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
-# Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
-# breadcrumb entirely: the request payload, the proxy's snapshot of the inbound request (its body
-# aliases the live request metadata, earlier breadcrumbs included, so copying it would nest every
-# breadcrumb inside the next one), and the router-internal walk state. Credentials are handled
-# separately by mask_credentials_in_payload, which scrubs credential-named values from whatever
-# kwargs remain rather than trying to enumerate every credential-bearing key here.
-RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
-    (
-        "messages",
-        "original_function",
-        "attempted_targets",
-        "proxy_server_request",
-    )
-)
 RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
@@ -1552,6 +1537,18 @@ class Router:
         if group is None:
             return False
         return sum(len(self.model_name_to_deployment_indices.get(member) or ()) for member in group.models) > 1
+
+    def team_model_has_alternatives(self, deployment_id: str) -> bool:
+        deployment: Final = self.get_deployment(model_id=deployment_id)
+        if deployment is None:
+            return False
+        team_id: Final = deployment.model_info.team_id
+        public_model_name: Final = deployment.model_info.team_public_model_name
+        if team_id is None or public_model_name is None:
+            return False
+        sibling_indices: Final = self.team_model_to_deployment_indices.get((team_id, public_model_name)) or ()
+        routable_siblings: Final = self._filter_blocked_deployments([self.model_list[idx] for idx in sibling_indices])
+        return len(routable_siblings) > 1
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
@@ -3271,8 +3268,15 @@ class Router:
                         kwargs=initial_kwargs,
                         metadata_variable_name="litellm_metadata",
                     )
+                    # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
+                    # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
+                    fallback_trigger: Final[Exception] = (
+                        e.original_exception
+                        if isinstance(e.original_exception, litellm.ContentPolicyViolationError)
+                        else e
+                    )
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=fallback_trigger,
                         disable_fallbacks=False,
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -4108,16 +4112,16 @@ class Router:
         models: Final = [m.strip() for m in model.split(",")]
 
         async def _async_completion_no_exceptions(
-            model: str, messages: list[dict[str, str]], stream: bool, **kwargs: Any
+            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: Any
         ) -> ModelResponse | CustomStreamWrapper | Exception:
             """
             Wrapper around self.acompletion that catches exceptions and returns them as a result
             """
             try:
-                result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
+                result = await self.acompletion(model=model_name, messages=messages, stream=stream, **kwargs)
                 return result
             except asyncio.CancelledError:
-                verbose_router_logger.debug("Received 'task.cancel'. Cancelling call w/ model=%s.", model)
+                verbose_router_logger.debug("Received 'task.cancel'. Cancelling call w/ model=%s.", model_name)
                 raise
             except Exception as e:
                 return e
@@ -4144,9 +4148,9 @@ class Router:
                 except KeyError:
                     pass
 
-        for model in models:
+        for model_name in models:
             task = asyncio.create_task(
-                _async_completion_no_exceptions(model=model, messages=messages, stream=stream, **kwargs)
+                _async_completion_no_exceptions(model_name=model_name, messages=messages, stream=stream, **kwargs)
             )
             pending_tasks.append(task)
 
@@ -8374,31 +8378,30 @@ class Router:
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
-        When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
+        When a retry or fallback happens, record which model group, deployment and attempt just failed and why
         """
+        from litellm.types.router import RetryAttemptRecord
+
         _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
         request_metadata: Final[Mapping[str, object]] = kwargs[_metadata_var]
-        attempt_kwargs: Final = MappingProxyType(
-            {k: v for k, v in kwargs.items() if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS}
-        )
-        attempt_metadata: Final = MappingProxyType(
-            {k: v for k, v in request_metadata.items() if k != "previous_models"}
-        )
-        previous_model: Final = MappingProxyType(
-            {
-                "exception_type": type(e).__name__,
-                "exception_string": str(e),
-                **attempt_kwargs,
-                _metadata_var: attempt_metadata,
-            }
-        )
+        model_group: Final = kwargs.get("model")
+        model_info: Final = request_metadata.get("model_info")
+        deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+        attempted_retries: Final = request_metadata.get("attempted_retries")
+        attempt_record: Final[RetryAttemptRecord] = {
+            "model_group": model_group if isinstance(model_group, str) else None,
+            "deployment_id": deployment_id if isinstance(deployment_id, str) else None,
+            "exception_type": type(e).__name__,
+            "exception_string": str(e),
+            "attempted_retries": attempted_retries if type(attempted_retries) is int else None,
+        }
         earlier_breadcrumbs: Final = request_metadata.get("previous_models")
         kept_breadcrumbs: Final[tuple[object, ...]] = (
             tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
             if isinstance(earlier_breadcrumbs, (list, tuple))
             else ()
         )
-        breadcrumbs: Final = (*kept_breadcrumbs, mask_credentials_in_payload(previous_model))
+        breadcrumbs: Final = (*kept_breadcrumbs, attempt_record)
         kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
         return kwargs
 
@@ -13878,6 +13881,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
 
         if strategy == "simple-shuffle":
@@ -13910,6 +13914,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
         verbose_router_logger.info(
@@ -13987,6 +13992,11 @@ class Router:
                 model=model,
                 llm_provider="",
             )
+        pass_through_model_ids: Final = tuple(
+            deployment["model_info"]["id"]
+            for deployment in pass_through_deployments
+            if "id" in deployment.get("model_info", {})
+        )
 
         # 4. Apply health-check and cooldown filtering
         parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
@@ -14024,6 +14034,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=pass_through_model_ids,
             )
 
         # 6. Apply load balancing strategy
@@ -14057,6 +14068,7 @@ class Router:
                 cooldown_time=_cooldown_time,
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
+                model_ids=model_ids,
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
 
