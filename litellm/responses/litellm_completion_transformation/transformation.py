@@ -2703,8 +2703,8 @@ class LiteLLMCompletionResponsesConfig:
                 # avoiding an unfamiliar standalone reasoning output item that
                 # agent clients may not understand.
                 reasoning_text: Final = getattr(choice.message, "reasoning_content", None) or ""
-                reasoning_block: Final = (
-                    [
+                reasoning_block: Final[list] = (
+                    [  # mutable-ok: fresh block list for reasoning
                         OutputText(
                             type="output_text",
                             text=reasoning_text,
