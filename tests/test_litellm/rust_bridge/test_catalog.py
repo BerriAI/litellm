@@ -26,10 +26,12 @@ def test_every_component_name_is_cataloged_under_its_own_name() -> None:
     assert all(component.name is name for name, component in COMPONENTS.items())
 
 
-def test_exports_are_unique_across_components() -> None:
-    declared: Final = [export for component in COMPONENTS.values() for export in component.exports]
+@pytest.mark.parametrize("export", sorted(NATIVE_EXPORTS))
+def test_each_native_export_binds_through_exactly_one_component(export: str) -> None:
+    owners: Final = tuple(component for component in COMPONENTS.values() if export in component.exports)
 
-    assert len(declared) == len(NATIVE_EXPORTS) == len(set(declared))
+    assert len(owners) == 1
+    assert owners[0].bind(export, validate=lambda value: value).component is owners[0].name
 
 
 def test_declared_exports_exist_on_the_native_bridge() -> None:
