@@ -471,6 +471,11 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "avector_store_search",
             "acreate_skill",
             "acreate_interaction",
+            "acreate_realtime_client_secret",
+            "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_calls",
+            "arealtime_translation_calls",
         ]
     ],
 )

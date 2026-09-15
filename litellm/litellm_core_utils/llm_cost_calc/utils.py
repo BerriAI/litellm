@@ -768,6 +768,11 @@ def calculate_cache_writing_cost(
 class PromptTokensDetailsResult(TypedDict):
     cache_hit_tokens: int
     cache_hit_audio_tokens: ReadOnly[int]
+
+    cached_text_tokens: ReadOnly[int]
+    cached_audio_tokens: ReadOnly[int]
+    cached_image_tokens: ReadOnly[int]
+    has_cached_tokens_details: ReadOnly[bool]
     cache_creation_tokens: int
     cache_creation_token_details: CacheCreationTokenDetails | None
     text_tokens: int
@@ -854,6 +859,10 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     return PromptTokensDetailsResult(
         cache_hit_tokens=cache_hit_tokens,
         cache_hit_audio_tokens=cached_audio_tokens,
+        cached_text_tokens=cached_text_tokens,
+        cached_audio_tokens=cached_audio_tokens,
+        cached_image_tokens=cached_image_tokens,
+        has_cached_tokens_details=cached_tokens_details is not None,
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
         text_tokens=text_tokens,
@@ -937,15 +946,11 @@ def _calculate_input_cost(
     prompt_cost = float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
 
     ### CACHE READ COST - Now uses tiered pricing
-    cache_hit_audio_tokens: Final = prompt_tokens_details["cache_hit_audio_tokens"]
-    audio_cache_read_rate: Final = _get_cost_per_unit(
-        model_info,
-        _get_service_tier_cost_key("cache_read_input_audio_token_cost", service_tier),
-        None,
-    )
-    prompt_cost += float(prompt_tokens_details["cache_hit_tokens"] - cache_hit_audio_tokens) * cache_read_cost
-    prompt_cost += float(cache_hit_audio_tokens) * (
-        audio_cache_read_rate if audio_cache_read_rate is not None else cache_read_cost
+    prompt_cost += _calculate_cache_read_cost(
+        prompt_tokens_details=prompt_tokens_details,
+        model_info=model_info,
+        cache_read_cost=cache_read_cost,
+        service_tier=service_tier,
     )
 
     ### AUDIO COST
@@ -1023,6 +1028,38 @@ def _calculate_input_cost(
         )
 
     return prompt_cost
+
+
+def _calculate_cache_read_cost(
+    prompt_tokens_details: PromptTokensDetailsResult,
+    model_info: ModelInfo,
+    cache_read_cost: float,
+    service_tier: str | None,
+) -> float:
+    cached_text_tokens: Final = prompt_tokens_details["cached_text_tokens"]
+    cached_audio_tokens: Final = prompt_tokens_details["cached_audio_tokens"]
+    cached_image_tokens: Final = prompt_tokens_details["cached_image_tokens"]
+    classified_cached_tokens: Final = cached_text_tokens + cached_audio_tokens + cached_image_tokens
+    unclassified_cached_tokens: Final = max(prompt_tokens_details["cache_hit_tokens"] - classified_cached_tokens, 0)
+    total_cost = (  # rebind-ok: cached modality components accumulate into one cache-read cost
+        float(cached_text_tokens + unclassified_cached_tokens) * cache_read_cost
+    )
+
+    if cached_audio_tokens:
+        cached_audio_cost_key: Final = _get_service_tier_cost_key("cache_read_input_audio_token_cost", service_tier)
+        cached_audio_cost: Final = _get_cost_per_unit(model_info, cached_audio_cost_key, cache_read_cost)
+        total_cost += (  # rebind-ok: cached audio contributes to cache-read cost
+            float(cached_audio_tokens) * float(cached_audio_cost or 0.0)
+        )
+
+    if cached_image_tokens:
+        cached_image_cost_key: Final = _get_service_tier_cost_key("cache_read_input_image_token_cost", service_tier)
+        cached_image_cost: Final = _get_cost_per_unit(model_info, cached_image_cost_key, cache_read_cost)
+        total_cost += (  # rebind-ok: cached images contribute to cache-read cost
+            float(cached_image_tokens) * float(cached_image_cost or 0.0)
+        )
+
+    return total_cost
 
 
 def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
@@ -1184,6 +1221,10 @@ def generic_cost_per_token(
     prompt_tokens_details = PromptTokensDetailsResult(
         cache_hit_tokens=0,
         cache_hit_audio_tokens=0,
+        cached_text_tokens=0,
+        cached_audio_tokens=0,
+        cached_image_tokens=0,
+        has_cached_tokens_details=False,
         cache_creation_tokens=0,
         cache_creation_token_details=None,
         text_tokens=usage.prompt_tokens,
@@ -1358,6 +1399,7 @@ class BilledTokenRates:
     cache_creation_input_token_cost: float
     cache_creation_input_token_cost_above_1hr: float
     output_cost_per_reasoning_token: float
+    cache_read_input_image_token_cost: float | None = None
 
     def scaled(self, multiplier: float) -> "BilledTokenRates":
         if multiplier == 1.0:
@@ -1370,6 +1412,11 @@ class BilledTokenRates:
             cache_creation_input_token_cost=self.cache_creation_input_token_cost * multiplier,
             cache_creation_input_token_cost_above_1hr=self.cache_creation_input_token_cost_above_1hr * multiplier,
             output_cost_per_reasoning_token=self.output_cost_per_reasoning_token * multiplier,
+            cache_read_input_image_token_cost=(
+                self.cache_read_input_image_token_cost * multiplier
+                if self.cache_read_input_image_token_cost is not None
+                else None
+            ),
         )
 
 
@@ -1473,6 +1520,11 @@ def _cost_map_billed_rates(
         cache_creation_input_token_cost=cache_creation_cost_rate,
         cache_creation_input_token_cost_above_1hr=cache_creation_cost_above_1hr_rate,
         output_cost_per_reasoning_token=reasoning_rate,
+        cache_read_input_image_token_cost=_get_cost_per_unit(
+            model_info,
+            _get_service_tier_cost_key("cache_read_input_image_token_cost", service_tier),
+            None,
+        ),
     ).scaled(multiplier)
 
 
@@ -1545,6 +1597,12 @@ def get_token_type_cost_breakdown(
     cache_read_tokens, cached_audio_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(
         usage
     )
+    cached_image_tokens: Final = parse_prompt_tokens_details(usage)["cached_image_tokens"]
+    image_cache_read_rate: Final = (
+        rates.cache_read_input_image_token_cost
+        if rates.cache_read_input_image_token_cost is not None
+        else rates.cache_read_input_token_cost
+    )
     cache_creation_cost: Final = (
         float(cache_creation_tokens) * rates.cache_creation_input_token_cost
         if custom_cost_per_token is not None
@@ -1558,8 +1616,9 @@ def get_token_type_cost_breakdown(
     return TokenTypeCostBreakdown(
         reasoning_cost=float(_reasoning_token_count(usage)) * rates.output_cost_per_reasoning_token,
         cache_read_cost=(
-            float(cache_read_tokens - cached_audio_tokens) * rates.cache_read_input_token_cost
+            float(cache_read_tokens - cached_audio_tokens - cached_image_tokens) * rates.cache_read_input_token_cost
             + float(cached_audio_tokens) * rates.cache_read_input_audio_token_cost
+            + float(cached_image_tokens) * image_cache_read_rate
         ),
         cache_creation_cost=cache_creation_cost,
         rates=rates,
