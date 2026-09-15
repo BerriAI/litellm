@@ -1,10 +1,13 @@
+import json
 import os
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
+from litellm.litellm_core_utils.spend_log_request_id import get_spend_logs_id
 
 
 class TestGCSBucketBase:
@@ -128,3 +131,26 @@ class TestGCSBucketBase:
         assert object_name.endswith("-target_uploadType_media")
         assert ".." not in object_name
         assert "?" not in object_name
+
+    @pytest.mark.asyncio
+    async def test_logs_viewer_finds_payloads_stored_for_requests_sharing_a_provider_response_id(self):
+        logger = GCSBucketLogger.__new__(GCSBucketLogger)
+        provider_response = {"id": "chatcmpl-reused"}
+        stored_objects = {
+            logger._get_object_name(
+                kwargs={"call_type": "acompletion", "litellm_call_id": call_id},
+                logging_payload={"id": "chatcmpl-reused"},
+                response_obj=provider_response,
+            ): json.dumps({"litellm_call_id": call_id})
+            for call_id in ("call-id-1", "call-id-2")
+        }
+        assert len(stored_objects) == 2
+        logger.download_gcs_object = AsyncMock(side_effect=lambda object_name: stored_objects.get(object_name))
+
+        payload = await logger.get_request_response_payload(
+            request_id=get_spend_logs_id("acompletion", provider_response, {"litellm_call_id": "call-id-2"}),
+            start_time_utc=datetime.now(timezone.utc),
+            end_time_utc=None,
+        )
+
+        assert payload == {"litellm_call_id": "call-id-2"}

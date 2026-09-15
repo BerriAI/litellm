@@ -14,6 +14,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.litellm_core_utils.cloud_storage_security import (
     sanitize_cloud_object_component,
 )
+from litellm.litellm_core_utils.spend_log_request_id import get_spend_logs_id
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
@@ -289,7 +290,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         else:
             object_name = self._generate_success_object_name(
                 request_date_str=current_date,
-                response_id=response_obj.get("id", ""),
+                response_id=get_spend_logs_id(kwargs.get("call_type") or "acompletion", response_obj, kwargs) or "",
             )
 
         # used for testing

@@ -30,11 +30,13 @@ from litellm.litellm_core_utils.litellm_logging import (
     request_model_access_groups_from_litellm_params,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.spend_log_request_id import (
+    get_spend_logs_id,
+)
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
-    CallTypes,
     CostBreakdown,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
@@ -209,49 +211,6 @@ def _get_spend_logs_metadata(
     clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
-
-
-BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
-
-_RESPONSE_ID_KEYED_CALL_TYPES: Final = frozenset(
-    {
-        CallTypes.acreate_batch.value,
-        CallTypes.aretrieve_batch.value,
-        CallTypes.acreate_file.value,
-    }
-)
-"""Batch and file rows key off the object's own id so repeated polls of the same
-object collapse into one row instead of billing it once per poll. Every other call
-type keys off the proxy-generated per-call id: request_id is the LiteLLM_SpendLogs
-primary key and the flush inserts with skip_duplicates, so keying off the provider's
-response id silently drops every row after the first whenever a provider (commonly a
-self-hosted OpenAI-compatible server) reuses completion ids."""
-
-
-def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
-    standard_logging_payload = kwargs.get("standard_logging_object")
-    standard_logging_id: Final = (
-        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None
-    )
-    candidate_ids: Final = (
-        (
-            response_obj.get("id"),
-            standard_logging_id,
-            kwargs.get("litellm_call_id"),
-        )
-        if call_type in _RESPONSE_ID_KEYED_CALL_TYPES
-        else (
-            kwargs.get("litellm_call_id"),
-            standard_logging_id,
-            response_obj.get("id"),
-        )
-    )
-    resolved_id: Final = next(
-        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
-    )
-    if resolved_id is not None and call_type == CallTypes.aretrieve_batch.value:
-        return f"{resolved_id}{BATCH_COST_REQUEST_ID_SUFFIX}"
-    return resolved_id
 
 
 _MISSING_ATTRIBUTE: Final = object()
