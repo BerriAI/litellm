@@ -43,6 +43,13 @@ export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
 ];
 
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
+  if (key.deleted_at) {
+    return {
+      tone: "neutral",
+      label: "Deleted",
+      tooltip: `Deleted ${new Date(key.deleted_at).toLocaleString()}${key.deleted_by ? ` by ${key.deleted_by}` : ""}. Kept for audit and spend history; requests using this key are rejected.`,
+    };
+  }
   if (key.blocked === true) {
     const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;
     return {
