@@ -637,3 +637,7 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
             )
             exception_status = 500
     return exception_status
+
+
+def is_caller_timeout_408(client_side_timeout: object, exception_status: str | int) -> bool:
+    return bool(client_side_timeout) and cast_exception_status_to_int(exception_status) == 408
