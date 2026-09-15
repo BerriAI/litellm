@@ -29711,11 +29711,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
-            /**
-             * Forward Reasoning Content
-             * @default false
-             */
-            forward_reasoning_content: boolean | null;
+            /** Forward Reasoning Content */
+            forward_reasoning_content?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -39932,11 +39929,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
-            /**
-             * Forward Reasoning Content
-             * @default false
-             */
-            forward_reasoning_content: boolean | null;
+            /** Forward Reasoning Content */
+            forward_reasoning_content?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
