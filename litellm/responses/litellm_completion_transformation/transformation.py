@@ -2711,9 +2711,7 @@ class LiteLLMCompletionResponsesConfig:
                     ),
                     role=choice.message.role,
                     content=[
-                        LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
-                            choice.message
-                        )
+                        LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(choice.message)
                     ],
                 )
                 if reasoning_text:
