@@ -6953,3 +6953,90 @@ def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it(
     )
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}
+
+
+def test_mid_conversation_system_after_multiple_tool_results():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "calling tools",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "system", "content": "reminder"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "r2"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+        "user",
+    ]
+    assert out_messages[2]["content"] == "r1"
+    assert out_messages[3]["content"] == "r2"
+    # Reminder lands after ALL tool results, not between them.
+    assert out_messages[4]["content"][1]["text"] == "reminder"
+    assert out_messages[5]["content"] == "done"
+
+
+def test_mid_conversation_multi_system_run_after_multiple_tool_results():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "calling tools",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "system", "content": "reminder 1"},
+        {"role": "system", "content": "reminder 2"},
+        {"role": "tool", "tool_call_id": "call_a", "content": "r1"},
+        {"role": "tool", "tool_call_id": "call_b", "content": "r2"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, _ = config._transform_system_message(messages)
+    assert [m["role"] for m in out_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "user",
+        "user",
+        "user",
+    ]
+    assert out_messages[4]["content"][1]["text"] == "reminder 1"
+    assert out_messages[5]["content"][1]["text"] == "reminder 2"
+
+
+def test_mid_conversation_system_carries_operator_note():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "stay on policy"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == ["user", "user", "user"]
+    converted = out_messages[1]["content"]
+    assert "not from the user" in converted[0]["text"].lower()
+    assert converted[1]["text"] == "stay on policy"
