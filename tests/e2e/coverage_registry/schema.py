@@ -84,6 +84,8 @@ LlmCapability = Literal[
     "tool_search",
     "tool_search_history",
     "tool_use",
+    "transcription",
+    "translation",
     "vision",
     "web_search",
     "web_search_server_tool",
@@ -153,14 +155,7 @@ class OtherCell(_Base):
 
 
 Cell = Annotated[
-    LlmCell
-    | MgmtCell
-    | McpCell
-    | ReliabilityCell
-    | QuotaCell
-    | LoggingCell
-    | GuardrailCell
-    | OtherCell,
+    LlmCell | MgmtCell | McpCell | ReliabilityCell | QuotaCell | LoggingCell | GuardrailCell | OtherCell,
     Field(discriminator="module"),
 ]
 
