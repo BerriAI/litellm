@@ -36,8 +36,17 @@ from litellm.types.utils import (
 @pytest.mark.parametrize("async_mode", [False, True], ids=["responses", "aresponses"])
 @pytest.mark.parametrize("forward", [None, False, True], ids=["absent", "false", "true"])
 @pytest.mark.parametrize("sequential", [False, True], ids=["parallel-tools", "sequential-tools"])
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai"])
+@pytest.mark.parametrize("field", [None, "reasoning"])
+@pytest.mark.parametrize("via_router", [False, True])
 async def test_hosted_vllm_responses_reasoning_and_parallel_tools_final_wire(
-    async_mode: bool, forward: bool | None, sequential: bool, monkeypatch: pytest.MonkeyPatch
+    async_mode: bool,
+    forward: bool | None,
+    sequential: bool,
+    provider: str,
+    field: str | None,
+    via_router: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     reasoning: Final = "Inspect both tool results before answering."
@@ -70,13 +79,27 @@ async def test_hosted_vllm_responses_reasoning_and_parallel_tools_final_wire(
     ]
     original: Final = deepcopy(input_items)
     kwargs: Final = {
-        "model": "hosted_vllm/reasoning-test",
+        "model": f"{provider}/reasoning-test",
         "input": input_items,
         "api_base": "https://responses-reasoning-test.invalid/v1",
         "api_key": "test-key",
         "use_chat_completions_api": True,
         **({} if forward is None else {"forward_reasoning_content": forward}),
+        **({} if field is None else {"reasoning_content_field": field}),
     }
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "history-alias",
+                "litellm_params": {key: value for key, value in kwargs.items() if key != "input"},
+            }
+        ],
+        num_retries=0,
+    )
+    client: Final = router if via_router else litellm
+    request: Final = {"model": "history-alias", "input": input_items} if via_router else kwargs
+    forwarded: Final = provider == "openai" or forward is True
+    output_field: Final = field or "reasoning_content"
     with respx.mock(assert_all_called=True) as mock:
         route: Final = mock.post("https://responses-reasoning-test.invalid/v1/chat/completions").mock(
             return_value=httpx.Response(
@@ -93,13 +116,14 @@ async def test_hosted_vllm_responses_reasoning_and_parallel_tools_final_wire(
                 },
             )
         )
-        response: Final = await litellm.aresponses(**kwargs) if async_mode else litellm.responses(**kwargs)
+        response: Final = await client.aresponses(**request) if async_mode else client.responses(**request)
         assert response.output[0].content[0].text == "Compared"
         assert route.call_count == 1
         payload: Final = json.loads(route.calls[0].request.content)
         assert payload["model"] == "reasoning-test"
         assert "forward_reasoning_content" not in route.calls[0].request.content.decode()
         assert "use_chat_completions_api" not in payload
+        assert "reasoning_content_field" not in payload
         messages: Final = payload["messages"]
         assert [message["role"] for message in messages] == (
             ["user", "assistant", "tool", "assistant", "tool"] if sequential else ["user", "assistant", "tool", "tool"]
@@ -108,11 +132,11 @@ async def test_hosted_vllm_responses_reasoning_and_parallel_tools_final_wire(
         results: Final = [message for message in messages if message["role"] == "tool"]
         assert [message["tool_call_id"] for message in results] == ["call_1", "call_2"]
         assert [message["content"] for message in results] == ["first record", "second record"]
-        assert messages[1].get("reasoning_content") == (reasoning if forward is True else None)
-        assert route.calls[0].request.content.decode().count(reasoning) == int(forward is True)
+        assert messages[1].get(output_field) == (reasoning if forwarded else None)
+        assert route.calls[0].request.content.decode().count(reasoning) == int(forwarded)
         if sequential:
-            assert messages[3].get("reasoning_content") == (next_reasoning if forward is True else None)
-            assert route.calls[0].request.content.decode().count(next_reasoning) == int(forward is True)
+            assert messages[3].get(output_field) == (next_reasoning if forwarded else None)
+            assert route.calls[0].request.content.decode().count(next_reasoning) == int(forwarded)
     assert input_items == original
 
 

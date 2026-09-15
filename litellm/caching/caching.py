@@ -372,6 +372,11 @@ class Cache:
         )
         if forward_reasoning_content is True:
             cache_key += "forward_reasoning_content: True"
+        reasoning_content_field: Final = kwargs.get(
+            "reasoning_content_field", nested_litellm_params.get("reasoning_content_field")
+        )
+        if reasoning_content_field == "reasoning":
+            cache_key += "reasoning_content_field: reasoning"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)

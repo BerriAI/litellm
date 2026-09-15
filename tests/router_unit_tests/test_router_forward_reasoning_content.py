@@ -124,10 +124,14 @@ async def test_router_aliases_isolate_reasoning_flag_on_same_backend(async_mode:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("surface", ["sdk", "router", "responses"])
+@pytest.mark.parametrize("surface", ["sdk", "router", "responses", "router-responses"])
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai"])
+@pytest.mark.parametrize("normalize", [False, True])
 async def test_local_cache_separates_forwarded_reasoning_history(
-    async_mode: bool, surface: str, monkeypatch: pytest.MonkeyPatch
+    async_mode: bool, surface: str, provider: str, normalize: bool, monkeypatch: pytest.MonkeyPatch
 ):
+    if provider == "openai" and not normalize:
+        pytest.skip("OpenAI does not apply hosted_vllm forwarding policy")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "cache", Cache(type="local", namespace="reasoning-cache-test"))
     messages: Final = _messages()
@@ -151,10 +155,22 @@ async def test_local_cache_separates_forwarded_reasoning_history(
             {
                 "model_name": alias,
                 "litellm_params": {
-                    "model": MODEL,
+                    "model": f"{provider}/reasoning-test",
                     "api_base": URL.removesuffix("/chat/completions"),
                     "api_key": "test-key",
-                    **({} if enabled is None else {"forward_reasoning_content": enabled}),
+                    "use_chat_completions_api": True,
+                    **(
+                        {
+                            "forward_reasoning_content": True,
+                            **(
+                                {}
+                                if enabled is None
+                                else {"reasoning_content_field": "reasoning" if enabled else "reasoning_content"}
+                            ),
+                        }
+                        if normalize
+                        else ({} if enabled is None else {"forward_reasoning_content": enabled})
+                    ),
                 },
             }
             for alias, enabled in (("default", None), ("disabled", False), ("enabled", True))
@@ -167,7 +183,8 @@ async def test_local_cache_separates_forwarded_reasoning_history(
     def backend(request: httpx.Request) -> httpx.Response:
         body: Final = json.loads(request.content)
         assert "forward_reasoning_content" not in body
-        enabled: Final = body["messages"][1].get("reasoning_content") == REASONING
+        assert "reasoning_content_field" not in body
+        enabled: Final = body["messages"][1].get("reasoning" if normalize else "reasoning_content") == REASONING
         return httpx.Response(
             200,
             json={
@@ -196,13 +213,30 @@ async def test_local_cache_separates_forwarded_reasoning_history(
             ("enabled", True, 2),
         ):
             kwargs: Final = {
-                "model": MODEL,
+                "model": f"{provider}/reasoning-test",
                 "api_base": URL.removesuffix("/chat/completions"),
                 "api_key": "test-key",
                 "caching": True,
-                **({} if forward is None else {"forward_reasoning_content": forward}),
+                **(
+                    {
+                        "forward_reasoning_content": True,
+                        **(
+                            {}
+                            if forward is None
+                            else {"reasoning_content_field": "reasoning" if forward else "reasoning_content"}
+                        ),
+                    }
+                    if normalize
+                    else ({} if forward is None else {"forward_reasoning_content": forward})
+                ),
             }
-            if surface == "router":
+            if surface == "router-responses":
+                response = (
+                    await router.aresponses(model=alias, input=input_items)
+                    if async_mode
+                    else router.responses(model=alias, input=input_items)
+                )
+            elif surface == "router":
                 response = (
                     await router.acompletion(model=alias, messages=messages)
                     if async_mode
@@ -222,7 +256,9 @@ async def test_local_cache_separates_forwarded_reasoning_history(
                 )
             await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
             content: Final = (
-                response.output[0].content[0].text if surface == "responses" else response.choices[0].message.content
+                response.output[0].content[0].text
+                if surface in ("responses", "router-responses")
+                else response.choices[0].message.content
             )
             assert content == ("forwarded" if forward is True else "omitted")
             assert route.call_count == expected_calls

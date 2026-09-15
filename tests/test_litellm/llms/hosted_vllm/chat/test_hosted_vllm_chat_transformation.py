@@ -1,5 +1,11 @@
 import json
 from copy import deepcopy
+from typing import Final
+
+import httpx
+import respx
+
+import litellm
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -517,3 +523,139 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("via_router", [False, True])
+@pytest.mark.parametrize("forward", [None, False, True])
+@pytest.mark.parametrize(
+    "history, expected",
+    [
+        ({"reasoning_content": "source"}, "source"),
+        ({"reasoning": "target"}, "target"),
+        ({"reasoning_content": "same", "reasoning": "same"}, "same"),
+        ({"reasoning_content": "source", "reasoning": "target"}, "target"),
+        ({"reasoning_content": "source", "reasoning": None}, "source"),
+        ({"reasoning_content": "source", "reasoning": ""}, ""),
+        ({"reasoning_content": "", "reasoning": None}, ""),
+        ({"reasoning_content": None, "reasoning": None}, None),
+        ({}, None),
+    ],
+)
+async def test_reasoning_field_sdk_router_final_wire(
+    provider: str,
+    is_async: bool,
+    via_router: bool,
+    forward: bool | None,
+    history: dict[str, str | None],
+    expected: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    messages: Final = [
+        {"role": "user", "content": "Check both records"},
+        *[
+            message
+            for index in (1, 2)
+            for message in (
+                {
+                    "role": "assistant",
+                    "content": f"Checking {index}",
+                    **history,
+                    "tool_calls": [
+                        {"id": f"call_{index}", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": f"call_{index}", "content": f"record {index}"},
+            )
+        ],
+    ]
+    original: Final = deepcopy(messages)
+    base_params: Final = {
+        "model": f"{provider}/reasoning-test",
+        "api_base": "https://history-field.invalid/v1",
+        "api_key": "test-key",
+        **({} if forward is None else {"forward_reasoning_content": forward}),
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": alias, "litellm_params": {**base_params, **params}}
+            for alias, params in (
+                ("legacy", {}),
+                ("normalized", {"reasoning_content_field": "reasoning"}),
+                ("explicit-default", {"reasoning_content_field": "reasoning_content"}),
+            )
+        ],
+        num_retries=0,
+    )
+    with respx.mock(assert_all_called=True) as mock:
+        route: Final = mock.post("https://history-field.invalid/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-history",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "reasoning-test",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Done"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            },
+        )
+        for alias, field in (("normalized", "reasoning"), ("legacy", None), ("explicit-default", "reasoning_content")):
+            kwargs: Final = (
+                {"model": alias, "messages": messages}
+                if via_router
+                else {
+                    **base_params,
+                    "messages": messages,
+                    **({} if field is None else {"reasoning_content_field": field}),
+                }
+            )
+            client: Final = router if via_router else litellm
+            response: Final = await client.acompletion(**kwargs) if is_async else client.completion(**kwargs)
+            assert response.choices[0].message.content == "Done"
+            payload: Final = json.loads(route.calls[-1].request.content)
+            forwarded: Final = provider == "openai" or forward is True
+            expected_history: Final = (
+                ({"reasoning": expected} if expected is not None and forwarded else {})
+                if field == "reasoning"
+                else {
+                    key: value
+                    for key, value in history.items()
+                    if value is not None and (forwarded or key != "reasoning_content")
+                }
+            )
+            assert payload["messages"] == [
+                (
+                    {**{key: value for key, value in message.items() if key not in history}, **expected_history}
+                    if message["role"] == "assistant"
+                    else message
+                )
+                for message in original
+            ]
+            assert "reasoning_content_field" not in payload
+            assert "forward_reasoning_content" not in payload
+            assert messages == original
+        assert route.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("provider", ["deepinfra", "together_ai", None])
+async def test_reasoning_field_does_not_apply_to_inherited_provider(provider: str | None, is_async: bool):
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    config: Final = OpenAIGPTConfig()
+    messages: Final = [{"role": "assistant", "content": "Done", "reasoning_content": "source", "reasoning": "target"}]
+    original: Final = deepcopy(messages)
+    kwargs: Final = {
+        "model": "reasoning-test",
+        "messages": messages,
+        "optional_params": {},
+        "headers": {},
+        "litellm_params": {"custom_llm_provider": provider, "reasoning_content_field": "reasoning"},
+    }
+    result: Final = await config.async_transform_request(**kwargs) if is_async else config.transform_request(**kwargs)
+    assert result["messages"] == original
+    assert messages == original

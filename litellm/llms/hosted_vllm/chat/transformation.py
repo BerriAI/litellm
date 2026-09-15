@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
+from litellm.litellm_core_utils.reasoning_content_utils import normalize_reasoning_content
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -154,7 +155,11 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         litellm_params: dict,  # mutable-ok: provider request contract
         headers: dict,  # mutable-ok: provider request contract
     ) -> dict:  # mutable-ok: provider request contract
-        request_messages: Final = deepcopy(messages)
+        request_messages: Final = (
+            normalize_reasoning_content(messages, forward=litellm_params.get("forward_reasoning_content") is True)
+            if litellm_params.get("reasoning_content_field") == "reasoning"
+            else deepcopy(messages)
+        )
         if litellm_params.get("forward_reasoning_content") is not True:
             for message in request_messages:
                 if message["role"] == "assistant":

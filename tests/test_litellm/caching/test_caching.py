@@ -298,3 +298,42 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     assert baseline != cache.get_cache_key(
         model="claude-sonnet-4-5", messages=messages, **anthropic_param
     )
+
+
+@pytest.mark.parametrize("semantic", [False, True])
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai"])
+def test_reasoning_field_cache_identity(semantic: bool, provider: str):
+    cache = _semantic_cache(namespace="history-field") if semantic else Cache(type="local", namespace="history-field")
+    request = {
+        "model": f"{provider}/reasoning-test",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"model_group": "first", "caching_groups": [("first", "second")], "user_api_key": "tenant-a"},
+    }
+    legacy = cache.get_cache_key(**request)
+    assert cache.get_cache_key(**request, reasoning_content_field="reasoning_content") == legacy
+    assert cache.get_cache_key(**request, litellm_params={"reasoning_content_field": "reasoning_content"}) == legacy
+    normalized = cache.get_cache_key(**request, reasoning_content_field="reasoning")
+    assert normalized != legacy
+    assert normalized == cache.get_cache_key(**request, litellm_params={"reasoning_content_field": "reasoning"})
+    assert normalized != cache.get_cache_key(
+        **request, reasoning_content_field="reasoning", forward_reasoning_content=True
+    )
+    assert (
+        cache.get_cache_key(
+            **request,
+            reasoning_content_field="reasoning_content",
+            litellm_params={"reasoning_content_field": "reasoning"},
+        )
+        == legacy
+    )
+    assert normalized == cache.get_cache_key(
+        **{**request, "metadata": {**request["metadata"], "model_group": "second"}}, reasoning_content_field="reasoning"
+    )
+    assert normalized != cache.get_cache_key(
+        **request, reasoning_content_field="reasoning", cache={"namespace": "other"}
+    )
+    if semantic:
+        assert normalized != cache.get_cache_key(
+            **{**request, "metadata": {**request["metadata"], "user_api_key": "tenant-b"}},
+            reasoning_content_field="reasoning",
+        )
