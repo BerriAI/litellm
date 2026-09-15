@@ -853,11 +853,6 @@ def _is_converted_stream_result(result: object) -> bool:
     return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
 
 
-def _mark_logging_as_stream(logging_obj: LiteLLMLoggingObject) -> None:
-    logging_obj.stream = True
-    logging_obj.model_call_details["stream"] = True
-
-
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1902,7 +1897,8 @@ def client(original_function):
                     and _caching_handler_response.final_embedding_cached_response is None
                 ):
                     if _is_converted_stream_result(_caching_handler_response.cached_result):
-                        _mark_logging_as_stream(logging_obj)
+                        logging_obj.stream = True
+                        logging_obj.model_call_details["stream"] = True
                     return _caching_handler_response.cached_result
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
@@ -1961,7 +1957,8 @@ def client(original_function):
             end_time = datetime.datetime.now()
 
             if _is_streaming_request(kwargs=kwargs, call_type=call_type) or _is_converted_stream_result(result):
-                _mark_logging_as_stream(logging_obj)
+                logging_obj.stream = True
+                logging_obj.model_call_details["stream"] = True
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
