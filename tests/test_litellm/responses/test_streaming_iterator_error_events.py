@@ -20,6 +20,7 @@ Pydantic ValidationError (previously typed as Optional[str]).
 """
 
 import json
+from importlib import import_module
 from unittest.mock import Mock, patch
 
 import pytest
