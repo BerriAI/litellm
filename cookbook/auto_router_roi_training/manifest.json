@@ -25,7 +25,31 @@
     "83 fitting tasks and 30 validation tasks support only exploratory estimates",
     "Published training outcomes use different task budgets and serving configurations from the live pilot",
     "Missing training cost records remain missing and are excluded as pairs only from cost metrics",
-    "Luna/Sol profiles have public-data validation only unless a corresponding fresh live evaluation is listed",
-    "Training retains the source included_in_score filter; excluded provider/infrastructure failures are not modeled as solver failures"
-  ]
+    "Training retains the source included_in_score filter; excluded provider/infrastructure failures are not modeled as solver failures",
+    "One attempt per solver per task; 25 tasks do not establish a small production quality-loss bound"
+  ],
+  "live_evaluation": {
+    "tasks": 25,
+    "solver_attempts": 100,
+    "judge_forecasts": 300,
+    "dataset": "SWE-bench Verified",
+    "dataset_revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+    "architecture": "native ARM64",
+    "harness": "mini-swe-agent==2.0.0",
+    "grader": "swebench==4.1.0",
+    "solver_models": [
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-opus-5",
+      "openai/gpt-5.6-luna",
+      "openai/gpt-5.6-sol"
+    ],
+    "comparison": "Task-pinned paired replay of frozen policies, with recorded solver and judge cost",
+    "files": [
+      "FINDINGS.md",
+      "BENCHMARK.md",
+      "benchmark_results.json",
+      "ABLATIONS.md",
+      "ablation_diagnostics.json"
+    ]
+  }
 }

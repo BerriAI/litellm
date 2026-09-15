@@ -28,6 +28,8 @@ curl http://localhost:4000/v1/chat/completions \
 
 `profiles.json` contains the exact cards, coefficients, thresholds and validation results for each alias. `manifest.json` records model versions, effort, sources and limitations. `training_records.jsonl` retains the numerical forecasts and paired outcome evidence used for fitting and selection
 
+For controlled comparisons, `fixed_boundary_profiles.json` contains 18 additional configurations: each model pair, each of the three cards, and raw, per-model, or task-dependent calibration. Calibration uses the fixed middle regularization strength of 10. These keep the original routing boundary unchanged and were not selected using live outcomes. Replace one alias's `complexity_router_config` with the chosen entry to benchmark it
+
 ## What was fitted
 
 DeepSWE v1.1 supplies 113 tasks, with repeated attempts for each solver. We split repositories into 83 training tasks and 30 validation tasks. Within each task, repeated outcomes are averaged; each task receives equal fitting weight. Missing bills remain missing and are excluded as matched pairs only from cost calculations
@@ -45,3 +47,9 @@ The raw model probabilities and calibrated probabilities are separate outputs. B
 These are small-sample experimental snapshots. Model, judge, prompt, effort, task distribution and harness changes can invalidate the coefficients. Published DeepSWE outcomes use different budgets and serving configurations from the live SWE-bench pilot, so that pilot measures transfer. Zero observed validation loss is a point estimate, not statistical noninferiority
 
 The capability classifier uses an absolute efficient-model probability threshold plus its boundary step. V2 compares the two models' predicted probabilities. Their threshold values have different meanings and should not be copied between classifiers
+
+## Fresh benchmark results
+
+Read [FINDINGS.md](FINDINGS.md) for the interpretation and next experiments. See [BENCHMARK.md](BENCHMARK.md) for the 25-task comparison against the original classifiers and each fixed model. [ABLATIONS.md](ABLATIONS.md) holds the boundary fixed to isolate card and calibration changes. The JSON files include per-task routes, outcomes, cost, lost and gained solves, probability diagnostics, and the frozen selection hash
+
+The learned Sonnet/Opus V2 profiles choose Opus on every live task and add classifier cost. That configuration provides no savings on this sample. Use the complete tables to compare other profiles with both fixed-model baselines; validation gains do not establish transfer to this workload

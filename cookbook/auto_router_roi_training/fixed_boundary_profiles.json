@@ -1,0 +1,1268 @@
+{
+  "sonnet_opus_original_none_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_original",
+      "variant": "original",
+      "adjustment": "none",
+      "alpha": 0,
+      "key": "cap_sonnet_opus_original_none_0",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "none",
+          "categories": [],
+          "coefficients": [
+            0.0,
+            1.0
+          ],
+          "alpha": 0.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      }
+    }
+  },
+  "sonnet_opus_original_per_model_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_original",
+      "variant": "original",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "key": "cap_sonnet_opus_original_per_model_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "per_model",
+          "categories": [],
+          "coefficients": [
+            -0.15694849044908038,
+            1e-06
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "calibration": {
+          "version": "roi-20260914-cap_sonnet_opus_original_per_model_10",
+          "intercept": -0.15694849044908038,
+          "slope": 1e-06,
+          "rule_intercepts": []
+        }
+      }
+    }
+  },
+  "sonnet_opus_original_task_conditioned_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_original",
+      "variant": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "key": "cap_sonnet_opus_original_task_conditioned_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "task_conditioned",
+          "categories": [
+            "rule:SUP-1",
+            "rule:SUP-2",
+            "rule:SUP-3",
+            "rule:SUP-4",
+            "rule:UNC-1"
+          ],
+          "coefficients": [
+            -0.1382504641394264,
+            1e-06,
+            0.05419659299853679,
+            0.054430215508990326,
+            -0.08341648469377791,
+            -0.09684040297943382,
+            0.0716485814432589
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "calibration": {
+          "version": "roi-20260914-cap_sonnet_opus_original_task_conditioned_10",
+          "intercept": -0.1382504641394264,
+          "slope": 1e-06,
+          "rule_intercepts": [
+            {
+              "rule": "SUP-1",
+              "intercept": 0.05419659299853679
+            },
+            {
+              "rule": "SUP-2",
+              "intercept": 0.054430215508990326
+            },
+            {
+              "rule": "SUP-3",
+              "intercept": -0.08341648469377791
+            },
+            {
+              "rule": "SUP-4",
+              "intercept": -0.09684040297943382
+            },
+            {
+              "rule": "UNC-1",
+              "intercept": 0.0716485814432589
+            }
+          ]
+        }
+      }
+    }
+  },
+  "sonnet_opus_research_none_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_research",
+      "variant": "research",
+      "adjustment": "none",
+      "alpha": 0,
+      "key": "cap_sonnet_opus_research_none_0",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "none",
+          "categories": [],
+          "coefficients": [
+            0.0,
+            1.0
+          ],
+          "alpha": 0.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_sonnet_opus_research",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: Claude Sonnet 5 at high effort is a general coding solver. Evaluate its fit to the actual mechanism and scope. Clear instructions and runnable tests help, but do not establish complete coverage or guarantee success. Large repository size alone is not difficult scope. Public research does not establish a universal Sonnet advantage for a task family.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": false
+        }
+      }
+    }
+  },
+  "sonnet_opus_research_per_model_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_research",
+      "variant": "research",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "key": "cap_sonnet_opus_research_per_model_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "per_model",
+          "categories": [],
+          "coefficients": [
+            -0.15694780123210855,
+            1e-06
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_sonnet_opus_research",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: Claude Sonnet 5 at high effort is a general coding solver. Evaluate its fit to the actual mechanism and scope. Clear instructions and runnable tests help, but do not establish complete coverage or guarantee success. Large repository size alone is not difficult scope. Public research does not establish a universal Sonnet advantage for a task family.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": false
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_sonnet_opus_research_per_model_10",
+          "intercept": -0.15694780123210855,
+          "slope": 1e-06,
+          "rule_intercepts": []
+        }
+      }
+    }
+  },
+  "sonnet_opus_research_task_conditioned_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_research",
+      "variant": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "key": "cap_sonnet_opus_research_task_conditioned_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "task_conditioned",
+          "categories": [
+            "rule:SUP-3",
+            "rule:UNC-1",
+            "rule:UNC-2"
+          ],
+          "coefficients": [
+            -0.21068613953735668,
+            1e-06,
+            -0.019341530958738987,
+            -0.03760249210534061,
+            0.05694322679151085
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_sonnet_opus_research",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: Claude Sonnet 5 at high effort is a general coding solver. Evaluate its fit to the actual mechanism and scope. Clear instructions and runnable tests help, but do not establish complete coverage or guarantee success. Large repository size alone is not difficult scope. Public research does not establish a universal Sonnet advantage for a task family.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": false
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_sonnet_opus_research_task_conditioned_10",
+          "intercept": -0.21068613953735668,
+          "slope": 1e-06,
+          "rule_intercepts": [
+            {
+              "rule": "SUP-3",
+              "intercept": -0.019341530958738987
+            },
+            {
+              "rule": "UNC-1",
+              "intercept": -0.03760249210534061
+            },
+            {
+              "rule": "UNC-2",
+              "intercept": 0.05694322679151085
+            }
+          ]
+        }
+      }
+    }
+  },
+  "sonnet_opus_trained_card_none_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_trained_card",
+      "variant": "trained_card",
+      "adjustment": "none",
+      "alpha": 0,
+      "key": "cap_sonnet_opus_trained_card_none_0",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "none",
+          "categories": [],
+          "coefficients": [
+            0.0,
+            1.0
+          ],
+          "alpha": 0.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_sonnet_opus_trained_card",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: Claude Sonnet 5 at high effort is a general coding solver. Evaluate its fit to the actual mechanism and scope. Clear instructions and runnable tests help, but do not establish complete coverage or guarantee success. Large repository size alone is not difficult scope. Public research does not establish a universal Sonnet advantage for a task family.\nTraining evidence: 83 distinct DeepSWE tasks, repeated attempts averaged within task; mean success 0.461. go: 23 tasks, success estimate shrunk toward the overall mean 0.425. python: 27 tasks, success estimate shrunk toward the overall mean 0.477. rust: 5 tasks, success estimate shrunk toward the overall mean 0.437. typescript: 25 tasks, success estimate shrunk toward the overall mean 0.483. These are task-family priors from a different budget/configuration, not the probability for this request. Use visible demands to update them. Do not identify or recall a benchmark task or its published answer.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": true
+        }
+      }
+    }
+  },
+  "sonnet_opus_trained_card_per_model_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_trained_card",
+      "variant": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "key": "cap_sonnet_opus_trained_card_per_model_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "per_model",
+          "categories": [],
+          "coefficients": [
+            -0.15694730450333153,
+            1e-06
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_sonnet_opus_trained_card",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: Claude Sonnet 5 at high effort is a general coding solver. Evaluate its fit to the actual mechanism and scope. Clear instructions and runnable tests help, but do not establish complete coverage or guarantee success. Large repository size alone is not difficult scope. Public research does not establish a universal Sonnet advantage for a task family.\nTraining evidence: 83 distinct DeepSWE tasks, repeated attempts averaged within task; mean success 0.461. go: 23 tasks, success estimate shrunk toward the overall mean 0.425. python: 27 tasks, success estimate shrunk toward the overall mean 0.477. rust: 5 tasks, success estimate shrunk toward the overall mean 0.437. typescript: 25 tasks, success estimate shrunk toward the overall mean 0.483. These are task-family priors from a different budget/configuration, not the probability for this request. Use visible demands to update them. Do not identify or recall a benchmark task or its published answer.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": true
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_sonnet_opus_trained_card_per_model_10",
+          "intercept": -0.15694730450333153,
+          "slope": 1e-06,
+          "rule_intercepts": []
+        }
+      }
+    }
+  },
+  "sonnet_opus_trained_card_task_conditioned_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "sonnet_opus",
+      "definition_id": "cap_sonnet_opus_trained_card",
+      "variant": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "key": "cap_sonnet_opus_trained_card_task_conditioned_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "task_conditioned",
+          "categories": [
+            "rule:UNC-1",
+            "rule:UNC-2"
+          ],
+          "coefficients": [
+            -0.1998281734853973,
+            1e-06,
+            -0.04393622356745107,
+            0.04393571062062153
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "claude-sonnet-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_sonnet_opus_trained_card",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: Claude Sonnet 5 at high effort is a general coding solver. Evaluate its fit to the actual mechanism and scope. Clear instructions and runnable tests help, but do not establish complete coverage or guarantee success. Large repository size alone is not difficult scope. Public research does not establish a universal Sonnet advantage for a task family.\nTraining evidence: 83 distinct DeepSWE tasks, repeated attempts averaged within task; mean success 0.461. go: 23 tasks, success estimate shrunk toward the overall mean 0.425. python: 27 tasks, success estimate shrunk toward the overall mean 0.477. rust: 5 tasks, success estimate shrunk toward the overall mean 0.437. typescript: 25 tasks, success estimate shrunk toward the overall mean 0.483. These are task-family priors from a different budget/configuration, not the probability for this request. Use visible demands to update them. Do not identify or recall a benchmark task or its published answer.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": true
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_sonnet_opus_trained_card_task_conditioned_10",
+          "intercept": -0.1998281734853973,
+          "slope": 1e-06,
+          "rule_intercepts": [
+            {
+              "rule": "UNC-1",
+              "intercept": -0.04393622356745107
+            },
+            {
+              "rule": "UNC-2",
+              "intercept": 0.04393571062062153
+            }
+          ]
+        }
+      }
+    }
+  },
+  "luna_sol_original_none_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_original",
+      "variant": "original",
+      "adjustment": "none",
+      "alpha": 0,
+      "key": "cap_luna_sol_original_none_0",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "none",
+          "categories": [],
+          "coefficients": [
+            0.0,
+            1.0
+          ],
+          "alpha": 0.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      }
+    }
+  },
+  "luna_sol_original_per_model_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_original",
+      "variant": "original",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "key": "cap_luna_sol_original_per_model_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "per_model",
+          "categories": [],
+          "coefficients": [
+            -0.2517542908037531,
+            0.14203318423900715
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "calibration": {
+          "version": "roi-20260914-cap_luna_sol_original_per_model_10",
+          "intercept": -0.2517542908037531,
+          "slope": 0.14203318423900715,
+          "rule_intercepts": []
+        }
+      }
+    }
+  },
+  "luna_sol_original_task_conditioned_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_original",
+      "variant": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "key": "cap_luna_sol_original_task_conditioned_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "task_conditioned",
+          "categories": [
+            "rule:SUP-1",
+            "rule:SUP-2",
+            "rule:SUP-3",
+            "rule:SUP-4",
+            "rule:UNC-1"
+          ],
+          "coefficients": [
+            -0.24175211398815877,
+            0.08835222230098246,
+            0.05304867006758595,
+            0.10570907649489589,
+            -0.04989630727579947,
+            -0.015835812492558256,
+            -0.09302599921746896
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "calibration": {
+          "version": "roi-20260914-cap_luna_sol_original_task_conditioned_10",
+          "intercept": -0.24175211398815877,
+          "slope": 0.08835222230098246,
+          "rule_intercepts": [
+            {
+              "rule": "SUP-1",
+              "intercept": 0.05304867006758595
+            },
+            {
+              "rule": "SUP-2",
+              "intercept": 0.10570907649489589
+            },
+            {
+              "rule": "SUP-3",
+              "intercept": -0.04989630727579947
+            },
+            {
+              "rule": "SUP-4",
+              "intercept": -0.015835812492558256
+            },
+            {
+              "rule": "UNC-1",
+              "intercept": -0.09302599921746896
+            }
+          ]
+        }
+      }
+    }
+  },
+  "luna_sol_research_none_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_research",
+      "variant": "research",
+      "adjustment": "none",
+      "alpha": 0,
+      "key": "cap_luna_sol_research_none_0",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "none",
+          "categories": [],
+          "coefficients": [
+            0.0,
+            1.0
+          ],
+          "alpha": 0.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_luna_sol_research",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: GPT-5.6 Luna at high effort is a low-cost general coding solver. Public research suggests useful document and scientific subproblem capability, but results at max effort do not establish high-effort task success. Check whether the core algorithm and integration demands fit; executable feedback does not remove missing reasoning.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": false
+        }
+      }
+    }
+  },
+  "luna_sol_research_per_model_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_research",
+      "variant": "research",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "key": "cap_luna_sol_research_per_model_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "per_model",
+          "categories": [],
+          "coefficients": [
+            -0.19337115180283754,
+            1e-06
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_luna_sol_research",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: GPT-5.6 Luna at high effort is a low-cost general coding solver. Public research suggests useful document and scientific subproblem capability, but results at max effort do not establish high-effort task success. Check whether the core algorithm and integration demands fit; executable feedback does not remove missing reasoning.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": false
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_luna_sol_research_per_model_10",
+          "intercept": -0.19337115180283754,
+          "slope": 1e-06,
+          "rule_intercepts": []
+        }
+      }
+    }
+  },
+  "luna_sol_research_task_conditioned_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_research",
+      "variant": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "key": "cap_luna_sol_research_task_conditioned_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "task_conditioned",
+          "categories": [
+            "rule:UNC-1",
+            "rule:UNC-2"
+          ],
+          "coefficients": [
+            -0.27190256565439436,
+            1e-06,
+            -0.08246452608922843,
+            0.0824655656863525
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_luna_sol_research",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: GPT-5.6 Luna at high effort is a low-cost general coding solver. Public research suggests useful document and scientific subproblem capability, but results at max effort do not establish high-effort task success. Check whether the core algorithm and integration demands fit; executable feedback does not remove missing reasoning.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": false
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_luna_sol_research_task_conditioned_10",
+          "intercept": -0.27190256565439436,
+          "slope": 1e-06,
+          "rule_intercepts": [
+            {
+              "rule": "UNC-1",
+              "intercept": -0.08246452608922843
+            },
+            {
+              "rule": "UNC-2",
+              "intercept": 0.0824655656863525
+            }
+          ]
+        }
+      }
+    }
+  },
+  "luna_sol_trained_card_none_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_trained_card",
+      "variant": "trained_card",
+      "adjustment": "none",
+      "alpha": 0,
+      "key": "cap_luna_sol_trained_card_none_0",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "none",
+          "categories": [],
+          "coefficients": [
+            0.0,
+            1.0
+          ],
+          "alpha": 0.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_luna_sol_trained_card",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: GPT-5.6 Luna at high effort is a low-cost general coding solver. Public research suggests useful document and scientific subproblem capability, but results at max effort do not establish high-effort task success. Check whether the core algorithm and integration demands fit; executable feedback does not remove missing reasoning.\nTraining evidence: 83 distinct DeepSWE tasks, repeated attempts averaged within task; mean success 0.452. go: 23 tasks, success estimate shrunk toward the overall mean 0.479. python: 27 tasks, success estimate shrunk toward the overall mean 0.453. rust: 5 tasks, success estimate shrunk toward the overall mean 0.355. typescript: 25 tasks, success estimate shrunk toward the overall mean 0.473. These are task-family priors from a different budget/configuration, not the probability for this request. Use visible demands to update them. Do not identify or recall a benchmark task or its published answer.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": true
+        }
+      }
+    }
+  },
+  "luna_sol_trained_card_per_model_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_trained_card",
+      "variant": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "key": "cap_luna_sol_trained_card_per_model_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "per_model",
+          "categories": [],
+          "coefficients": [
+            -0.19337065723367608,
+            1e-06
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_luna_sol_trained_card",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: GPT-5.6 Luna at high effort is a low-cost general coding solver. Public research suggests useful document and scientific subproblem capability, but results at max effort do not establish high-effort task success. Check whether the core algorithm and integration demands fit; executable feedback does not remove missing reasoning.\nTraining evidence: 83 distinct DeepSWE tasks, repeated attempts averaged within task; mean success 0.452. go: 23 tasks, success estimate shrunk toward the overall mean 0.479. python: 27 tasks, success estimate shrunk toward the overall mean 0.453. rust: 5 tasks, success estimate shrunk toward the overall mean 0.355. typescript: 25 tasks, success estimate shrunk toward the overall mean 0.473. These are task-family priors from a different budget/configuration, not the probability for this request. Use visible demands to update them. Do not identify or recall a benchmark task or its published answer.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": true
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_luna_sol_trained_card_per_model_10",
+          "intercept": -0.19337065723367608,
+          "slope": 1e-06,
+          "rule_intercepts": []
+        }
+      }
+    }
+  },
+  "luna_sol_trained_card_task_conditioned_default_boundary": {
+    "selection": {
+      "classifier": "cap",
+      "pair": "luna_sol",
+      "definition_id": "cap_luna_sol_trained_card",
+      "variant": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "key": "cap_luna_sol_trained_card_task_conditioned_10",
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "fitted": {
+        "efficient": {
+          "adjustment": "task_conditioned",
+          "categories": [
+            "rule:UNC-1",
+            "rule:UNC-2"
+          ],
+          "coefficients": [
+            -0.23541946518012546,
+            1e-06,
+            -0.04308211801010749,
+            0.04308208929842996
+          ],
+          "alpha": 10.0
+        }
+      }
+    },
+    "complexity_router_config": {
+      "classifier_type": "capability",
+      "classifier_llm_config": {
+        "model": "router-judge",
+        "timeout_ms": 30000,
+        "reasoning_effort": "low"
+      },
+      "tiers": {
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
+      },
+      "adaptive": false,
+      "route_housekeeping_to_cheapest_tier": false,
+      "escalation_keywords": [],
+      "plan_mode_min_tier": null,
+      "enable_context_window_escalation": false,
+      "return_raw_model_name": true,
+      "max_tokens_from_tier_model": false,
+      "capability_classifier_config": {
+        "efficient_tier": "SIMPLE",
+        "capable_tier": "REASONING",
+        "max_output_tokens": 2048,
+        "base_threshold": 0.5,
+        "threshold_step": 0.1,
+        "card": {
+          "version": "roi-20260914-cap_luna_sol_trained_card",
+          "text": "- SUP-1 [supported]: A bounded transformation has explicit inputs, outputs and accessible checks covering its material requirements; merely mentioning tests does not establish coverage.\n- SUP-2 [supported]: Relevant repository state can be inspected and a localized repair mechanism can be verified; repository size, familiar terminology and file count are not difficulty proxies.\n- SUP-3 [supported]: Numerical or typed behavior has explicit interfaces, edge cases and tolerances, and the solver can validate the core computation; a test harness does not solve an unknown algorithm.\n- SUP-4 [supported]: The failure mechanism and search boundary are supplied or readily inspectable, and the requested change fits the configured solver; multiple mechanical edits need not require stronger reasoning.\n- SUP-5 [supported]: Behavioral reproduction has an accessible executable reference or complete specification covering edge cases; hidden grading alone is not such a reference.\n- UNC-1 [uncertain]: Material semantic choices or interacting invariants remain unresolved, so several plausible implementations could differ in correctness.\n- UNC-2 [uncertain]: The task requires completeness across coupled paths, asynchronous state, schemas or compatibility surfaces without a clear search boundary or sufficient visible coverage.\n- LIM-1 [unsupported]: Exact information must be recovered from noisy visual or temporal media without an available reliable extraction mechanism.\n- LIM-2 [unsupported]: Success requires inaccessible reference behavior, undocumented state or unknown configuration. Such obstacles may defeat either solver; unsupported does not imply capable success.\n\nConfigured solver: GPT-5.6 Luna at high effort is a low-cost general coding solver. Public research suggests useful document and scientific subproblem capability, but results at max effort do not establish high-effort task success. Check whether the core algorithm and integration demands fit; executable feedback does not remove missing reasoning.\nTraining evidence: 83 distinct DeepSWE tasks, repeated attempts averaged within task; mean success 0.452. go: 23 tasks, success estimate shrunk toward the overall mean 0.479. python: 27 tasks, success estimate shrunk toward the overall mean 0.453. rust: 5 tasks, success estimate shrunk toward the overall mean 0.355. typescript: 25 tasks, success estimate shrunk toward the overall mean 0.473. These are task-family priors from a different budget/configuration, not the probability for this request. Use visible demands to update them. Do not identify or recall a benchmark task or its published answer.\nHarness: mini-SWE-agent 2.0.0, Linux shell, repository inspection and edits, existing tests and self-written reproductions; one fresh attempt, high native reasoning effort, 150 model calls and USD 5 inference limit. Final hidden tests are unavailable to the solver. No retry or inherited patch from another model.",
+          "empirical": true
+        },
+        "calibration": {
+          "version": "roi-20260914-cap_luna_sol_trained_card_task_conditioned_10",
+          "intercept": -0.23541946518012546,
+          "slope": 1e-06,
+          "rule_intercepts": [
+            {
+              "rule": "UNC-1",
+              "intercept": -0.04308211801010749
+            },
+            {
+              "rule": "UNC-2",
+              "intercept": 0.04308208929842996
+            }
+          ]
+        }
+      }
+    }
+  }
+}
