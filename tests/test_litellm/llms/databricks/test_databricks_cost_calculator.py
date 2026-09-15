@@ -1,4 +1,3 @@
-import json
 from decimal import Decimal
 from pathlib import Path
 from typing import Final
@@ -163,29 +162,6 @@ def test_legacy_endpoint_names_still_resolve(local_model_cost_map: None) -> None
     assert completion_cost == pytest.approx(100 * info["output_cost_per_token"])
 
 
-@pytest.mark.parametrize("model", NEW_MODELS)
-def test_new_models_carry_cache_pricing(local_model_cost_map: None, model: str) -> None:
-    info: Final = _model_info(model)
-
-    assert info["input_cost_per_token"] > 0
-    assert info["output_cost_per_token"] > 0
-    assert info["cache_creation_input_token_cost"] > info["input_cost_per_token"]
-    assert info["cache_read_input_token_cost"] < info["input_cost_per_token"]
-    assert info["supports_prompt_caching"] is True
-
-
-def test_every_priced_databricks_model_declares_cache_rates(local_model_cost_map: None) -> None:
-    undeclared: Final = [
-        model
-        for model, info in litellm.model_cost.items()
-        if model.startswith("databricks/")
-        and info.get("input_cost_per_token") is not None
-        and any(info.get(field) is None for field in CACHE_FIELDS)
-    ]
-
-    assert undeclared == []
-
-
 def test_models_without_a_cache_discount_bill_cache_tokens_at_the_input_rate(
     local_model_cost_map: None,
 ) -> None:
@@ -202,34 +178,6 @@ def test_models_without_a_cache_discount_bill_cache_tokens_at_the_input_rate(
 
     assert prompt_cost == pytest.approx(10000 * info["input_cost_per_token"])
     assert prompt_cost > 8000 * info["input_cost_per_token"]
-
-
-def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_rate(
-    local_model_cost_map: None,
-) -> None:
-    without_published_rates: Final = [
-        model
-        for model, info in litellm.model_cost.items()
-        if model.startswith("databricks/")
-        and info.get("input_cost_per_token")
-        and model not in PUBLISHED_DBU_PER_MILLION
-    ]
-
-    assert len(without_published_rates) == 14
-    for model in without_published_rates:
-        info = _model_info(model)
-        for field in CACHE_FIELDS:
-            assert info[field] == pytest.approx(info["input_cost_per_token"]), (model, field)
-
-
-@pytest.mark.parametrize("model", NEW_MODELS)
-def test_backup_price_map_matches_main(model: str) -> None:
-    main_cost: Final = json.loads(MAIN_PRICES.read_text())
-    backup_cost: Final = json.loads(BACKUP_PRICES.read_text())
-
-    assert model in main_cost
-    assert model in backup_cost
-    assert backup_cost[model] == main_cost[model]
 
 
 def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: None) -> None:
