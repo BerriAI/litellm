@@ -22,7 +22,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
-from .in_memory_cache import InMemoryCache
+from .in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from .redis_cache import RedisCache, RedisCircuitBreakerOpenError, log_redis_failure
 
 if TYPE_CHECKING:
@@ -82,6 +82,9 @@ class DualCache(BaseCache):
 
         if default_redis_ttl is not None:
             self.default_redis_ttl = default_redis_ttl
+
+    def update_in_memory_max_size(self, max_size: int | None) -> None:
+        self.in_memory_cache.max_size_in_memory = DEFAULT_MAX_SIZE_IN_MEMORY if max_size is None else max_size
 
     def attach_redis_cache(
         self,
@@ -376,7 +379,9 @@ class DualCache(BaseCache):
             )
 
     # async_batch_set_cache
-    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs
+    ):
         """
         Batch write values to the cache
         """

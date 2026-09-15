@@ -15,10 +15,12 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, create_autospec, mock_open, patch
 
 import click
+import fastapi.routing
 import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
@@ -31,6 +33,7 @@ from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
@@ -5247,6 +5250,8 @@ async def test_model_info_v1_oci_secrets_not_leaked():
         result = await model_info_v1(user_api_key_dict=mock_user_api_key_dict, litellm_model_id=None)
 
         # Verify the result structure
+        result_str = result.body.decode()
+        result = json.loads(result_str)
         assert "data" in result
         assert len(result["data"]) == 1
 
@@ -5269,11 +5274,94 @@ async def test_model_info_v1_oci_secrets_not_leaked():
         assert litellm_params["model"].startswith("oci/"), "model should retain its full value"
 
         # Verify that actual secret values are not present in the response
-        result_str = str(result)
         assert "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
         assert "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00" not in result_str
         assert "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
         assert "/path/to/oci_api_key.pem" not in result_str
+
+
+def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
+    """
+    /model/info serializes its multi-megabyte listing itself with orjson. FastAPI must not
+    re-walk the payload through `jsonable_encoder`, while values orjson cannot encode natively
+    still come out as JSON.
+    """
+    created_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    model_data = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-secret-value"},
+        "model_info": {
+            "id": "db-row-1",
+            "db_model": True,
+            "created_at": created_at,
+            "supported_regions": frozenset({"eu"}),
+        },
+    }
+    mock_router = MagicMock()
+    mock_router.model_list = [model_data]
+    mock_router.get_model_list_from_model_alias.return_value = []
+    mock_router.get_model_names.return_value = ["gpt-4o"]
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_deployment.return_value = None
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [model_data])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"infer_model_from_keys": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+
+    encoder_spy = MagicMock(wraps=jsonable_encoder)
+    monkeypatch.setattr(fastapi.routing, "jsonable_encoder", encoder_spy)
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", models=[], team_models=[]
+    )
+    client = TestClient(app)
+    try:
+        response = client.get("/model/info")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    rows = response.json()["data"]
+    assert [row["model_name"] for row in rows] == ["gpt-4o"]
+    assert rows[0]["model_info"]["created_at"] == created_at.isoformat()
+    assert rows[0]["model_info"]["supported_regions"] == ["eu"]
+    assert "sk-secret-value" not in response.text
+    assert encoder_spy.call_count == 0
+
+
+def test_model_info_v1_cli_model_returns_single_deployment_as_json(monkeypatch):
+    """
+    A proxy started with `litellm --model <name>` answers /model/info with one deployment
+    object under `data`, serialized the same way as the listing.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", "gpt-4o")
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    encoder_spy = MagicMock(wraps=jsonable_encoder)
+    monkeypatch.setattr(fastapi.routing, "jsonable_encoder", encoder_spy)
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", models=[], team_models=[]
+    )
+    client = TestClient(app)
+    try:
+        response = client.get("/model/info")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    deployment = response.json()["data"]
+    assert deployment["model_name"] == "*"
+    assert deployment["litellm_params"]["model"] == "gpt-4o"
+    assert encoder_spy.call_count == 0
 
 
 def test_add_callback_from_db_to_in_memory_litellm_callbacks():
@@ -7313,6 +7401,88 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
+    for index in range(count):
+        cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_running_cache(monkeypatch):
+    """The Admin UI writes the capacity to the DB config, so the running cache has
+    to pick it up on reload; otherwise the knob only works after a restart."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
+    """Blanking the field in the dashboard deletes the key, so the cache must fall
+    back to the default capacity rather than keep the last configured size."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(5000)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 5000})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 201)
+    assert cache.get_cache(key="key-0", local_only=True) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_value", [0, -5, "lots"])
+async def test_update_general_settings_ignores_an_invalid_user_api_key_cache_max_size(db_value, monkeypatch):
+    """A non-positive capacity would make the eviction loop pop an empty heap on the
+    next write, so a bad DB value must leave the running cache untouched."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": db_value})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(monkeypatch):
+    """A DB value must not silently override an explicit YAML capacity on reload."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"user_api_key_cache_max_size"}
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 300})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await proxy_config._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 10})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
@@ -8337,7 +8507,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     async def assert_reservation_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
-        return ps._PendingSpendIncrement(
+        return ps.PendingSpendIncrement(
             counter_key=kwargs["counter_key"], increment=kwargs["increment"]
         )
 
@@ -9184,6 +9354,126 @@ class TestLazyFeatureMiddleware:
     """Behavior of the middleware itself, exercised in isolation."""
 
     @pytest.mark.asyncio
+    async def test_llm_passthrough_loads_on_first_provider_request(self, monkeypatch):
+        """An app that never registered the provider passthrough routes 404s a
+        provider request; behind the middleware the same request registers the
+        routes and is forwarded to the provider with the configured key."""
+        import respx
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeatureMiddleware
+
+        monkeypatch.setenv("MISTRAL_API_KEY", "sk-upstream")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        target_app = FastAPI()
+        target_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-virtual")
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(feat,))
+
+        with respx.mock() as upstream:
+            route = upstream.get("https://api.mistral.ai/v1/models").mock(
+                return_value=httpx.Response(200, json={"object": "list", "data": []})
+            )
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as bare:
+                assert (await bare.get("/mistral/v1/models")).status_code == 404
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as lazy:
+                response = await lazy.get("/mistral/v1/models")
+
+            assert (response.status_code, response.json()) == (200, {"object": "list", "data": []})
+            assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
+
+    def test_llm_passthrough_prefixes_cover_every_route_the_module_registers(self):
+        """A route the module registers under a prefix the feature does not claim
+        would 404 until an unrelated provider request happens to load the module."""
+        from litellm.proxy._lazy_features import LAZY_FEATURES
+
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        paths = [r.path for r in importlib.import_module(feat.module_path).router.routes]
+
+        assert {"/mistral/{endpoint:path}", "/openai/{endpoint:path}"} <= set(paths)
+        unreachable = [p for p in paths if not feat.matches(p.replace("{endpoint:path}", "x"))]
+        assert unreachable == [], f"routes the middleware would never load: {unreachable}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first_hit", ["/v1/realtime/calls", "/openai/v1/models"])
+    async def test_lazy_routes_land_in_registry_order_not_first_hit_order(self, first_hit):
+        """Two lazy features with overlapping paths must answer a request with the
+        same handler no matter which one a deployment happens to hit first."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware
+
+        def make_register(path, handler):
+            def register(app, module):
+                router = APIRouter()
+                router.add_api_route(path, lambda: {"handler": handler}, methods=["POST"])
+                app.include_router(router)
+
+            return register
+
+        catch_all = LazyFeature(
+            name="catch_all",
+            module_path="json",
+            path_prefixes=("/openai/",),
+            register_fn=make_register("/openai/{endpoint:path}", "catch_all"),
+        )
+        specific = LazyFeature(
+            name="specific",
+            module_path="base64",
+            path_prefixes=("/openai/v1/realtime", "/v1/realtime"),
+            register_fn=make_register("/openai/v1/realtime/calls", "specific"),
+        )
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(catch_all, specific))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as client:
+            await client.post(first_hit)
+            await client.post("/openai/v1/models")
+            response = await client.post("/openai/v1/realtime/calls")
+
+        assert response.json() == {"handler": "catch_all"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("root_path", ["", "/api"])
+    async def test_reserved_slot_keeps_lazy_catch_all_ahead_of_later_eager_routes(self, root_path):
+        """/{mcp_server_name}/mcp is registered after the provider passthrough router
+        at startup, so /mistral/mcp must keep reaching the provider catch-all once
+        that router loads lazily instead of being swallowed by the MCP route. The
+        native /mistral/v1/files route sits ahead of it, so that path neither loads
+        the feature nor changes owner, with or without a SERVER_ROOT_PATH prefix."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware, reserve_lazy_slot
+
+        def register(app, module):
+            router = APIRouter()
+            router.add_api_route("/mistral/{endpoint:path}", lambda: {"handler": "passthrough"}, methods=["POST"])
+            app.include_router(router)
+
+        passthrough = LazyFeature(
+            name="llm_passthrough", module_path="json", path_prefixes=("/mistral/",), register_fn=register
+        )
+        target_app = FastAPI(root_path=root_path)
+        target_app.add_api_route("/mistral/v1/files", lambda: {"handler": "files"}, methods=["POST"])
+        reserve_lazy_slot(target_app, "llm_passthrough", features=(passthrough,))
+        target_app.add_api_route("/{mcp_server_name}/mcp", lambda: {"handler": "mcp"}, methods=["POST"])
+        target_app.add_middleware(LazyFeatureMiddleware, fastapi_app=target_app, features=(passthrough,))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as client:
+            files_first = (await client.post(f"{root_path}/mistral/v1/files")).json()["handler"]
+            loaded_after_files = frozenset(target_app.state.lazy_loaded)
+            handlers = [
+                (await client.post(f"{root_path}{path}")).json()["handler"]
+                for path in ("/mistral/mcp", "/mistral/v1/files")
+            ]
+
+        assert (files_first, loaded_after_files) == ("files", frozenset())
+        assert handlers == ["passthrough", "files"]
+
+    @pytest.mark.asyncio
     async def test_first_request_triggers_load_subsequent_does_not(self):
         from fastapi import FastAPI
 
@@ -9710,6 +10000,7 @@ async def _lit6973_drive_realtime_session(
     reservation: dict,
     *,
     backend_logged_success: bool,
+    backend_logged_failure: bool = False,
     phase_one_exit: str | None = None,
     websocket: MagicMock | None = None,
 ) -> MagicMock:
@@ -9717,8 +10008,9 @@ async def _lit6973_drive_realtime_session(
 
     phase_one_exit picks a rejection before the relay: "model_access" makes the
     key/model check raise ProxyException, "pre_call" makes pre-call processing
-    (rate limits, guardrails) raise. Neither reaches route_request, so no success
-    log can own the reservation and the endpoint has to release it on that exit.
+    (rate limits, guardrails) raise, "pre_call_cancelled" cancels the task inside
+    pre-call processing. None reaches route_request, so no success log can own the
+    reservation and the endpoint has to release it on that exit.
 
     route_request resolves normally in both cases: the relay owns the session
     once route_request returns. A successful session enqueues its success cost
@@ -9728,7 +10020,7 @@ async def _lit6973_drive_realtime_session(
     logging object carries a real model_call_details dict so the stamp is
     observable, and the reservation has empty entries so the real release touches
     no counter store."""
-    from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+    from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
     from litellm.proxy import proxy_server as ps
 
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")
@@ -9740,6 +10032,8 @@ async def _lit6973_drive_realtime_session(
     async def fake_llm_call() -> None:
         if backend_logged_success:
             logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+        if backend_logged_failure:
+            logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
     from litellm.proxy._types import ProxyException
 
@@ -9748,7 +10042,13 @@ async def _lit6973_drive_realtime_session(
         if phase_one_exit == "model_access"
         else None
     )
-    pre_call_error: Final = Exception("Rate limit exceeded") if phase_one_exit == "pre_call" else None
+    pre_call_error: Final = (
+        asyncio.CancelledError()
+        if phase_one_exit == "pre_call_cancelled"
+        else Exception("Rate limit exceeded")
+        if phase_one_exit == "pre_call"
+        else None
+    )
     pre_call: Final = AsyncMock(
         side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
     )
@@ -9864,6 +10164,114 @@ async def test_successful_realtime_session_leaves_the_reservation_for_the_cost_c
     await _lit6973_drive_realtime_session(reservation, backend_logged_success=True)
 
     assert reservation["finalized"] is False
+
+
+_LIT6463_COUNTER_KEY: Final = "{api_key:hashed-token}:max_parallel_requests"
+
+
+async def _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+    *,
+    backend_logged_success: bool,
+    backend_logged_failure: bool = False,
+    phase_one_exit: str | None = None,
+) -> tuple[DualCache, RequestRateLimiterStash]:
+    """Run the realtime endpoint with a real v3 limiter registered and the request's
+    stash already holding slot-1 of a two-slot counter, the state pre-call leaves
+    behind. Returns the limiter's cache and the stash so the test can read what the
+    endpoint did to the slot."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+        _request_stash,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    dual_cache: Final = DualCache()
+    await dual_cache.async_set_cache(
+        key=_LIT6463_COUNTER_KEY, value={"slot-1": 1.0, "slot-2": 2.0}, local_only=True
+    )
+    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache))
+    stash: Final = RequestRateLimiterStash(
+        parallel_slot={"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]}
+    )
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    stash_token: Final = _request_stash.set(stash)
+    try:
+        hooks: Final = patch.dict(  # test-quality-ok: registers the real limiter the route's release reads
+            ps.proxy_logging_obj.proxy_hook_mapping, {"parallel_request_limiter": limiter}
+        )
+        expected_exit: Final = (
+            pytest.raises(asyncio.CancelledError)
+            if phase_one_exit == "pre_call_cancelled"
+            else contextlib.nullcontext()
+        )
+        with hooks, expected_exit:
+            await _lit6973_drive_realtime_session(
+                reservation,
+                backend_logged_success=backend_logged_success,
+                backend_logged_failure=backend_logged_failure,
+                phase_one_exit=phase_one_exit,
+            )
+    finally:
+        _request_stash.reset(stash_token)
+    return dual_cache, stash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase_one_exit", [None, "pre_call", "pre_call_cancelled"])
+async def test_realtime_session_ending_without_llm_callbacks_releases_the_max_parallel_slot(
+    phase_one_exit: str | None,
+):
+    """The rate limiter acquires the key's max_parallel_requests slot in pre-call and
+    only frees it from the LLM success/failure callbacks. A realtime session that ends
+    without either callback (Bedrock closes without usage events, a later pre-call hook
+    rejects the session, or the task is cancelled while still in pre-call) has to be
+    released by the route itself, or the slot stays occupied until its TTL and the key's
+    next session is refused with a 429."""
+    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+        backend_logged_success=False, phase_one_exit=phase_one_exit
+    )
+
+    assert await dual_cache.async_get_cache(key=_LIT6463_COUNTER_KEY, local_only=True) == {"slot-2": 2.0}
+    assert stash.parallel_slot is None
+
+
+@pytest.mark.asyncio
+async def test_successful_realtime_session_leaves_the_max_parallel_slot_for_the_limiter_callback():
+    """A session that enqueued its success callback hands the slot to the limiter's
+    own success handler, which runs on the logging worker. If the route also released
+    it, the two releases would race on the same stashed acquisition and, under the
+    limiter's integer in-memory fallback, double-decrement the counter so the key
+    admits more sessions than max_parallel_requests allows. With the success stamp
+    present the route leaves the slot and the stash alone."""
+    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+        backend_logged_success=True
+    )
+
+    assert await dual_cache.async_get_cache(key=_LIT6463_COUNTER_KEY, local_only=True) == {
+        "slot-1": 1.0,
+        "slot-2": 2.0,
+    }
+    assert stash.parallel_slot == {"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]}
+
+
+@pytest.mark.asyncio
+async def test_refused_realtime_session_leaves_the_max_parallel_slot_for_the_limiter_failure_callback():
+    """An upstream refusal before any frame enqueues the failure callback instead, and
+    the limiter's failure handler releases the slot from the logging worker just like
+    the success handler does. The route sees no success stamp, so it still settles the
+    budget reservation, but it must leave the slot to that callback or the two releases
+    race on the same acquisition."""
+    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+        backend_logged_success=False, backend_logged_failure=True
+    )
+
+    assert await dual_cache.async_get_cache(key=_LIT6463_COUNTER_KEY, local_only=True) == {
+        "slot-1": 1.0,
+        "slot-2": 2.0,
+    }
+    assert stash.parallel_slot == {"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]}
 
 
 @pytest.mark.asyncio
@@ -10220,6 +10628,27 @@ def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
         fields = {item["field_name"]: item for item in resp.json()}
         assert "apply_user_budget_to_team_keys" in fields
         assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_config_list_includes_user_api_key_cache_max_size(monkeypatch):
+    """The Admin UI General Settings table renders whatever /config/list returns,
+    so the cache capacity has to be exposed there as an Integer to be editable."""
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    app.dependency_overrides[proxy_server_module.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert fields["user_api_key_cache_max_size"]["field_type"] == "Integer"
     finally:
         app.dependency_overrides.clear()
 
@@ -12367,6 +12796,45 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
 
 
 @pytest.mark.asyncio
+async def test_moderations_response_carries_litellm_call_id_header():
+    from fastapi import Response
+
+    from litellm.types.utils import ModerationCreateResponse
+
+    call_id = "moderation-call-id-123"
+    moderation_response = ModerationCreateResponse(id="modr-1", model="omni-moderation-latest", results=[])
+    moderation_response._hidden_params = {"litellm_call_id": call_id, "model_id": "mod-deployment-1"}
+
+    async def fake_llm_call():
+        return moderation_response
+
+    async def passthrough_add_litellm_data(data, **kwargs):
+        return {**data, "litellm_call_id": call_id}
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fastapi_response = Response()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", spend=0.0)
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "route_request", new=AsyncMock(return_value=fake_llm_call())),  # test-quality-ok: fakes the provider call so the response headers assembled by the real route are observable
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global, no injection point
+    ):
+        mock_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        mock_logging.update_request_status = AsyncMock()
+        result = await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert result is moderation_response
+    assert fastapi_response.headers["x-litellm-call-id"] == call_id
+    assert fastapi_response.headers["x-litellm-model-id"] == "mod-deployment-1"
+
+
+@pytest.mark.asyncio
 async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(monkeypatch):
     from litellm.proxy.agent_endpoints.agent_registry import (
         AGENT_RECONCILE_LOCK,
@@ -12824,6 +13292,48 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert router.fallback_access_check is router_fallback_access_check
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_api_key_cache_max_size_keeps_more_than_200_entries(tmp_path, monkeypatch):
+    """The auth cache used to be pinned at InMemoryCache's 200 entry default, so a
+    deployment with more keys than that evicted constantly and every request
+    fell through to the DB. The YAML knob has to raise the cap on the live cache."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": "1000"}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 999)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0, -1, "unbounded"])
+async def test_load_config_rejects_a_non_positive_user_api_key_cache_max_size(tmp_path, bad_value, monkeypatch):
+    """InMemoryCache treats 0 as 'cache nothing' and a negative cap makes eviction
+    pop an empty heap, so the proxy must refuse to boot with such a value instead
+    of silently disabling auth caching."""
+    from pydantic import ValidationError
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": bad_value}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    with pytest.raises(ValidationError):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 150)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
 def test_docs_redoc_openapi_are_reachable_by_default():

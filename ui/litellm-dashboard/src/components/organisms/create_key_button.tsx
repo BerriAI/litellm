@@ -592,35 +592,35 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   };
 
   const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
-    write(orgId ?? undefined);
+    write(orgId);
     setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);
-    form.setValue("team_id", undefined);
-    form.setValue("project_id", undefined);
+    form.setValue("team_id", null);
+    form.setValue("project_id", null);
   };
 
   const selectTeam = (team: Team | null) => {
     setSelectedCreateKeyTeam(team);
     setSelectedProjectId(null);
-    form.setValue("project_id", undefined);
+    form.setValue("project_id", null);
     // Auto-populate org from team for non-admin users
     if (team?.organization_id) {
       setSelectedOrganizationId(team.organization_id);
       form.setValue("organization_id", team.organization_id);
     } else if (!team) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
-  const changeProject = (write: FieldWrite) => (projectId: string) => {
+  const changeProject = (write: FieldWrite) => (projectId: string | null) => {
     write(projectId);
     if (!projectId) {
       setSelectedProjectId(null);
       setSelectedCreateKeyTeam(null);
-      form.setValue("team_id", undefined);
+      form.setValue("team_id", null);
       return;
     }
     setSelectedProjectId(projectId);
@@ -756,8 +756,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       inputId="create-key-agent"
                       placeholder="Select an agent"
                       emptyText="No agents found"
-                      value={selectedAgentId ?? undefined}
-                      onValueChange={(value) => setSelectedAgentId(value === "" ? null : value)}
+                      value={selectedAgentId}
+                      onValueChange={setSelectedAgentId}
                       options={agentsList.map((a) => ({
                         label: a.agent_name || a.agent_id,
                         value: a.agent_id,
@@ -783,7 +783,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <OrganizationDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       organizations={organizations}
                       loading={isOrganizationsLoading}
                       disabled={userRole !== "Admin"}
@@ -809,7 +809,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <TeamDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       onChange={control.onChange}
                       disabled={selectedProjectId !== null}
                       organizationId={selectedOrganizationId}
@@ -833,7 +833,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <ProjectDropdown
                         id={control.id}
-                        value={control.value as string | undefined}
+                        value={typeof control.value === "string" ? control.value : null}
                         projects={projects}
                         teamId={selectedCreateKeyTeam?.team_id}
                         loading={isProjectsLoading || !teams}
@@ -1021,7 +1021,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             value={control.value as string | null | undefined}
                             showNeverResets
                             placeholder="Not set"
-                            onChange={control.onChange}
+                            onChange={(next) => control.onChange(next ?? undefined)}
                           />
                         )}
                       </MountedFormField>

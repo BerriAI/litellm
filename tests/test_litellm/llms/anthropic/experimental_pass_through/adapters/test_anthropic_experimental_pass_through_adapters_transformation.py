@@ -3358,6 +3358,27 @@ def test_is_web_search_tool():
     assert adapter._is_web_search_tool(regular_tool) is False
 
 
+@pytest.mark.parametrize("schema", [{}, {"type": "object", "properties": {"query": {"type": "string"}}}])
+def test_translate_anthropic_client_web_search_preserves_schema_and_choice(schema: dict[str, object]) -> None:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    request: Final = AnthropicMessagesRequest(
+        model="gpt-5.4-mini",
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Search for current news"}],
+        tools=[{"name": "web_search", "input_schema": schema}],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    assert "web_search_options" not in translated
+    assert translated["tools"] == [
+        {"type": "function", "function": {"name": "web_search", "parameters": schema}}
+    ]
+    assert translated["tool_choice"] == {"type": "function", "function": {"name": "web_search"}}
+
+
 def test_translate_anthropic_to_openai_with_web_search_tool():
     """
     Test that Anthropic web search tools are converted to web_search_options parameter.

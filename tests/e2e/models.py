@@ -11,7 +11,16 @@ from datetime import datetime
 from typing import Final, Literal
 
 from e2e_http import PartialBody
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    model_serializer,
+    model_validator,
+)
 
 # ---------- keys ----------
 
@@ -67,6 +76,7 @@ class KeyGenerateBody(BaseModel):
     budget_duration: str | None = None
     user_id: str | None = None
     team_id: str | None = None
+    project_id: str | None = None
     organization_id: str | None = None
     budget_id: str | None = None
     key_alias: str | None = None
@@ -130,6 +140,8 @@ class KeyInfo(BaseModel):
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    project_id: str | None = None
+    organization_id: str | None = None
     team_id: str | None = None
     blocked: bool | None = None
     spend: float | None = None
@@ -695,6 +707,7 @@ class SpendLogRow(BaseModel):
     total_tokens: int | None = None
     request_tags: list[str] | None = None
     metadata: SpendLogMetadata | None = None
+    proxy_server_request: JsonValue = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -922,10 +935,12 @@ class LiteLLMParamsBody(BaseModel):
     auto_router_default_model: str | None = None
     auto_router_embedding_model: str | None = None
     tags: list[str] | None = None
-    mock_response: str | None = None
+    mock_response: str | list[float] | None = None
     timeout: float | None = None
     tpm: int | None = None
     weight: int | None = None
+    cooldown_time: float | None = None
+    order: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -1045,6 +1060,7 @@ class KeyUpdateBody(BaseModel):
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
     key: str
+    project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
     tpm_limit: int | None = None
@@ -1075,13 +1091,13 @@ class UiLoginBody(BaseModel):
 
 
 class UiLoginResponse(BaseModel):
-    token: str
+    token: str = Field(repr=False)
     redirect_url: str
 
 
 class UiSessionClaims(BaseModel):
     user_id: str
-    key: str
+    key: str = Field(repr=False)
     user_role: str
     login_method: Literal["sso", "username_password"]
     exp: int
@@ -1119,6 +1135,7 @@ class TeamInfoParams(BaseModel):
 
 
 class TeamData(BaseModel):
+    organization_id: str | None = None
     team_alias: str | None = None
     models: list[str] = []
     members_with_roles: list[TeamMemberEntry] = []
@@ -1159,6 +1176,7 @@ class UserNewBody(BaseModel):
     user_email: str
     user_role: UserRole
     user_id: str | None = None
+    auto_create_key: bool | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -1171,7 +1189,7 @@ class UserUpdateBody(BaseModel):
 
 
 class UserInfoParams(BaseModel):
-    user_id: str
+    user_id: str | None = None
 
 
 class UserData(BaseModel):
@@ -1224,14 +1242,34 @@ class OrgInfoParams(BaseModel):
     organization_id: str
 
 
+class OrgMembership(BaseModel):
+    user_id: str
+    user_role: str
+
+
 class OrgInfoResponse(BaseModel):
     organization_id: str
     organization_alias: str | None = None
     models: list[str] = []
+    members: tuple[OrgMembership, ...] = ()
+
+
+class OrgMemberEntry(BaseModel):
+    user_id: str
+    role: Literal["org_admin", "internal_user"]
+
+
+class OrgMemberAddBody(BaseModel):
+    organization_id: str
+    member: OrgMemberEntry
 
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+class OrgDeleteResponse(RootModel[tuple[OrgInfoResponse, ...]]):
+    pass
 
 
 # ---------- tags (management) ----------
@@ -1258,6 +1296,19 @@ class TagListResponse(RootModel[list[TagListEntry]]):
 
 
 # ---------- health / lifecycle ----------
+
+
+class ProcessMemory(BaseModel):
+    ram_usage_mb: float | None = None
+    system_memory_percent: float | None = None
+    error: str | None = None
+
+
+class MemorySummaryResponse(BaseModel):
+    worker_pid: int
+    hostname: str | None = None
+    status: str
+    memory: ProcessMemory
 
 
 class ReadinessResponse(BaseModel):

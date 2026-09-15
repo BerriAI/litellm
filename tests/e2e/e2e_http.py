@@ -16,9 +16,11 @@ requests itself imports.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Final, Generator, Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
+from typing import Final, Generic, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
@@ -36,8 +38,8 @@ class Headers(BaseModel):
 
 class AuthHeaders(Headers):
     # litellm accepts either; set whichever the call needs, leave the other None.
-    authorization: str | None = None
-    x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key")
+    authorization: str | None = Field(default=None, repr=False)
+    x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key", repr=False)
 
 
 class AnthropicHeaders(AuthHeaders):
@@ -128,6 +130,20 @@ class ProbeResult(BaseModel):
     @property
     def healthy(self) -> bool:
         return 200 <= self.status_code < 500 and self.status_code != 404
+
+
+class ExternalWrite(BaseModel):
+    """Outcome of a write to a non-proxy API (an identity provider's admin API)
+    that answers with a status and, on create, a Location header naming the new
+    resource rather than a JSON body."""
+
+    status_code: int
+    location: str = ""
+    body: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300
 
 
 class StreamingResponse(BaseModel):
@@ -257,27 +273,43 @@ def assert_auth_denied(result: StreamingResponse, context: str) -> None:
         f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
     )
 
-
 def wire_body(json: BaseModel) -> dict[str, object]:
     if isinstance(json, PartialBody):
         return json.model_dump(by_alias=True, exclude_unset=True)
     return json.model_dump(by_alias=True, exclude_none=True)
 
 
-def _headers(headers: BaseModel) -> dict[str, str]:
-    dumped: dict[str, object] = headers.model_dump(by_alias=True, exclude_none=True)
+def _flat(model: BaseModel) -> dict[str, str]:
+    dumped: dict[str, object] = model.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
+
+
+def _headers(headers: BaseModel) -> dict[str, str]:
+    return _flat(headers)
 
 
 def _params(params: BaseModel | None) -> dict[str, str]:
-    if params is None:
-        return {}
-    dumped: dict[str, object] = params.model_dump(by_alias=True, exclude_none=True)
-    return {key: str(value) for key, value in dumped.items()}
+    return _flat(params) if params is not None else {}
 
 
 TRANSIENT_STATUSES: frozenset[int] = frozenset({529})
 RETRY_ATTEMPTS: int = 3
+_QUALIFICATION: Final[ContextVar[bool]] = ContextVar("e2e_qualification", default=False)
+
+
+def retry_attempts(default: int) -> int:
+    return 1 if _QUALIFICATION.get() else default
+
+
+@contextmanager
+def without_retries() -> Generator[None]:
+    token: Final = _QUALIFICATION.set(True)
+    try:
+        yield
+    finally:
+        _QUALIFICATION.reset(token)
+
+
 RETRY_BACKOFF_SECONDS: float = 0.5
 
 
@@ -305,7 +337,7 @@ def request_with_retry[T: RetryableResponse](
     hang should surface as a hang instead of doubling the wall clock. Every
     retry prints, so flakiness stays visible in the run log instead of
     vanishing into green."""
-    for attempt in range(1, RETRY_ATTEMPTS):
+    for attempt in range(1, retry_attempts(RETRY_ATTEMPTS)):
         resp = issue()
         if resp.status_code not in TRANSIENT_STATUSES:
             return resp
@@ -400,6 +432,7 @@ def get_external[R: BaseModel](
     url: str,
     *,
     response_type: type[R],
+    headers: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
     """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
@@ -408,12 +441,68 @@ def get_external[R: BaseModel](
     try:
         resp = requests.get(
             url,
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/json", **(_headers(headers) if headers is not None else {})},
             timeout=timeout,
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return classify(resp, response_type)
+
+
+def post_form_external[R: BaseModel](
+    url: str,
+    *,
+    form: BaseModel,
+    response_type: type[R],
+    headers: BaseModel | None = None,
+    timeout: float = 30.0,
+) -> Result[R]:
+    """POST an absolute URL outside the proxy as `application/x-www-form-urlencoded`,
+    the encoding OAuth 2 token endpoints take. Like get_external: no proxy base url,
+    no proxy auth, and the same tagged-union classification as every other call."""
+    try:
+        resp = requests.post(
+            url,
+            data=_flat(form),
+            headers=_headers(headers) if headers is not None else None,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return classify(resp, response_type)
+
+
+def post_json_external(
+    url: str,
+    *,
+    headers: BaseModel,
+    json: BaseModel,
+    timeout: float = 30.0,
+) -> ExternalWrite:
+    """POST an absolute URL outside the proxy under its own bearer, for an API that
+    answers a create with a status and a Location header rather than a JSON body."""
+    try:
+        resp = requests.post(
+            url,
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return ExternalWrite(status_code=-1, body=str(exc))
+    return ExternalWrite(
+        status_code=resp.status_code,
+        location=resp.headers.get("Location", ""),
+        body=resp.text,
+    )
+
+
+def delete_external(url: str, *, headers: BaseModel, timeout: float = 30.0) -> ExternalWrite:
+    try:
+        resp = requests.delete(url, headers=_headers(headers), timeout=timeout)
+    except requests.RequestException as exc:
+        return ExternalWrite(status_code=-1, body=str(exc))
+    return ExternalWrite(status_code=resp.status_code, body=resp.text)
 
 
 def delete[R: BaseModel](
