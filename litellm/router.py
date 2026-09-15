@@ -12502,7 +12502,7 @@ class Router:
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
             return model, self._get_deployment_by_litellm_model(model=model)
-        elif self.has_model_id(model):
+        elif model not in self.model_names and self.has_model_id(model):
             deployment: Final = self.get_deployment(model_id=model)
             if deployment is not None:
                 deployment_model: Final = deployment.litellm_params.model
