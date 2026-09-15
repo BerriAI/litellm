@@ -1168,7 +1168,8 @@ class TestUpdateModel:
     """
 
     @pytest.mark.asyncio
-    async def test_update_model_clears_cache_after_db_write(self):
+    @pytest.mark.parametrize("reasoning_field", [None, "reasoning_content", "reasoning"])
+    async def test_update_model_clears_cache_after_db_write(self, reasoning_field):
         """
         Regression test for the stale-router bug: POST /model/update must refresh
         the in-memory router after persisting to LiteLLM_ProxyModelTable, otherwise
@@ -1190,6 +1191,7 @@ class TestUpdateModel:
         existing_row.litellm_params = {
             "model": "openai/gpt-4o-mini",
             "api_key": "sk-existing",
+            "reasoning_content_field": "reasoning",
         }
         existing_row.model_dump.return_value = {
             "model_name": "gpt-4o-mini",
@@ -1237,7 +1239,7 @@ class TestUpdateModel:
         ):
             await update_model(
                 model_params=updateDeployment(
-                    litellm_params=updateLiteLLMParams(guardrails=["g1"]),
+                    litellm_params=updateLiteLLMParams(guardrails=["g1"], **({} if reasoning_field is None else {"reasoning_content_field": reasoning_field})),
                     model_info=ModelInfo(id=model_id),
                 ),
                 user_api_key_dict=admin_user,
@@ -1245,6 +1247,8 @@ class TestUpdateModel:
 
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
             mock_clear_cache.assert_awaited_once_with()
+            stored = json.loads(mock_prisma.db.litellm_proxymodeltable.update.call_args.kwargs["data"]["litellm_params"])
+            assert stored["reasoning_content_field"] == (reasoning_field or "reasoning")
 
 
 class TestUpdatePublicModelGroups:
@@ -6198,3 +6202,27 @@ class TestAccessGroupModelSync:
         assert "array_replace" in update_call.args[0]
         assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
         invalidate.assert_awaited_once_with(("ag-1",))
+
+
+@pytest.mark.parametrize("field", [None, "reasoning_content", "reasoning"])
+def test_model_patch_preserves_reasoning_field_unless_explicit(field, monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-reasoning-field")
+    deployment = Deployment(
+        model_name="reasoning-test",
+        litellm_params=LiteLLM_Params(model="openai/reasoning-test", reasoning_content_field="reasoning"),
+        model_info=ModelInfo(id="reasoning-row"),
+    )
+    params = updateLiteLLMParams(tpm=123, **({} if field is None else {"reasoning_content_field": field}))
+    if field is None:
+        assert "reasoning_content_field" not in params.model_dump(exclude_none=True)
+    result = update_db_model(db_model=deployment, updated_patch=updateDeployment(litellm_params=params))
+    stored = json.loads(result["litellm_params"])
+    assert stored["tpm"] == 123
+    assert (
+        stored["reasoning_content_field"] if field is None
+        else decrypt_value_helper(value=stored["reasoning_content_field"], key="reasoning_content_field")
+    ) == (field or "reasoning")
+    assert deployment.litellm_params.reasoning_content_field == "reasoning"
