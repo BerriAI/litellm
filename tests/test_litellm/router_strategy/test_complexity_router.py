@@ -2589,6 +2589,28 @@ class TestCapabilityClassifier:
         )
 
     @pytest.mark.asyncio
+    async def test_encrypted_task_is_not_replaced_by_plaintext_envelope(self, mock_router_instance: MagicMock) -> None:
+        mock_router_instance.aresponses = AsyncMock(
+            return_value=_native_classifier_response(_capability_reply(p_solve=0.8))
+        )
+        router: Final = self._router(mock_router_instance)
+        task: Final = _encrypted_agent_task()
+        request: Final = {"input": [task]}
+        original: Final = deepcopy(request)
+        result: Final = await router.async_pre_routing_hook(model="capability-router", request_kwargs=request)
+        assert result is not None and result.model == "efficient-model"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "capability_classifier"
+        mock_router_instance.aresponses.assert_awaited_once()
+        call: Final = mock_router_instance.aresponses.call_args.kwargs
+        assert call["input"][-1] == task
+        plaintext: Final = json.dumps(call["input"][:-1])
+        assert "The delegated task in the following agent_message." in plaintext
+        assert "Message Type: NEW_TASK" not in plaintext
+        assert "opaque-provider-task" not in plaintext
+        assert request == original
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("custom_markers", (False, True))
     async def test_task_forecast_uses_request_scoped_codex_markers(
         self, mock_router_instance: MagicMock, custom_markers: bool
