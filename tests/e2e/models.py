@@ -1091,13 +1091,13 @@ class UiLoginBody(BaseModel):
 
 
 class UiLoginResponse(BaseModel):
-    token: str
+    token: str = Field(repr=False)
     redirect_url: str
 
 
 class UiSessionClaims(BaseModel):
     user_id: str
-    key: str
+    key: str = Field(repr=False)
     user_role: str
     login_method: Literal["sso", "username_password"]
     exp: int
@@ -1135,6 +1135,7 @@ class TeamInfoParams(BaseModel):
 
 
 class TeamData(BaseModel):
+    organization_id: str | None = None
     team_alias: str | None = None
     models: list[str] = []
     members_with_roles: list[TeamMemberEntry] = []
@@ -1175,6 +1176,7 @@ class UserNewBody(BaseModel):
     user_email: str
     user_role: UserRole
     user_id: str | None = None
+    auto_create_key: bool | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -1187,7 +1189,7 @@ class UserUpdateBody(BaseModel):
 
 
 class UserInfoParams(BaseModel):
-    user_id: str
+    user_id: str | None = None
 
 
 class UserData(BaseModel):
@@ -1240,14 +1242,34 @@ class OrgInfoParams(BaseModel):
     organization_id: str
 
 
+class OrgMembership(BaseModel):
+    user_id: str
+    user_role: str
+
+
 class OrgInfoResponse(BaseModel):
     organization_id: str
     organization_alias: str | None = None
     models: list[str] = []
+    members: tuple[OrgMembership, ...] = ()
+
+
+class OrgMemberEntry(BaseModel):
+    user_id: str
+    role: Literal["org_admin", "internal_user"]
+
+
+class OrgMemberAddBody(BaseModel):
+    organization_id: str
+    member: OrgMemberEntry
 
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+class OrgDeleteResponse(RootModel[tuple[OrgInfoResponse, ...]]):
+    pass
 
 
 # ---------- tags (management) ----------
