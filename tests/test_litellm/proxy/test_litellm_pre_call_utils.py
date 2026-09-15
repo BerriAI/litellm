@@ -957,6 +957,8 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "metadata": copy.deepcopy(malicious_metadata),
         "litellm_metadata": copy.deepcopy(malicious_metadata),
+        "weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
+        "_router_weights": {"gpt-3.5-turbo": {"forged-deployment-id": 100}},
     }
 
     updated = await add_litellm_data_to_request(
@@ -974,6 +976,10 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "enable_prompt_caching" not in updated
     assert "routing_decision" not in updated
     assert "litellm_gateway_injected_cache" not in updated
+    assert "weights" not in updated
+    assert "_router_weights" not in updated
+    assert "weights" not in updated["proxy_server_request"]["body"]
+    assert "_router_weights" not in updated["proxy_server_request"]["body"]
 
     stripped_keys = {
         "disable_global_guardrails",

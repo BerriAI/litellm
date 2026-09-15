@@ -3592,6 +3592,7 @@ class SSOAuthenticationHandler:
         verbose_proxy_logger.info("user_defined_values for creating ui key: %s", user_defined_values)
 
         response: Final = await generate_key_helper_fn(
+            llm_router=None,
             request_type="key",
             duration=LITELLM_UI_SESSION_DURATION,
             key_max_budget=litellm.max_ui_session_budget,
