@@ -220,3 +220,70 @@ def test_transform_inherits_allowlisted_keys_from_base_model_entry(sync_module):
     assert entry["supports_pdf_input"] is True
     assert entry["supports_assistant_prefill"] is True
     assert entry["input_cost_per_token"] == 1.5e-07
+
+
+def test_sync_drops_friendli_entries_absent_from_catalog(sync_module):
+    local = {
+        "friendliai/dead-model": {"litellm_provider": "friendliai", "input_cost_per_token": 1e-06},
+        "friendliai/zai-org/GLM-Test": {"litellm_provider": "friendliai"},
+        "openrouter/still-listed": {"input_cost_per_token": 1e-06},
+    }
+    remote = sync_module.transform_friendli_data([_reasoning_model()], local)
+    dropped = sync_module._stale_friendli_keys(
+        local_keys=frozenset(local), friendli_keys_in_remote=frozenset(remote)
+    )
+    sync_module.sync_local_data_with_remote(
+        local, remote, replace_keys=frozenset(remote), catalog_dropped_keys=dropped
+    )
+    assert "friendliai/dead-model" not in local
+    assert "friendliai/zai-org/GLM-Test" in local
+    assert "openrouter/still-listed" in local
+
+
+def test_stale_keys_scoped_to_friendli_prefix(sync_module):
+    local_keys = frozenset({"friendliai/gone", "openrouter/also-absent", "zhipuai/glm-test"})
+    remote_keys = frozenset({"friendliai/zai-org/GLM-Test"})
+    dropped = sync_module._stale_friendli_keys(local_keys, remote_keys)
+    assert dropped == frozenset({"friendliai/gone"})
+
+
+def test_sync_keeps_all_entries_when_friendli_fetch_fails_or_is_empty(sync_module):
+    local = {
+        "friendliai/zai-org/GLM-Test": {"litellm_provider": "friendliai"},
+        "openrouter/kept": {"input_cost_per_token": 1e-06},
+    }
+    for failed_fetch in (None, []):
+        remote = sync_module.transform_friendli_data(failed_fetch, local)
+        assert remote == {}
+        sync_module.sync_local_data_with_remote(local, remote, replace_keys=frozenset(remote))
+        assert "friendliai/zai-org/GLM-Test" in local
+        assert "openrouter/kept" in local
+
+
+def test_sync_deletes_nothing_when_friendli_fetch_fails_but_other_catalogs_succeed(sync_module):
+    # merged remote is non-empty (openrouter rows), friendli catalog unreachable:
+    # absence from the friendli catalog proves nothing, so its entries must survive
+    local = {
+        "friendliai/zai-org/GLM-Test": {"litellm_provider": "friendliai"},
+        "openrouter/live-model": {"input_cost_per_token": 1e-06},
+    }
+    remote = {"openrouter/live-model": {"input_cost_per_token": 2e-06}}
+    sync_module.sync_local_data_with_remote(
+        local, remote, replace_keys=frozenset(), catalog_dropped_keys=frozenset()
+    )
+    assert "friendliai/zai-org/GLM-Test" in local
+    assert "openrouter/live-model" in local
+
+
+def test_sync_drops_legacy_friendli_entries_without_source_field(sync_module):
+    local = {
+        "friendliai/legacy-model": {"litellm_provider": "friendliai", "max_tokens": 8192},
+    }
+    remote = sync_module.transform_friendli_data([_reasoning_model()], local)
+    dropped = sync_module._stale_friendli_keys(
+        local_keys=frozenset(local), friendli_keys_in_remote=frozenset(remote)
+    )
+    sync_module.sync_local_data_with_remote(
+        local, remote, replace_keys=frozenset(remote), catalog_dropped_keys=dropped
+    )
+    assert "friendliai/legacy-model" not in local
