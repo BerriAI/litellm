@@ -2847,13 +2847,7 @@ _SPEND_ACCRUED_AFTER_COMMIT = 7.5
 
 
 class AmbiguousCommitClient(MockPrismaClient):
-    """A client whose batch commit lands in the database and only then fails in
-    transit, so the caller cannot tell whether it committed.
-
-    The queued spend-zero is applied to `key_spend`, and fresh usage accrues in
-    the window between that landed commit and any replay, so a replay is
-    observable as erased spend rather than merely as an extra commit.
-    """
+    """A client whose batch commit lands in the database and only then fails in transit."""
 
     def __init__(self, *, error: Exception, spend_accrued_after_commit: float):
         super().__init__()
@@ -2911,16 +2905,7 @@ class AmbiguousCommitClient(MockPrismaClient):
 def test_ambiguous_commit_replay_does_not_erase_newly_accrued_spend(
     error, expected_commits, expected_spend, expected_reconnects
 ):
-    """A reset zeroes spend unconditionally, so replaying a commit that already
-    landed erases every dollar spent since it landed (LIT-5372 review finding).
-
-    The `connect_error` case is the control: it is the one error class allowed
-    to replay, and driving it through this same land-then-fail harness proves
-    the spend assertion can actually observe an erasure (the replayed decrement
-    both erases the accrued spend and over-decrements the row). In production a
-    ConnectError means the statements never reached the database, so its replay
-    has nothing to erase.
-    """
+    """Replaying a commit that already landed erases spend accrued since it landed."""
     client = AmbiguousCommitClient(error=error, spend_accrued_after_commit=_SPEND_ACCRUED_AFTER_COMMIT)
     client.data["key"] = [_due_row("key", "tok-1")]
     job = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=client)
@@ -3264,16 +3249,8 @@ def test_window_reset_zeroes_counter_when_rollover_disabled(monkeypatch):
     spend_counter_cache.async_get_cache.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
-# Reset-vs-flush race (LIT-7814): the reset write must decrement by the spend
-# captured at read time, not set spend=0 absolutely, so spend the batch writer
-# lands between the job's read and its commit survives the reset.
-
-
-def _apply_spend_payload(db_spend: float, spend_field: Any) -> float:
-    if isinstance(spend_field, dict):
-        return db_spend - spend_field["decrement"]
-    return spend_field
+def _apply_spend_payload(db_spend: float, spend_field: dict[str, float]) -> float:
+    return db_spend - spend_field["decrement"]
 
 
 _RACE_TABLES = [
@@ -3317,9 +3294,7 @@ _RACE_TABLES = [
 def test_reset_decrement_preserves_spend_landed_after_read(
     reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
 ):
-    """Regression for LIT-7814: spend flushed between the read and the commit
-    must survive the reset. spend=5.0 at read, DB row grows to 5.4 before the
-    write applies; the decrement leaves 0.4, an absolute spend=0 erases it."""
+    """LIT-7814: spend flushed between the read and the commit survives the reset."""
     now = datetime.now(timezone.utc)
     mock_prisma_client.data[table] = [row_factory(now)]
 
@@ -3337,8 +3312,7 @@ def test_reset_decrement_preserves_spend_landed_after_read(
 def test_reset_decrement_subsumes_rollover_cap(
     rollover_enabled, reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
 ):
-    """Rollover on, spend=5.0 over a max_budget=3.0 cap: decrement by the cap
-    leaves the 2.0 carry, matching the old max_budget decrement special case."""
+    """Rollover on, spend over the cap decrements by the cap itself."""
     now = datetime.now(timezone.utc)
     row = row_factory(now)
     row.max_budget = 3.0
@@ -3356,8 +3330,7 @@ def test_reset_decrement_subsumes_rollover_cap(
 def test_reset_decrement_under_cap_with_rollover(
     rollover_enabled, reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
 ):
-    """Rollover on, spend=2.0 under a max_budget=3.0 cap: decrement by the
-    read-time spend (2.0), which used to be an absolute spend=0 write."""
+    """Rollover on, spend under the cap decrements by the read-time spend."""
     now = datetime.now(timezone.utc)
     row = row_factory(now)
     row.spend = 2.0
@@ -3376,8 +3349,7 @@ def test_reset_decrement_under_cap_with_rollover(
 def test_reset_zero_spend_row_writes_noop_decrement(
     reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
 ):
-    """A row already at spend=0 gets a no-op decrement, never an absolute
-    spend=0, so spend landing between the read and the commit survives."""
+    """A spend=0 row gets a no-op decrement, never an absolute spend=0."""
     now = datetime.now(timezone.utc)
     row = row_factory(now)
     row.spend = 0.0
@@ -3393,9 +3365,7 @@ def test_reset_zero_spend_row_writes_noop_decrement(
 
 
 def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_prisma_client, monkeypatch):
-    """A reset drops the counter key so the next get_current_spend reseeds from
-    the committed row, the only value that includes increments that raced the
-    reset; seeding the in-memory post-reset value would undercount it."""
+    """A reset deletes the counter so the next read reseeds from the committed row."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["user"] = [
