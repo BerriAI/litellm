@@ -4294,6 +4294,40 @@ def _check_model_access_group(models: list[str] | None, llm_router: Router | Non
     return True
 
 
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def metadata_json_with_limits(
+    metadata: Mapping[str, object] | None,
+    *,
+    model_rpm_limit: Mapping[str, object] | None,
+    model_tpm_limit: Mapping[str, object] | None,
+    mcp_rpm_limit: Mapping[str, int] | None,
+    tag_rpm_limit: Mapping[str, int] | None,
+    guardrails: Sequence[str] | None,
+    policies: Sequence[str] | None,
+    prompts: Sequence[str] | None,
+) -> str:
+    """Serialize the stored metadata blob with the per-model, MCP, tag, guardrail, policy and prompt settings folded in."""
+    limits: Final = tuple(
+        (name, value)
+        for name, value in (
+            ("model_rpm_limit", model_rpm_limit),
+            ("model_tpm_limit", model_tpm_limit),
+            ("mcp_rpm_limit", mcp_rpm_limit),
+            ("tag_rpm_limit", tag_rpm_limit),
+            ("guardrails", guardrails),
+            ("policies", policies),
+            ("prompts", prompts),
+        )
+        if value is not None
+    )
+    if metadata is None and not limits:
+        return json.dumps(None)
+    merged: Final = {**(metadata or _NO_METADATA), **dict(limits)}  # mutable-ok: encrypt_callback_vars takes a dict
+    return json.dumps(encrypt_callback_vars(merged))
+
+
 async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: str | None = None,
@@ -4405,31 +4439,16 @@ async def generate_key_helper_fn(
     permissions_json: Final = json.dumps(permissions)
     router_settings_json: Final = safe_dumps(router_settings) if router_settings is not None else safe_dumps({})
 
-    # Add model_rpm_limit and model_tpm_limit to metadata
-    if model_rpm_limit is not None:
-        metadata = metadata or {}
-        metadata["model_rpm_limit"] = model_rpm_limit
-    if model_tpm_limit is not None:
-        metadata = metadata or {}
-        metadata["model_tpm_limit"] = model_tpm_limit
-    if mcp_rpm_limit is not None:
-        metadata = metadata or {}
-        metadata["mcp_rpm_limit"] = mcp_rpm_limit
-    if tag_rpm_limit is not None:
-        metadata = metadata or {}
-        metadata["tag_rpm_limit"] = tag_rpm_limit
-    if guardrails is not None:
-        metadata = metadata or {}
-        metadata["guardrails"] = guardrails
-    if policies is not None:
-        metadata = metadata or {}
-        metadata["policies"] = policies
-    if prompts is not None:
-        metadata = metadata or {}
-        metadata["prompts"] = prompts
-
-    metadata = encrypt_callback_vars(metadata)
-    metadata_json: Final = json.dumps(metadata)
+    metadata_json: Final = metadata_json_with_limits(
+        metadata,
+        model_rpm_limit=model_rpm_limit,
+        model_tpm_limit=model_tpm_limit,
+        mcp_rpm_limit=mcp_rpm_limit,
+        tag_rpm_limit=tag_rpm_limit,
+        guardrails=guardrails,
+        policies=policies,
+        prompts=prompts,
+    )
     validate_model_max_budget(model_max_budget)
     model_max_budget_json: Final = json.dumps(model_max_budget)
     budget_fallbacks_json: Final = json.dumps(budget_fallbacks or {})
