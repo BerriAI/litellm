@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
 from threading import Lock
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
@@ -94,6 +95,76 @@ def _assume_role_params(
             return _AssumeRoleParams(
                 RoleArn=aws_role_name, RoleSessionName=aws_session_name, ExternalId=external_id, Tags=tags
             )
+
+
+_SecureTransportBool = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
+
+
+class _SecureTransportCondition(TypedDict):
+    Bool: ReadOnly[_SecureTransportBool]
+
+
+class _SessionPolicyStatement(TypedDict):
+    Sid: ReadOnly[str]
+    Effect: ReadOnly[Literal["Allow"]]
+    Action: ReadOnly[tuple[str, ...]]
+    Resource: ReadOnly[Literal["*"]]
+    Condition: ReadOnly[_SecureTransportCondition]
+
+
+class WebIdentitySessionPolicy(TypedDict):
+    Version: ReadOnly[Literal["2012-10-17"]]
+    Statement: ReadOnly[tuple[_SessionPolicyStatement, ...]]
+
+
+_WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "BedrockLiteLLM": (
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream",
+            "bedrock:CountTokens",
+            "bedrock:Rerank",
+            "bedrock:Retrieve",
+            "bedrock:ListKnowledgeBases",
+            "bedrock:InvokeAgent",
+            "bedrock:ApplyGuardrail",
+            "bedrock:GetGuardrail",
+            "bedrock:ListGuardrails",
+        ),
+        "BedrockAgentCoreLiteLLM": (
+            "bedrock-agentcore:InvokeAgentRuntime",
+            "bedrock-agentcore:InvokeGateway",
+        ),
+        "ClaudePlatformLiteLLM": (
+            "aws-external-anthropic:CreateInference",
+            "aws-external-anthropic:CreateBatchInference",
+            "aws-external-anthropic:CancelBatchInference",
+            "aws-external-anthropic:DeleteBatchInference",
+            "aws-external-anthropic:CountTokens",
+            "aws-external-anthropic:Get*",
+            "aws-external-anthropic:List*",
+        ),
+        "BedrockMantleLiteLLM": ("bedrock-mantle:CreateInference",),
+    }
+)
+
+_SECURE_TRANSPORT_ONLY: Final = _SecureTransportCondition(Bool=_SecureTransportBool({"aws:SecureTransport": "true"}))
+
+
+def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
+    return WebIdentitySessionPolicy(
+        Version="2012-10-17",
+        Statement=tuple(
+            _SessionPolicyStatement(
+                Sid=sid,
+                Effect="Allow",
+                Action=actions,
+                Resource="*",
+                Condition=_SECURE_TRANSPORT_ONLY,
+            )
+            for sid, actions in _WEB_IDENTITY_SESSION_POLICY_ACTIONS.items()
+        ),
+    )
 
 
 class BedrockRequestTarget(BaseModel):
@@ -940,60 +1011,12 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # auth only (static creds + IRSA take other code paths).
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
-        bedrock_session_policy: Final = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Sid": "BedrockLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "bedrock:InvokeModel",
-                        "bedrock:InvokeModelWithResponseStream",
-                        "bedrock:CountTokens",
-                        "bedrock:ApplyGuardrail",
-                        "bedrock:GetGuardrail",
-                        "bedrock:ListGuardrails",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-                # Claude Platform on AWS (added by #27678 for the
-                # ``bedrock/claude_platform/<model>`` route) lives under
-                # a separate IAM action namespace; without these entries
-                # the OIDC path 403s on every claude_platform request
-                # even with a fully permissive identity policy (#30200).
-                {
-                    "Sid": "ClaudePlatformLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "aws-external-anthropic:CreateInference",
-                        "aws-external-anthropic:CreateBatchInference",
-                        "aws-external-anthropic:CancelBatchInference",
-                        "aws-external-anthropic:DeleteBatchInference",
-                        "aws-external-anthropic:CountTokens",
-                        "aws-external-anthropic:Get*",
-                        "aws-external-anthropic:List*",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-                {
-                    "Sid": "BedrockMantleLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "bedrock-mantle:CreateInference",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-            ],
-        }
         assume_role_params: Final = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": json.dumps(bedrock_session_policy, separators=(",", ":")),
+            "Policy": json.dumps(build_web_identity_session_policy(), separators=(",", ":")),
         }
 
         # Add ExternalId parameter if provided
