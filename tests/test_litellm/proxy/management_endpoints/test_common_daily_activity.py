@@ -1,3 +1,4 @@
+import pathlib
 import re
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
@@ -9,11 +10,6 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 from pytest_postgresql import factories
-
-from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-
-
-import pathlib
 
 from litellm.constants import (
     DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM,
@@ -29,10 +25,11 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
-    key_free_source_table,
+    global_rollup_reconciled_through,
     update_metrics,
 )
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import RECONCILE_DAY_SQL
+from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import evict_config_param
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
@@ -1632,7 +1629,9 @@ def _prisma_with_marker(marker: str | None) -> MagicMock:
     prisma.db = MagicMock()
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
-    row = None if marker is None else SimpleNamespace(param_name="m", param_value=f'{{"reconciled_through": "{marker}"}}')
+    row = (
+        None if marker is None else SimpleNamespace(param_name="m", param_value=f'{{"reconciled_through": "{marker}"}}')
+    )
     prisma.get_generic_data = AsyncMock(return_value=row)
     return prisma
 
@@ -1657,9 +1656,9 @@ def _unfiltered_user_query(**overrides):
 @pytest.mark.parametrize(
     ("marker", "overrides", "expected"),
     [
-        ("2026-06-02", {}, "LiteLLM_DailyGlobalSpend"),
-        ("2026-06-02", {"model": "gpt-5"}, "LiteLLM_DailyGlobalSpend"),
-        ("2026-06-01", {}, None),
+        ("2026-06-02", {}, "2026-06-02"),
+        ("2026-06-02", {"model": "gpt-5"}, "2026-06-02"),
+        ("2026-05-01", {}, "2026-05-01"),
         (None, {}, None),
         ("2026-06-02", {"api_key": "sk-1"}, None),
         ("2026-06-02", {"api_key": []}, None),
@@ -1668,31 +1667,48 @@ def _unfiltered_user_query(**overrides):
         ("2026-06-02", {"table_name": "litellm_dailyteamspend", "entity_id_field": "team_id"}, None),
     ],
 )
-async def test_key_free_source_table_routes_only_unfiltered_user_reads_within_the_marker(marker, overrides, expected):
-    """Anything that filters by key or entity has no counterpart in the global table, and a
-    range the reconcile has not reached must stay on the per-key table."""
+async def test_global_rollup_marker_is_used_only_for_unfiltered_user_reads(marker, overrides, expected):
+    """Anything that filters by key or entity has no counterpart in the global table; the
+    SQL splits the range at the marker itself, so the marker passes through unchanged."""
     await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
     prisma = _prisma_with_marker(marker)
 
-    assert await key_free_source_table(prisma, _unfiltered_user_query(**overrides)) == expected
+    assert await global_rollup_reconciled_through(prisma, _unfiltered_user_query(**overrides)) == expected
     await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
 
 
 @pytest.mark.asyncio
-async def test_key_free_source_table_judges_the_timezone_extended_end_not_the_requested_one():
-    """A caller west of UTC asking through their local today gets today's UTC bucket added to
-    the range; the marker must cover that extended day, not just the requested end."""
+async def test_global_rollup_marker_read_failure_falls_back_to_the_per_key_table():
     await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
-    today_utc: Final = datetime.now(timezone.utc).date()
-    yesterday: Final = (today_utc - timedelta(days=1)).isoformat()
-    query: Final = _unfiltered_user_query(
-        start_date=yesterday, end_date=yesterday, timezone_offset_minutes=24 * 60, include_current_utc_day=True
-    )
+    prisma = _prisma_with_marker(None)
+    prisma.get_generic_data = AsyncMock(side_effect=RuntimeError("db down"))
 
-    assert await key_free_source_table(_prisma_with_marker(yesterday), query) is None
+    assert await global_rollup_reconciled_through(prisma, _unfiltered_user_query()) is None
     await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
-    assert await key_free_source_table(_prisma_with_marker(today_utc.isoformat()), query) == "LiteLLM_DailyGlobalSpend"
-    await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
+
+
+def test_aggregated_sql_splits_the_key_free_arm_at_the_marker_and_keeps_the_key_arm_per_key():
+    sql, params = _build_aggregated_sql_query(**_unfiltered_user_query(), global_rollup_through="2026-06-01")
+    marker_param: Final = f"${len(params)}"
+
+    assert params[-1] == "2026-06-01"
+    assert (
+        f'FROM "LiteLLM_DailyGlobalSpend"\n            WHERE date >= $1 AND date <= $2 AND date <= {marker_param}'
+        in sql
+    )
+    assert (
+        f'FROM "LiteLLM_DailyUserSpend"\n            WHERE date >= $1 AND date <= $2 AND date > {marker_param}' in sql
+    )
+    key_arm: Final = sql.split("UNION ALL\n        (WITH top_api_keys")[1]
+    assert "LiteLLM_DailyGlobalSpend" not in key_arm
+    assert marker_param not in key_arm
+
+
+def test_aggregated_sql_without_a_marker_reads_the_per_key_table_only():
+    sql, params = _build_aggregated_sql_query(**_unfiltered_user_query())
+
+    assert "LiteLLM_DailyGlobalSpend" not in sql
+    assert params[-1] == PTU_SENTINEL_API_KEY
 
 
 _GLOBAL_SPEND_MIGRATION: Final = (
@@ -1706,12 +1722,12 @@ _GLOBAL_SPEND_MIGRATION: Final = (
 
 
 @pytest.mark.asyncio
-async def test_get_daily_activity_aggregated_reads_the_global_table_for_the_key_free_arm(
+async def test_get_daily_activity_aggregated_serves_closed_days_from_the_global_table_and_open_days_live(
     _aggregated_postgresql: psycopg.Connection,
 ):
-    """With the range reconciled, the key-free arm reads LiteLLM_DailyGlobalSpend while the
-    per-key arm stays on the user table, and the response is identical to the all-per-key
-    read: same totals, same rollups, same top keys."""
+    """Day 1 is rolled up and day 2 is still open (never rolled up), so a marker of day 1 must
+    give the same response as reading everything per-key: day 1 from the global table, day 2
+    live, one grand total across both. The per-key arm stays on the user table throughout."""
     n_keys: Final = USAGE_TOP_API_KEYS_LIMIT + 3
     rows: Final = [
         (
@@ -1734,11 +1750,10 @@ async def test_get_daily_activity_aggregated_reads_the_global_table_for_the_key_
     _seed_daily_user_spend(_aggregated_postgresql, rows)
     with _aggregated_postgresql.cursor() as cur:
         cur.execute(_GLOBAL_SPEND_MIGRATION.read_text())  # pyright: ignore[reportArgumentType]  # DDL literal
-        for day in ("2026-06-01", "2026-06-02"):
-            cur.execute(
-                re.sub(r"\$(\d+)", r"%(p\1)s", RECONCILE_DAY_SQL),  # pyright: ignore[reportArgumentType]  # $N -> psycopg
-                {"p1": day},
-            )
+        cur.execute(
+            re.sub(r"\$(\d+)", r"%(p\1)s", RECONCILE_DAY_SQL),  # pyright: ignore[reportArgumentType]  # $N -> psycopg
+            {"p1": "2026-06-01"},
+        )
     _aggregated_postgresql.commit()
 
     async def read(marker: str | None, sql_seen: list[str]):
@@ -1760,16 +1775,19 @@ async def test_get_daily_activity_aggregated_reads_the_global_table_for_the_key_
     per_key_sql: Final[list[str]] = []  # mutable-ok: out-param for the query_raw shim
     global_sql: Final[list[str]] = []  # mutable-ok: out-param for the query_raw shim
     from_per_key = await read(None, per_key_sql)
-    from_global = await read("2026-06-02", global_sql)
+    from_global = await read("2026-06-01", global_sql)
     await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
 
     assert per_key_sql[0].count('FROM "LiteLLM_DailyGlobalSpend"') == 0
     assert global_sql[0].count('FROM "LiteLLM_DailyGlobalSpend"') == 1
-    assert global_sql[0].count('FROM "LiteLLM_DailyUserSpend"') == 2
+    assert global_sql[0].count('FROM "LiteLLM_DailyUserSpend"') == 3
     assert from_global.model_dump() == from_per_key.model_dump()
     assert from_global.metadata.total_spend == pytest.approx(2 * sum(float(i + 1) for i in range(n_keys)))
+    assert {day.date.isoformat() for day in from_global.results} == {"2026-06-01", "2026-06-02"}
     assert len(from_global.results[0].breakdown.api_keys) == USAGE_TOP_API_KEYS_LIMIT
     assert set(from_global.results[0].breakdown.model_groups) == {"gpt-5", "claude"}
+
+
 def _no_spend_record():
     """A rollup row for a key with no spend, where SUM() returns NULL (None)."""
     return SimpleNamespace(

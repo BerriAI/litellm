@@ -2,7 +2,6 @@
 
 import pathlib
 import re
-from contextlib import asynccontextmanager
 from datetime import date
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -13,11 +12,7 @@ from psycopg.rows import dict_row
 from pytest_postgresql import factories
 
 from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM
-from litellm.proxy.db.daily_spend_bulk_upsert import (
-    DAILY_SPEND_TABLES,
-    build_bulk_upsert_with_global_rollup,
-    merge_by_conflict_key,
-)
+from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
     RECONCILE_DAY_SQL,
     reconciled_through,
@@ -45,21 +40,6 @@ class _FakeConfigTable:
         return _FakeConfigRow(where["param_name"], data["update"]["param_value"])
 
 
-class _FakeTransaction:
-    def __init__(self, prisma: "_FakePrisma") -> None:
-        self._prisma = prisma
-
-    async def execute_raw(self, sql: str, *params: str) -> int:
-        if "LOCK TABLE" in sql:
-            self._prisma.locks_taken += 1
-            return 0
-        (day,) = params
-        if day in self._prisma.failing_days:
-            raise RuntimeError(f"day {day} exploded")
-        self._prisma.reconciled.append(day)
-        return 1
-
-
 class _FakeDb:
     def __init__(self, prisma: "_FakePrisma") -> None:
         self._prisma = prisma
@@ -69,19 +49,21 @@ class _FakeDb:
         first, last = params
         return [{"date": d} for d in sorted(self._prisma.user_days) if first <= d <= last]
 
-    @asynccontextmanager
-    async def tx(self, timeout: object):
-        yield _FakeTransaction(self._prisma)
+    async def execute_raw(self, sql: str, *params: str) -> int:
+        (day,) = params
+        if day in self._prisma.failing_days:
+            raise RuntimeError(f"day {day} exploded")
+        self._prisma.reconciled.append(day)
+        return 1
 
 
 class _FakePrisma:
-    """Enough of PrismaClient for the reconcile: per-key dates, a config table, and a transaction."""
+    """Enough of PrismaClient for the reconcile: per-key dates, a config table, and execute_raw."""
 
     def __init__(self, user_days: tuple[str, ...], failing_days: frozenset[str] = frozenset()) -> None:
         self.user_days = user_days
         self.failing_days = failing_days
         self.reconciled: list[str] = []
-        self.locks_taken = 0
         self.db = _FakeDb(self)
 
     async def get_generic_data(self, key: str, value: str, table_name: str) -> _FakeConfigRow | None:
@@ -97,33 +79,45 @@ async def _fresh_marker_cache():
 
 
 @pytest.mark.asyncio
-async def test_first_run_rolls_up_every_historical_day_and_today_then_marks_today():
-    """Before any marker exists, every day with per-key rows is rolled up, plus today even
-    with no rows yet, so reads for ranges ending today can switch to the global table."""
-    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-03", "2026-09-14"))
+async def test_first_run_rolls_up_every_closed_day_and_never_today():
+    """Before any marker exists every closed day with per-key rows is rolled up. Today is left
+    out: pods are still flushing it, so it is served live from the per-key table until it closes."""
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-03", "2026-09-14", "2026-09-15"))
 
     result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
 
-    assert result.days_reconciled == ("2026-09-01", "2026-09-03", "2026-09-14", "2026-09-15")
+    assert result.days_reconciled == ("2026-09-01", "2026-09-03", "2026-09-14")
     assert result.failed_day is None
-    assert result.reconciled_through == "2026-09-15"
-    assert await reconciled_through(prisma) == "2026-09-15"
-    assert prisma.locks_taken == 4
+    assert result.reconciled_through == "2026-09-14"
+    assert await reconciled_through(prisma) == "2026-09-14"
+    assert "2026-09-15" not in prisma.reconciled
 
 
 @pytest.mark.asyncio
 async def test_later_run_replays_the_marker_day_and_the_day_before_only():
     """Days older than marker-1 are settled; the marker day and its predecessor are replayed so
-    rows a pre-writer pod flushed around midnight during a rolling deploy get folded in."""
+    per-key rows that landed after their day was rolled up get folded in."""
     prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-12", "2026-09-13", "2026-09-14"))
-    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 13))
+    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
     prisma.reconciled.clear()
 
     result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
 
-    assert result.days_reconciled == ("2026-09-12", "2026-09-13", "2026-09-14", "2026-09-15")
+    assert result.days_reconciled == ("2026-09-12", "2026-09-13", "2026-09-14")
     assert "2026-09-01" not in prisma.reconciled
-    assert await reconciled_through(prisma) == "2026-09-15"
+    assert await reconciled_through(prisma) == "2026-09-14"
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_no_new_closed_days_keeps_the_marker():
+    prisma = _FakePrisma(user_days=("2026-09-13",))
+    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma.reconciled.clear()
+
+    result = await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+
+    assert result.days_reconciled == ("2026-09-13",)
+    assert result.reconciled_through == "2026-09-13"
 
 
 @pytest.mark.asyncio
@@ -149,16 +143,16 @@ async def test_the_next_run_resumes_from_the_failed_day():
 
     result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
 
-    assert result.days_reconciled == ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-15")
-    assert await reconciled_through(prisma) == "2026-09-15"
+    assert result.days_reconciled == ("2026-09-01", "2026-09-02", "2026-09-03")
+    assert await reconciled_through(prisma) == "2026-09-03"
 
 
 @pytest.mark.asyncio
 async def test_a_failure_with_nothing_done_reports_the_previous_marker_and_alerts():
-    """A pre-writer pod flushing rows for the day before the marker is exactly the replay case;
-    when that replay fails the marker must stay put and the operator must hear about it."""
+    """A late flush for the day before the marker is exactly the replay case; when that replay
+    fails the marker must stay put and the operator must hear about it."""
     prisma = _FakePrisma(user_days=("2026-09-13",))
-    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 13))
+    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
     prisma.user_days = ("2026-09-12", "2026-09-13")
     prisma.failing_days = frozenset({"2026-09-12"})
     alert = AsyncMock()
@@ -212,7 +206,7 @@ async def test_scheduled_run_runs_and_releases_the_lock_when_it_wins():
 
     result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock, today=TODAY)
 
-    assert result is not None and result.days_reconciled == ("2026-09-13", "2026-09-15")
+    assert result is not None and result.days_reconciled == ("2026-09-13",)
     lock.release_lock.assert_awaited_once()
 
 
@@ -226,7 +220,7 @@ async def test_scheduled_run_proceeds_when_the_lock_cannot_be_acquired_or_read()
 
     result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock, today=TODAY)
 
-    assert result is not None and result.days_reconciled == ("2026-09-13", "2026-09-15")
+    assert result is not None and result.days_reconciled == ("2026-09-13",)
     lock.release_lock.assert_not_awaited()
 
 
@@ -341,9 +335,9 @@ def _normalized(rows: list[dict[str, object]]) -> list[tuple[object, ...]]:
 
 
 def test_reconcile_day_sql_makes_the_global_day_equal_the_per_key_sums(_rollup_postgresql: psycopg.Connection):
-    """Against real Postgres and the shipped migration: rows the writer never saw (a
-    pre-writer pod's flush, NULL and '' dimension spellings) end up folded into the global
-    day, running the day twice changes nothing, and other days are left alone."""
+    """Against real Postgres and the shipped migration: writer-shaped rows and legacy rows
+    (NULL and '' dimension spellings) fold into one global day, running the day twice changes
+    nothing, and other days are left alone."""
     conn: Final = _rollup_postgresql
     conn.execute(_DAILY_USER_SPEND_DDL)  # pyright: ignore[reportArgumentType]  # DDL literal
     conn.execute(_GLOBAL_SPEND_MIGRATION.read_text())  # pyright: ignore[reportArgumentType]  # DDL literal
@@ -353,7 +347,7 @@ def test_reconcile_day_sql_makes_the_global_day_equal_the_per_key_sums(_rollup_p
         USER_TABLE,
         (_user_txn(api_key="sk-1", spend=1.0), _user_txn(api_key="sk-2", user_id="u-2", spend=2.0, prompt_tokens=20)),
     )
-    _execute_dollar_sql(conn, *build_bulk_upsert_with_global_rollup(USER_TABLE, written_batch))
+    _execute_dollar_sql(conn, *build_bulk_upsert(USER_TABLE, written_batch))
 
     conn.execute(
         """

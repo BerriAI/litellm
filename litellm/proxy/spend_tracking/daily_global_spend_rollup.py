@@ -1,9 +1,10 @@
-"""Reconcile ``LiteLLM_DailyGlobalSpend`` from ``LiteLLM_DailyUserSpend``, one day per transaction.
+"""Roll closed UTC days of ``LiteLLM_DailyUserSpend`` up into ``LiteLLM_DailyGlobalSpend``.
 
-The spend writer keeps both tables in step from the moment it is deployed; this job rolls up
-the days before that and records how far it has reached in ``LiteLLM_Config`` so usage reads
-know when the global table can answer for a date range. It runs as a background cron, never
-in a Prisma migration, since on a large deployment the aggregate is minutes of work.
+Only days that are over get rolled up, so a pod still flushing per-key spend for the current
+day can never leave the global table short; usage reads serve days through the recorded
+marker from the global table and later days live from the per-key table. The marker lives in
+``LiteLLM_Config``. This runs as a background cron, never in a Prisma migration, since on a
+large deployment the first backfill is minutes of work.
 """
 
 from collections.abc import Awaitable, Callable
@@ -19,7 +20,6 @@ from litellm.constants import (
     DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS,
     DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM,
 )
-from litellm.proxy.db.daily_spend_bulk_upsert import GLOBAL_SPEND_TABLE
 from litellm.repositories.config_repository import ConfigRepository
 
 if TYPE_CHECKING:
@@ -27,8 +27,11 @@ if TYPE_CHECKING:
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
 
-_DAY_TRANSACTION_TIMEOUT: Final = timedelta(minutes=10)
 _REPLAY_DAYS: Final = 1
+GLOBAL_SPEND_TABLE_NAME: Final = "LiteLLM_DailyGlobalSpend"
+# The unique constraint, in constraint order. NULL never matches itself in a unique index, so
+# every column is normalized to '' or the same group would be inserted again on every run.
+_KEY_COLUMNS: Final = ("date", "model", "model_group", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
 _METRIC_COLUMNS: Final = (
     "prompt_tokens",
     "completion_tokens",
@@ -51,23 +54,21 @@ def _quoted(columns: tuple[str, ...]) -> str:
 
 
 def _reconcile_day_sql() -> str:
-    key_columns: Final = GLOBAL_SPEND_TABLE.key_columns
-    normalized_keys: Final = ", ".join(f"COALESCE(\"{column}\", '')" for column in key_columns)
+    normalized_keys: Final = ", ".join(f"COALESCE(\"{column}\", '')" for column in _KEY_COLUMNS)
     sums: Final = ", ".join(f'SUM("{column}")' for column in _METRIC_COLUMNS)
     overwrite: Final = ", ".join(f'"{column}" = EXCLUDED."{column}"' for column in _METRIC_COLUMNS)
     return (
-        f'INSERT INTO "{GLOBAL_SPEND_TABLE.name}" ("id", {_quoted(key_columns)}, {_quoted(_METRIC_COLUMNS)}, '
+        f'INSERT INTO "{GLOBAL_SPEND_TABLE_NAME}" ("id", {_quoted(_KEY_COLUMNS)}, {_quoted(_METRIC_COLUMNS)}, '
         '"updated_at")\n'
         f"SELECT gen_random_uuid()::text, {normalized_keys}, {sums}, (NOW() AT TIME ZONE 'UTC')\n"
         'FROM "LiteLLM_DailyUserSpend" WHERE "date" = $1\n'
         f"GROUP BY {normalized_keys}\n"
-        f"ON CONFLICT ({_quoted(key_columns)}) DO UPDATE SET {overwrite}, "
+        f"ON CONFLICT ({_quoted(_KEY_COLUMNS)}) DO UPDATE SET {overwrite}, "
         "\"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )
 
 
 RECONCILE_DAY_SQL: Final = _reconcile_day_sql()
-_LOCK_GLOBAL_TABLE_SQL: Final = f'LOCK TABLE "{GLOBAL_SPEND_TABLE.name}" IN EXCLUSIVE MODE'
 _PENDING_DAYS_SQL: Final = (
     'SELECT DISTINCT "date" FROM "LiteLLM_DailyUserSpend" WHERE "date" >= $1 AND "date" <= $2 ORDER BY "date"'
 )
@@ -134,19 +135,19 @@ def _first_pending_day(marker: str | None) -> str:
 
 
 async def pending_days(prisma_client: "PrismaClient", today: date) -> tuple[str, ...]:
-    """Every UTC day through today still to roll up, oldest first; the marker day and the one
-    before it are replayed so rows flushed by a pre-writer pod during a rolling deploy are folded in."""
+    """Every closed UTC day (strictly before today) still to roll up, oldest first. The marker
+    day and the one before it are replayed so per-key rows that landed after their day was
+    rolled up (a flush straddling midnight, a late retry) are folded in."""
     marker: Final = await reconciled_through(prisma_client)
-    rows: Final = await prisma_client.db.query_raw(_PENDING_DAYS_SQL, _first_pending_day(marker), today.isoformat())
-    return tuple(sorted({*(_DateRow.model_validate(row).date for row in rows), today.isoformat()}))
+    last_closed_day: Final = (today - timedelta(days=1)).isoformat()
+    rows: Final = await prisma_client.db.query_raw(_PENDING_DAYS_SQL, _first_pending_day(marker), last_closed_day)
+    return tuple(_DateRow.model_validate(row).date for row in rows)
 
 
 async def reconcile_day(prisma_client: "PrismaClient", day: str) -> None:
-    """Rewrite one day of the global table from the per-key sums; the table lock keeps the
-    writer's increments out between the aggregate and the overwrite so none are lost."""
-    async with prisma_client.db.tx(timeout=_DAY_TRANSACTION_TIMEOUT) as transaction:
-        await transaction.execute_raw(_LOCK_GLOBAL_TABLE_SQL)
-        await transaction.execute_raw(RECONCILE_DAY_SQL, day)
+    """Rewrite one day of the global table from the per-key sums. Idempotent: a rerun
+    overwrites every group with the same totals."""
+    await prisma_client.db.execute_raw(RECONCILE_DAY_SQL, day)
 
 
 async def run_daily_global_spend_reconcile(
