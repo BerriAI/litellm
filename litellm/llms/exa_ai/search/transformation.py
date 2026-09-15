@@ -4,9 +4,12 @@ Calls Exa AI's /search endpoint to search the web.
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import BaseModel, ConfigDict
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -44,6 +47,90 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     context: bool | dict  # Optional - format results for LLMs
     moderation: bool  # Optional - enable content moderation, default false
     contents: dict  # Optional - content retrieval options
+
+
+_HIGHLIGHT_SEPARATOR: Final[str] = "\n\n"
+
+_NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _optional(key: str, value: object) -> Mapping[str, object]:
+    return MappingProxyType({key: value}) if value is not None else _NOTHING
+
+
+class _ExaHighlightFields(BaseModel):
+    """
+    Parses just the two content-mode fields whose runtime shape Exa doesn't guarantee,
+    typed as `object` (not the documented `list[str]`/`list[float]` shape) so
+    `_exa_highlights`/`_exa_highlight_scores` can isinstance-check them meaningfully
+    against a real unknown, rather than a shape basedpyright would otherwise trust.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    highlights: object = None
+    highlightScores: object = None
+
+
+def _exa_highlights(fields: _ExaHighlightFields) -> tuple[object, ...] | None:
+    """
+    Exa documents `highlights` as a list of strings, but a malformed response (e.g. a bare
+    string) must not be silently iterated character-by-character. Items are passed through
+    as-is rather than filtered by type, since `highlightScores[i]` is Exa's relevance score
+    for `highlights[i]`; independently filtering either array by item type would desync
+    that positional pairing.
+    """
+    raw: Final = fields.highlights
+    return tuple(raw) if isinstance(raw, (list, tuple)) else None
+
+
+def _exa_highlight_scores(fields: _ExaHighlightFields) -> tuple[object, ...] | None:
+    raw: Final = fields.highlightScores
+    return tuple(raw) if isinstance(raw, (list, tuple)) else None
+
+
+def _as_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _exa_snippet(result: Mapping[str, object], highlights: tuple[object, ...] | None) -> str:
+    """
+    Exa returns each requested content mode in its own field, and omits `text`
+    entirely when only `highlights` or `summary` were asked for. Non-string highlight
+    entries are dropped only for this joined-snippet computation, not from the raw
+    `highlights` extra field, and blank entries are dropped too, since joining only
+    blanks would otherwise produce a non-empty separator-only string that wrongly wins
+    over `summary`.
+    """
+    highlights_snippet: Final = _HIGHLIGHT_SEPARATOR.join(
+        h for h in (highlights or ()) if isinstance(h, str) and h.strip()
+    )
+    return _as_str(result.get("text")) or highlights_snippet or _as_str(result.get("summary")) or ""
+
+
+def _exa_results(response_json: object) -> tuple[Mapping[str, object], ...]:
+    """Filters out a malformed `results` entry (e.g. `null`) instead of letting it
+    crash `.get()` calls downstream."""
+    raw: Final = response_json.get("results") if isinstance(response_json, dict) else None
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(r for r in raw if isinstance(r, dict))
+
+
+def _to_search_result(result: Mapping[str, object]) -> SearchResult:
+    fields: Final = _ExaHighlightFields.model_validate(result)
+    highlights: Final = _exa_highlights(fields)
+    return SearchResult(
+        title=_as_str(result.get("title")) or "",
+        url=_as_str(result.get("url")) or "",
+        snippet=_exa_snippet(result, highlights),
+        date=_as_str(result.get("publishedDate")),  # ISO 8601 datetime string
+        last_updated=None,  # Exa AI doesn't provide last_updated in response
+        **_optional("highlights", highlights),
+        **_optional("highlight_scores", _exa_highlight_scores(fields)),
+        **_optional("summary", result.get("summary")),
+        **_optional("score", result.get("score")),
+    )
 
 
 class ExaAISearchConfig(BaseSearchConfig):
@@ -164,7 +251,8 @@ class ExaAISearchConfig(BaseSearchConfig):
         Exa AI → LiteLLM mappings:
         - results[].title → SearchResult.title
         - results[].url → SearchResult.url
-        - results[].text → SearchResult.snippet
+        - results[].text, else results[].highlights, else results[].summary → SearchResult.snippet
+        - results[].highlights, results[].highlightScores, results[].summary, results[].score → passed through when present
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
 
@@ -177,19 +265,9 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         response_json: Final = raw_response.json()
 
-        # Transform results to SearchResult objects
-        results: Final = []
-        for result in response_json.get("results", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("text", ""),  # Exa AI uses "text" for content
-                date=result.get("publishedDate"),  # ISO 8601 datetime string
-                last_updated=None,  # Exa AI doesn't provide last_updated in response
-            )
-            results.append(search_result)
-
         return SearchResponse(
-            results=results,
+            results=[  # mutable-ok: SearchResponse.results is declared list[SearchResult]
+                _to_search_result(result) for result in _exa_results(response_json)
+            ],
             object="search",
         )
