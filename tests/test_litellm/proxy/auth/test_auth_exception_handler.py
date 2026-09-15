@@ -488,6 +488,34 @@ async def test_route_passed_to_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_dynamic_route_normalized_on_auth_failure():
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+        ) as mock_post_call_failure_hook,
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings", {}
+        ),
+        pytest.raises(ProxyException),
+    ):
+        await handler._handle_authentication_error(
+            HTTPException(status_code=401, detail="Authentication Error, Invalid proxy server token passed"),
+            MagicMock(),
+            {},
+            "/v1/responses/resp_attacker_controlled_id",
+            None,
+            "sk-doesnotexist",
+        )
+
+    hook_kwargs = mock_post_call_failure_hook.call_args.kwargs
+    assert hook_kwargs["route"] == "/v1/responses/resp_attacker_controlled_id"
+    assert hook_kwargs["user_api_key_dict"].request_route == "/v1/responses/{response_id}"
+
+
+@pytest.mark.asyncio
 async def test_resolved_identity_exported_on_auth_failure():
     """Regression: when auth fails AFTER the key/team/user identity is resolved
     (e.g. an expired key), that identity must still reach the failure logging /
