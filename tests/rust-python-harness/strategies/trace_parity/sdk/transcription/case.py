@@ -92,11 +92,16 @@ TRACE_SUITE: Final = TraceSuite(
     route=SPEC,
     scenarios=(
         TraceScenario(
-            name="bedrock",
+            name="sync-bedrock",
             fixture=_fixture,
-            mappings=MAPPINGS,
-            sync_mappings=SYNC_MAPPINGS,
-            async_mappings=ASYNC_MAPPINGS,
+            mappings=SYNC_MAPPINGS,
+            asynchronous=False,
+        ),
+        TraceScenario(
+            name="async-bedrock",
+            fixture=_fixture,
+            mappings=ASYNC_MAPPINGS,
+            asynchronous=True,
         ),
     ),
 )
