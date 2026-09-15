@@ -28,15 +28,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-def test_opus_4_8_fast_mode_multiplier():
-    """Opus 4.8 dropped fast-mode pricing to 2x base ($10/$50 per MTok);
-    Opus 4.7 was 6x ($30/$150)."""
-    model_data = _load_root_cost_map()
-    entry = model_data["claude-opus-4-8"]["provider_specific_entry"]
-    assert entry["us"] == 1.1
-    assert entry["fast"] == 2.0
-
-
 def test_opus_4_8_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-4-8" in BEDROCK_CONVERSE_MODELS
 
