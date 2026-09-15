@@ -248,7 +248,9 @@ def _output_index(parsed_chunk: Mapping[str, object]) -> int | None:
 
 def _remember_output_item_phase(
     parsed_chunk: Mapping[str, object],
-    output_item_phases: dict[tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase],
+    output_item_phases: dict[  # mutable-ok: per-stream Responses output state
+        tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase
+    ],
 ) -> None:
     phase: Final = _phase_from_output_item(parsed_chunk.get("item")) or _phase_from_output_item(parsed_chunk)
     if phase is None:
@@ -1361,9 +1363,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
-        self._output_item_phases: dict[
+        self._output_item_phases: dict[  # mutable-ok: per-stream Responses output state
             tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase
-        ] = {}  # mutable-ok: per-stream accumulator state
+        ] = {}
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1404,7 +1406,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
-        output_item_phases: dict[tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase]
+        output_item_phases: dict[  # mutable-ok: per-stream Responses output state
+            tuple[Literal["id", "index"], str | int], _ResponsesOutputItemPhase
+        ]
         | None = None,  # mutable-ok: per-stream state, preserved across output item events
     ) -> "ModelResponseStream":
         """
