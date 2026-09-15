@@ -7435,6 +7435,34 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
         assert still_protected.value.code == "401"
 
 
+@pytest.mark.asyncio
+async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path():
+    """The auth check lets any matching ``auth: false`` entry through, so a DB
+    ``auth: true`` entry can only lock down a YAML-declared path if the YAML
+    entry is dropped from the merged list."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {"path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": False}
+    db_endpoint: Final = {"id": "db-1", "path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": True}
+
+    request: Final = MagicMock()
+    request.url.path = "/v1/cuopt/request"
+    request.headers = {}
+    request.query_params = {}
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        with pytest.raises(ProxyException) as locked_down:
+            await user_api_key_auth(request=request, api_key=None)
+        assert locked_down.value.code == "401"
+
+
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
     for index in range(count):
         cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
