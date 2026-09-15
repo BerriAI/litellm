@@ -9,9 +9,8 @@ use moka::future::Cache;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::auth::error::AuthConfigurationError;
-use crate::auth::http::apply_credential;
-use crate::auth::{AuthError, CredentialPlacement, InputSource, SecretValue, Sourced};
+use litellm_auth::http::apply_credential;
+use litellm_auth::{CredentialPlacement, Error, InputSource, SecretValue, Sourced};
 
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
@@ -24,17 +23,17 @@ const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
 const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct VertexConfig {
+pub struct VertexConfig {
     credentials: Option<Sourced<SecretValue>>,
     project_id: Option<String>,
     location: Option<String>,
 }
 
 impl VertexConfig {
-    pub(crate) fn from_sourced_optional_params(
+    pub fn from_sourced_optional_params(
         params: &Map<String, Value>,
         sources: &BTreeMap<String, InputSource>,
-    ) -> Result<Self, AuthError> {
+    ) -> Result<Self, Error> {
         Ok(Self {
             credentials: optional_credentials(
                 params,
@@ -46,16 +45,16 @@ impl VertexConfig {
         })
     }
 
-    pub(crate) fn project_id(&self) -> Option<&str> {
+    pub fn project_id(&self) -> Option<&str> {
         self.project_id.as_deref()
     }
 
-    pub(crate) fn location(&self) -> Option<&str> {
+    pub fn location(&self) -> Option<&str> {
         self.location.as_deref()
     }
 }
 
-pub(crate) struct VertexEnvironment {
+pub struct VertexEnvironment {
     pub headers: Vec<(String, String)>,
     pub project_id: String,
 }
@@ -65,7 +64,7 @@ struct VertexAccessToken {
     project_id: String,
 }
 
-pub(crate) fn get_vertex_ai_project(
+pub fn get_vertex_ai_project(
     config: &VertexConfig,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
@@ -75,7 +74,7 @@ pub(crate) fn get_vertex_ai_project(
         .or_else(|| non_empty_env(env_lookup, VERTEXAI_PROJECT_ENV))
 }
 
-pub(crate) fn get_vertex_ai_location(
+pub fn get_vertex_ai_location(
     config: &VertexConfig,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
@@ -87,7 +86,7 @@ pub(crate) fn get_vertex_ai_location(
 }
 
 #[derive(Clone)]
-pub(crate) struct VertexAuth {
+pub struct VertexAuth {
     providers: Cache<CredentialCacheKey, Arc<dyn VertexTokenSource>>,
     loader: Arc<dyn VertexProviderLoader>,
 }
@@ -106,13 +105,14 @@ impl VertexAuth {
         }
     }
 
-    pub(crate) async fn validate_environment(
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    pub async fn validate_environment(
         &self,
         headers: Vec<(String, String)>,
         api_key: Option<&str>,
         config: &VertexConfig,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<VertexEnvironment, AuthError> {
+    ) -> Result<VertexEnvironment, Error> {
         let has_authorization = headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("Authorization"));
@@ -160,7 +160,7 @@ impl VertexAuth {
         &self,
         config: &VertexConfig,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<VertexAccessToken, AuthError> {
+    ) -> Result<VertexAccessToken, Error> {
         let provider = self.load_provider(config, env_lookup).await?;
         let (token, project_id) = tokio::try_join!(provider.token(), provider.project_id())?;
         Ok(VertexAccessToken { token, project_id })
@@ -170,7 +170,7 @@ impl VertexAuth {
         &self,
         config: &VertexConfig,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<Arc<dyn VertexTokenSource>, AuthError> {
+    ) -> Result<Arc<dyn VertexTokenSource>, Error> {
         let source = credential_source(config, env_lookup);
         let key = source.cache_key();
         self.providers
@@ -189,7 +189,7 @@ trait VertexProviderLoader: Send + Sync {
     fn load(&self, source: CredentialSource) -> VertexAuthFuture<'_, Arc<dyn VertexTokenSource>>;
 }
 
-type VertexAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AuthError>> + Send + 'a>>;
+type VertexAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 struct GcpTokenSource(Arc<dyn TokenProvider>);
 
@@ -249,7 +249,7 @@ impl VertexProviderLoader for GcpProviderLoader {
     }
 }
 
-fn validate_request_credentials(configured: &str) -> Result<&str, AuthError> {
+fn validate_request_credentials(configured: &str) -> Result<&str, Error> {
     let token_uri = serde_json::from_str::<Value>(configured)
         .ok()
         .and_then(|credentials| {
@@ -259,7 +259,7 @@ fn validate_request_credentials(configured: &str) -> Result<&str, AuthError> {
                 .map(str::to_string)
         });
     if token_uri.as_deref() != Some(GOOGLE_OAUTH_TOKEN_ENDPOINT) {
-        return Err(AuthConfigurationError::RequestVertexTokenEndpoint.into());
+        return Err(Error::RequestVertexTokenEndpoint);
     }
     Ok(configured)
 }
@@ -321,7 +321,7 @@ fn optional_credentials(
     params: &Map<String, Value>,
     sources: &BTreeMap<String, InputSource>,
     names: &[&str],
-) -> Result<Option<Sourced<SecretValue>>, AuthError> {
+) -> Result<Option<Sourced<SecretValue>>, Error> {
     for name in names {
         let source = source_for(sources, name);
         match params.get(*name) {
@@ -336,17 +336,10 @@ fn optional_credentials(
                     .map(SecretValue::new)
                     .map(|value| Sourced::new(value, source))
                     .map(Some)
-                    .map_err(|error| {
-                        AuthError::Configuration(AuthConfigurationError::InvalidFieldType(format!(
-                            "{}: {error}",
-                            names[0]
-                        )))
-                    });
+                    .map_err(|error| Error::InvalidFieldType(format!("{}: {error}", names[0])));
             }
             Some(_) => {
-                return Err(AuthError::Configuration(
-                    AuthConfigurationError::InvalidFieldType(names[0].to_string()),
-                ));
+                return Err(Error::InvalidFieldType(names[0].to_string()));
             }
         }
     }
@@ -357,19 +350,14 @@ fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSourc
     sources.get(name).copied().unwrap_or_default()
 }
 
-fn optional_string(
-    params: &Map<String, Value>,
-    names: &[&str],
-) -> Result<Option<String>, AuthError> {
+fn optional_string(params: &Map<String, Value>, names: &[&str]) -> Result<Option<String>, Error> {
     for name in names {
         match params.get(*name) {
             None | Some(Value::Null) => continue,
             Some(Value::String(value)) if value.trim().is_empty() => continue,
             Some(Value::String(value)) => return Ok(Some(value.clone())),
             Some(_) => {
-                return Err(AuthError::Configuration(
-                    AuthConfigurationError::InvalidFieldType(names[0].to_string()),
-                ));
+                return Err(Error::InvalidFieldType(names[0].to_string()));
             }
         }
     }
@@ -382,8 +370,8 @@ fn non_empty_env(env_lookup: &dyn Fn(&str) -> Option<String>, name: &str) -> Opt
         .filter(|value| !value.is_empty())
 }
 
-fn auth_acquisition_error(error: gcp_auth::Error) -> AuthError {
-    AuthError::VertexTokenAcquisition(error.to_string())
+fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
+    Error::VertexTokenAcquisition(error.to_string())
 }
 
 #[cfg(test)]
@@ -537,15 +525,11 @@ mod tests {
         );
         assert!(matches!(
             validate_request_credentials(r#"{"token_uri":"http://127.0.0.1/token"}"#),
-            Err(AuthError::Configuration(
-                AuthConfigurationError::RequestVertexTokenEndpoint
-            ))
+            Err(Error::RequestVertexTokenEndpoint)
         ));
         assert!(matches!(
             validate_request_credentials("{}"),
-            Err(AuthError::Configuration(
-                AuthConfigurationError::RequestVertexTokenEndpoint
-            ))
+            Err(Error::RequestVertexTokenEndpoint)
         ));
     }
 

@@ -8,10 +8,10 @@ use super::error::{OcrError, OcrResponseError};
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use super::wire::{DecodedOcrResponse, decode_response};
 use crate::Error;
-use crate::auth::vertex::VertexAuth;
 use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
 use crate::error::TransportError;
 use crate::media::MediaFetcher;
+use litellm_auth_gcp::VertexAuth;
 
 #[derive(Clone)]
 pub struct OcrClient {

@@ -40,16 +40,14 @@ impl OcrConfigKind {
         match self {
             Self::Cohere => CohereParseConfig.get_supported_ocr_params(model),
             Self::Mistral => MistralOCRConfig.get_supported_ocr_params(model),
-            Self::AzureAi => AzureAIOCRConfig::default().get_supported_ocr_params(model),
-            Self::AzureCohere => {
-                AzureAICohereParseConfig::default().get_supported_ocr_params(model)
-            }
+            Self::AzureAi => AzureAIOCRConfig.get_supported_ocr_params(model),
+            Self::AzureCohere => AzureAICohereParseConfig.get_supported_ocr_params(model),
             Self::AzureDocumentIntelligence => {
                 AzureDocumentIntelligenceOCRConfig.get_supported_ocr_params(model)
             }
             Self::ReductoLegacy => ReductoParseLegacyConfig.get_supported_ocr_params(model),
             Self::ReductoV3 => ReductoParseV3Config.get_supported_ocr_params(model),
-            Self::VertexAi => VertexAIOCRConfig::default().get_supported_ocr_params(model),
+            Self::VertexAi => VertexAIOCRConfig.get_supported_ocr_params(model),
             Self::VertexDeepSeek => VertexAIDeepSeekOCRConfig.get_supported_ocr_params(model),
         }
     }

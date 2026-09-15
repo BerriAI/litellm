@@ -66,13 +66,9 @@ impl PreparedOcrCall {
         let http = match request.config {
             OcrConfigKind::Cohere => CohereParseConfig.prepare_request(&request, &client).await?,
             OcrConfigKind::Mistral => MistralOCRConfig.prepare_request(&request, &client).await?,
-            OcrConfigKind::AzureAi => {
-                AzureAIOCRConfig::default()
-                    .prepare_request(&request, &client)
-                    .await?
-            }
+            OcrConfigKind::AzureAi => AzureAIOCRConfig.prepare_request(&request, &client).await?,
             OcrConfigKind::AzureCohere => {
-                AzureAICohereParseConfig::default()
+                AzureAICohereParseConfig
                     .prepare_request(&request, &client)
                     .await?
             }
@@ -91,11 +87,7 @@ impl PreparedOcrCall {
                     .prepare_request(&request, &client)
                     .await?
             }
-            OcrConfigKind::VertexAi => {
-                VertexAIOCRConfig::default()
-                    .prepare_request(&request, &client)
-                    .await?
-            }
+            OcrConfigKind::VertexAi => VertexAIOCRConfig.prepare_request(&request, &client).await?,
             OcrConfigKind::VertexDeepSeek => {
                 VertexAIDeepSeekOCRConfig
                     .prepare_request(&request, &client)
@@ -130,12 +122,12 @@ impl PreparedOcrCall {
                     .await?,
             ),
             OcrConfigKind::AzureAi => OcrProviderData::AzureAi(
-                AzureAIOCRConfig::default()
+                AzureAIOCRConfig
                     .read_response(&self.client, response, &url, &headers, &self.request)
                     .await?,
             ),
             OcrConfigKind::AzureCohere => OcrProviderData::AzureCohere(
-                AzureAICohereParseConfig::default()
+                AzureAICohereParseConfig
                     .read_response(&self.client, response, &url, &headers, &self.request)
                     .await?,
             ),
@@ -155,7 +147,7 @@ impl PreparedOcrCall {
                     .await?,
             ),
             OcrConfigKind::VertexAi => OcrProviderData::VertexAi(
-                VertexAIOCRConfig::default()
+                VertexAIOCRConfig
                     .read_response(&self.client, response, &url, &headers, &self.request)
                     .await?,
             ),
@@ -217,12 +209,11 @@ impl OcrProviderResponse {
                 decoded.native,
             ),
             OcrProviderData::AzureAi(decoded) => (
-                AzureAIOCRConfig::default().transform_ocr_response(&self.request, decoded.data)?,
+                AzureAIOCRConfig.transform_ocr_response(&self.request, decoded.data)?,
                 decoded.native,
             ),
             OcrProviderData::AzureCohere(decoded) => (
-                AzureAICohereParseConfig::default()
-                    .transform_ocr_response(&self.request, decoded.data)?,
+                AzureAICohereParseConfig.transform_ocr_response(&self.request, decoded.data)?,
                 decoded.native,
             ),
             OcrProviderData::AzureDocumentIntelligence(decoded) => (
@@ -239,7 +230,7 @@ impl OcrProviderResponse {
                 decoded.native,
             ),
             OcrProviderData::VertexAi(decoded) => (
-                VertexAIOCRConfig::default().transform_ocr_response(&self.request, decoded.data)?,
+                VertexAIOCRConfig.transform_ocr_response(&self.request, decoded.data)?,
                 decoded.native,
             ),
             OcrProviderData::VertexDeepSeek(decoded) => (

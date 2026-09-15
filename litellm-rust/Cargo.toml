@@ -1,5 +1,16 @@
 [workspace]
-members = ["crates/*"]
+members = [
+    "crates/auth",
+    "crates/auth-aws",
+    "crates/auth-azure",
+    "crates/auth-gcp",
+    "crates/core",
+    "crates/token-counter",
+    "crates/config",
+    "crates/ai-gateway",
+    "crates/python-interop",
+    "crates/python-bridge",
+]
 resolver = "2"
 
 [workspace.package]
@@ -11,6 +22,10 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 bytes = "1"
 litellm-core = { path = "crates/core" }
+litellm-auth = { path = "crates/auth" }
+litellm-auth-aws = { path = "crates/auth-aws" }
+litellm-auth-azure = { path = "crates/auth-azure" }
+litellm-auth-gcp = { path = "crates/auth-gcp" }
 litellm-token-counter = { path = "crates/token-counter" }
 litellm-python-interop = { path = "crates/python-interop" }
 pyo3 = "0.29.2"

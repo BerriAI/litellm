@@ -15,5 +15,5 @@ pub mod providers;
 pub mod responses;
 mod url_utils;
 
-pub use auth::AuthError;
+pub use auth::Error as AuthError;
 pub use error::Error;

@@ -213,7 +213,6 @@ pub(crate) use mapping::{transform_ocr_request, transform_ocr_response};
 
 use super::common_utils::validate_destination;
 use crate::Error;
-use crate::auth::vertex::{self, VertexConfig};
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::ocr::OcrClient;
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
@@ -222,6 +221,7 @@ use crate::ocr::prepare::{
 };
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
+use litellm_auth_gcp::{self as vertex, VertexConfig};
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_NAMESPACE: &str = "deepseek-ai";
 const DEFAULT_LOCATION: &str = "us-central1";

@@ -1,11 +1,10 @@
 use std::sync::OnceLock;
 
 use crate::Error;
-use crate::auth::error::AuthConfigurationError;
 use crate::auth::{InputSource, Sourced};
 use crate::ocr::error::OcrError;
 use crate::ocr::types::OcrConnection;
-use crate::providers::azure_ai::auth::{AzureAuthInputs, AzureAuthService};
+use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 
 pub(super) async fn resolve_entra(
     config: &AzureAuthInputs,
@@ -38,10 +37,7 @@ pub(super) fn validate_destination(
         && connection.api_base_source == InputSource::Request
         && credential_source != InputSource::Request
     {
-        return Err(Error::from(crate::AuthError::Configuration(
-            AuthConfigurationError::RequestAzureCredentialDestination,
-        ))
-        .into());
+        return Err(Error::from(crate::AuthError::RequestAzureCredentialDestination).into());
     }
     Ok(())
 }
