@@ -2715,7 +2715,8 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
                 if reasoning_text:
-                    setattr(message_item, "reasoning_content", reasoning_text)  # pyright: ignore[reportGeneralTypeIssues]  # extra='allow' model, attribute name is fixed
+                    # cast-ok: extra='allow' model accepts dynamic reasoning_content field
+                    cast("dict[str, object]", message_item)["reasoning_content"] = reasoning_text
                 message_output_items.append(message_item)
         return message_output_items
 
