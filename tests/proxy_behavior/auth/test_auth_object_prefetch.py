@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+import litellm.proxy.proxy_server  # noqa: F401  # preload log_db_metrics' lazy import; it can outlast the 5s org TTL
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     get_org_object,
