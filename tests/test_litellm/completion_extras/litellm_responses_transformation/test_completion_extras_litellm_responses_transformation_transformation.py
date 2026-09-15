@@ -4395,3 +4395,70 @@ def test_chunk_parser_first_message_item_streams_through_unchanged():
     result = iterator.chunk_parser({"type": "response.output_text.delta", "delta": "literal text"})
     assert result.choices[0].delta.content == "literal text"
     assert result.choices[0].finish_reason is None
+
+
+def test_chunk_parser_failed_stream_flushes_buffered_text():
+    # a response.failed terminal event must still deliver buffered new text
+    iterator = _make_iterator()
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 0, "item": {"id": "msg_1", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "seen text"})
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"id": "msg_1", "type": "message"},
+        }
+    )
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 1, "item": {"id": "msg_2", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "tail text"})
+    result = iterator.chunk_parser(
+        {"type": "response.failed", "response": {"output": [], "error": {"code": "overloaded_error"}}}
+    )
+    assert result.choices[0].delta.content == "tail text"
+
+
+def test_chunk_parser_unrelated_item_done_leaves_message_buffer_intact():
+    # an interleaved function_call completion must not consume the message buffer
+    iterator = _make_iterator()
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 0, "item": {"id": "msg_1", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "seen text"})
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"id": "msg_1", "type": "message"},
+        }
+    )
+
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 1, "item": {"id": "msg_2", "type": "message"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "tail text"})
+
+    # an unrelated item finishes while msg_2 is still open
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 2,
+            "item": {"id": "fc_1", "type": "function_call", "name": "my_tool", "arguments": "{}"},
+        }
+    )
+
+    # msg_2's buffer survives: its own completion flushes the new text
+    result = iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {"id": "msg_2", "type": "message"},
+        }
+    )
+    assert result.choices[0].delta.content == "tail text"

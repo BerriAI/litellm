@@ -1638,9 +1638,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def _parse_event_chunk(self, parsed_chunk: dict) -> "ModelResponseStream":
         """Per-stream event handling: applies the duplicate message-item suppression
         from #41109 around the stateless event translation."""
-        event_type = parsed_chunk.get("type")
-        if isinstance(event_type, ResponsesAPIStreamEvents):
-            event_type = event_type.value
+        raw_event_type = parsed_chunk.get("type")
+        event_type = raw_event_type.value if isinstance(raw_event_type, ResponsesAPIStreamEvents) else raw_event_type
 
         if event_type == "response.output_item.added":
             item: Final = parsed_chunk.get("item") or {}
@@ -1655,7 +1654,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 self._pending_message_text += delta_text
             return self._with_stream_scoped_id(self._empty_chat_chunk())
 
-        flush: Final = self._consume_pending_message_buffer(event_type)
+        flush: Final = self._consume_pending_message_buffer(event_type, parsed_chunk)
         result = self._with_stream_scoped_id(
             OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 parsed_chunk, tool_call_index_map=self._tool_call_index_map
@@ -1671,12 +1670,16 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             result.choices[0].delta.content = flush
         return result
 
-    def _consume_pending_message_buffer(self, event_type: object) -> str:
+    def _consume_pending_message_buffer(self, event_type: object, parsed_chunk: dict) -> str:
         """Drop a buffered message item that repeats already-streamed text; return
         the buffered text when it is new content that still has to be emitted."""
         if self._pending_message_item_id is None:
             return ""
-        if event_type not in ("response.output_item.done", "response.completed", "response.incomplete"):
+        if event_type == "response.output_item.done":
+            done_item = parsed_chunk.get("item") or {}
+            if not isinstance(done_item, dict) or done_item.get("id") != self._pending_message_item_id:
+                return ""  # an unrelated item completed: leave the message buffer alone
+        elif event_type not in ("response.completed", "response.incomplete", "response.failed"):
             return ""
         buffered: Final = self._pending_message_text
         self._pending_message_item_id = None
