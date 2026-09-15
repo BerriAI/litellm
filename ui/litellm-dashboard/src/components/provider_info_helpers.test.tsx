@@ -79,6 +79,17 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
     });
 
+    it("should map edenai slug and EDENAI enum key to the Eden AI display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("edenai");
+      expect(fromSlug.displayName).toBe(Providers.EDENAI);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.EDENAI]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("EDENAI");
+      expect(fromEnumKey.displayName).toBe(Providers.EDENAI);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.EDENAI]);
+    });
+
     it("should resolve the BedrockMantle enum key to the Bedrock Mantle logo", () => {
       // The Add Model dropdown passes the provider_map key ("BedrockMantle"),
       // not the slug ("bedrock_mantle"). Unlike "Bedrock", the key does not
@@ -203,6 +214,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return an edenai model placeholder for EDENAI provider", () => {
+      expect(getPlaceholder(Providers.EDENAI)).toBe("edenai/openai/gpt-mini-latest");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
