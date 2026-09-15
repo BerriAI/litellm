@@ -5619,29 +5619,24 @@ async def test_wrapper_async_fires_post_call_failure_deployment_hook_once_per_fa
 
 
 class _StreamConvertingLogger(CustomLogger):
-    """Mimics a guardrail that turns a streaming request into a non-streaming deployment call
-    and has the agentic loop fake-stream the resolved answer back to the client."""
-
-    def __init__(self) -> None:
+    def __init__(self, first_success_payload: asyncio.Future[object]) -> None:
         super().__init__()
-        self.success_payloads: list[object] = []
+        self.first_success_payload: Final = first_success_payload
 
     async def async_pre_call_deployment_hook(self, kwargs, call_type):
         return {**kwargs, "stream": False, "_code_interpreter_interception_converted_stream": True}
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.success_payloads.append(kwargs.get("standard_logging_object"))
+        if not self.first_success_payload.done():
+            self.first_success_payload.set_result(kwargs.get("standard_logging_object"))
 
 
 @pytest.mark.asyncio
 async def test_wrapper_async_logs_standard_logging_object_for_converted_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression: when a deployment hook flips stream=True to stream=False and the call still
-    returns a CustomStreamWrapper, the wrapper must log it as a stream. Logging it as a
-    non-streaming result left the cost callback without a standard_logging_object."""
-    recorder = _StreamConvertingLogger()
-    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    first_success_payload: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
+    monkeypatch.setattr(litellm, "callbacks", [_StreamConvertingLogger(first_success_payload)])
 
     response = await litellm.acompletion(
         model="gpt-4o-mini",
@@ -5650,14 +5645,14 @@ async def test_wrapper_async_logs_standard_logging_object_for_converted_stream(
         stream=True,
     )
     assert isinstance(response, CustomStreamWrapper)
-    await asyncio.sleep(0.5)
+    logging_tasks_started_before_drain: Final = frozenset(asyncio.all_tasks()) - {asyncio.current_task()}
+    if logging_tasks_started_before_drain:
+        await asyncio.wait(logging_tasks_started_before_drain, timeout=5)
     async for _ in response:
         pass
-    await asyncio.sleep(0.5)
 
-    assert len(recorder.success_payloads) == 1
-    payload = recorder.success_payloads[0]
-    assert payload is not None
+    payload = await asyncio.wait_for(first_success_payload, timeout=5)
+    assert isinstance(payload, dict)
     assert payload["response_cost"] > 0
 
 
