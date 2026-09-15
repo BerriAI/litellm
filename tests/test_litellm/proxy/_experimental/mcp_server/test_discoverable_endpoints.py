@@ -570,6 +570,103 @@ async def test_authorize_endpoint_preserves_existing_query_params():
     assert "scope=read+write" in location
 
 
+async def _authorize_and_get_location_query(authorization_url: str):
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+
+    oauth2_server = MCPServer(
+        server_id="test_oauth_server",
+        name="test_oauth",
+        server_name="test_oauth",
+        alias="test_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="test_client_id",
+        client_secret="test_client_secret",
+        authorization_url=authorization_url,
+        token_url="https://oauth2.googleapis.com/token",
+        scopes=["read", "write"],
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(  # test-quality-ok: real encryption needs a signing secret the unit env lacks
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.return_value = "mocked_encrypted_state"
+
+        response = await authorize(
+            request=mock_request,
+            client_id="test_client_id",
+            mcp_server_name="test_oauth",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="test_state",
+        )
+
+    return parse_qs(urlparse(response.headers["location"]).query)
+
+
+@pytest.mark.asyncio
+async def test_authorize_endpoint_requests_google_offline_access():
+    """Google upstreams must get access_type=offline + prompt=consent so a refresh_token is issued"""
+    try:
+        import litellm.proxy._experimental.mcp_server.discoverable_endpoints  # noqa: F401
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    query = await _authorize_and_get_location_query("https://accounts.google.com/o/oauth2/v2/auth")
+
+    assert query.get("access_type") == ["offline"]
+    assert query.get("prompt") == ["consent"]
+    assert query.get("client_id") == ["test_client_id"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_endpoint_lets_configured_url_override_google_prompt():
+    """An operator-set prompt on authorization_url wins over the Google default, offline access stays"""
+    try:
+        import litellm.proxy._experimental.mcp_server.discoverable_endpoints  # noqa: F401
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    query = await _authorize_and_get_location_query(
+        "https://accounts.google.com/o/oauth2/v2/auth?prompt=select_account"
+    )
+
+    assert query.get("prompt") == ["select_account"]
+    assert query.get("access_type") == ["offline"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_endpoint_omits_offline_params_for_non_google_provider():
+    """Non-Google upstreams get no access_type/prompt injected"""
+    try:
+        import litellm.proxy._experimental.mcp_server.discoverable_endpoints  # noqa: F401
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    query = await _authorize_and_get_location_query("https://provider.com/oauth/authorize")
+
+    assert "access_type" not in query
+    assert "prompt" not in query
+
+
 @pytest.mark.asyncio
 async def test_authorize_endpoint_forwards_pkce_parameters():
     """Test that authorize endpoint forwards PKCE parameters (code_challenge and code_challenge_method)"""
