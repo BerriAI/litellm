@@ -5,6 +5,7 @@ import asyncio
 import os
 import time
 import traceback
+from typing import Final
 
 import pytest
 
@@ -13,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.router import RetryAttemptRecord
 
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
@@ -21,15 +23,15 @@ class MyCustomHandler(CustomLogger):
     success: bool = False
     failure: bool = False
     previous_models: int = 0
+    previous_model_records: tuple[RetryAttemptRecord, ...] = ()
 
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
         print(
             f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
         )
-        self.previous_models = len(
-            kwargs["litellm_params"]["metadata"].get("previous_models", [])
-        )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
+        self.previous_model_records = tuple(kwargs["litellm_params"]["metadata"].get("previous_models", ()))
+        self.previous_models = len(self.previous_model_records)
         print(f"self.previous_models: {self.previous_models}")
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
@@ -718,7 +720,14 @@ async def test_async_fallbacks_max_retries_per_request():
         await asyncio.sleep(
             0.05
         )  # allow a delay as success_callbacks are on a separate thread
-        assert customHandler.previous_models == 0  # 0 retries, 0 fallback
+        records: Final = customHandler.previous_model_records
+        assert customHandler.previous_models == len(records)
+        assert records
+        assert {record["model_group"] for record in records} == {"azure/gpt-3.5-turbo"}
+        assert next(record["exception_type"] for record in records if record["attempted_retries"] == 0) == "AuthenticationError"
+        refused_retries: Final = tuple(record for record in records if record["attempted_retries"])
+        assert refused_retries
+        assert all("Max retries per request hit!" in record["exception_string"] for record in refused_retries)
         router.reset()
     except litellm.Timeout as e:
         pass
