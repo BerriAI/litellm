@@ -17,7 +17,9 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
+    deployment_id_for_encoding,
     encode_character_id_in_response,
+    encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     video_reference_to_id,
@@ -89,7 +91,7 @@ async def video_generation(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -107,6 +109,7 @@ async def video_generation(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(response, deployment_id_for_encoding(response, data))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -114,6 +117,8 @@ async def video_generation(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return encoded_response
 
 
 @router.get(
@@ -478,7 +483,7 @@ async def video_remix(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -496,6 +501,7 @@ async def video_remix(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(response, deployment_id_for_encoding(response, data))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -503,6 +509,8 @@ async def video_remix(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return encoded_response
 
 
 @router.post(
@@ -592,7 +600,7 @@ async def video_create_character(
         if target_model_name:
             hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
             provider_for_encoding: Final = hidden_params.get("custom_llm_provider") or custom_llm_provider or "openai"
-            model_id_for_encoding: Final = hidden_params.get("model_id") or data.get("model")
+            model_id_for_encoding: Final = deployment_id_for_encoding(response, data)
             response = encode_character_id_in_response(
                 response=response,
                 custom_llm_provider=provider_for_encoding,
@@ -789,7 +797,7 @@ async def video_edit(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -807,6 +815,7 @@ async def video_edit(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(response, deployment_id_for_encoding(response, data))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -814,6 +823,8 @@ async def video_edit(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return encoded_response
 
 
 @router.post(
@@ -884,7 +895,7 @@ async def video_extension(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -902,6 +913,7 @@ async def video_extension(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_response: Final = encode_video_id_in_response(response, deployment_id_for_encoding(response, data))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -909,3 +921,5 @@ async def video_extension(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return encoded_response
