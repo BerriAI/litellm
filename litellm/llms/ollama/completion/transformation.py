@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -194,6 +194,10 @@ class OllamaConfig(BaseConfig):
                 elif value["type"] == "json_schema":
                     optional_params["format"] = value["json_schema"]["schema"]
 
+        if "functions_unsupported_model" in optional_params and optional_params.get("stream") is True:
+            # functions_unsupported_model means tools are emulated via prompt injection here.
+            optional_params["fake_stream"] = True
+
         return optional_params
 
     def _supports_function_calling(self, ollama_model_info: dict) -> bool:
@@ -252,7 +256,7 @@ class OllamaConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: tiktoken.Encoding | None,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -329,10 +333,12 @@ class OllamaConfig(BaseConfig):
         model_response.created = int(time.time())
         model_response.model = "ollama/" + model
         _prompt: Final = request_data.get("prompt", "")
+        _prompt_eval_count: Final = response_json.get("prompt_eval_count")
         tokenizer: Final = encoding if encoding is not None else litellm.encoding
-        prompt_tokens: Final = response_json.get(
-            "prompt_eval_count",
-            len(tokenizer.encode(_prompt, disallowed_special=())),
+        prompt_tokens: Final = (
+            _prompt_eval_count
+            if _prompt_eval_count is not None
+            else len(tokenizer.encode(_prompt, disallowed_special=()))
         )
         completion_tokens: Final = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))
@@ -347,7 +353,6 @@ class OllamaConfig(BaseConfig):
             ),
         )
         return model_response
-
     @property
     def uses_async_transform_request(self) -> bool:
         return True
@@ -419,6 +424,26 @@ class OllamaConfig(BaseConfig):
             data["think"] = think
 
         return data
+
+    def sign_request(
+        self,
+        headers: dict[
+            str, str
+        ],  # mutable-ok: returned unchanged, must stay assignable to BaseConfig's dict return type
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: return type must match BaseConfig's dict-shaped contract
+        if fake_stream is True:
+            # /api/generate defaults to streaming when "stream" is absent from the body, but
+            # the shared fake-stream handling drops the key instead of setting it False. Force
+            # it explicitly so the actual request to Ollama is a single non-streaming call.
+            return headers, json.dumps({**request_data, "stream": False}).encode()
+        return headers, None
 
     def validate_environment(
         self,
