@@ -11089,18 +11089,26 @@ def _failing_group_with_healthy_fallback_router(num_retries):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "cap, hop_refused", [(2, True), (4, False)], ids=["cap-spent-before-the-hop", "cap-not-reached-by-the-hop"]
+    "cap, planted_count, hop_refused",
+    [(2, None, True), (4, None, False), (2, -100, True)],
+    ids=["cap-spent-before-the-hop", "cap-not-reached-by-the-hop", "planted-negative-count-does-not-lift-the-cap"],
 )
-async def test_num_retries_per_request_counts_retries_across_fallback_hops(monkeypatch, cap, hop_refused):
+async def test_num_retries_per_request_counts_retries_across_fallback_hops(
+    monkeypatch, cap, planted_count, hop_refused
+):
     """num_retries_per_request caps the retries of one request, fallback hops included. Each hop starts a
     fresh per-hop attempted_retries at zero, so a cap read from that counter let every hop retry from zero
-    and a request could spend far more retries than the cap allows."""
+    and a request could spend far more retries than the cap allows. A caller who plants a negative count
+    in the request metadata must not push the cap further away either."""
     monkeypatch.setattr(litellm, "num_retries_per_request", cap)
     router = _failing_group_with_healthy_fallback_router(num_retries=1)
     recorder = _FallbackAttemptRecorder()
     litellm.callbacks.append(recorder)
     try:
-        request = router.acompletion(model="broken-group", messages=[{"role": "user", "content": "hi"}])
+        metadata = {} if planted_count is None else {"request_retry_count": planted_count}
+        request = router.acompletion(
+            model="broken-group", messages=[{"role": "user", "content": "hi"}], metadata=metadata
+        )
         if not hop_refused:
             assert (await request).choices[0].message.content == "ok"
             return
