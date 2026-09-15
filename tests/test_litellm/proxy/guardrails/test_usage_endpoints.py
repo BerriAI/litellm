@@ -682,3 +682,67 @@ async def test_detail_prev_trend_query_is_bounded():
     prev_wheres = [w for w in wheres if "lt" in w.get("date", {})]
     assert prev_wheres
     assert all("gte" in w["date"] for w in prev_wheres)
+
+
+@pytest.mark.asyncio
+async def test_logs_report_not_run_entries_as_not_run_not_passed():
+    """LIT-6314: a guardrail that never scanned must not be reported as a pass in the drill-down."""
+    index_row = MagicMock()
+    index_row.request_id = "req-nr"
+    index_row.guardrail_id = "db-1"
+    index_row.start_time = datetime(2026, 4, 22)
+    spend_log = MagicMock()
+    spend_log.request_id = "req-nr"
+    spend_log.model = "gpt-4o-mini"
+    spend_log.startTime = datetime(2026, 4, 22)
+    spend_log.metadata = {
+        "guardrail_information": [
+            {"guardrail_name": "db-1", "guardrail_status": "not_run", "duration": 0.0},
+        ]
+    }
+    prisma = _prisma(find_unique=_db_row(), index_find_many=[index_row])
+    prisma.db.litellm_spendlogs.find_many = AsyncMock(return_value=[spend_log])
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_logs(
+            guardrail_id="db-1",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action=None,
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+    assert [log.action for log in resp.logs] == ["not_run"]
+
+
+@pytest.mark.asyncio
+async def test_logs_action_passed_filter_excludes_not_run_entries():
+    """LIT-6314: filtering the drill-down for passes must not return unscanned requests."""
+    index_row = MagicMock()
+    index_row.request_id = "req-nr"
+    index_row.guardrail_id = "db-1"
+    index_row.start_time = datetime(2026, 4, 22)
+    spend_log = MagicMock()
+    spend_log.request_id = "req-nr"
+    spend_log.model = "gpt-4o-mini"
+    spend_log.startTime = datetime(2026, 4, 22)
+    spend_log.metadata = {"guardrail_information": [{"guardrail_name": "db-1", "guardrail_status": "not_run"}]}
+    prisma = _prisma(find_unique=_db_row(), index_find_many=[index_row])
+    prisma.db.litellm_spendlogs.find_many = AsyncMock(return_value=[spend_log])
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_logs(
+            guardrail_id="db-1",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action="passed",
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+    assert resp.logs == []

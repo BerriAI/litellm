@@ -91,6 +91,8 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
 )
 
+from .base import CachedTokensDetails
+
 FileContent = IO[bytes] | bytes | PathLike
 
 FileTypes = (
@@ -1288,6 +1290,7 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
     text_tokens: int | None = None
 
     model_config = {"extra": "allow"}
@@ -2190,6 +2193,53 @@ class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     item_id: ReadOnly[str]
 
 
+class OpenAIRealtimeErrorDetail(TypedDict):
+    type: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+class OpenAIRealtimeErrorEvent(TypedDict):
+    type: ReadOnly[Literal["error"]]
+    error: ReadOnly[OpenAIRealtimeErrorDetail]
+
+
+class OpenAIRealtimeTranscriptionAudioFormat(TypedDict):
+    type: ReadOnly[Literal["audio/pcm"]]
+    rate: ReadOnly[int]
+
+
+class OpenAIRealtimeTranscriptionSettings(TypedDict):
+    model: ReadOnly[str]
+    language: NotRequired[ReadOnly[str]]
+
+
+class OpenAIRealtimeServerVadTurnDetection(TypedDict):
+    type: ReadOnly[Literal["server_vad"]]
+
+
+class OpenAIRealtimeTranscriptionAudioInput(TypedDict):
+    format: ReadOnly[OpenAIRealtimeTranscriptionAudioFormat]
+    transcription: ReadOnly[OpenAIRealtimeTranscriptionSettings]
+    turn_detection: ReadOnly[OpenAIRealtimeServerVadTurnDetection | None]
+
+
+class OpenAIRealtimeTranscriptionAudio(TypedDict):
+    input: ReadOnly[OpenAIRealtimeTranscriptionAudioInput]
+
+
+class OpenAIRealtimeTranscriptionSession(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[Literal["realtime.transcription_session"]]
+    type: ReadOnly[Literal["transcription"]]
+    audio: ReadOnly[OpenAIRealtimeTranscriptionAudio]
+
+
+class OpenAIRealtimeTranscriptionSessionCreated(TypedDict):
+    type: ReadOnly[Literal["session.created"]]
+    event_id: ReadOnly[str]
+    session: ReadOnly[OpenAIRealtimeTranscriptionSession]
+
+
 class OpenAIRealtimeInputAudioTranscriptionDelta(TypedDict):
     type: ReadOnly[Literal["conversation.item.input_audio_transcription.delta"]]
     event_id: ReadOnly[str]
@@ -2204,12 +2254,20 @@ class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
     item_id: ReadOnly[str]
     content_index: ReadOnly[int]
     transcript: ReadOnly[str]
+    usage: NotRequired[ReadOnly[Mapping[str, object]]]
+
+
+class OpenAIRealtimeCachedTokensDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+    image_tokens: ReadOnly[int]
 
 
 class OpenAIRealtimeUsageTokenDetails(TypedDict):
     audio_tokens: ReadOnly[int]
     text_tokens: ReadOnly[int]
     cached_tokens: NotRequired[ReadOnly[int]]
+    cached_tokens_details: NotRequired[ReadOnly[OpenAIRealtimeCachedTokensDetails]]
 
 
 class OpenAIRealtimeResponseUsage(TypedDict):
@@ -2260,6 +2318,8 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeInputAudioBufferSpeechEvent
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
+    | OpenAIRealtimeTranscriptionSessionCreated
+    | OpenAIRealtimeErrorEvent
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]

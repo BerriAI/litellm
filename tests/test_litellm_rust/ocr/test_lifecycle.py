@@ -80,6 +80,20 @@ async def test_proxy_metadata_remains_python_owned(ocr_server: RecordingServer) 
 
 
 @pytest.mark.asyncio
+async def test_request_level_custom_pricing_reaches_logging_params_and_bills_the_call(
+    ocr_server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+    response: Final = await call_aocr(ocr_server, callbacks=[recorder], ocr_cost_per_page=0.05)
+    events: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert response.usage_info is not None and response.usage_info.pages_processed == 1
+    assert events[0].kwargs["litellm_params"]["ocr_cost_per_page"] == 0.05
+    assert response._hidden_params["response_cost"] == pytest.approx(0.05)
+    assert "ocr_cost_per_page" not in ocr_server.requests[0].body
+
+
+@pytest.mark.asyncio
 async def test_response_replacement_finalized_before_dispatch_in_caller_task(ocr_server: RecordingServer) -> None:
     caller: Final = asyncio.current_task()
     context: Final = ContextVar("lifecycle-test", default="before")
@@ -792,7 +806,7 @@ async def test_shared_call_limits_still_reject_before_reading_ocr_file(
     monkeypatch.setattr(litellm, "_current_cost", 2)
     monkeypatch.setattr(litellm, "num_retries_per_request", 1 if limit == "retries" else None)
     expected: Final = litellm.BudgetExceededError if limit == "budget" else RuntimeError
-    arguments: Final = {"document": {"type": "file", "file": File()}, "metadata": {"previous_models": ["earlier"]}}
+    arguments: Final = {"document": {"type": "file", "file": File()}, "metadata": {"request_retry_count": 1}}
     with pytest.raises(expected, match=r"Budget has been exceeded|Max retries per request hit"):
         await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
     assert reads == []

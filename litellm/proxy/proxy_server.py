@@ -250,7 +250,7 @@ import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
@@ -274,6 +274,8 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
@@ -353,6 +355,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -364,6 +367,7 @@ from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
 )
+from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -371,10 +375,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     check_file_size_under_limit,
     get_form_data,
 )
-from litellm.proxy.common_utils.load_config_utils import (
-    get_config_file_contents_from_gcs,
-    get_file_contents_from_s3,
-)
+from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
@@ -448,7 +449,10 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     ProxyWorkerHeartbeat,
 )
 from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
-from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
+from litellm.proxy.discovery_endpoints import (
+    agent_skills_discovery_router,
+    ui_discovery_endpoints_router,
+)
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
@@ -3452,8 +3456,10 @@ async def _invalidate_spend_counter(counter_key: str):
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
     try:
         await increment_spend_counters_pipeline(pending=pending)
-    except RedisCircuitBreakerOpenError:
-        return
+    except Exception as e:
+        if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e):
+            return
+        raise
 
 
 async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> None:
@@ -4807,12 +4813,12 @@ class ProxyConfig:
         if config is None:
             raise Exception("Config cannot be None or Empty.")
         # Process includes
-        config = self._process_includes(config=config, base_dir=os.path.dirname(os.path.abspath(file_path or "")))
+        config = await self._process_includes(config=config, config_file_path=os.path.abspath(file_path or ""))
 
         # verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
         return config
 
-    def _process_includes(self, config: dict, base_dir: str) -> dict:
+    async def _process_includes(self, config: dict, config_file_path: str) -> dict:
         """
         Process includes by appending their contents to the main config
 
@@ -4827,29 +4833,21 @@ class ProxyConfig:
             callbacks: ["prometheus"]
         ```
         """
-        if "include" not in config:
-            return config
 
-        if not isinstance(config["include"], list):
-            raise ValueError("'include' must be a list of file paths")
+        included_config_adapter: Final = TypeAdapter(dict[str, object])
 
-        # Load and append all included files
-        for include_file in config["include"]:
-            file_path = os.path.join(base_dir, include_file)
+        def resolve(include_file: str, declared_in: str) -> str:
+            return resolve_include_file_path(include_file, declared_in, config_file_path)
+
+        async def read_included(file_path: str) -> Mapping[str, object]:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"Included file not found: {file_path}")
+            try:
+                return included_config_adapter.validate_python(self._load_yaml_file(file_path))
+            except ValidationError as e:
+                raise ValueError(f"Included config file is not a YAML mapping: {file_path}") from e
 
-            included_config = self._load_yaml_file(file_path)
-            # Simply update/extend the main config with included config
-            for key, value in included_config.items():
-                if isinstance(value, list) and key in config:
-                    config[key].extend(value)
-                else:
-                    config[key] = value
-
-        # Remove the include directive
-        del config["include"]
-        return config
+        return await resolve_includes(config=config, location=config_file_path, resolve=resolve, read=read_included)
 
     async def save_config(self, new_config: dict, include_env_vars: bool = False):
         global prisma_client, general_settings, user_config_file_path, store_model_in_db
@@ -5207,15 +5205,19 @@ class ProxyConfig:
         global prisma_client, store_model_in_db
         # Load existing config
 
-        if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
-            bucket_name: Final = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
+        bucket_name: Final = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
+        if bucket_name is not None:
             object_key: Final = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
             bucket_type: Final = os.environ.get("LITELLM_CONFIG_BUCKET_TYPE")
             verbose_proxy_logger.debug("bucket_name: %s, object_key: %s", bucket_name, object_key)
-            if bucket_type == "gcs":
-                config = await get_config_file_contents_from_gcs(bucket_name=bucket_name, object_key=object_key)
-            else:
-                config = get_file_contents_from_s3(bucket_name=bucket_name, object_key=object_key)
+            if object_key is None:
+                raise Exception("LITELLM_CONFIG_BUCKET_OBJECT_KEY must be set to load the config from a bucket.")
+
+            config = await get_config_from_bucket(
+                bucket_type=bucket_type,
+                bucket_name=bucket_name,
+                object_key=object_key,
+            )
 
             if config is None:
                 raise Exception("Unable to load config from given source.")
@@ -7076,6 +7078,9 @@ class ProxyConfig:
 
         if "max_file_size_mb" not in self._yaml_general_settings_keys:
             general_settings["max_file_size_mb"] = _general_settings.get("max_file_size_mb")
+
+        if "allowed_file_extensions" not in self._yaml_general_settings_keys:
+            general_settings["allowed_file_extensions"] = _general_settings.get("allowed_file_extensions")
 
         if "blocked_file_extensions" not in self._yaml_general_settings_keys:
             general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
@@ -9550,6 +9555,7 @@ class ProxyStartupEvent:
         gate the first duration window.
         """
         await generate_key_helper_fn(
+            llm_router=llm_router,
             request_type="user",
             table_name="user",
             user_id=LITELLM_PROXY_BUDGET_NAME,
@@ -11905,6 +11911,13 @@ async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth
     )
 
 
+async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth) -> None:
+    release_like_http_disconnect: Final = (
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect  # pyright: ignore[reportPrivateUsage]  # shared
+    )
+    await release_like_http_disconnect(user_api_key_dict)
+
+
 async def _reject_realtime_session(
     websocket: WebSocket,
     user_api_key_dict: UserAPIKeyAuth,
@@ -11924,6 +11937,7 @@ async def _reject_realtime_session(
         await websocket.close(code=code, reason=reason)
     finally:
         await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 @app.websocket("/openai/v1/realtime")
@@ -12027,6 +12041,9 @@ async def realtime_websocket_endpoint(
             websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
         )
         return
+    except BaseException:
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
 
     # Phase 2: route to upstream LLM.
     try:
@@ -12056,12 +12073,10 @@ async def realtime_websocket_endpoint(
         except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
     finally:
-        from litellm.litellm_core_utils.realtime_streaming import (
-            REALTIME_SESSION_SUCCESS_LOGGED_KEY,
-        )
-
         if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
             await _release_realtime_budget_reservation(user_api_key_dict)
+            if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):
+                await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 ######################################################################
@@ -15045,6 +15060,13 @@ def _get_proxy_model_info(model: dict) -> dict:
     return _translate_model_name_for_response(model)
 
 
+def _model_info_json_response(data: Sequence[Mapping[str, object]] | Mapping[str, object]) -> Response:
+    return Response(
+        content=orjson.dumps({"data": data}, default=jsonable_encoder, option=orjson.OPT_NON_STR_KEYS),
+        media_type="application/json",
+    )
+
+
 @router.get(
     "/model/info",
     tags=["model management"],
@@ -15092,7 +15114,7 @@ async def model_info_v1(
     `model_info.direct_access` when the proxy database is connected.
 
     Returns:
-        Returns a dictionary containing information about each model.
+        A JSON response whose `data` list holds one entry per model.
 
     Example Response:
     ```json
@@ -15140,7 +15162,7 @@ async def model_info_v1(
             deployment_dict=_deployment_info_dict,
             excluded_keys={"litellm_credential_name"},
         )
-        return {"data": _deployment_info_dict}
+        return _model_info_json_response(_deployment_info_dict)
 
     if llm_model_list is None:
         raise HTTPException(
@@ -15191,7 +15213,7 @@ async def model_info_v1(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-        return {"data": single_model_list}
+        return _model_info_json_response(single_model_list)
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
     # expanded model names from get_complete_model_list(). Team-scoped rows
@@ -15259,7 +15281,7 @@ async def model_info_v1(
     visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
-    return {"data": visible_models}
+    return _model_info_json_response(visible_models)
 
 
 @router.get(
@@ -15828,10 +15850,7 @@ async def fallback_login(request: Request):
 
     from fastapi.responses import HTMLResponse
 
-    hide_default_credentials_hint: Final = (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-    )
+    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     return HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=False,
@@ -16281,6 +16300,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     global master_key, general_settings
 
     response: Final = await generate_key_helper_fn(
+        llm_router=llm_router,
         request_type="key",
         **{
             "user_role": user_obj.user_role,
@@ -17048,6 +17068,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
         "max_file_size_mb": "Integer",
+        "allowed_file_extensions": "List",
         "blocked_file_extensions": "List",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
@@ -18807,6 +18828,7 @@ app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
+app.include_router(agent_skills_discovery_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
 app.include_router(google_router)
 

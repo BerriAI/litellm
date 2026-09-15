@@ -454,6 +454,17 @@ def _resolve_vertex_location_for_cost(
     return VertexBase.get_vertex_region(configured_location, model)
 
 
+def _resolve_mantle_region_for_cost(
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object] | None,
+) -> str | None:
+    if custom_llm_provider != "bedrock_mantle":
+        return None
+    from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_region
+
+    return resolve_mantle_region(litellm_params or MappingProxyType({}))
+
+
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
@@ -545,7 +556,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # ids leaking into a different, later request on the same thread. Sync
         # support is deferred to a follow-up PR with its own safe-restore
         # mechanism; async calls (the proxy's only call path) are unaffected.
-        if supports_correlation_logging:
+        if supports_correlation_logging and litellm.request_correlation_in_logs:
             set_trace_id(self.litellm_trace_id)
             set_session_id(self.litellm_session_id)
         # set_trace_id()/set_session_id() sanitize (strip control chars, bound
@@ -1768,6 +1779,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     optional_params=self.optional_params,
                     model=litellm_model_name or self.model,
                 ),
+                "region_name": _resolve_mantle_region_for_cost(
+                    custom_llm_provider=self.model_call_details.get("custom_llm_provider", None),
+                    litellm_params=self.model_call_details.get("litellm_params"),
+                ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -2427,7 +2442,7 @@ class Logging(LiteLLMLoggingBaseClass):
         call) would leave the outer request's subsequent log lines stamped with
         the nested call's trace_id/session_id instead of its own.
 
-        Uses a plain set() of the captured pre-call value rather than
+        Uses a plain contextvar set() of the captured pre-call value rather than
         contextvars.Token-based reset(), since this can end up called from a
         different asyncio Task/context than __init__ ran in (e.g. the request
         task's own wrapper() finally block, plus async_success_handler
@@ -2438,8 +2453,8 @@ class Logging(LiteLLMLoggingBaseClass):
         that Task's view of the contextvars, so calling it multiple times
         (once per Task involved in this attempt) is required, not just safe.
         """
-        set_trace_id(self._pre_call_trace_id)
-        set_session_id(self._pre_call_session_id)
+        trace_id_var.set(self._pre_call_trace_id)
+        session_id_var.set(self._pre_call_session_id)
 
     def _restore_correlation_context_if_unclaimed(self) -> None:
         """Guarded variant for __del__-triggered cleanup only.

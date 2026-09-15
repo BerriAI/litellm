@@ -14,6 +14,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -24,6 +25,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+    MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
@@ -75,6 +77,7 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
+from litellm.types.router_weights import validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
@@ -215,6 +218,12 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 
 def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
+
+
+def resolve_litellm_call_id(client_call_id: str | None) -> str:
+    if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
+        return client_call_id
+    return str(uuid.uuid4())
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -1564,6 +1573,9 @@ class ProxyBaseLLMRequestProcessing:
     ) -> dict:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
+        resolved_call_id: Final = (
+            call_id or hidden_params.get("litellm_call_id") or (request_data or {}).get("litellm_call_id")
+        )
         timing_values: Final = _timing_values(
             hidden_params=hidden_params,
             logging_obj=litellm_logging_obj,
@@ -1591,7 +1603,7 @@ class ProxyBaseLLMRequestProcessing:
         classifier_cost: Final = _classifier_cost_from_request_data(request_data)
 
         headers: Final = {
-            "x-litellm-call-id": call_id,
+            "x-litellm-call-id": resolved_call_id,
             "x-litellm-model-id": model_id,
             "x-litellm-model-name": model_name,
             "x-litellm-cache-key": cache_key,
@@ -1929,6 +1941,13 @@ class ProxyBaseLLMRequestProcessing:
             # This avoids expensive Router instantiation on each request
             if router_settings is not None:
                 self.data["router_settings_override"] = router_settings
+                try:
+                    self.data["_router_weights"] = validate_router_weights(router_settings.get("weights"))
+                except ValidationError:
+                    self.data["_router_weights"] = None
+                    verbose_proxy_logger.warning(
+                        "Ignoring invalid saved router weights; update team/key router_settings"
+                    )
                 alias_target: Final = await _resolve_per_request_model_group_alias(
                     requested_model=self.data.get("model"),
                     router_settings=router_settings,
@@ -1938,7 +1957,7 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        self.data["litellm_call_id"] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -3445,15 +3464,13 @@ class ProxyBaseLLMRequestProcessing:
             # a failed request reports no timing, matching /v1/chat/completions
             read_timing_from_logging_obj=False,
         )
-        # Extract headers from exception - check both e.headers and e.response.headers
         headers = getattr(e, "headers", None) or {}
         if not headers:
-            # Try to get headers from e.response.headers (httpx.Response)
             _response: Final = attribute_of(e, "response")
-            if _response is not None:
-                _response_headers: Final = getattr(_response, "headers", None)
-                if _response_headers:
-                    headers = get_response_headers(dict(_response_headers))
+            _response_headers: Final = getattr(_response, "headers", None) if _response is not None else None
+            _provider_headers: Final = _response_headers or getattr(e, "litellm_response_headers", None)
+            if _provider_headers:
+                headers = get_response_headers(dict(_provider_headers))
         headers.update(custom_headers)
 
         # Call response headers hook for failure
