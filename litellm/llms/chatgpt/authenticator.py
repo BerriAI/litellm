@@ -9,6 +9,7 @@ import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import can_block_current_thread
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 from .common_utils import (
@@ -25,6 +26,7 @@ from .common_utils import (
 )
 
 TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
+TOKEN_REFRESH_TIMEOUT_SECONDS: Final = 30
 DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS: Final = 5
@@ -65,6 +67,18 @@ class Authenticator:
                     return refreshed["access_token"]
                 except RefreshAccessTokenError as exc:
                     verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
+
+        if not can_block_current_thread():
+            raise GetAccessTokenError(
+                message=(
+                    "ChatGPT device-code login needs a human and cannot run inside a running event loop "
+                    "or a worker thread (for example the LiteLLM proxy). Log in once outside the proxy with "
+                    '`python -c "from litellm.llms.chatgpt.authenticator import Authenticator; '
+                    'Authenticator().get_access_token()"` and mount the resulting auth.json into the proxy, '
+                    "or set CHATGPT_TOKEN_DIR to a directory that already holds it."
+                ),
+                status_code=401,
+            )
 
         cooldown_remaining: Final = self._get_device_code_cooldown_remaining(auth_data)
         if cooldown_remaining > 0:
@@ -309,6 +323,7 @@ class Authenticator:
                     "refresh_token": refresh_token,
                     "scope": "openid profile email",
                 },
+                timeout=TOKEN_REFRESH_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
             data: Final = _JSON_OBJECT_ADAPTER.validate_python(resp.json())
