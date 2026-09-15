@@ -17,7 +17,18 @@ from litellm.rust_bridge.configuration import (
     RustImplementationState,
 )
 from litellm.rust_bridge.errors import RustRouteUnavailableError, RustRouteUnsupportedError
-from litellm.rust_bridge.route import ComponentBinding, ComponentExecution, NativeComponent
+from litellm.rust_bridge.route import (
+    ComponentBinding,
+    ComponentExecution,
+    NativeComponent,
+    NativeRoute,
+    PythonRoute,
+    RouteFailure,
+    RouteMismatch,
+    RouteUnavailable,
+    RouteUnsupported,
+    raise_route_failure,
+)
 
 OPT_IN: Final = CapabilityDefinition(
     rust=RustImplementationState.EXPERIMENTAL, python_available=True, rollout=RolloutPolicy.RUST_OPT_IN
@@ -49,6 +60,11 @@ def _binding(monkeypatch: pytest.MonkeyPatch, name: ComponentName, native: objec
     return _component(name).bind("route", validate=lambda value: value)
 
 
+def _failure(route: PythonRoute | NativeRoute[object] | RouteFailure) -> RouteFailure:
+    assert not isinstance(route, PythonRoute | NativeRoute)
+    return route
+
+
 def test_resolve_applies_process_override_to_optional_component() -> None:
     component: Final = _component(ComponentName.CHAT_COMPLETIONS)
 
@@ -72,54 +88,64 @@ def test_resolve_passes_context_to_capability_resolver() -> None:
     )
 
 
-def test_select_returns_none_for_python_without_loading_native(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_returns_python_route_without_loading_native(monkeypatch: pytest.MonkeyPatch) -> None:
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=ExecutionDecision.PYTHON)
     binding: Final = _binding(monkeypatch, ComponentName.OCR, None)
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: pytest.fail("native must not be loaded"))
 
-    assert execution.select(binding) is None
+    assert execution.select(binding) == PythonRoute()
 
 
 @pytest.mark.parametrize("decision", [ExecutionDecision.RUST_WITH_FALLBACK, ExecutionDecision.RUST_REQUIRED])
-def test_select_returns_native_export(monkeypatch: pytest.MonkeyPatch, decision: ExecutionDecision) -> None:
+def test_select_returns_native_route(monkeypatch: pytest.MonkeyPatch, decision: ExecutionDecision) -> None:
     export: Final = object()
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=decision)
 
-    assert execution.select(_binding(monkeypatch, ComponentName.OCR, SimpleNamespace(route=export))) is export
+    assert execution.select(_binding(monkeypatch, ComponentName.OCR, SimpleNamespace(route=export))) == NativeRoute(
+        export
+    )
 
 
 def test_select_falls_back_to_python_when_native_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=ExecutionDecision.RUST_WITH_FALLBACK)
 
-    assert execution.select(_binding(monkeypatch, ComponentName.OCR, None)) is None
+    assert execution.select(_binding(monkeypatch, ComponentName.OCR, None)) == PythonRoute()
 
 
-def test_select_raises_when_required_native_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_reports_unavailable_when_required_native_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     execution: Final = ComponentExecution(
         component=ComponentName.TRANSCRIPTION, decision=ExecutionDecision.RUST_REQUIRED
     )
 
+    failure: Final = execution.select(_binding(monkeypatch, ComponentName.TRANSCRIPTION, None))
+
+    assert failure == RouteUnavailable(ComponentName.TRANSCRIPTION)
     with pytest.raises(RustRouteUnavailableError, match="transcription"):
-        execution.select(_binding(monkeypatch, ComponentName.TRANSCRIPTION, None))
+        raise_route_failure(_failure(failure))
 
 
 def test_select_rejects_a_binding_owned_by_another_component(monkeypatch: pytest.MonkeyPatch) -> None:
     execution: Final = ComponentExecution(component=ComponentName.OCR, decision=ExecutionDecision.RUST_WITH_FALLBACK)
     binding: Final = _binding(monkeypatch, ComponentName.MESSAGES, SimpleNamespace(route=object()))
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: pytest.fail("native must not be loaded"))
 
+    failure: Final = execution.select(binding)
+
+    assert failure == RouteMismatch(component=ComponentName.OCR, binding=ComponentName.MESSAGES)
     with pytest.raises(ValueError, match=r"messages.*ocr"):
-        execution.select(binding)
+        raise_route_failure(_failure(failure))
 
 
-def test_unsupported_execution_raises_before_loading_native(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_reports_unsupported_without_loading_native(monkeypatch: pytest.MonkeyPatch) -> None:
     execution: Final = ComponentExecution(component=ComponentName.RESPONSES, decision=ExecutionDecision.UNSUPPORTED)
     binding: Final = _binding(monkeypatch, ComponentName.RESPONSES, None)
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: pytest.fail("native must not be loaded"))
 
+    failure: Final = execution.select(binding)
+
+    assert failure == RouteUnsupported(ComponentName.RESPONSES)
     with pytest.raises(RustRouteUnsupportedError, match="responses"):
-        execution.require_supported()
-    with pytest.raises(RustRouteUnsupportedError, match="responses"):
-        execution.select(binding)
+        raise_route_failure(_failure(failure))
 
 
 def test_bind_only_allows_declared_exports(monkeypatch: pytest.MonkeyPatch) -> None:
