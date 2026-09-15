@@ -69,11 +69,9 @@ async def get_all_team_member_emails(team_id: str | None = None) -> list:
 
 
 async def get_team_admin_emails(team: LiteLLM_TeamTable, prisma_client: object) -> tuple[str, ...]:
-    """Emails of the team's admins: the user record's email, else the inline one, plus the legacy admins list, deduped"""
+    """Emails of the members holding the admin role: the user record's email, else the inline one, deduped"""
     admins: Final = tuple(member for member in team.members_with_roles if member.role == "admin")
-    admin_ids: Final = frozenset(
-        (*(member.user_id for member in admins if member.user_id), *(user_id for user_id in team.admins if user_id))
-    )
+    admin_ids: Final = frozenset(member.user_id for member in admins if member.user_id)
     rows: Final = (
         await UserRepository(prisma_client).find_many(
             where={"user_id": {"in": sorted(admin_ids)}}  # mutable-ok: prisma filter payloads are plain dict/list

@@ -44,11 +44,13 @@ async def test_should_return_only_admin_emails():
 
 
 @pytest.mark.asyncio
-async def test_should_include_legacy_admins_list():
+async def test_should_ignore_the_legacy_admins_list_the_proxy_does_not_authorize():
+    prisma: Final = _prisma(USERS)
     team: Final = LiteLLM_TeamTable(
         team_id="t1", admins=["u-legacy"], members_with_roles=[Member(user_id="u-admin", role="admin")]
     )
-    assert sorted(await get_team_admin_emails(team, _prisma(USERS))) == ["admin@example.com", "legacy@example.com"]
+    assert await get_team_admin_emails(team, prisma) == ("admin@example.com",)
+    assert prisma.db.litellm_usertable.queries == [{"user_id": {"in": ["u-admin"]}}]
 
 
 @pytest.mark.asyncio
@@ -79,9 +81,9 @@ async def test_should_include_email_only_admins_and_dedupe_ids_and_emails():
     )
     team: Final = LiteLLM_TeamTable(
         team_id="t1",
-        admins=["", "u-legacy", "u-admin"],
         members_with_roles=[
             Member(user_id="u-admin", role="admin"),
+            Member(user_id="u-legacy", role="admin"),
             Member(user_email="mail-only@example.com", role="admin"),
         ],
     )
