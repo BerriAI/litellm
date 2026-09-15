@@ -20,6 +20,7 @@ from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_timeout_408,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -80,7 +81,7 @@ def _trigger_cooldown_for_failed_deployment(
         # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
         # actual health. Left unguarded, a caller could force a 408 on every deployment in
         # the fallback chain from a single request with a near-zero timeout.
-        if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
+        if is_caller_timeout_408(kwargs.get("client_side_timeout"), exception_status):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: a caller-supplied "
                 "x-litellm-timeout caused this 408, not deployment health."
