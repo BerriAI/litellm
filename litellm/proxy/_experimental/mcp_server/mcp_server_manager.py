@@ -4598,7 +4598,7 @@ class MCPServerManager:
         if not any(inputs):
             return None
         material: Final = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(material.encode()).hexdigest()
+        return hashlib.sha256(material.encode(), usedforsecurity=False).hexdigest()
 
     @staticmethod
     def _forwarded_header_values(
