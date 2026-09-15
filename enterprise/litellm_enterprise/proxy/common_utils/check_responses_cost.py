@@ -1,8 +1,7 @@
 """
 Polls LiteLLM_ManagedObjectTable to check if the response is complete.
-Cost tracking is handled by the get-responses call, which prices normally only because the
-poll stamps itself with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN; user-facing reads of the
-same route are non-inference and free.
+The status CAS is the durable billed marker and precedes the billing read, so a stolen or
+duplicate claim can never bill the same row twice.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -110,10 +109,10 @@ class CheckResponsesCost:
     async def _claim_job_for_costing(self, job: "LiteLLM_ManagedObjectTable") -> bool:
         """Atomically flip batch_processed false to true, returning whether this pod won the row.
 
-        Every pod polls the same table and the read is what prices the job, so the claim has to be
-        taken before it. The ``updated_at`` arm takes a claim back from a pod that died holding it;
-        ``updated_at`` is ``@updatedAt``, so a live claim is never stolen. A schema without the
-        column cannot claim, so it keeps the pre-existing behavior instead of billing nothing.
+        The claim precedes the probe and billing reads. The ``updated_at`` arm takes a claim back
+        from a pod that died holding it; ``updated_at`` is ``@updatedAt``, so a live claim is never
+        stolen. A schema without the column cannot claim, so it keeps the pre-existing behavior
+        instead of billing nothing.
         """
         abandoned_before: Final = datetime.now(timezone.utc) - timedelta(
             seconds=CLAIM_ABANDONED_AFTER_POLL_CYCLES * PROXY_BATCH_POLLING_INTERVAL
@@ -155,26 +154,31 @@ class CheckResponsesCost:
                 f"so its cost will not be retried: {db_err}"
             )
 
-    async def _mark_job_completed(self, job: "LiteLLM_ManagedObjectTable") -> None:
-        """Retire a billed row from polling, per job so one failure can't strand the rest.
+    async def _mark_job_completed(self, job: "LiteLLM_ManagedObjectTable") -> bool:
+        """CAS the durable billed marker before the billing read, returning whether this pod won.
 
-        Only ``status`` is written, and always the literal "completed", because the usage already
-        landed in ``LiteLLM_SpendLogs`` and stale-row expiry keys off that exact value.
+        Only queued or in-progress rows may transition to the literal "completed" value.
         """
         try:
-            await self.prisma_client.db.litellm_managedobjecttable.update_many(
-                where={"id": job.id},
+            updated: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={
+                    "id": job.id,
+                    "status": {"in": ["queued", "in_progress"]},
+                },
                 data={"status": "completed"},
             )
         except Exception as db_err:
             verbose_proxy_logger.error(
                 f"CheckResponsesCost: failed to mark job {job.id} completed: {db_err}"
             )
+            return False
+        return updated > 0
 
     async def check_responses_cost(self):
         """Read every queued background response and retire the ones the provider has finished.
 
-        The read itself is what bills, because it is stamped with the poll's call origin.
+        The probe is free. The status CAS marks the row billed before the follow-up read records
+        its spend.
         """
         try:
             await self._cleanup_stale_managed_objects()
@@ -193,7 +197,7 @@ class CheckResponsesCost:
         )
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
-        completed_jobs = []
+        completed_count: int = 0
 
         for job in jobs:
             unified_object_id = job.unified_object_id
@@ -210,18 +214,12 @@ class CheckResponsesCost:
                 # Decrypts rows written before model_object_id held the provider's own id.
                 responses_id_security = ResponsesIDSecurity().provider_response_id(job.model_object_id)
                 
-                # Prepare metadata with model information for cost tracking
-                litellm_metadata = {
+                probe_metadata: Final = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
-                    INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **({"user_api_key_team_id": job.team_id} if job.team_id else {}),
                     **({"user_api_key": job.api_key, "user_api_key_hash": job.api_key} if job.api_key else {}),
+                    **({"model": model_name, "model_group": model_name} if model_name else {}),
                 }
-                
-                # Add model information if available
-                if model_name:
-                    litellm_metadata["model"] = model_name
-                    litellm_metadata["model_group"] = model_name  # Use same value for model_group
                 
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -238,7 +236,7 @@ class CheckResponsesCost:
             try:
                 response = await self._get_response(
                     response_id=responses_id_security,
-                    litellm_metadata=litellm_metadata,
+                    litellm_metadata=probe_metadata,
                 )
             except Exception as e:
                 await self._release_job_claim(job)
@@ -255,15 +253,29 @@ class CheckResponsesCost:
                 await self._release_job_claim(job)
                 continue
 
-            verbose_proxy_logger.info(
-                f"Response {unified_object_id} has terminal status {response.status}, marking as complete"
-            )
-            completed_jobs.append(job)
+            if not await self._mark_job_completed(job):
+                verbose_proxy_logger.debug(
+                    f"Response {unified_object_id} was already finalized by another poller"
+                )
+                continue
 
-        for job in completed_jobs:
-            await self._mark_job_completed(job)
-
-        if len(completed_jobs) > 0:
+            completed_count += 1
             verbose_proxy_logger.info(
-                f"Marked {len(completed_jobs)} response jobs as completed"
+                f"Response {unified_object_id} has terminal status {response.status}, marked as complete"
             )
+            billing_metadata: Final = {
+                **probe_metadata,
+                INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+            }
+            try:
+                await self._get_response(
+                    response_id=responses_id_security,
+                    litellm_metadata=billing_metadata,
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Response {unified_object_id} is already finalized, so its spend will not be retried: {e}"
+                )
+
+        if completed_count > 0:
+            verbose_proxy_logger.info(f"Marked {completed_count} response jobs as completed")
