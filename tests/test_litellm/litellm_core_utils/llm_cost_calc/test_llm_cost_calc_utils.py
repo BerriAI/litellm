@@ -86,6 +86,7 @@ def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
         "output_cost_per_token": 0.0,
         "litellm_provider": "vertex_ai",
         "mode": "embedding",
+        "supported_openai_params": None,
     }
     usage = Usage(
         prompt_tokens=64,
