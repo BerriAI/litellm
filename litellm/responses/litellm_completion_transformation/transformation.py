@@ -2703,7 +2703,7 @@ class LiteLLMCompletionResponsesConfig:
                 # avoiding an unfamiliar standalone reasoning output item that
                 # agent clients may not understand.
                 reasoning_text: Final = getattr(choice.message, "reasoning_content", None) or ""
-                message_content: Final[list] = [
+                message_content: Final[list] = [  # mutable-ok: fresh output list for the message item
                     LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(choice.message)
                 ]
                 if reasoning_text:
@@ -2724,7 +2724,7 @@ class LiteLLMCompletionResponsesConfig:
                             choice.finish_reason
                         ),
                         role=choice.message.role,
-                        content=message_content,  # mutable-ok: fresh output list
+                        content=message_content,  # mutable-ok: list built above is owned by this item
                     )
                 )
         return message_output_items
