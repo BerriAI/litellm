@@ -484,11 +484,12 @@ def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None,
 def _apply_off_peak_to_base_costs(
     model_info: ModelInfo,
     current_time: datetime | None,
-    base_costs: tuple[float, float, float, float, float],
+    base_costs: tuple[float, float, float, float | None, float],
 ) -> tuple[float, float, float, float, float]:
     """Apply off-peak rates to an already-resolved set of base costs, whichever pricing path
-    produced them. The one-hour cache-creation rate passes through untouched, since
-    off_peak_pricing has no field for it, and reasoning is left to _resolve_billed_reasoning_rate.
+    produced them. off_peak_pricing has no field for the one-hour cache-creation rate, so a
+    present one passes through untouched and an absent one resolves to the applied
+    cache-creation rate. Reasoning is left to _resolve_billed_reasoning_rate.
     """
     prompt, completion, cache_creation, cache_creation_above_1hr, cache_read = base_costs
     rates: Final = apply_off_peak_pricing(
@@ -506,7 +507,7 @@ def _apply_off_peak_to_base_costs(
         rates.input_rate,
         rates.output_rate,
         rates.cache_creation_rate,
-        cache_creation_above_1hr,
+        rates.cache_creation_rate if cache_creation_above_1hr is None else cache_creation_above_1hr,
         rates.cache_read_rate,
     )
 
@@ -535,7 +536,7 @@ def _get_token_base_cost(
     An absent cache-creation rate always resolves to the resolved input rate, the way the
     tiered table and custom deployment pricing already do, since a provider that publishes
     no write price bills cache writes as ordinary input. An absent 1h write rate resolves
-    to the cache-creation rate. An explicit 0.0 stays a real price for both.
+    to the cache-creation rate, off-peak included. An explicit 0.0 stays a real price for both.
 
     Returns:
         Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
@@ -667,9 +668,6 @@ def _get_token_base_cost(
     resolved_cache_creation_cost: Final = (
         input_rate_for_missing_cache_rates if cache_creation_cost is None else cache_creation_cost
     )
-    resolved_cache_creation_cost_above_1hr: Final = (
-        resolved_cache_creation_cost if cache_creation_cost_above_1hr is None else cache_creation_cost_above_1hr
-    )
 
     return _apply_off_peak_to_base_costs(
         model_info,
@@ -678,7 +676,7 @@ def _get_token_base_cost(
             prompt_base_cost,
             completion_base_cost,
             resolved_cache_creation_cost,
-            resolved_cache_creation_cost_above_1hr,
+            cache_creation_cost_above_1hr,
             cache_read_cost,
         ),
     )

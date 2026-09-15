@@ -16,9 +16,9 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -76,8 +76,10 @@ class _RecordingLogger(CustomLogger):
         super().__init__()
         self.standard_logging_object: StandardLoggingPayload | None = None
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.standard_logging_object = kwargs["standard_logging_object"]
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.standard_logging_object = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
 
 
 class PostCallGuardrail(CustomGuardrail):

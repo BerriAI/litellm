@@ -5476,6 +5476,19 @@ def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a
             1e-7,
             id="no-write-price-uses-the-off-peak-input-rate",
         ),
+        pytest.param(
+            {
+                "off_peak_pricing": {
+                    "hours_utc": "00:00-23:59",
+                    "input_cost_per_token": 1e-7,
+                    "cache_creation_input_token_cost": 3e-7,
+                }
+            },
+            datetime(2026, 9, 14, 12, tzinfo=timezone.utc),
+            3e-7,
+            3e-7,
+            id="no-1h-price-uses-the-off-peak-write-price",
+        ),
     ),
 )
 def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_path(
