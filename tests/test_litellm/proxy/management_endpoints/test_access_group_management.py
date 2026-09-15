@@ -501,6 +501,7 @@ async def test_create_access_group_read_through_recovers_model_created_on_siblin
         litellm_params={"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
         model_info={},
         blocked=False,
+        created_at=None,
     )
 
     mock_router = Router(

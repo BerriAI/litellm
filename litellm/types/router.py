@@ -624,6 +624,13 @@ class Deployment(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class DroppedDeployment:
+    model_name: str
+    model_id: str
+    error: str
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentModelListingInfo:
     """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
 

@@ -149,10 +149,25 @@ _AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for 
 
 
 class ProxyModelNotFoundError(HTTPException):
-    def __init__(self, route: str, model_name: str, retryable_with_model_read_through: bool = True):
-        self.retryable_with_model_read_through: Final = retryable_with_model_read_through
+    def __init__(
+        self,
+        route: str,
+        model_name: str,
+        retryable_with_model_read_through: bool = True,
+        configured_but_failed_to_load: bool = False,
+    ):
+        self.retryable_with_model_read_through: Final = (
+            retryable_with_model_read_through and not configured_but_failed_to_load
+        )
         self.spend_log_error_message: Final = f"{route}: Invalid model name passed in. {_AVAILABLE_MODELS_HINT}"
-        detail: Final = {"error": f"{route}: Invalid model name passed in model={model_name}. {_AVAILABLE_MODELS_HINT}"}
+        detail: Final = {
+            "error": (
+                f"{route}: model={model_name} is configured on the proxy but failed to load. "
+                "Ask your proxy admin to check `/model/info` for the reason."
+                if configured_but_failed_to_load
+                else f"{route}: Invalid model name passed in model={model_name}. {_AVAILABLE_MODELS_HINT}"
+            )
+        }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
@@ -713,7 +728,11 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     # if no route found then it's a bad request
     route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
+    dropped_deployment: Final = (
+        llm_router.dropped_deployment_for_model_name(data.get("model", "")) if llm_router is not None else None
+    )
     raise ProxyModelNotFoundError(
         route=route_name,
         model_name=data.get("model", ""),
+        configured_but_failed_to_load=dropped_deployment is not None,
     )

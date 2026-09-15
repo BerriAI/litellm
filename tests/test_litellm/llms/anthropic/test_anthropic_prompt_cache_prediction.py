@@ -149,7 +149,11 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
     if source == "database":
         monkeypatch.setattr(proxy_server, "llm_router", router)
         assert proxy_server.ProxyConfig()._add_deployment([SimpleNamespace(
-            model_id=_DEPLOYMENT, model_name="test-native", model_info={}, litellm_params=dict(params),
+            model_id=_DEPLOYMENT,
+            model_name="test-native",
+            model_info={},
+            litellm_params=dict(params),
+            created_at=None,
         )]) == 1
     deployment: Final = router.get_deployment(_DEPLOYMENT)
     assert deployment is not None
