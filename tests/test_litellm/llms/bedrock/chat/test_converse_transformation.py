@@ -7025,3 +7025,18 @@ def test_mid_conversation_multi_system_run_after_multiple_tool_results():
     ]
     assert out_messages[4]["content"][1]["text"] == "reminder 1"
     assert out_messages[5]["content"][1]["text"] == "reminder 2"
+
+
+def test_mid_conversation_system_carries_operator_note():
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "stay on policy"},
+        {"role": "user", "content": "done"},
+    ]
+    out_messages, system_blocks = config._transform_system_message(messages)
+    assert system_blocks == []
+    assert [m["role"] for m in out_messages] == ["user", "user", "user"]
+    converted = out_messages[1]["content"]
+    assert "not from the user" in converted[0]["text"].lower()
+    assert converted[1]["text"] == "stay on policy"

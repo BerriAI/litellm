@@ -1358,7 +1358,6 @@ class AmazonConverseConfig(BaseConfig):
                 converted = self._system_role_message_as_user(
                     cast(Mapping, message)
                 )  # cast-ok: system check narrows to Mapping
-                # Skip note-only converts.
                 if len(converted["content"]) > 1:
                     new_messages.append(converted)
             else:
