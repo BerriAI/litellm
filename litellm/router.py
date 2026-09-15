@@ -8292,6 +8292,11 @@ class Router:
                 )
                 return False
 
+            from litellm.types.router import RouterNoDeploymentsAvailableError
+
+            if isinstance(exception, RouterNoDeploymentsAvailableError):
+                return False
+
             exception_status: Final = getattr(exception, "status_code", "")
 
             # Cache litellm_params to avoid repeated dict lookups
