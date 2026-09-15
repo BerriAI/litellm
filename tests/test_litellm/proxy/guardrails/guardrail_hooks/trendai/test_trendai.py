@@ -33,7 +33,6 @@ def _guardrail(
     *,
     app_name: str | None = None,
     fallback_on_error: Literal["block", "allow"] = "block",
-    mask_pii: bool = True,
     timeout: float = 5.0,
     stream_batch_size: int = 2048,
     stream_overlap_size: int = 256,
@@ -48,7 +47,6 @@ def _guardrail(
         api_base=api_base,
         app_name=app_name,
         fallback_on_error=fallback_on_error,
-        mask_pii=mask_pii,
         timeout=timeout,
         stream_batch_size=stream_batch_size,
         stream_overlap_size=stream_overlap_size,
@@ -131,6 +129,15 @@ def test_invalid_stream_configuration_is_rejected() -> None:
 def test_invalid_timeout_is_rejected() -> None:
     with pytest.raises(ValueError, match="timeout"):
         _guardrail(timeout=0)
+
+
+def test_pii_masking_is_not_configurable_on_the_guardrail() -> None:
+    with pytest.raises(TypeError, match="mask_pii"):
+        TrendAIGuardrail(
+            api_key="test-key",
+            api_base="https://guard.example.com/v3.0/aiSecurity",
+            mask_pii=False,
+        )
 
 
 @pytest.mark.asyncio
