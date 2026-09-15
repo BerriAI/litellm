@@ -25,6 +25,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
     SSOUserDefinedValues,
@@ -1682,11 +1683,11 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
 _DENIED_MESSAGE_TEMPLATE: Final = "The model `{model}` is unavailable for this API key or does not exist."
 
 
-def test_can_object_call_model_denial_uses_configured_message_and_logs_detail(monkeypatch, caplog):
+def test_can_object_call_model_denial_uses_configured_message_and_keeps_detail_on_exception(monkeypatch, caplog):
     monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
 
-    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
-        with pytest.raises(ProxyException) as exc_info:
+    with caplog.at_level("DEBUG", logger="LiteLLM Proxy"):
+        with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
             _can_object_call_model(
                 model="anthropic-sonnet-4-5",
                 llm_router=None,
@@ -1700,28 +1701,30 @@ def test_can_object_call_model_denial_uses_configured_message_and_logs_detail(mo
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
     assert exc_info.value.param == "model"
     assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
-    assert "internal-models" in caplog.text
-    assert "anthropic-sonnet-4-5" in caplog.text
-
-
-def test_can_object_call_model_denial_log_strips_newlines_from_requested_model(monkeypatch, caplog):
-    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
-
-    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
-        with pytest.raises(ProxyException):
-            _can_object_call_model(
-                model="gpt-5.6\r\nWARNING forged log line",
-                llm_router=None,
-                models=["internal-models"],
-                object_type="key",
-            )
-
-    denial_records = [r for r in caplog.records if "not allowed to access model" in r.getMessage()]
-    assert len(denial_records) == 1
-    assert denial_records[0].getMessage() == (
+    assert exc_info.value.internal_message == (
         "key not allowed to access model. This key can only access models=['internal-models']. "
-        "Tried to access gpt-5.6WARNING forged log line"
+        "Tried to access anthropic-sonnet-4-5"
     )
+    assert "internal-models" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_access_group_fallback_grant_does_not_log_a_denial(monkeypatch, caplog):
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
+    team_object = LiteLLM_TeamTable(team_id="team-123", models=["direct-model"], access_group_ids=["ag-1"])
+
+    with (
+        patch(  # test-quality-ok: access-group lookup has no dependency-injection seam
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            new=AsyncMock(return_value=["group-model"]),
+        ),
+        caplog.at_level("DEBUG", logger="LiteLLM Proxy"),
+    ):
+        assert await can_team_access_model("group-model", team_object, None) is True
+
+    assert "not allowed to access model" not in caplog.text
 
 
 @pytest.mark.parametrize("unset_value", [None, ""])

@@ -37,6 +37,7 @@ from litellm.proxy.auth.handle_jwt import (
     JWTHandler,
     NoMatchingJWTPublicKeyError,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.types.agents import AgentResponse
 
 
@@ -6990,7 +6991,7 @@ def test_can_rbac_role_call_model_denial_honors_configured_message(monkeypatch, 
         ]
     }
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
         JWTAuthManager.can_rbac_role_call_model(
             rbac_role=LitellmUserRoles.INTERNAL_USER,
             general_settings=general_settings,
@@ -6999,6 +7000,9 @@ def test_can_rbac_role_call_model_denial_honors_configured_message(monkeypatch, 
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == expected_detail
+    assert exc_info.value.internal_message == (
+        "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"
+    )
 
 
 @pytest.mark.parametrize(
@@ -7012,7 +7016,7 @@ def test_can_rbac_role_call_model_denial_honors_configured_message(monkeypatch, 
 def test_check_scope_based_access_denial_honors_configured_message(monkeypatch, configured_message, expected_error):
     monkeypatch.setattr(litellm, "model_access_denied_message", configured_message)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
         JWTAuthManager.check_scope_based_access(
             scope_mappings=[ScopeMapping(scope="litellm.api.consumer", models=["gpt-5.6-mini"])],
             scopes=["litellm.api.consumer"],
@@ -7022,3 +7026,4 @@ def test_check_scope_based_access_denial_honors_configured_message(monkeypatch, 
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == {"error": expected_error}
+    assert exc_info.value.internal_message == "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"
