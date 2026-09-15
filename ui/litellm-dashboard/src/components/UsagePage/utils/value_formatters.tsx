@@ -12,8 +12,8 @@ export function valueFormatter(number: number) {
 }
 
 export function formatAvgLatency(totalLatencyMs: number | undefined, latencyRequests: number | undefined): string {
-  if (!totalLatencyMs || totalLatencyMs <= 0 || !latencyRequests || latencyRequests <= 0) return "-";
-  const avgMs = totalLatencyMs / latencyRequests;
+  const avgMs = (totalLatencyMs ?? 0) / (latencyRequests ?? 0);
+  if (!Number.isFinite(avgMs) || avgMs <= 0) return "-";
   if (avgMs >= 1000) return `${(avgMs / 1000).toFixed(2)} s`;
   return `${Math.round(avgMs)} ms`;
 }

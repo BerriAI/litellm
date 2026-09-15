@@ -430,13 +430,14 @@ describe("ActivityMetrics", () => {
   });
 
   it("shows a dash for latency when no request in the range carries a measured duration", () => {
+    const unmeasuredOverrides: Partial<ModelActivityData> = {
+      total_successful_requests: 40,
+      total_failed_requests: 100,
+      total_latency_ms: 0,
+      total_latency_requests: 0,
+    };
     const modelWithOnlyFailures: Record<string, ModelActivityData> = {
-      "gpt-4": createMockModelActivityData("GPT-4", {
-        total_successful_requests: 40,
-        total_failed_requests: 100,
-        total_latency_ms: 0,
-        total_latency_requests: 0,
-      }),
+      "gpt-4": createMockModelActivityData("GPT-4", unmeasuredOverrides),
     };
 
     render(<ActivityMetrics modelMetrics={modelWithOnlyFailures} />);
