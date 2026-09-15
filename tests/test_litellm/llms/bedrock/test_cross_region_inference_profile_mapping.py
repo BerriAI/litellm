@@ -4,12 +4,10 @@ from typing import NamedTuple
 
 import pytest
 
-
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
-from litellm.utils import _get_model_info_helper
-from litellm.cost_calculator import completion_cost
 from litellm.types.utils import (
     Choices,
     Message,
@@ -17,6 +15,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from litellm.utils import _get_model_info_helper
 
 
 @pytest.fixture
@@ -228,3 +227,52 @@ def test_bedrock_gpt_5_6_offers_tools_and_reasoning_effort_but_not_thinking(prof
     assert "reasoning_effort" in supported
     assert "thinking" not in supported
     assert "output_config" not in supported
+
+
+@pytest.mark.parametrize(
+    "model,expected_cache_read",
+    [
+        ("amazon.nova-lite-v1:0", 1.5e-8),
+        ("us.amazon.nova-lite-v1:0", 1.5e-8),
+        ("amazon.nova-micro-v1:0", 8.75e-9),
+        ("us.amazon.nova-micro-v1:0", 8.75e-9),
+        ("amazon.nova-pro-v1:0", 2e-7),
+        ("us.amazon.nova-pro-v1:0", 2e-7),
+        ("us.amazon.nova-premier-v1:0", 6.25e-7),
+    ],
+)
+def test_bedrock_nova_cache_read_prices(
+    model, expected_cache_read, local_model_cost_map
+):
+    model_info = litellm.model_cost[model]
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=100,
+        total_tokens=1_100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400),
+    )
+    response = _bedrock_response(model, usage)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+    expected_cost = (
+        600 * model_info["input_cost_per_token"]
+        + 400 * expected_cache_read
+        + 100 * model_info["output_cost_per_token"]
+    )
+    assert cost == pytest.approx(expected_cost)
+
+    uncached_usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=100,
+        total_tokens=1_100,
+    )
+    uncached_cost = completion_cost(
+        completion_response=_bedrock_response(model, uncached_usage),
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+    assert cost < uncached_cost
