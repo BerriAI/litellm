@@ -13529,14 +13529,8 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     from litellm import Router
     from litellm.types.router import DeploymentTypedDict
 
-    claude_tokenizer: Final = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
-    loads: Final[list[tuple[str, str, str | None]]] = []
-
-    class CountingHubTokenizer:
-        @staticmethod
-        def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
-            loads.append((identifier, revision, token))
-            return claude_tokenizer
+    claude_tokenizer: Final[Tokenizer] = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    from_pretrained: Final = MagicMock(return_value=claude_tokenizer)
 
     def deployment(model_name: str, revision: str, auth_token: str | None) -> DeploymentTypedDict:
         return {
@@ -13547,7 +13541,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
             },
         }
 
-    monkeypatch.setattr(litellm.utils, "Tokenizer", CountingHubTokenizer)
+    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
@@ -13564,17 +13558,17 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
             await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
             for _ in range(3)
         ]
-        assert loads == [("my-org/tokenizer", "main", None)]
+        assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
         assert all(response.tokenizer_type == "huggingface_tokenizer" for response in responses)
         assert len({response.total_tokens for response in responses}) == 1
         assert responses[0].total_tokens > 0
 
         await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
         await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
-        assert loads == [
-            ("my-org/tokenizer", "main", None),
-            ("my-org/tokenizer", "v2", None),
-            ("my-org/tokenizer", "main", "hf_test_token"),
+        assert from_pretrained.call_args_list == [
+            mock.call("my-org/tokenizer", revision="main", token=None),
+            mock.call("my-org/tokenizer", revision="v2", token=None),
+            mock.call("my-org/tokenizer", revision="main", token="hf_test_token"),
         ]
     finally:
         litellm.utils._select_custom_tokenizer_helper.cache_clear()
