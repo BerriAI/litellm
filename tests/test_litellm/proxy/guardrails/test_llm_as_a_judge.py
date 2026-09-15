@@ -350,19 +350,25 @@ async def test_apply_guardrail_request_without_structured_messages_judges_all_te
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_request_with_both_request_modes_logs_configured_mode():
+@pytest.mark.parametrize(
+    ("modes", "input_type"),
+    [
+        ([GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call], "request"),
+        ([GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only], "request"),
+        ([GuardrailEventHooks.post_call, GuardrailEventHooks.logging_only], "response"),
+    ],
+)
+async def test_apply_guardrail_with_ambiguous_modes_logs_configured_mode(
+    modes: list[GuardrailEventHooks], input_type: str
+):
     router: Final = _judge_router(90.0)
-    guardrail: Final = _make_guardrail(
-        event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call],
-        router_provider=lambda: router,
-    )
+    guardrail: Final = _make_guardrail(event_hook=modes, router_provider=lambda: router)
     request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
 
-    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, "request")
+    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, input_type)
 
     assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == [
-        "pre_call",
-        "during_call",
+        mode.value for mode in modes
     ]
 
 
