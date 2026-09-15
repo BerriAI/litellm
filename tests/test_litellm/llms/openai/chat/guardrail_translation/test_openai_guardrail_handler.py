@@ -1980,6 +1980,26 @@ class TestNoScannableContentRecordsNotRun:
 
         assert self._recorded_entries(data) == []
 
+    @pytest.mark.asyncio
+    async def test_scoped_out_image_only_message_is_not_reported_as_not_run(self):
+        """An image in a skipped role must behave like any other image-only request"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="image-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None
+        assert self._recorded_entries(data) == []
+
 
 class ToolDroppingTextGuardrail(CustomGuardrail):
     """Answers one text per non-tool message it saw, the way a guardrail that

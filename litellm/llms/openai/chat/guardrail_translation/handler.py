@@ -214,27 +214,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
 
         elif not images_to_check and not guardrail_to_apply.records_own_guardrail_information:
-            unscoped_texts: Final[list[str]] = []
-            unscoped_tool_calls: Final[list[ChatCompletionToolParam]] = []
-            for unscoped_idx, unscoped_message in enumerate(messages):
-                self._extract_inputs(
-                    message=unscoped_message,
-                    msg_idx=unscoped_idx,
-                    texts_to_check=unscoped_texts,
-                    images_to_check=[],
-                    tool_calls_to_check=unscoped_tool_calls,
-                    text_task_mappings=[],
-                    tool_call_task_mappings=[],
-                )
-            guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response=(
-                    "no scannable content after message scoping"
-                    if unscoped_texts or unscoped_tool_calls
-                    else "no scannable content"
-                ),
-                request_data=data,
-                guardrail_status="not_run",
-            )
+            self._record_not_run(data=data, messages=messages, guardrail_to_apply=guardrail_to_apply)
 
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s",
@@ -242,6 +222,37 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return data
+
+    def _record_not_run(
+        self,
+        data: dict,
+        messages: list[dict[str, Any]],
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> None:
+        unscoped_texts: Final[list[str]] = []
+        unscoped_images: Final[list[str]] = []
+        unscoped_tool_calls: Final[list[ChatCompletionToolParam]] = []
+        for msg_idx, message in enumerate(messages):
+            self._extract_inputs(
+                message=message,
+                msg_idx=msg_idx,
+                texts_to_check=unscoped_texts,
+                images_to_check=unscoped_images,
+                tool_calls_to_check=unscoped_tool_calls,
+                text_task_mappings=[],
+                tool_call_task_mappings=[],
+            )
+        if unscoped_images:
+            return
+        guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=(
+                "no scannable content after message scoping"
+                if unscoped_texts or unscoped_tool_calls
+                else "no scannable content"
+            ),
+            request_data=data,
+            guardrail_status="not_run",
+        )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
