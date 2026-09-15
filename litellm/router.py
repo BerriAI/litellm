@@ -3774,7 +3774,16 @@ class Router:
         self, deployment: dict, kwargs: dict, function_name: str | None = None
     ) -> Deployment:
         """
-        Handle clientside credential
+        Build a per-request Deployment carrying the caller-supplied api_key/api_base,
+        with its own stable id for cooldown, logging, and cost-map identity.
+
+        This deployment is deliberately never registered with the router (no
+        upsert_deployment/add_deployment call): doing so used to add it to
+        self.model_list under the shared model_name, which made a request-scoped,
+        caller-supplied provider credential a permanent, load-balanced deployment
+        that every other caller of that model group could be routed onto. Its
+        pricing is still registered directly, so a custom price configured on the
+        underlying deployment still applies to this call.
         """
         model_info: Final = deployment.get("model_info", {}).copy()
         litellm_params: Final = deployment["litellm_params"].copy()
@@ -3793,7 +3802,7 @@ class Router:
             litellm_params=LiteLLM_Params(**dynamic_litellm_params),
             model_info=model_info,
         )
-        self.upsert_deployment(deployment=deployment_pydantic_obj)  # add new deployment to router
+        Router._register_deployment_pricing(deployment=deployment_pydantic_obj)
         return deployment_pydantic_obj
 
     @staticmethod
@@ -9701,40 +9710,7 @@ class Router:
         # initialize client
         self._add_deployment(deployment=deployment)
 
-        _model_info_dict: Final[dict] = deployment.model_info.model_dump(exclude_none=True)
-        for field in CustomPricingLiteLLMParams.model_fields:
-            field_value = deployment.litellm_params.get(field)
-            if field_value is not None:
-                _model_info_dict[field] = field_value
-
-        Router._inherit_builtin_base_rates_for_off_peak(
-            model_info=_model_info_dict,
-            backend_model=deployment.litellm_params.model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-        )
-        if _model_info_dict.get("input_cost_per_token") is not None:
-            Router._inherit_builtin_cache_pricing(
-                model_info=_model_info_dict,
-                backend_model=deployment.litellm_params.model,
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
-        Router._inherit_builtin_tiered_output_rate(
-            model_info=_model_info_dict,
-            backend_model=deployment.litellm_params.model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-        )
-
-        # Register custom pricing in litellm.model_cost.
-        # Mirrors _create_deployment() logic to ensure dynamically-added deployments
-        # (e.g., loaded from DB) also have their custom pricing registered.
-        # Without this, _is_model_cost_zero() cannot detect explicitly-configured
-        # zero-cost models, causing budget checks to block free models.
-        Router._register_deployment_in_model_cost(
-            model_id=deployment.model_info.id,
-            model_info=_model_info_dict,
-            model=deployment.litellm_params.model,
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-        )
+        Router._register_deployment_pricing(deployment=deployment)
 
         # add to model names
         self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
@@ -9995,6 +9971,21 @@ class Router:
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         return model_info
+
+    @staticmethod
+    def _register_deployment_pricing(deployment: Deployment) -> None:
+        """Register a deployment's custom/inherited pricing in ``litellm.model_cost``.
+
+        Takes only a ``Deployment``, so it registers pricing for a deployment that
+        is never added to ``self.model_list`` (a per-request client-side-credential
+        deployment) just as readily as one that is.
+        """
+        Router._register_deployment_in_model_cost(
+            model_id=deployment.model_info.id,
+            model_info=Router._deployment_model_cost_payload(deployment),
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
 
     @staticmethod
     def _register_deployment_in_model_cost(
