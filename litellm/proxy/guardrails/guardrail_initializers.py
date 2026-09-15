@@ -23,6 +23,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         prompt_attack_threshold=litellm_params.prompt_attack_threshold,
         pii_confidence_threshold=litellm_params.pii_confidence_threshold,
         chunk_budget_chars=litellm_params.chunk_budget_chars,
+        contextual_grounding_from_messages=litellm_params.contextual_grounding_from_messages,
         default_on=litellm_params.default_on,
         disable_exception_on_block=litellm_params.disable_exception_on_block,
         mask_request_content=litellm_params.mask_request_content,

@@ -3427,6 +3427,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cost/predict-cache": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Predict Cache Cost
+         * @description Compare the next native Anthropic request on two configured deployment IDs.
+         *
+         *     Estimates use provider token counting and recent successful cache telemetry for this key.
+         *     Unknown cache state uses the cold scenario when prices/counts are available. Cache observations
+         *     do not guarantee retention. v0 supports one message-content breakpoint, text and client tools;
+         *     system/tool-only breakpoints, thinking, images, nondefault Anthropic versions, beta headers and
+         *     request transforms are unknown.
+         *     Each provider count consumes one RPM unit and holds concurrency capacity; a comparison uses
+         *     up to four counts. The legacy rate limiter returns unknown without contacting the provider.
+         *     This endpoint does not generate tokens, prewarm caches, choose a model or alter routing.
+         */
+        post: operations["predict_cache_cost_cost_predict_cache_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials": {
         parameters: {
             query?: never;
@@ -8938,7 +8967,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -19084,7 +19113,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -24702,6 +24731,31 @@ export interface components {
             /** Failed Requests */
             failed_requests: number;
         };
+        /** CacheCostScenario */
+        CacheCostScenario: {
+            /** Input Cost */
+            input_cost: number;
+            tokens: components["schemas"]["CacheTokenBuckets"];
+        };
+        /** CacheEvidence */
+        CacheEvidence: {
+            /**
+             * Confidence
+             * @default observed
+             * @constant
+             */
+            confidence: "observed";
+            /** Expires At */
+            expires_at: number;
+            /** Observed At */
+            observed_at: number;
+            /**
+             * Source
+             * @default provider_usage
+             * @constant
+             */
+            source: "provider_usage";
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -24718,6 +24772,59 @@ export interface components {
             set_cache_response?: string | null;
             /** Status */
             status: string;
+        };
+        /** CachePredictionArm */
+        CachePredictionArm: {
+            /**
+             * Cache State
+             * @default unknown
+             * @enum {string}
+             */
+            cache_state: "warm" | "partial" | "stale" | "unknown" | "disabled";
+            cold?: components["schemas"]["CacheCostScenario"] | null;
+            /** Deployment Id */
+            deployment_id: string;
+            estimate?: components["schemas"]["CacheCostScenario"] | null;
+            evidence?: components["schemas"]["CacheEvidence"] | null;
+            /** Model */
+            model?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Token Count Source */
+            token_count_source?: "anthropic_count_tokens" | null;
+            warm?: components["schemas"]["CacheCostScenario"] | null;
+        };
+        /** CachePredictionRequest */
+        CachePredictionRequest: {
+            /** Candidate Deployment Id */
+            candidate_deployment_id: string;
+            /** Current Deployment Id */
+            current_deployment_id: string;
+            /** Request */
+            request: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        };
+        /** CachePredictionResponse */
+        CachePredictionResponse: {
+            /**
+             * Cache Guarantee
+             * @default false
+             * @constant
+             */
+            cache_guarantee: false;
+            /** Cache Rebuild Penalty */
+            cache_rebuild_penalty: number | null;
+            /**
+             * Pricing Basis
+             * @default input_before_discounts_and_margins
+             * @constant
+             */
+            pricing_basis: "input_before_discounts_and_margins";
+            stay: components["schemas"]["CachePredictionArm"];
+            switch: components["schemas"]["CachePredictionArm"];
+            /** Switch Delta */
+            switch_delta: number | null;
         };
         /** CacheSettingsField */
         CacheSettingsField: {
@@ -24799,6 +24906,29 @@ export interface components {
              * @description Connection status: 'success' or 'failed'
              */
             status: string;
+        };
+        /** CacheTokenBuckets */
+        CacheTokenBuckets: {
+            /**
+             * Cache Creation 1H Input Tokens
+             * @default 0
+             */
+            cache_creation_1h_input_tokens: number;
+            /**
+             * Cache Creation 5M Input Tokens
+             * @default 0
+             */
+            cache_creation_5m_input_tokens: number;
+            /**
+             * Cache Read Input Tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
+             * Uncached Input Tokens
+             * @default 0
+             */
+            uncached_input_tokens: number;
         };
         /**
          * CallTypes
@@ -25810,6 +25940,11 @@ export interface components {
              */
             allow_unmanaged_response_ids?: boolean | null;
             /**
+             * Allowed File Extensions
+             * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
+             */
+            allowed_file_extensions?: string[] | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25831,7 +25966,7 @@ export interface components {
             background_health_checks?: boolean | null;
             /**
              * Blocked File Extensions
-             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename
+             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set
              */
             blocked_file_extensions?: string[] | null;
             /**
@@ -28416,6 +28551,7 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -29721,6 +29857,8 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Batches */
+            input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -29731,6 +29869,8 @@ export interface components {
             input_cost_per_image_above_128k_tokens?: number | null;
             /** Input Cost Per Image Token */
             input_cost_per_image_token?: number | null;
+            /** Input Cost Per Image Token Batches */
+            input_cost_per_image_token_batches?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -29773,6 +29913,8 @@ export interface components {
             input_cost_per_video_per_second_above_8s_interval?: number | null;
             /** Input Cost Per Video Token */
             input_cost_per_video_token?: number | null;
+            /** Input Cost Per Video Token Batches */
+            input_cost_per_video_token_batches?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Keepalive Seconds */
@@ -30870,6 +31012,12 @@ export interface components {
              * @description Enable content moderation to check for harmful content (harassment, hate speech, etc.).
              */
             content_moderation_check?: boolean | null;
+            /**
+             * Contextual Grounding From Messages
+             * @description ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.
+             * @default false
+             */
+            contextual_grounding_from_messages: boolean;
             /**
              * Credentials
              * @description Path to Google Cloud credentials JSON file or JSON string
@@ -39935,6 +40083,8 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Batches */
+            input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -39945,6 +40095,8 @@ export interface components {
             input_cost_per_image_above_128k_tokens?: number | null;
             /** Input Cost Per Image Token */
             input_cost_per_image_token?: number | null;
+            /** Input Cost Per Image Token Batches */
+            input_cost_per_image_token_batches?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -39987,6 +40139,8 @@ export interface components {
             input_cost_per_video_per_second_above_8s_interval?: number | null;
             /** Input Cost Per Video Token */
             input_cost_per_video_token?: number | null;
+            /** Input Cost Per Video Token Batches */
+            input_cost_per_video_token_batches?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Keepalive Seconds */
@@ -45304,6 +45458,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CostEstimateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    predict_cache_cost_cost_predict_cache_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CachePredictionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CachePredictionResponse"];
                 };
             };
             /** @description Validation Error */

@@ -887,6 +887,7 @@ class LiteLLMRoutes(enum.Enum):
         "/auto_router/validate_complexity_router_config",
         # Per-session auto-router read - the endpoint scopes the row to the caller's own key hash
         "/auto_router/session",
+        "/cost/predict-cache",
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
@@ -2635,9 +2636,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
+    allowed_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied",
+    )
     blocked_file_extensions: tuple[str, ...] | None = Field(
         None,
-        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -4414,6 +4419,9 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
+    # Parent org's model ceiling, reported only to callers who can manage the team.
+    # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
+    organization_models: list[str] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
