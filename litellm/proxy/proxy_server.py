@@ -13058,8 +13058,15 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
 
     tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
-    typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
-        Sequence[AllMessageValues] | None, messages
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    typed_messages: Final = (
+        cast(  # cast-ok: request messages and adapter output share token_counter's chat-message shape
+            Sequence[AllMessageValues] | None,
+            messages
+            if messages is not None or prompt is not None or contents is None
+            else GoogleGenAIAdapter().translate_generate_content_to_completion(model_to_use, contents).get("messages"),
+        )
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
