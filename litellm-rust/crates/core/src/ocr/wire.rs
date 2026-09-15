@@ -83,31 +83,31 @@ pub struct OcrWireRequest {
 }
 
 pub fn is_supported_request(model: &str, custom_llm_provider: Option<&str>) -> bool {
-    super::registry::resolve_wire_adapter(model, custom_llm_provider).is_ok()
+    super::provider_config::resolve_provider_config(model, custom_llm_provider).is_ok()
 }
 
 pub fn consumed_optional_param_names(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<Vec<&'static str>, Error> {
-    use super::registry::OcrAdapterKind;
+    use super::provider_config::OcrConfigKind;
 
-    let (_, adapter) = super::registry::resolve_wire_adapter(model, custom_llm_provider)?;
-    let provider_fields: &[&str] = match adapter {
-        OcrAdapterKind::Cohere | OcrAdapterKind::AzureCohere => &["output_format"],
-        OcrAdapterKind::Mistral | OcrAdapterKind::AzureMistral | OcrAdapterKind::VertexMistral => {
+    let (_, config) = super::provider_config::resolve_provider_config(model, custom_llm_provider)?;
+    let provider_fields: &[&str] = match config {
+        OcrConfigKind::Cohere | OcrConfigKind::AzureCohere => &["output_format"],
+        OcrConfigKind::Mistral | OcrConfigKind::AzureAi | OcrConfigKind::VertexAi => {
             MISTRAL_OPTION_FIELDS
         }
-        OcrAdapterKind::AzureDocumentIntelligence => DOCUMENT_INTELLIGENCE_OPTION_FIELDS,
-        OcrAdapterKind::ReductoV3 => REDUCTO_V3_OPTION_FIELDS,
-        OcrAdapterKind::ReductoLegacy => REDUCTO_LEGACY_OPTION_FIELDS,
-        OcrAdapterKind::VertexDeepSeek => DEEPSEEK_OPTION_FIELDS,
+        OcrConfigKind::AzureDocumentIntelligence => DOCUMENT_INTELLIGENCE_OPTION_FIELDS,
+        OcrConfigKind::ReductoV3 => REDUCTO_V3_OPTION_FIELDS,
+        OcrConfigKind::ReductoLegacy => REDUCTO_LEGACY_OPTION_FIELDS,
+        OcrConfigKind::VertexDeepSeek => DEEPSEEK_OPTION_FIELDS,
     };
-    let auth_fields: &[&str] = match adapter {
-        OcrAdapterKind::AzureMistral
-        | OcrAdapterKind::AzureDocumentIntelligence
-        | OcrAdapterKind::AzureCohere => AZURE_AUTH_OPTION_FIELDS,
-        OcrAdapterKind::VertexMistral | OcrAdapterKind::VertexDeepSeek => VERTEX_AUTH_OPTION_FIELDS,
+    let auth_fields: &[&str] = match config {
+        OcrConfigKind::AzureAi
+        | OcrConfigKind::AzureDocumentIntelligence
+        | OcrConfigKind::AzureCohere => AZURE_AUTH_OPTION_FIELDS,
+        OcrConfigKind::VertexAi | OcrConfigKind::VertexDeepSeek => VERTEX_AUTH_OPTION_FIELDS,
         _ => &[],
     };
     Ok(COMMON_OPTION_FIELDS

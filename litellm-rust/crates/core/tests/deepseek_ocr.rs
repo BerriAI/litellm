@@ -1,7 +1,7 @@
 use rstest::rstest;
 use serde_json::{Value, json};
 
-use crate::ocr::codecs::deepseek::{
+use crate::llms::vertex_ai::ocr::deepseek_transformation::{
     DeepSeekOcrParams, DeepSeekOcrResponse, transform_ocr_request, transform_ocr_response,
 };
 use crate::ocr::types::OcrDocument;
@@ -65,7 +65,10 @@ fn request_maps_both_document_types_to_image_content(#[case] document: Value) {
 #[case(json!("[]"), "[]")]
 #[case(json!("{\"pages\":[{\"markdown\":\"json text\"}]}"), "json text")]
 #[case(json!({"pages":[{"markdown":"object"}]}), "object")]
-fn response_codec_handles_text_json_and_objects(#[case] content: Value, #[case] expected: &str) {
+fn response_transform_handles_text_json_and_objects(
+    #[case] content: Value,
+    #[case] expected: &str,
+) {
     let response: DeepSeekOcrResponse = serde_json::from_value(
         json!({"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":1}}),
     )
@@ -102,7 +105,7 @@ fn structured_result_maps_pages_usage_model_and_annotation() {
 }
 
 #[test]
-fn response_codec_rejects_missing_empty_and_malformed_content() {
+fn response_transform_rejects_missing_empty_and_malformed_content() {
     for value in [
         json!({"choices":[]}),
         json!({"choices":[{"message":{"content":""}}]}),

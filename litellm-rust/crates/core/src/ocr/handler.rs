@@ -1,11 +1,27 @@
+use std::sync::Arc;
+
 use super::OcrClient;
-use super::adapters::OcrAdapter;
 use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
-use super::registry::OcrAdapterKind;
+use super::provider_config::OcrConfigKind;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
+use super::wire::DecodedOcrResponse;
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
-use std::sync::Arc;
+use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
+use crate::llms::azure_ai::ocr::document_intelligence::AzureDocumentIntelligenceOperation;
+use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOCRConfig;
+use crate::llms::azure_ai::ocr::transformation::AzureAIOCRConfig;
+use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::llms::cohere::ocr::CohereResponse;
+use crate::llms::cohere::ocr::transformation::CohereParseConfig;
+use crate::llms::mistral::ocr::MistralOcrResponse;
+use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+use crate::llms::reducto::ocr::ReductoResponse;
+use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
+use crate::llms::vertex_ai::ocr::deepseek_transformation::{
+    DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig,
+};
+use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
@@ -15,7 +31,7 @@ pub(crate) async fn perform_ocr_request(
     let context = CallLifecycleContext::new(
         "ocr",
         request.model.clone(),
-        request.adapter.provider().as_str(),
+        request.config.provider().as_str(),
         request
             .litellm_call_id
             .clone()
@@ -47,14 +63,45 @@ impl PreparedOcrCall {
         client: OcrClient,
         request: LiteLLMOcrRequest,
     ) -> Result<Self, Error> {
-        macro_rules! prepare_adapter {
-            ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
-                match request.adapter {
-                    $( OcrAdapterKind::$variant => $instance.prepare_request(&request, &client).await?, )+
-                }
-            };
-        }
-        let http = super::adapters::for_each_ocr_adapter!(prepare_adapter);
+        let http = match request.config {
+            OcrConfigKind::Cohere => CohereParseConfig.prepare_request(&request, &client).await?,
+            OcrConfigKind::Mistral => MistralOCRConfig.prepare_request(&request, &client).await?,
+            OcrConfigKind::AzureAi => {
+                AzureAIOCRConfig::default()
+                    .prepare_request(&request, &client)
+                    .await?
+            }
+            OcrConfigKind::AzureCohere => {
+                AzureAICohereParseConfig::default()
+                    .prepare_request(&request, &client)
+                    .await?
+            }
+            OcrConfigKind::AzureDocumentIntelligence => {
+                AzureDocumentIntelligenceOCRConfig
+                    .prepare_request(&request, &client)
+                    .await?
+            }
+            OcrConfigKind::ReductoLegacy => {
+                ReductoParseLegacyConfig
+                    .prepare_request(&request, &client)
+                    .await?
+            }
+            OcrConfigKind::ReductoV3 => {
+                ReductoParseV3Config
+                    .prepare_request(&request, &client)
+                    .await?
+            }
+            OcrConfigKind::VertexAi => {
+                VertexAIOCRConfig::default()
+                    .prepare_request(&request, &client)
+                    .await?
+            }
+            OcrConfigKind::VertexDeepSeek => {
+                VertexAIDeepSeekOCRConfig
+                    .prepare_request(&request, &client)
+                    .await?
+            }
+        };
         Ok(Self {
             client,
             request,
@@ -71,20 +118,57 @@ impl PreparedOcrCall {
         ))
         .await
         .map_err(super::client::transport_error)?;
-        macro_rules! read_adapter {
-            ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
-                match self.request.adapter {
-                    $( OcrAdapterKind::$variant => {
-                        let decoded = $instance.read_response(&self.client, response, &url, &headers, &self.request).await?;
-                        Ok(OcrProviderResponse {
-                            request: self.request,
-                            data: OcrProviderData::$variant(decoded),
-                        })
-                    }, )+
-                }
-            };
-        }
-        super::adapters::for_each_ocr_adapter!(read_adapter)
+        let data = match self.request.config {
+            OcrConfigKind::Cohere => OcrProviderData::Cohere(
+                CohereParseConfig
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::Mistral => OcrProviderData::Mistral(
+                MistralOCRConfig
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::AzureAi => OcrProviderData::AzureAi(
+                AzureAIOCRConfig::default()
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::AzureCohere => OcrProviderData::AzureCohere(
+                AzureAICohereParseConfig::default()
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::AzureDocumentIntelligence => OcrProviderData::AzureDocumentIntelligence(
+                AzureDocumentIntelligenceOCRConfig
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::ReductoLegacy => OcrProviderData::ReductoLegacy(
+                ReductoParseLegacyConfig
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::ReductoV3 => OcrProviderData::ReductoV3(
+                ReductoParseV3Config
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::VertexAi => OcrProviderData::VertexAi(
+                VertexAIOCRConfig::default()
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+            OcrConfigKind::VertexDeepSeek => OcrProviderData::VertexDeepSeek(
+                VertexAIDeepSeekOCRConfig
+                    .read_response(&self.client, response, &url, &headers, &self.request)
+                    .await?,
+            ),
+        };
+        Ok(OcrProviderResponse {
+            request: self.request,
+            data,
+        })
     }
 }
 
@@ -104,28 +188,70 @@ fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, 
         .collect()
 }
 
-macro_rules! provider_data {
-    ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
-        enum OcrProviderData {
-            $( $variant(super::wire::DecodedOcrResponse<<$adapter as OcrAdapter>::ProviderResponse>), )+
-        }
-
-        impl OcrProviderResponse {
-            pub(crate) fn normalize(self) -> Result<LiteLLMOcrResponse, Error> {
-                match self.data {
-                    $( OcrProviderData::$variant(decoded) => {
-                        let response = $instance.transform_ocr_response(&self.request, decoded.data)?;
-                        Ok(LiteLLMOcrResponse { provider_native_response: decoded.native, ..response })
-                    }, )+
-                }
-            }
-        }
-    };
+enum OcrProviderData {
+    Cohere(DecodedOcrResponse<CohereResponse>),
+    Mistral(DecodedOcrResponse<MistralOcrResponse>),
+    AzureAi(DecodedOcrResponse<MistralOcrResponse>),
+    AzureCohere(DecodedOcrResponse<CohereResponse>),
+    AzureDocumentIntelligence(DecodedOcrResponse<AzureDocumentIntelligenceOperation>),
+    ReductoLegacy(DecodedOcrResponse<ReductoResponse>),
+    ReductoV3(DecodedOcrResponse<ReductoResponse>),
+    VertexAi(DecodedOcrResponse<MistralOcrResponse>),
+    VertexDeepSeek(DecodedOcrResponse<DeepSeekOcrResponse>),
 }
 
 pub(crate) struct OcrProviderResponse {
     request: LiteLLMOcrRequest,
     data: OcrProviderData,
+}
+
+impl OcrProviderResponse {
+    pub(crate) fn normalize(self) -> Result<LiteLLMOcrResponse, Error> {
+        let (response, native) = match self.data {
+            OcrProviderData::Cohere(decoded) => (
+                CohereParseConfig.transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::Mistral(decoded) => (
+                MistralOCRConfig.transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::AzureAi(decoded) => (
+                AzureAIOCRConfig::default().transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::AzureCohere(decoded) => (
+                AzureAICohereParseConfig::default()
+                    .transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::AzureDocumentIntelligence(decoded) => (
+                AzureDocumentIntelligenceOCRConfig
+                    .transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::ReductoLegacy(decoded) => (
+                ReductoParseLegacyConfig.transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::ReductoV3(decoded) => (
+                ReductoParseV3Config.transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::VertexAi(decoded) => (
+                VertexAIOCRConfig::default().transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+            OcrProviderData::VertexDeepSeek(decoded) => (
+                VertexAIDeepSeekOCRConfig.transform_ocr_response(&self.request, decoded.data)?,
+                decoded.native,
+            ),
+        };
+        Ok(LiteLLMOcrResponse {
+            provider_native_response: native,
+            ..response
+        })
+    }
 }
 
 pub(crate) async fn post_call(hooks: &Arc<dyn OcrHooks>, bytes: &[u8]) -> Result<(), Error> {
@@ -135,5 +261,3 @@ pub(crate) async fn post_call(hooks: &Arc<dyn OcrHooks>, bytes: &[u8]) -> Result
         .await?;
     Ok(())
 }
-
-super::adapters::for_each_ocr_adapter!(provider_data);

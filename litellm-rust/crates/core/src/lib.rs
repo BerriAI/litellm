@@ -6,6 +6,7 @@ pub mod chat_completions;
 pub mod constants;
 pub mod error;
 pub mod http_utils;
+pub(crate) mod llms;
 mod media;
 pub mod messages;
 #[cfg(any(feature = "observability", test))]

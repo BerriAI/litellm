@@ -1,13 +1,11 @@
-mod adapters;
 pub mod client;
-mod codecs;
-mod document;
+pub(crate) mod document;
 pub mod error;
-mod handler;
+pub(crate) mod handler;
 pub mod hooks;
 mod lifecycle;
-mod prepare;
-mod registry;
+pub(crate) mod prepare;
+mod provider_config;
 pub mod types;
 pub mod wire;
 
