@@ -25,6 +25,7 @@ from litellm.llms.base_llm.search.transformation import BaseSearchConfig, Search
 from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
 from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.chatgpt.authenticator import Authenticator as ChatGPTAuthenticator
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
@@ -473,11 +474,18 @@ def _chatgpt_responses_logging_obj():
     return logging_obj
 
 
+def _chatgpt_responses_config():
+    authenticator = Mock(spec=ChatGPTAuthenticator)
+    authenticator.get_access_token.return_value = "access-test"
+    authenticator.get_account_id.return_value = "acct-test"
+    return ChatGPTResponsesAPIConfig(authenticator=authenticator)
+
+
 def _chatgpt_handler_kwargs(caller_params, client):
     return {
         "model": "gpt-5.3-codex",
         "input": "hi",
-        "responses_api_provider_config": ChatGPTResponsesAPIConfig(),
+        "responses_api_provider_config": _chatgpt_responses_config(),
         "response_api_optional_request_params": caller_params,
         "custom_llm_provider": "chatgpt",
         "litellm_params": GenericLiteLLMParams(api_key="sk-test", api_base="https://chatgpt.example.com"),
