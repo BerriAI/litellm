@@ -217,10 +217,12 @@ def _make_team_obj(
     mcp_servers=None,
     mcp_access_groups=None,
     mcp_tool_permissions=None,
+    access_group_ids=None,
 ):
     """Create a mock team object with the given MCP permissions."""
     mock_team = MagicMock()
     mock_team.team_id = team_id
+    mock_team.access_group_ids = access_group_ids or []
 
     if (
         mcp_servers is not None
@@ -539,6 +541,95 @@ async def test_validate_team_no_mcp_config_blocks_all(
             team_obj=team_obj,
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-1", "server-2"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=["server-1"],
+)
+async def test_validate_key_servers_granted_via_team_unified_access_group_pass(
+    mock_unified_access_groups, mock_allow_all
+):
+    """A team whose only MCP grant comes from a unified access group still
+    allows keys in that team to request those servers."""
+    team_obj = _make_team_obj(access_group_ids=["ag-1"])
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["server-1"]},
+        team_obj=team_obj,
+    )
+    mock_unified_access_groups.assert_awaited_once()
+    assert mock_unified_access_groups.await_args.kwargs["access_group_ids"] == ["ag-1"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-1", "server-2"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=["server-1"],
+)
+async def test_validate_key_servers_outside_team_unified_access_group_rejected(
+    mock_unified_access_groups, mock_allow_all
+):
+    """A server not granted by the team's unified access group is rejected,
+    and the error lists the access-group-granted servers as the team scope."""
+    team_obj = _make_team_obj(access_group_ids=["ag-1"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["server-2"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "server-2" in str(exc_info.value.detail)
+    assert "Team allows: ['server-1']" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-1", "server-2"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=["server-2"],
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_team_allowed_servers_union_object_permission_and_unified_access_group(
+    mock_access_groups, mock_unified_access_groups, mock_allow_all
+):
+    """Team scope is the union of object_permission servers and unified
+    access group servers."""
+    team_obj = _make_team_obj(mcp_servers=["server-1"], access_group_ids=["ag-1"])
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["server-1", "server-2"]},
+        team_obj=team_obj,
+    )
 
 
 @pytest.mark.asyncio

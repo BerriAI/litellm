@@ -565,17 +565,35 @@ async def _get_team_allowed_mcp_servers(
     """
     Get the full set of MCP server IDs a team allows.
 
-    If team has no object_permission or no MCP config, returns empty set
-    (meaning only allow_all_keys servers are permitted).
+    Combines servers granted via the team's object_permission with servers
+    granted via the team's unified access groups (access_group_ids). If the
+    team grants neither, returns empty set (meaning only allow_all_keys
+    servers are permitted).
     """
     if team_obj is None:
         return set()
 
+    from litellm.proxy.auth.auth_checks import (
+        _get_mcp_server_ids_from_access_groups,  # pyright: ignore[reportPrivateUsage]  # same shared resolver the runtime MCP auth path calls
+    )
+
+    access_group_servers: Final = await _get_mcp_server_ids_from_access_groups(
+        access_group_ids=team_obj.access_group_ids or [],
+        prisma_client=prisma_client,
+    )
+    resolved_access_group_servers: Final = await _resolve_mcp_server_identifiers_to_ids(
+        identifiers=set(access_group_servers),
+        prisma_client=prisma_client,
+    )
+    unified_servers: Final = _flatten_resolved_mcp_server_ids(resolved_access_group_servers) | {
+        server for server in access_group_servers if not resolved_access_group_servers.get(server)
+    }
+
     team_object_permission: Final = team_obj.object_permission
     if team_object_permission is None:
-        return set()
+        return unified_servers
 
-    return await _resolve_team_allowed_mcp_servers(
+    return unified_servers | await _resolve_team_allowed_mcp_servers(
         team_object_permission=team_object_permission,
         prisma_client=prisma_client,
     )
@@ -650,14 +668,17 @@ async def validate_key_mcp_servers_against_team(
 
     Rules:
     - If key is in a team: key's mcp_servers must be a subset of
-      (team's allowed servers + allow_all_keys servers)
+      (team's allowed servers + allow_all_keys servers), where the team's
+      allowed servers include servers granted via the team's unified
+      access groups
     - If key is NOT in a team and the caller is a proxy admin: any server or
       access group may be assigned. A proxy admin can already reach every MCP
       server, and runtime access is granted directly from the key's own
       object_permission, so the key is scoped to exactly what the admin selected
     - If key is NOT in a team and the caller is not a proxy admin: key's
       mcp_servers must only contain allow_all_keys servers
-    - If team has no MCP config: key can only use allow_all_keys servers
+    - If team has no MCP config (no object_permission and no unified
+      access groups): key can only use allow_all_keys servers
 
     Raises HTTPException(403) if validation fails.
     """
