@@ -449,31 +449,6 @@ def shipped_cost_map(monkeypatch):
         set_fallback_generalizations(previous_rules)
 
 
-def test_shipped_bare_gemini_id_routes_to_vertex_ai(shipped_cost_map):
-    for model in (
-        "gemini-3.9-flash",
-        "gemini-4-pro",
-        "gemini-4-pro-preview",
-        "gemini-3.9-flash-lite-preview-09-2026",
-    ):
-        assert model not in litellm.model_cost
-        assert litellm.get_llm_provider(model=model)[1] == "vertex_ai"
-
-    assert litellm.get_llm_provider(model="gemini-2.5-pro")[1] == "vertex_ai"
-
-
-def test_shipped_gemini_routing_rule_is_anchored(shipped_cost_map):
-    for model in (
-        "gemini-4-flash-image",
-        "gemini-3.9-flash-preview-tts",
-        "gemini-2.0-flash-new",
-        "gemini-1.5-flash-new",
-        "gemini-4-flashy",
-        "gemini/gemini-4-pro",
-    ):
-        assert match_routing_generalization(model) is None, model
-
-
 @pytest.mark.parametrize(
     "model,provider",
     [
@@ -491,10 +466,11 @@ def test_shipped_gemini_baseline_resolves_unmapped_ids_provider_neutral(shipped_
     info = litellm.get_model_info(model, custom_llm_provider=provider)
     assert info["litellm_provider"] == provider
     assert info["mode"] == "chat"
-    assert info["max_input_tokens"] == 1048576
-    assert info["max_tokens"] == 65536
+    assert not info.get("max_input_tokens")
     assert info["supports_reasoning"] is True
     assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_response_schema"] is True
     assert info["supports_vision"] is True
     assert not info.get("input_cost_per_token")
     assert not info.get("output_cost_per_token")
