@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Coroutine, Mapping, Sequence
-from typing import final
+from typing import Never, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
@@ -16,7 +16,7 @@ def ocr(
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, object] | None = None,
     optional_params: Mapping[str, object] | None = None,
-    input_sources: Sequence[object] | None = None,
+    input_sources: Mapping[str, str] | None = None,
     timeout_seconds: float | None = None,
 ) -> dict[str, object]: ...
 def aocr(
@@ -27,7 +27,7 @@ def aocr(
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, object] | None = None,
     optional_params: Mapping[str, object] | None = None,
-    input_sources: Sequence[object] | None = None,
+    input_sources: Mapping[str, str] | None = None,
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
 
@@ -113,6 +113,7 @@ def achat_completions(
 
 @final
 class ResponsesWebSocketConnection:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
     @classmethod
     def connect(
         cls,
