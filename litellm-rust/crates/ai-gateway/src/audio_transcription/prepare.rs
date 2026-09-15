@@ -25,10 +25,12 @@ pub(crate) fn prepare_audio_transcription_call(
             model: request.model,
             custom_llm_provider: "bedrock",
         });
+    let model = provider_info.model.to_string();
+    let provider = provider_info.custom_llm_provider.to_string();
     PreparedAudioTranscriptionCall {
         request: PreparedAudioTranscriptionRequest {
-            model: provider_info.model.to_string(),
-            custom_llm_provider: provider_info.custom_llm_provider.to_string(),
+            model,
+            custom_llm_provider: provider.clone(),
             litellm_call_id: call_id,
             audio: request.audio,
             api_key: request.api_key.map(str::to_string),
@@ -41,6 +43,7 @@ pub(crate) fn prepare_audio_transcription_call(
             CustomLoggerRunner::new(request.callbacks),
             CustomGuardrailRunner::new(request.guardrails),
             request.request_metadata,
+            provider,
         ),
     }
 }

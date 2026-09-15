@@ -11,12 +11,14 @@ use litellm_python_interop::{
 use super::callbacks;
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::project::{ProjectedOcrFields, admitted_call, project_request};
+use crate::lifecycle::contract::{CallMode, CallbackPhase, PythonCallType};
 use crate::lifecycle::{
     OperationClass, PythonCallState, PythonRoute, missing_state, now, run_call,
 };
 
 struct PythonOcrHost {
     state: PythonCallState,
+    adapter: Py<PyAny>,
     data: OcrHostData,
 }
 
@@ -92,12 +94,17 @@ impl PythonOcrHost {
         let pre_call = projected.pre_call.as_ref().ok_or_else(missing_state)?;
         self.state.logger()?.update_ocr(
             py,
+            &self.adapter,
             &self.state.kwargs,
             pre_call,
             &projected.fields.secret_fields,
             &request.url,
         )?;
-        if !self.state.logger()?.callbacks_needed(py, "payload")? {
+        if !self
+            .state
+            .logger()?
+            .callbacks_needed(py, CallbackPhase::Payload)?
+        {
             self.state
                 .logger()?
                 .object(py)
@@ -145,7 +152,7 @@ impl PythonOcrHost {
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
         let logger = self.state.logger()?;
-        if logger.callbacks_needed(py, "payload")? {
+        if logger.callbacks_needed(py, CallbackPhase::Payload)? {
             let projected = self.projected()?;
             logger.post_ocr(
                 py,
@@ -215,7 +222,8 @@ impl PythonRoute for PythonOcrHost {
             }
             OcrHostOperation::ConstructResponse(response) => {
                 self.state.end = Some(now(py)?);
-                self.state.response = Some(callbacks::response(py, response.as_ref())?);
+                self.state.response =
+                    Some(callbacks::response(py, &self.adapter, response.as_ref())?);
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::MapFailure(error) => {
@@ -234,7 +242,7 @@ impl PythonRoute for PythonOcrHost {
                     ),
                     OcrHostData::Released => return Err(missing_state()),
                 };
-                let mapped = callbacks::map_failure(py, error, request, provider)?;
+                let mapped = callbacks::map_failure(py, &self.adapter, error, request, provider)?;
                 self.state
                     .retain_error(py, PyErr::from_value(mapped.into_bound(py).into_any()));
                 OcrHostResult::Lifecycle(Ok(()))
@@ -249,6 +257,7 @@ impl PythonRoute for PythonOcrHost {
         self.data = OcrHostData::Released;
     }
     fn traverse(&self, visit: &pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
+        visit.call(&self.adapter)?;
         match &self.data {
             OcrHostData::Unprojected { request } => visit.call(request),
             OcrHostData::Projected(projected) => {
@@ -275,13 +284,13 @@ impl litellm_core::ocr::hooks::OcrHooks for BridgeOcrHooks {
     }
 }
 
-#[pyfunction]
-fn _ocr_lifecycle(
+fn run(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
+    host: Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
     let call = admitted_call(OcrCall::admit(
@@ -296,9 +305,14 @@ fn _ocr_lifecycle(
             py,
             args.unbind(),
             kwargs.copy()?.unbind(),
-            asynchronous,
-            if asynchronous { "aocr" } else { "ocr" },
+            CallMode::from_async(asynchronous),
+            if asynchronous {
+                PythonCallType::AsyncOcr
+            } else {
+                PythonCallType::Ocr
+            },
         )?,
+        adapter: host.unbind(),
         data: OcrHostData::Unprojected {
             request: request.unbind(),
         },
@@ -306,6 +320,29 @@ fn _ocr_lifecycle(
     run_call(py, call, host)
 }
 
+#[pyfunction]
+fn ocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    host: Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    run(py, request, args, kwargs, false, host)
+}
+
+#[pyfunction]
+fn aocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    host: Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    run(py, request, args, kwargs, true, host)
+}
+
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(_ocr_lifecycle, module)?)
+    crate::routes::definition::add_function(module, wrap_pyfunction!(ocr, module)?)?;
+    crate::routes::definition::add_function(module, wrap_pyfunction!(aocr, module)?)
 }

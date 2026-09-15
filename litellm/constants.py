@@ -911,7 +911,7 @@ openai_compatible_endpoints: Final[list] = [
 ]
 
 
-openai_compatible_providers: Final[list] = [
+openai_compatible_providers: Final[list[str]] = [  # mutable-ok: module registry is initialized once
     "anyscale",
     "groq",
     "nvidia_nim",

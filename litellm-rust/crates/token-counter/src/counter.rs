@@ -25,6 +25,7 @@ pub struct InputTokenCount {
 }
 
 enum Encoder {
+    Admission,
     HuggingFace {
         tokenizer: Box<tokenizers::Tokenizer>,
         byte_level: Option<ByteLevelCounter>,
@@ -40,6 +41,15 @@ pub struct TokenCounter {
 }
 
 impl TokenCounter {
+    pub fn admit_request(body: &[u8]) -> Result<(), Error> {
+        let request = CountableRequest::parse(body)?;
+        Self {
+            encoder: Encoder::Admission,
+        }
+        .count_request(&request)
+        .map(|_| ())
+    }
+
     /// Load a HuggingFace `tokenizer.json` document. The host reads the file.
     pub fn from_json(tokenizer_json: &str) -> Result<Self, Error> {
         let tokenizer = tokenizer_json
@@ -74,6 +84,7 @@ impl TokenCounter {
 
     pub fn count_text(&self, text: &str) -> Result<usize, Error> {
         match &self.encoder {
+            Encoder::Admission => Ok(0),
             Encoder::Tiktoken(counter) => Ok(counter.count(text)),
             Encoder::HuggingFace {
                 tokenizer,

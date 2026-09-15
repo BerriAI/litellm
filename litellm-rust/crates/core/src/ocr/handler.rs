@@ -1,10 +1,9 @@
 use super::OcrClient;
 use super::adapters::OcrAdapter;
-use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
+use super::hooks::{OcrHooks, OcrPostCallRequest, OcrPreCallRequest};
 use super::registry::OcrAdapterKind;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::Error;
-use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 use std::sync::Arc;
 
 pub(crate) async fn perform_ocr_request(
@@ -12,28 +11,38 @@ pub(crate) async fn perform_ocr_request(
     request: LiteLLMOcrRequest,
 ) -> Result<LiteLLMOcrResponse, Error> {
     request.response_format()?;
-    let context = CallLifecycleContext::new(
-        "ocr",
-        request.model.clone(),
-        request.adapter.provider().as_str(),
-        request
-            .litellm_call_id
-            .clone()
-            .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>())),
-    );
-    let hooks = OcrLifecycleHooks {
-        hooks: request.hooks.clone(),
-        provider_name: context.custom_llm_provider.clone(),
-    };
-    CallLifecycle::default()
-        .run(context, request, &hooks, |request| async move {
-            PreparedOcrCall::prepare(client.clone(), request)
-                .await?
-                .execute()
-                .await?
-                .normalize()
+    let request = pre_call(request).await?;
+    PreparedOcrCall::prepare(client.clone(), request)
+        .await?
+        .execute()
+        .await?
+        .normalize()
+}
+
+async fn pre_call(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrRequest, Error> {
+    if !request.hooks.intercepts_requests() {
+        return Ok(request);
+    }
+    let changed = request
+        .hooks
+        .pre_call(OcrPreCallRequest {
+            model: request.model.clone(),
+            custom_llm_provider: request.adapter.provider().as_str().to_owned(),
+            document: request.document,
+            optional_params: serde_json::Value::Object(request.optional_params),
         })
-        .await
+        .await?;
+    let serde_json::Value::Object(optional_params) = changed.optional_params else {
+        return Err(super::error::OcrRequestError::RequestField {
+            path: "guardrail.optional_params".into(),
+        }
+        .into());
+    };
+    Ok(LiteLLMOcrRequest {
+        document: changed.document,
+        optional_params,
+        ..request
+    })
 }
 
 pub(crate) struct PreparedOcrCall {

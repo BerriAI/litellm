@@ -4,8 +4,16 @@ use std::thread;
 
 use serde_json::{Map, json};
 
-use super::audio_transcription;
 use super::types::AudioTranscriptionRequest;
+use super::{admit, audio_transcription};
+
+#[test]
+fn uninspectable_request_declines_in_core() {
+    assert_eq!(
+        admit(crate::call_lifecycle::admission::Inspection::Uninspectable),
+        Err(crate::call_lifecycle::admission::AdmissionDecline::Uninspectable)
+    );
+}
 
 #[tokio::test]
 async fn bedrock_request_is_signed_and_contains_audio() {

@@ -274,6 +274,15 @@ impl ResponsesWebSocketConnection {
     }
 }
 
+pub fn admit(
+    provider: Option<&str>,
+) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+    match provider {
+        Some("openai") => Ok(()),
+        _ => Err(crate::call_lifecycle::admission::AdmissionDecline::Provider),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1926,6 +1926,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-cache-memory"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
+ "rstest",
+ "serde_json",
+]
+
+[[package]]
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
@@ -1952,6 +1972,8 @@ dependencies = [
  "data-url",
  "futures-util",
  "gcp_auth",
+ "litellm-cache",
+ "litellm-cache-memory",
  "mime_guess",
  "moka",
  "rand 0.8.7",
@@ -1980,6 +2002,8 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "futures-util",
+ "litellm-cache",
+ "litellm-cache-memory",
  "litellm-core",
  "litellm-python-interop",
  "litellm-token-counter",

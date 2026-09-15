@@ -633,7 +633,7 @@ async def acompletion(
     try:
         # Use a partial function to pass your keyword arguments
         kwargs.pop("acompletion", None)
-        func: Final = partial(completion, **completion_kwargs, **kwargs)
+        func: Final = partial(_python_completion, **completion_kwargs, **kwargs)
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
@@ -7685,7 +7685,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
-        func: Final = partial(transcription, *args, **kwargs)
+        func: Final = partial(_python_transcription, *args, **kwargs)
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
@@ -9181,3 +9181,24 @@ def __getattr__(name: str) -> tiktoken.Encoding:
         _encoding_cache = _encoding
         return _encoding
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+from litellm.rust_bridge.chat_completions.lifecycle import wrap_async as _wrap_chat_async
+from litellm.rust_bridge.chat_completions.lifecycle import wrap_sync as _wrap_chat_sync
+from litellm.rust_bridge.transcription.lifecycle import wrap_async as _wrap_transcription_async
+from litellm.rust_bridge.transcription.lifecycle import wrap_sync as _wrap_transcription_sync
+
+_python_completion: Final = completion
+_python_acompletion: Final = acompletion
+_python_transcription: Final = transcription
+_python_atranscription: Final = atranscription
+completion = _wrap_chat_sync(_python_completion)  # rebind-ok: the public selector wraps the captured Python lifecycle
+acompletion = _wrap_chat_async(
+    _python_acompletion
+)  # rebind-ok: the public selector wraps the captured Python lifecycle
+transcription = _wrap_transcription_sync(
+    _python_transcription
+)  # rebind-ok: the public selector wraps the captured Python lifecycle
+atranscription = _wrap_transcription_async(
+    _python_atranscription
+)  # rebind-ok: the public selector wraps the captured Python lifecycle

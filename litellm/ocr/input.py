@@ -4,8 +4,7 @@ from typing import Final, Literal, Protocol, cast  # noqa: TID251  # native call
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.configuration import rust_ocr_enabled
+from litellm.rust_bridge.ocr.definition import COMPONENT
 
 
 class FileReader(Protocol):
@@ -30,7 +29,7 @@ class NativeMimeType(Protocol):
     def __call__(self, file_name: str) -> str: ...
 
 
-_FILE_DOCUMENT: Final = NativeBinding(
+_FILE_DOCUMENT: Final = COMPONENT.bind(
     "_ocr_file_document",
     validate=lambda value: (
         cast(  # cast-ok: native export owns the callable signature
@@ -40,7 +39,7 @@ _FILE_DOCUMENT: Final = NativeBinding(
         else None
     ),
 )
-_UPLOAD_DOCUMENT: Final = NativeBinding(
+_UPLOAD_DOCUMENT: Final = COMPONENT.bind(
     "_ocr_upload_document",
     validate=lambda value: (
         cast(  # cast-ok: native export owns the callable signature
@@ -50,10 +49,10 @@ _UPLOAD_DOCUMENT: Final = NativeBinding(
         else None
     ),
 )
-_MAX_FILE_BYTES: Final = NativeBinding(
+_MAX_FILE_BYTES: Final = COMPONENT.bind(
     "_OCR_MAX_FILE_BYTES", validate=lambda value: value if isinstance(value, int) and value > 0 else None
 )
-_MIME_TYPE: Final = NativeBinding(
+_MIME_TYPE: Final = COMPONENT.bind(
     "_ocr_mime_type",
     validate=lambda value: (
         cast(  # cast-ok: native export owns the callable signature
@@ -67,7 +66,7 @@ _PYTHON_MAX_FILE_BYTES: Final = 50 * 1024 * 1024
 
 
 def get_mime_type(file_path: str) -> str:
-    native: Final = _MIME_TYPE.load() if rust_ocr_enabled() else None
+    native: Final = COMPONENT.resolve().select(_MIME_TYPE)
     if native is None:
         from litellm.ocr import legacy
 
@@ -76,14 +75,14 @@ def get_mime_type(file_path: str) -> str:
 
 
 def get_max_file_bytes() -> int:
-    limit: Final = _MAX_FILE_BYTES.load() if rust_ocr_enabled() else None
+    limit: Final = COMPONENT.resolve().select(_MAX_FILE_BYTES)
     if limit is None:
         return _PYTHON_MAX_FILE_BYTES
     return limit
 
 
 def convert_file_document_to_url_document(document: FileDocument) -> dict[str, str]:
-    native: Final = _FILE_DOCUMENT.load() if rust_ocr_enabled() else None
+    native: Final = COMPONENT.resolve().select(_FILE_DOCUMENT)
     if native is None:
         from litellm.ocr import legacy
 
@@ -94,7 +93,7 @@ def convert_file_document_to_url_document(document: FileDocument) -> dict[str, s
 def convert_upload_to_url_document(
     file_content: bytes, filename: str | None, content_type: str | None
 ) -> dict[str, str]:
-    native: Final = _UPLOAD_DOCUMENT.load() if rust_ocr_enabled() else None
+    native: Final = COMPONENT.resolve().select(_UPLOAD_DOCUMENT)
     if native is None:
         from litellm.ocr import legacy
 

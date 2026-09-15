@@ -1,43 +1,51 @@
-# CLAUDE.md
+# Python bridge
 
-Rules for `litellm-rust/crates/python-bridge`.
+Follow `AGENTS.md` for the boundary invariants
 
-## Responsibility
+## Ownership
 
-`python-bridge` is the PyO3 boundary between Python LiteLLM and Rust transforms.
-Keep this crate thin. It exposes LiteLLM Rust APIs, assembles domain requests,
-maps domain errors to Python exceptions, and delegates generic conversion and
-GIL handling to `litellm-python-interop`.
+Core owns typed native state, effect-free admission, lifecycle sequencing,
+provider preparation and I/O, normalization, and dispatch decisions
 
-## Bridge Shape
+This crate owns Python argument projection, retained Python references, public
+response and exception construction, callback invocation, and host scheduling
+Generic conversion and GIL utilities belong in `litellm-python-interop`
 
-- Prefer one stable method per top-level LiteLLM route, for example
-  `messages(...)`, calling the matching `litellm-core` entrypoint.
-- Do not add one exported PyO3 function per provider helper unless there is a
-  measured reason.
-- Provider dispatch belongs in the `litellm-core` route module (e.g.
-  `litellm_core::messages`), not in this PyO3 crate.
-- Python owns rollout state and fallback. Rust should return errors; Python
-  decides whether to raise or fall back. For a rust-only provider/route (no
-  Python reference), the Python side is a thin dispatch that calls Rust and
-  raises when the bridge is unavailable, with no fallback.
-- Keep the Python interface minimal (well under 100 lines per route): it only
-  marshals inputs and calls Rust. Do not add per-route feature flags, and do
-  not put provider dispatch in `litellm/main.py`; it lives in a thin dispatch
-  class under `litellm/llms/<provider>/<route>/`.
+Only core admission may authorize legacy fallback. Execution and conversion
+failures are terminal, including authentication and connection failures
 
-## Data Handling
+## Structure
 
-- OCR payloads can contain personal data and large base64 images. Do not log
-  payloads or provider responses.
-- Avoid copying large payloads more than needed. The current JSON round-trip is
-  acceptable for the first scaffold, but future performance work should evaluate
-  direct PyO3 conversion before expanding Rust coverage to image-heavy paths.
-- Do not expose raw Rust errors that include document contents or upstream
-  bodies.
+Each route registers its lifecycle binding from `routes/<route>/lifecycle.rs`
+Unimplemented routes use `unimplemented_lifecycle_route!`. Keep value bindings
+in `value.rs` where needed, and add projection or callback modules when the
+route requires them. Register route functions through `definition::add_function`
+to reject duplicate exports
 
-## Tests
+`lifecycle/mod.rs` declares modules and exports the shared boundary types
+`runner.rs` drives core calls, `state.rs` retains Python call state, and
+`dispatch.rs` executes core-selected delivery and retains logging arguments
+`handle.rs` owns the Created/Running/Suspended/Closed execution protocol
+`bindings.rs` invokes Python integrations, and `preparation.rs` projects shared
+preparation inputs. Runtime waiting and panic containment stay in `execution.rs`
 
-- `cargo test --workspace` must compile this crate.
-- Python tests must cover bridge disabled, bridge enabled, and module-missing
-  fallback behavior for every exposed route.
+The Python coroutine driver lives in `litellm/rust_bridge/lifecycle.py`
+Read Python state only at core-selected checkpoints. Preserve argument identity,
+aliases, omitted values, and deliberate copies across suspension and callbacks
+
+## Data handling
+
+Project only consumed values at their reference read points. Keep native
+provider state typed in core and preserve captured upload and request bytes
+Do not log OCR documents or upstream bodies, or expose them through raw errors
+Measure conversion and copy costs before optimizing large payloads
+
+## Verification
+
+`cargo test --workspace` must compile this crate. Cover disabled, enabled, and
+unavailable execution, effect-free decline, terminal errors, callback delivery,
+re-entry, GC, and cancellation. Validate the installed extension with a fresh
+wheel and positive native execution evidence for lifecycle changes
+
+Keep `_native.pyi` consistent with the exported bindings, including the
+Future-returning value bindings and coroutine-returning lifecycle bindings

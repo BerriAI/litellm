@@ -8,6 +8,7 @@ use litellm_core::ocr::hooks::OcrPreCallRequest;
 use litellm_python_interop::to_py_preserving_errors as to_py;
 
 use crate::lifecycle::PythonLogger;
+use crate::lifecycle::contract::CallbackPhase;
 
 pub(super) struct OcrLoggingFields {
     model: String,
@@ -29,6 +30,7 @@ impl PythonLogger {
     pub(super) fn update_ocr(
         &self,
         py: Python<'_>,
+        host: &Py<PyAny>,
         kwargs: &Py<PyDict>,
         pre_call: &OcrLoggingFields,
         secret_fields: &[&str],
@@ -58,7 +60,7 @@ impl PythonLogger {
                 params.set_item(name, value)?;
             }
         }
-        for name in custom_pricing_fields(py)? {
+        for name in custom_pricing_fields(py, host)? {
             if let Some(value) = kwargs.bind(py).get_item(&name)?
                 && !value.is_none()
             {
@@ -88,7 +90,7 @@ impl PythonLogger {
         kwargs.set_item("input", "OCR document processing")?;
         kwargs.set_item("api_key", api_key)?;
         kwargs.set_item("additional_args", &additional)?;
-        if self.callbacks_needed(py, "input")? {
+        if self.callbacks_needed(py, CallbackPhase::Input)? {
             self.object(py).call_method("pre_call", (), Some(&kwargs))?;
         } else {
             self.object(py)
@@ -108,7 +110,7 @@ impl PythonLogger {
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
         additional.set_item("headers", headers)?;
-        if self.callbacks_needed(py, "input")? {
+        if self.callbacks_needed(py, CallbackPhase::Input)? {
             let kwargs = PyDict::new(py);
             kwargs.set_item("original_response", to_py(py, original_response)?)?;
             kwargs.set_item("additional_args", &additional)?;
@@ -127,15 +129,10 @@ impl PythonLogger {
     }
 }
 
-fn custom_pricing_fields(py: Python<'_>) -> PyResult<Vec<String>> {
-    py.import("litellm.types.utils")?
-        .getattr("CustomPricingLiteLLMParams")?
-        .getattr("model_fields")?
-        .cast_into::<PyDict>()?
-        .keys()
-        .iter()
-        .map(|name| name.extract::<String>())
-        .collect()
+fn custom_pricing_fields(py: Python<'_>, host: &Py<PyAny>) -> PyResult<Vec<String>> {
+    host.bind(py)
+        .call_method0("custom_pricing_fields")?
+        .extract()
 }
 
 fn redact(
@@ -158,21 +155,26 @@ fn redact(
     Ok(redacted.unbind())
 }
 
-pub(super) fn response(py: Python<'_>, response: &LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {
-    py.import("litellm.rust_bridge.ocr")?
-        .getattr("_response")?
+pub(super) fn response(
+    py: Python<'_>,
+    host: &Py<PyAny>,
+    response: &LiteLLMOcrResponse,
+) -> PyResult<Py<PyAny>> {
+    host.bind(py)
+        .getattr("response")?
         .call1((to_py(py, response)?,))
         .map(Bound::unbind)
 }
 
 pub(super) fn map_failure(
     py: Python<'_>,
+    host: &Py<PyAny>,
     error: &Py<PyBaseException>,
     request: &Bound<'_, PyAny>,
     provider: &str,
 ) -> PyResult<Py<PyBaseException>> {
-    Ok(py
-        .import("litellm.rust_bridge.ocr_lifecycle")?
+    Ok(host
+        .bind(py)
         .getattr("map_failure")?
         .call1((error, request, provider))?
         .extract()?)

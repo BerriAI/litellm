@@ -2381,15 +2381,6 @@ def token_counter(
     Kept for backwards compatibility.
     """
 
-    #########################################################
-    # Flag to disable token counter
-    # We've gotten reports of this consuming CPU cycles,
-    # exposing this flag to allow users to disable
-    # it to confirm if this is indeed the issue
-    #########################################################
-    if litellm.disable_token_counter is True:
-        return 0
-
     return _get_token_counter_new()(
         model,
         custom_tokenizer,

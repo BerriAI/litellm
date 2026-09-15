@@ -25,6 +25,26 @@ pub trait HostCall: Send + Sync {
     ) -> HostCallFuture<'_, Self::Operation, Self::Complete>;
 }
 
+pub type LifecycleBackendFuture<'a, R> = Pin<Box<dyn Future<Output = R> + Send + 'a>>;
+
+pub trait LifecycleBackend<O, R>: Send + Sync {
+    fn invoke(&self, operation: O) -> LifecycleBackendFuture<'_, R>;
+}
+
+pub async fn drive<C, B>(call: &mut C, backend: &B) -> Result<C::Complete, crate::Error>
+where
+    C: HostCall,
+    B: LifecycleBackend<C::Operation, C::Result> + ?Sized,
+{
+    let mut result = None;
+    loop {
+        match call.resume(result.take()).await? {
+            HostCallStep::Host(operation) => result = Some(backend.invoke(operation).await),
+            HostCallStep::Complete(response) => return Ok(response),
+        }
+    }
+}
+
 pub enum HostStep<V, S> {
     Ready(V),
     Suspend(S),
@@ -35,9 +55,12 @@ pub enum HostPhase {
     Setup,
     DeploymentPreCall,
     Prepare,
+    CacheLookup,
     Execute,
     ConstructResponse,
+    PostProcess,
     DeploymentPostCall,
+    CacheStore,
     Finalize,
     Success,
     MapFailure,
@@ -56,6 +79,7 @@ pub enum HostFailure {
 pub struct HostLifecycle {
     phase: HostPhase,
     asynchronous: bool,
+    cached: bool,
 }
 
 impl HostLifecycle {
@@ -63,7 +87,13 @@ impl HostLifecycle {
         Self {
             phase: HostPhase::Setup,
             asynchronous,
+            cached: false,
         }
+    }
+
+    pub fn cache_hit(&mut self) {
+        self.cached = true;
+        self.phase = HostPhase::ConstructResponse;
     }
 
     pub fn phase(&self) -> HostPhase {
@@ -104,10 +134,16 @@ impl HostLifecycle {
         self.phase = match self.phase {
             HostPhase::Setup if self.asynchronous => HostPhase::DeploymentPreCall,
             HostPhase::Setup | HostPhase::DeploymentPreCall => HostPhase::Prepare,
-            HostPhase::Prepare => HostPhase::Execute,
+            HostPhase::Prepare => HostPhase::CacheLookup,
+            HostPhase::CacheLookup => HostPhase::Execute,
             HostPhase::Execute => HostPhase::ConstructResponse,
-            HostPhase::ConstructResponse if self.asynchronous => HostPhase::DeploymentPostCall,
-            HostPhase::ConstructResponse | HostPhase::DeploymentPostCall => HostPhase::Finalize,
+            HostPhase::ConstructResponse => HostPhase::PostProcess,
+            HostPhase::PostProcess if self.cached => HostPhase::Finalize,
+            HostPhase::PostProcess if self.asynchronous => HostPhase::DeploymentPostCall,
+            HostPhase::PostProcess => HostPhase::CacheStore,
+            HostPhase::DeploymentPostCall if self.cached => HostPhase::Finalize,
+            HostPhase::DeploymentPostCall => HostPhase::CacheStore,
+            HostPhase::CacheStore => HostPhase::Finalize,
             HostPhase::Finalize => HostPhase::Success,
             HostPhase::MapFailure if self.asynchronous => HostPhase::DeploymentFailure,
             HostPhase::MapFailure | HostPhase::DeploymentFailure => HostPhase::Failure,

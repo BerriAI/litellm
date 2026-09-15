@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::caching::in_memory_cache::InMemoryCache;
 use crate::error::Error;
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
@@ -12,6 +11,7 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
+use litellm_cache_memory::InMemoryCache;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -26,7 +26,7 @@ use super::constants::{
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
 
-static IAM_CREDENTIALS_CACHE: OnceLock<Mutex<InMemoryCache<Credentials>>> = OnceLock::new();
+static IAM_CREDENTIALS_CACHE: OnceLock<InMemoryCache<Credentials>> = OnceLock::new();
 
 fn credential_cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
     match flow {
@@ -108,16 +108,17 @@ fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
 }
 
 fn get_cached_credentials(key: &str) -> Option<Credentials> {
-    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
-    let mut entries = cache.lock().ok()?;
-    entries.get_cache(key)
+    IAM_CREDENTIALS_CACHE
+        .get_or_init(InMemoryCache::default)
+        .get_cache(key)
+        .ok()
+        .flatten()
 }
 
 fn set_cached_credentials(key: String, credentials: Credentials, ttl: Duration) {
-    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
-    if let Ok(mut entries) = cache.lock() {
-        entries.set_cache(key, credentials, Some(ttl));
-    }
+    let _ = IAM_CREDENTIALS_CACHE
+        .get_or_init(InMemoryCache::default)
+        .set_cache(key, credentials, Some(ttl));
 }
 
 fn role_identity(arn: &str) -> Option<(&str, &str, &str)> {

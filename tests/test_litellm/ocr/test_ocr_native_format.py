@@ -2,12 +2,12 @@
 Tests for the OCR `req_format` option in the SDK request path.
 """
 
-from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.ocr.host import HOST
 
 
 def test_rust_ocr_response_retains_provider_native_response():
     provider_response = {"status": "succeeded", "analyzeResult": {"content": "native"}}
-    response = rust_ocr_bridge._response(
+    response = HOST.response(
         {
             "pages": [],
             "model": "prebuilt-layout",

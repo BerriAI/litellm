@@ -11,6 +11,7 @@ mod client;
 mod common_utils;
 pub mod conversation;
 pub(crate) mod handler;
+pub mod lifecycle;
 mod prepare;
 pub mod response_utils;
 pub mod transformation;
@@ -18,15 +19,17 @@ pub mod types;
 
 use serde_json::{Map, Value};
 
-use handler::execute_chat_completions_provider_call;
-use prepare::{parse_messages, resolve_provider_config, resolve_request};
+use prepare::{parse_messages, resolve_provider_config};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(resolve_request(request)?).await
+    crate::call_lifecycle::provider::run_completed::<lifecycle::ChatCompletionsRoute>(
+        request.into(),
+    )
+    .await
 }
 
 /// Whether the core would accept this request, without resolving credentials or
@@ -53,6 +56,73 @@ pub fn chat_completions_decline_reason(
     config
         .unsupported_reason(&messages, optional_params)
         .map(|reason| reason.0)
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdmissionContext {
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default)]
+    pub anthropic_user_id: bool,
+    #[serde(default)]
+    pub bedrock_metadata_owned: bool,
+}
+
+pub struct ChatCompletionsAdmission {
+    pub model: String,
+    pub provider: Option<String>,
+    pub messages: Value,
+    pub params: Map<String, Value>,
+    pub headers: Option<Map<String, Value>>,
+    pub context: AdmissionContext,
+}
+
+pub fn admit(
+    inspection: crate::call_lifecycle::admission::Inspection<ChatCompletionsAdmission>,
+) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+    use crate::call_lifecycle::admission::{AdmissionDecline, Inspection};
+    let Inspection::Inspectable(admission) = inspection else {
+        return Err(AdmissionDecline::Uninspectable);
+    };
+    let resolved = crate::routing_utils::provider::get_custom_llm_provider(
+        &admission.model,
+        admission.provider.as_deref(),
+    );
+    let provider = admission
+        .provider
+        .as_deref()
+        .or_else(|| resolved.as_ref().map(|value| value.custom_llm_provider));
+    if admission.context.stream {
+        return Err(AdmissionDecline::Feature("streaming"));
+    }
+    if (provider == Some("anthropic") && admission.context.anthropic_user_id)
+        || (provider == Some("bedrock") && admission.context.bedrock_metadata_owned)
+    {
+        return Err(AdmissionDecline::HostOperations);
+    }
+    #[cfg(feature = "bedrock-auth")]
+    if provider == Some("bedrock")
+        && admission.headers.as_ref().is_some_and(|headers| {
+            headers
+                .keys()
+                .any(|name| crate::providers::bedrock::aws_base::is_sigv4_computed_header(name))
+        })
+    {
+        return Err(AdmissionDecline::Feature(
+            "request forwards a header AWS SigV4 computes",
+        ));
+    }
+    let _ = admission.headers;
+    match chat_completions_decline_reason(
+        &admission.model,
+        provider,
+        admission.messages,
+        &admission.params,
+    ) {
+        Some(reason) => Err(AdmissionDecline::Feature(reason)),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use crate::call_lifecycle::provider::{ProviderHooks, ProviderRequest, ProviderResponse};
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
 use crate::http_utils::http_request;
@@ -10,8 +11,24 @@ use super::types::{AnthropicMessagesResponse, MessagesRequest};
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest<'_>,
+    hooks: &dyn ProviderHooks,
 ) -> Result<AnthropicMessagesResponse, Error> {
     let request = prepare_provider_request(request)?;
+    let changed = hooks
+        .before_request(ProviderRequest {
+            model: request.model.clone(),
+            url: request.url.clone(),
+            headers: request.upstream_headers.clone(),
+            body: request.body.clone(),
+        })
+        .await?;
+    let request = super::types::ProviderMessagesRequest {
+        model: changed.model,
+        url: changed.url,
+        upstream_headers: changed.headers,
+        body: changed.body,
+        ..request
+    };
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);
@@ -30,9 +47,17 @@ pub(super) async fn execute_messages_provider_call(
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
 
-    if !status.is_success() {
-        return Err(Error::Http {
+    let observed = hooks
+        .after_response(ProviderResponse {
             status: status.as_u16(),
+            body: text,
+        })
+        .await?;
+    let observed_status = observed.status;
+    let text = observed.body;
+    if !(200..300).contains(&observed_status) {
+        return Err(Error::Http {
+            status: observed_status,
             body: truncate_error_body(&text),
         });
     }

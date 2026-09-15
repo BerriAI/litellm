@@ -19,3 +19,20 @@ mod unicode_classes;
 pub use counter::{InputTokenCount, TokenCounter};
 pub use error::Error;
 pub use types::CountableRequest;
+
+pub fn admit_tokenizer(
+    kind: Option<&str>,
+    encoding: &str,
+    disabled: bool,
+    legacy_accounting: bool,
+) -> Result<&'static str, Error> {
+    if disabled {
+        return Err(Error::UnsupportedTokenizer);
+    }
+    match (kind, encoding, legacy_accounting) {
+        (Some("anthropic"), _, _) => Ok("anthropic"),
+        (None, "cl100k_base", false) => Ok("cl100k_base"),
+        (None, "o200k_base", false) => Ok("o200k_base"),
+        _ => Err(Error::UnsupportedTokenizer),
+    }
+}

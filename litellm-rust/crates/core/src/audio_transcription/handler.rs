@@ -1,5 +1,8 @@
 use serde_json::Value;
 
+use crate::call_lifecycle::provider::{
+    NoopProviderHooks, ProviderHooks, ProviderRequest, ProviderResponse,
+};
 use crate::error::Error;
 use crate::http_utils::{http_request, truncate_error_body};
 
@@ -10,6 +13,28 @@ use super::types::ProviderAudioTranscriptionRequest;
 pub async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
+    execute_with_hooks(request, &NoopProviderHooks).await
+}
+
+pub(super) async fn execute_with_hooks(
+    request: ProviderAudioTranscriptionRequest,
+    hooks: &dyn ProviderHooks,
+) -> Result<Value, Error> {
+    let changed = hooks
+        .before_request(ProviderRequest {
+            model: request.model.clone(),
+            url: request.url.clone(),
+            headers: request.upstream_headers.clone(),
+            body: request.body.clone(),
+        })
+        .await?;
+    let request = ProviderAudioTranscriptionRequest {
+        model: changed.model,
+        url: changed.url,
+        upstream_headers: changed.headers,
+        body: changed.body,
+        ..request
+    };
     let body = serde_json::to_vec(&request.body)
         .map_err(|error| Error::InvalidRequest(format!("invalid audio request body: {error}")))?;
     let headers = signed_headers(&request, &body).await?;
@@ -28,9 +53,17 @@ pub async fn execute_audio_transcription_provider_call(
         .text()
         .await
         .map_err(|error| Error::Network(error.to_string()))?;
-    if !status.is_success() {
-        return Err(Error::Http {
+    let observed = hooks
+        .after_response(ProviderResponse {
             status: status.as_u16(),
+            body: text,
+        })
+        .await?;
+    let observed_status = observed.status;
+    let text = observed.body;
+    if !(200..300).contains(&observed_status) {
+        return Err(Error::Http {
+            status: observed_status,
             body: truncate_error_body(&text),
         });
     }

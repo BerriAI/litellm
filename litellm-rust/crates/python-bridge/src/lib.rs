@@ -1,4 +1,5 @@
 mod auth;
+mod cache;
 mod constants;
 mod diagnostics;
 mod errors;
@@ -8,63 +9,8 @@ mod function_trace;
 mod lifecycle;
 mod marshal;
 mod routes;
-mod token_counter;
 
-use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
-use serde_json::Value;
-
-use crate::errors::core_error_to_pyerr;
-use crate::marshal::{marshal_headers, optional_timeout};
-
-#[pyclass]
-struct ResponsesWebSocketConnection {
-    inner: RustResponsesWebSocketConnection,
-}
-
-#[pymethods]
-impl ResponsesWebSocketConnection {
-    #[classmethod]
-    #[pyo3(signature = (url, headers=None, timeout_seconds=None))]
-    fn connect<'py>(
-        _cls: &Bound<'py, pyo3::types::PyType>,
-        py: Python<'py>,
-        url: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] headers: Option<Value>,
-        timeout_seconds: Option<f64>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let headers = marshal_headers(headers)?;
-        let timeout = optional_timeout(timeout_seconds);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
-                .await
-                .map_err(core_error_to_pyerr)?;
-            Ok(ResponsesWebSocketConnection { inner })
-        })
-    }
-
-    fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.send_text(text).await.map_err(core_error_to_pyerr)
-        })
-    }
-
-    fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.recv_text().await.map_err(core_error_to_pyerr)
-        })
-    }
-
-    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.close().await.map_err(core_error_to_pyerr)
-        })
-    }
-}
 
 #[pymodule(gil_used = true)]
 mod _native {
@@ -74,8 +20,6 @@ mod _native {
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         super::errors::register(module)?;
         super::routes::register(module)?;
-        module.add_class::<super::ResponsesWebSocketConnection>()?;
-        super::token_counter::register(module)?;
         super::diagnostics::register(module)
     }
 }
@@ -99,7 +43,9 @@ mod tests {
             let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
 
             let expected = [
+                "RustBridgeUnavailable",
                 "RustBridgeDeclined",
+                "RustHostCallbackError",
                 "RustUpstreamError",
                 "ocr",
                 "aocr",
@@ -107,11 +53,24 @@ mod tests {
                 "atranscription",
                 "messages",
                 "amessages",
-                "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
+                "embedding",
+                "aembedding",
+                "image_edit",
+                "aimage_edit",
+                "image_generation",
+                "aimage_generation",
+                "moderation",
+                "amoderation",
+                "rerank",
+                "arerank",
                 "ResponsesWebSocketConnection",
-                "TokenCounter",
+                "responses",
+                "aresponses",
+                "speech",
+                "aspeech",
+                "count_input_tokens",
                 "gil_stats",
             ];
 
@@ -203,7 +162,7 @@ mod tests {
 import asyncio
 
 async def exercise():
-    connection = await native.ResponsesWebSocketConnection.connect(url)
+    connection = await native.ResponsesWebSocketConnection.connect(url, custom_llm_provider="openai")
     assert type(connection) is native.ResponsesWebSocketConnection
     await connection.send_text("from-python")
     assert await connection.recv_text() == "from-server"

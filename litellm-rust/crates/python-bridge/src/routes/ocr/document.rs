@@ -169,9 +169,12 @@ fn _ocr_upload_document(
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("_OCR_MAX_FILE_BYTES", OCR_INLINE_MAX_BYTES)?;
-    module.add_function(wrap_pyfunction!(_ocr_upload_document, module)?)?;
-    module.add_function(wrap_pyfunction!(_ocr_file_document, module)?)?;
-    module.add_function(wrap_pyfunction!(_ocr_mime_type, module)?)
+    crate::routes::definition::add_function(
+        module,
+        wrap_pyfunction!(_ocr_upload_document, module)?,
+    )?;
+    crate::routes::definition::add_function(module, wrap_pyfunction!(_ocr_file_document, module)?)?;
+    crate::routes::definition::add_function(module, wrap_pyfunction!(_ocr_mime_type, module)?)
 }
 
 #[cfg(test)]

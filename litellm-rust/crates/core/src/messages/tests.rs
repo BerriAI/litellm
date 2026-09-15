@@ -9,8 +9,16 @@ use crate::error::Error;
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
-use super::messages;
 use super::types::MessagesRequest;
+use super::{admit, messages};
+
+#[test]
+fn uninspectable_request_declines_in_core() {
+    assert_eq!(
+        admit(crate::call_lifecycle::admission::Inspection::Uninspectable),
+        Err(crate::call_lifecycle::admission::AdmissionDecline::Uninspectable)
+    );
+}
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();

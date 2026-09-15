@@ -11,13 +11,23 @@ mod registry;
 pub mod types;
 pub mod wire;
 
+pub use crate::call_lifecycle::host::LifecycleBackend as OcrHost;
 pub use client::{OcrClient, ocr};
 pub use document::{encode_file_document, mime_type_for_name, upload_mime_type};
 pub use lifecycle::{
     NativeOutcome, NativeResult, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline,
-    OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult,
+    OcrHookHost, OcrHostOperation, OcrHostResult,
 };
 pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+
+pub fn admit_value(
+    model: &str,
+    provider: Option<&str>,
+) -> Result<(), crate::call_lifecycle::admission::AdmissionDecline> {
+    registry::resolve_wire_adapter(model, provider)
+        .map(|_| ())
+        .map_err(|_| crate::call_lifecycle::admission::AdmissionDecline::Provider)
+}
 
 #[cfg(test)]
 #[path = "../../tests/azure_ai_ocr.rs"]

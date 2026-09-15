@@ -27,6 +27,34 @@ fn public_outcome_is_finalized_before_a_single_terminal_dispatch() {
     for asynchronous in [false, true] {
         let (events, failures) = run(None, asynchronous);
         assert!(failures.is_empty());
+        let expected = if asynchronous {
+            vec![
+                HostPhase::Setup,
+                HostPhase::DeploymentPreCall,
+                HostPhase::Prepare,
+                HostPhase::CacheLookup,
+                HostPhase::Execute,
+                HostPhase::ConstructResponse,
+                HostPhase::PostProcess,
+                HostPhase::DeploymentPostCall,
+                HostPhase::CacheStore,
+                HostPhase::Finalize,
+                HostPhase::Success,
+            ]
+        } else {
+            vec![
+                HostPhase::Setup,
+                HostPhase::Prepare,
+                HostPhase::CacheLookup,
+                HostPhase::Execute,
+                HostPhase::ConstructResponse,
+                HostPhase::PostProcess,
+                HostPhase::CacheStore,
+                HostPhase::Finalize,
+                HostPhase::Success,
+            ]
+        };
+        assert_eq!(events, expected);
         assert_eq!(
             &events[events.len() - 2..],
             &[HostPhase::Finalize, HostPhase::Success]
@@ -51,9 +79,12 @@ fn only_provider_and_response_construction_failures_use_provider_mapping() {
         HostPhase::Setup,
         HostPhase::DeploymentPreCall,
         HostPhase::Prepare,
+        HostPhase::CacheLookup,
         HostPhase::Execute,
         HostPhase::ConstructResponse,
+        HostPhase::PostProcess,
         HostPhase::DeploymentPostCall,
+        HostPhase::CacheStore,
         HostPhase::Finalize,
     ] {
         let (events, failures) = run(Some(phase), true);
@@ -74,6 +105,35 @@ fn only_provider_and_response_construction_failures_use_provider_mapping() {
                 <= 1
         );
     }
+}
+
+#[test]
+fn cache_hit_uses_the_same_graph_without_provider_or_cache_store() {
+    let mut lifecycle = HostLifecycle::new(true);
+    let mut events = Vec::new();
+    while lifecycle.phase() != HostPhase::CacheLookup {
+        events.push(lifecycle.phase());
+        lifecycle.accept(Ok(()));
+    }
+    events.push(HostPhase::CacheLookup);
+    lifecycle.cache_hit();
+    while lifecycle.phase() != HostPhase::Complete {
+        events.push(lifecycle.phase());
+        lifecycle.accept(Ok(()));
+    }
+    assert_eq!(
+        events,
+        [
+            HostPhase::Setup,
+            HostPhase::DeploymentPreCall,
+            HostPhase::Prepare,
+            HostPhase::CacheLookup,
+            HostPhase::ConstructResponse,
+            HostPhase::PostProcess,
+            HostPhase::Finalize,
+            HostPhase::Success,
+        ]
+    );
 }
 
 #[test]

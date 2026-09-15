@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/cache",
+    "crates/cache-memory",
     "crates/core",
     "crates/token-counter",
     "crates/config",
@@ -20,6 +22,8 @@ bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 litellm-core = { path = "crates/core" }
+litellm-cache = { path = "crates/cache" }
+litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-token-counter = { path = "crates/token-counter" }
 litellm-config = { path = "crates/config" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }

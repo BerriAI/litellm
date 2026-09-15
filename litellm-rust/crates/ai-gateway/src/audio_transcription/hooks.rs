@@ -1,12 +1,10 @@
-use litellm_core::audio_transcription::{
-    AudioTranscriptionRequest as CoreAudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
-    prepare_audio_transcription_provider_call,
-};
-use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::Error;
 use serde_json::{Map, Value, json};
-use std::future::Future;
-use std::pin::Pin;
+
+use litellm_core::call_lifecycle::provider::{
+    ProviderHookFuture, ProviderHooks, ProviderRequest, ProviderResponse,
+};
+use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
+use litellm_core::error::Error;
 
 use super::types::PreparedAudioTranscriptionRequest;
 use crate::integrations::custom_guardrail::{
@@ -23,25 +21,25 @@ pub(crate) struct AudioTranscriptionLifecycleHooks {
     logger_runner: CustomLoggerRunner,
     guardrail_runner: CustomGuardrailRunner,
     request_metadata: RequestMetadata,
+    provider: String,
 }
-
-type AudioFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
-type AudioLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 impl AudioTranscriptionLifecycleHooks {
     pub(crate) fn new(
         logger_runner: CustomLoggerRunner,
         guardrail_runner: CustomGuardrailRunner,
         request_metadata: RequestMetadata,
+        provider: String,
     ) -> Self {
         Self {
             logger_runner,
             guardrail_runner,
             request_metadata,
+            provider,
         }
     }
 
-    async fn run_pre_call_guardrails(
+    pub(crate) async fn run_pre_call_guardrails(
         &self,
         request: PreparedAudioTranscriptionRequest,
     ) -> Result<PreparedAudioTranscriptionRequest, Error> {
@@ -85,39 +83,10 @@ impl AudioTranscriptionLifecycleHooks {
         })
     }
 
-    async fn prepare_provider_request(
-        &self,
-        request: PreparedAudioTranscriptionRequest,
-    ) -> Result<ProviderAudioTranscriptionRequest, Error> {
-        let PreparedAudioTranscriptionRequest {
-            model,
-            custom_llm_provider,
-            audio,
-            api_key,
-            api_base,
-            extra_headers,
-            optional_params,
-            timeout,
-            ..
-        } = request;
-        let provider_request =
-            prepare_audio_transcription_provider_call(CoreAudioTranscriptionRequest {
-                model: &model,
-                audio,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: Some(&custom_llm_provider),
-                extra_headers,
-                optional_params,
-                timeout,
-            })?;
-        self.run_during_call_guardrails(provider_request).await
-    }
-
     async fn run_during_call_guardrails(
         &self,
-        request: ProviderAudioTranscriptionRequest,
-    ) -> Result<ProviderAudioTranscriptionRequest, Error> {
+        request: ProviderRequest,
+    ) -> Result<ProviderRequest, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(request);
         }
@@ -126,10 +95,10 @@ impl AudioTranscriptionLifecycleHooks {
             .run_during_call(
                 &guardrail_context(&self.request_metadata),
                 GuardrailRequest::new(json!({
-                    "model": request.model(),
-                    "custom_llm_provider": request.custom_llm_provider(),
-                    "url": request.url(),
-                    "body": request.body(),
+                    "model": &request.model,
+                    "custom_llm_provider": &self.provider,
+                    "url": &request.url,
+                    "body": &request.body,
                 })),
             )
             .await
@@ -142,7 +111,7 @@ impl AudioTranscriptionLifecycleHooks {
         let body = data.remove("body").ok_or_else(|| {
             Error::InvalidRequest("audio transcription guardrail removed body".to_string())
         })?;
-        Ok(request.with_body(body))
+        Ok(ProviderRequest { body, ..request })
     }
 
     fn logging_payload(
@@ -172,82 +141,65 @@ impl AudioTranscriptionLifecycleHooks {
             messages: None,
         }
     }
+    pub(crate) async fn log_success(
+        &self,
+        context: &CallLifecycleContext,
+        response: &Value,
+        timing: &CallLifecycleTiming,
+    ) {
+        if self.logger_runner.is_empty() {
+            return;
+        }
+        self.logger_runner
+            .async_log_success_event(
+                &ModelCallDetails::from_standard_logging_payload(
+                    self.logging_payload(context, timing),
+                ),
+                &CallbackValue::new("audio_transcription", response.clone()),
+                CallbackTiming::new(timing.start_time, timing.end_time),
+            )
+            .await;
+    }
+
+    pub(crate) async fn log_failure(
+        &self,
+        context: &CallLifecycleContext,
+        error: &Error,
+        timing: &CallLifecycleTiming,
+    ) {
+        if self.logger_runner.is_empty() {
+            return;
+        }
+        let logging_error = LoggingError {
+            message: error.to_string(),
+            kind: core_error_kind(error).to_string(),
+        };
+        self.logger_runner
+            .async_log_failure_event(
+                &ModelCallDetails::from_standard_logging_payload(
+                    self.logging_payload(context, timing),
+                )
+                .with_failure_error(logging_error.clone()),
+                Some(&CallbackValue::new(
+                    "error",
+                    json!({"message": logging_error.message, "kind": logging_error.kind}),
+                )),
+                CallbackTiming::new(timing.start_time, timing.end_time),
+            )
+            .await;
+    }
 }
 
-impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest, Value>
-    for AudioTranscriptionLifecycleHooks
-{
-    type PreCallFuture<'a> = AudioFuture<'a, PreparedAudioTranscriptionRequest>;
-    type DuringCallFuture<'a> = AudioFuture<'a, ProviderAudioTranscriptionRequest>;
-    type SuccessFuture<'a> = AudioLogFuture<'a>;
-    type FailureFuture<'a> = AudioLogFuture<'a>;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: PreparedAudioTranscriptionRequest,
-    ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move { self.run_pre_call_guardrails(request).await })
+impl ProviderHooks for AudioTranscriptionLifecycleHooks {
+    fn before_request(&self, request: ProviderRequest) -> ProviderHookFuture<'_, ProviderRequest> {
+        Box::pin(async move { self.run_during_call_guardrails(request).await })
     }
 
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: PreparedAudioTranscriptionRequest,
-    ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { self.prepare_provider_request(request).await })
-    }
-
-    fn async_log_success_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        response: &'a Value,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a> {
-        Box::pin(async move {
-            if self.logger_runner.is_empty() {
-                return;
-            }
-            self.logger_runner
-                .async_log_success_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.logging_payload(context, timing),
-                    ),
-                    &CallbackValue::new("audio_transcription", response.clone()),
-                    CallbackTiming::new(timing.start_time, timing.end_time),
-                )
-                .await;
-        })
-    }
-
-    fn async_log_failure_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        error: &'a Error,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a> {
-        Box::pin(async move {
-            if self.logger_runner.is_empty() {
-                return;
-            }
-            let logging_error = LoggingError {
-                message: error.to_string(),
-                kind: core_error_kind(error).to_string(),
-            };
-            self.logger_runner
-                .async_log_failure_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.logging_payload(context, timing),
-                    )
-                    .with_failure_error(logging_error.clone()),
-                    Some(&CallbackValue::new(
-                        "error",
-                        json!({"message": logging_error.message, "kind": logging_error.kind}),
-                    )),
-                    CallbackTiming::new(timing.start_time, timing.end_time),
-                )
-                .await;
-        })
+    fn after_response(
+        &self,
+        response: ProviderResponse,
+    ) -> ProviderHookFuture<'_, ProviderResponse> {
+        Box::pin(async move { Ok(response) })
     }
 }
 

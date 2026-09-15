@@ -1,395 +1,173 @@
-"""Tests for the Rust chat completions bridge.
-
-The native callables are dependency-injected through
-``set_rust_chat_completions`` rather than patched, so these run without the
-compiled extension present.
-"""
-
 from __future__ import annotations
+
+import asyncio
+import inspect
+from collections.abc import Awaitable
+from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
-import litellm
-from litellm.rust_bridge import configuration
-from litellm.rust_bridge import chat_completions as bridge
-from litellm.types.utils import ModelResponse
-
-RUST_RESPONSE = {
-    "created": 1_700_000_000,
-    "model": "claude-sonnet-4-5-20260101",
-    "choices": [
-        {
-            "index": 0,
-            "message": {"role": "assistant", "content": "hello from rust"},
-            "finish_reason": "stop",
-        }
-    ],
-    "usage": {
-        "prompt_tokens": 11,
-        "completion_tokens": 4,
-        "total_tokens": 15,
-        "prompt_tokens_details": {
-            "cached_tokens": 0,
-            "cache_creation_tokens": 0,
-            "text_tokens": 11,
-        },
-    },
-}
-
-MESSAGES = [{"role": "user", "content": "hi"}]
+from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge.chat_completions import lifecycle
 
 
-class _FakeDeclined(Exception):
-    """Stands in for the native `RustBridgeDeclined`."""
+class RustBridgeDeclined(Exception):
+    pass
 
 
-class _FakeUpstream(Exception):
-    """Stands in for the native `RustUpstreamError`; args are (status, message)."""
+class RustBridgeUnavailable(Exception):
+    pass
 
 
-class _FakeNative:
-    RustBridgeDeclined = _FakeDeclined
-    RustUpstreamError = _FakeUpstream
+class RustHostCallbackError(Exception):
+    pass
 
 
-def _fake_native_bridge(monkeypatch):
-    """Expose the bridge's exception classes without the compiled extension."""
-    monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+class RustUpstreamError(Exception):
+    pass
 
 
-def _hide_native_bridge(monkeypatch):
-    """Simulate a wheel built without the compiled extension.
-
-    There is no injection seam for "the .so is absent", so the loader itself is
-    replaced; every other case here uses `set_rust_chat_completions`.
-    """
-    monkeypatch.setattr(bridge, "get_native_bridge", lambda: None)
-
-
-@pytest.fixture(autouse=True)
-def reset_bridge(monkeypatch):
-    """Every test starts with no injected callables, and leaves none behind."""
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
-    configuration.reset_rust_configuration()
-    monkeypatch.setenv("LITELLM_RUST", "1")
-    yield
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
-    configuration.reset_rust_configuration()
+NATIVE_EXCEPTIONS: Final = SimpleNamespace(
+    RustBridgeDeclined=RustBridgeDeclined,
+    RustBridgeUnavailable=RustBridgeUnavailable,
+    RustHostCallbackError=RustHostCallbackError,
+    RustUpstreamError=RustUpstreamError,
+)
 
 
-class _RecordingDecline:
-    """A stand-in for the native gate that records what it was asked."""
+class _RecordingSync:
+    def __init__(self, result: object = "native", error: BaseException | None = None) -> None:
+        self.result: Final = result
+        self.error: Final = error
+        self.calls: Final[list[tuple[dict[str, object], tuple[object, ...], dict[str, object], object]]] = []
 
-    def __init__(self, reason: str | None = None):
-        self.reason = reason
-        self.calls: list[dict] = []
-
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.reason
-
-
-class _RecordingCall:
-    def __init__(self, result=None, error: Exception | None = None):
-        self.result = result if result is not None else dict(RUST_RESPONSE)
-        self.error = error
-        self.calls: list[dict] = []
-
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
+    def __call__(
+        self,
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> object:
+        self.calls.append((request, args, kwargs, host))
         if self.error is not None:
             raise self.error
         return self.result
 
 
-class _RecordingAsyncCall(_RecordingCall):
-    async def __call__(self, **kwargs):
-        return _RecordingCall.__call__(self, **kwargs)
+class _RecordingAsync(_RecordingSync):
+    def __call__(
+        self,
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> Awaitable[object]:
+        self.calls.append((request, args, kwargs, host))
+        if self.error is not None:
+            raise self.error
+
+        async def result() -> object:
+            return self.result
+
+        return result()
 
 
-def _accepts(**overrides) -> bool:
-    kwargs = {
-        "model": "claude-sonnet-4-5",
-        "messages": MESSAGES,
-        "optional_params": {"max_tokens": 16},
-        "custom_llm_provider": "anthropic",
-        "litellm_params": {},
-        "stream": None,
-    }
-    kwargs.update(overrides)
-    return bridge.rust_chat_completions_accepts(**kwargs)
+@pytest.fixture(autouse=True)
+def reset_bridge(monkeypatch: pytest.MonkeyPatch):
+    lifecycle.set_rust_chat_completions(chat_completions=None, achat_completions=None)
+    configuration.reset_rust_configuration()
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: NATIVE_EXCEPTIONS)
+    yield
+    lifecycle.set_rust_chat_completions(chat_completions=None, achat_completions=None)
+    configuration.reset_rust_configuration()
 
 
-class TestGate:
-    def test_declines_when_the_deployment_did_not_opt_in(self, monkeypatch):
-        monkeypatch.delenv("LITELLM_RUST", raising=False)
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(litellm_params={}) is False
-        assert _accepts(litellm_params=None) is False
-        assert gate.calls == [], "the gate must not be consulted before opt-in"
-
-    def test_accepts_when_the_deployment_opted_in_and_the_core_agrees(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts() is True
-        assert gate.calls[0]["model"] == "claude-sonnet-4-5"
-        assert gate.calls[0]["custom_llm_provider"] == "anthropic"
-
-    def test_process_enable_applies_without_request_override(self):
-        bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        configuration.rust(True)
-
-        assert _accepts(litellm_params={}) is True
-
-    def test_the_env_var_opts_in_without_a_per_model_flag(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "true")
-        bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        assert _accepts(litellm_params={}) is True
-
-    def test_declines_streaming_and_providers_off_the_path(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(stream=True) is False
-        assert _accepts(custom_llm_provider="openai") is False
-        assert _accepts(custom_llm_provider=None) is False
-        assert gate.calls == []
-
-    def test_declines_an_anthropic_request_carrying_a_litellm_metadata_user_id(self, monkeypatch):
-        """`AnthropicConfig.transform_request` copies a valid `user_id` into the Messages body.
-
-        It does that inside the function the Rust route replaces, and the core is
-        handed `optional_params` only, so accepting here would send the request
-        to Anthropic with the abuse-detection attribution silently missing.
-        """
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(litellm_params={"metadata": {"user_id": "u-123"}}) is False
-        assert gate.calls == [], "the core must not be consulted for a request it cannot see the key of"
-
-        # Bedrock's Converse transform reads no `user_id`, and an Anthropic request
-        # whose metadata carries none is one Python would not attribute either.
-        assert (
-            _accepts(
-                custom_llm_provider="bedrock",
-                model="bedrock/us-east-1/anthropic.claude-v2",
-                litellm_params={"metadata": {"user_id": "u-123"}},
-            )
-            is True
-        )
-        assert _accepts(litellm_params={"metadata": {"trace_id": "t-1"}}) is True
-        assert _accepts(litellm_params={"metadata": {"user_id": None}}) is True
-        assert _accepts(litellm_params={"metadata": None}) is True
-
-    def test_declines_a_bedrock_request_while_the_proxy_owns_request_metadata(self, monkeypatch):
-        """`AmazonConverseConfig` resolves proxy-owned `requestMetadata` onto the
-        Converse body from `litellm_params`, and owning that field also means
-        evicting a caller-supplied one. The core can do neither, so an operator
-        who armed `bedrock_request_metadata_fields` keeps the Python path.
-        """
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        bedrock = {
-            "custom_llm_provider": "bedrock",
-            "model": "bedrock/us-east-1/anthropic.claude-v2",
-        }
-
-        monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_team_id"])
-        assert _accepts(**bedrock) is False
-        assert gate.calls == [], "the core must not be consulted for a field it cannot write"
-        assert _accepts() is True, "arming Bedrock attribution must not decline Anthropic"
-
-        monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
-        assert _accepts(**bedrock) is True, "the decline follows the operator's opt-in alone"
-
-    def test_declines_when_the_core_declines(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        bridge.set_rust_chat_completions(decline=_RecordingDecline("streaming"))
-        assert _accepts() is False
-
-    def test_declines_when_the_bridge_is_unavailable(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        _hide_native_bridge(monkeypatch)
-        assert _accepts() is False
-
-    def test_declines_when_the_gate_itself_raises(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-
-        def exploding(**_kwargs):
-            raise RuntimeError("boom")
-
-        bridge.set_rust_chat_completions(decline=exploding)
-        assert _accepts() is False
+def _sync_function(model: str, messages: list[object], **kwargs: object) -> object:
+    return (model, messages, kwargs)
 
 
-def _call_kwargs(model_response: ModelResponse) -> dict:
-    return {
-        "model": "claude-sonnet-4-5",
-        "messages": MESSAGES,
-        "optional_params": {"max_tokens": 16},
-        "model_response": model_response,
-        "api_key": "sk-test",
-        "api_base": None,
-        "custom_llm_provider": "anthropic",
-        "extra_headers": {},
-        "timeout": 30.0,
-        "on_response": lambda _rust_response: None,
-    }
+async def _async_function(model: str, messages: list[object], **kwargs: object) -> object:
+    return (model, messages, kwargs)
 
 
-class TestSyncCall:
-    def test_builds_a_model_response_and_stamps_the_rust_header(self):
-        native = _RecordingCall()
-        bridge.set_rust_chat_completions(chat_completions=native)
-        model_response = ModelResponse()
-        original_id = model_response.id
+def test_sync_boundary_enters_native_once_and_preserves_call_shape() -> None:
+    rust: Final = _RecordingSync()
+    lifecycle.set_rust_chat_completions(chat_completions=rust)
+    wrapped: Final = lifecycle.wrap_sync(_sync_function)
+    messages: Final[list[object]] = [{"role": "user", "content": "hi"}]
 
-        result = bridge.chat_completions(**_call_kwargs(model_response))
-
-        assert result is not None
-        assert result.choices[0].message.content == "hello from rust"
-        assert result.choices[0].finish_reason == "stop"
-        assert result.model == "claude-sonnet-4-5-20260101"
-        assert result.usage.prompt_tokens == 11
-        assert result.usage.completion_tokens == 4
-        assert result.usage.total_tokens == 15
-        assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
-        assert result.id == original_id, "the rust path must keep the chatcmpl id litellm already minted"
-
-    def test_passes_the_timeout_through_as_seconds(self):
-        native = _RecordingCall()
-        bridge.set_rust_chat_completions(chat_completions=native)
-        bridge.chat_completions(**_call_kwargs(ModelResponse()))
-        assert native.calls[0]["timeout_seconds"] == 30.0
-
-    def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):
-        _hide_native_bridge(monkeypatch)
-        assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
-
-    def test_falls_back_when_the_core_declines_before_calling_the_provider(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
-        assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
+    assert wrapped("anthropic/model", messages, temperature=0.2) == "native"
+    assert len(rust.calls) == 1
+    request, args, kwargs, _ = rust.calls[0]
+    assert args == ("anthropic/model", messages)
+    assert kwargs == {"temperature": 0.2}
+    assert request["model"] == "anthropic/model"
+    assert request["messages"] is messages
+    assert inspect.signature(wrapped) == inspect.signature(_sync_function)
 
 
-class TestAsyncCall:
-    @pytest.mark.asyncio
-    async def test_builds_a_model_response(self):
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall())
-        result = await bridge.achat_completions(**_call_kwargs(ModelResponse()))
-        assert result is not None
-        assert result.choices[0].message.content == "hello from rust"
-        assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+def test_decline_calls_captured_python_implementation_once() -> None:
+    rust: Final = _RecordingSync(error=RustBridgeDeclined("unsupported"))
+    lifecycle.set_rust_chat_completions(chat_completions=rust)
+    calls: Final[list[None]] = []
 
-    @pytest.mark.asyncio
-    async def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):
-        _hide_native_bridge(monkeypatch)
-        assert await bridge.achat_completions(**_call_kwargs(ModelResponse())) is None
+    def python(model: str, messages: list[object]) -> str:
+        calls.append(None)
+        return f"python:{model}:{len(messages)}"
 
-    @pytest.mark.asyncio
-    async def test_falls_back_when_the_core_declines_before_calling_the_provider(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")))
-        assert await bridge.achat_completions(**_call_kwargs(ModelResponse())) is None
+    wrapped: Final = lifecycle.wrap_sync(python)
+    assert wrapped("anthropic/model", []) == "python:anthropic/model:0"
+    assert len(rust.calls) == 1
+    assert calls == [None]
 
 
-class TestAsyncFallbackWrapper:
-    @pytest.mark.asyncio
-    async def test_returns_the_rust_response_without_running_the_fallback(self):
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall())
-        ran = []
+def test_missing_binding_calls_python_without_native_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Final[list[None]] = []
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
 
-        async def fallback():
-            ran.append(True)
-            return "python"
+    def python(model: str, messages: list[object]) -> str:
+        calls.append(None)
+        return model
 
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result.choices[0].message.content == "hello from rust"
-        assert ran == []
-
-    @pytest.mark.asyncio
-    async def test_runs_the_fallback_when_the_core_declines(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")))
-
-        async def fallback():
-            return "python"
-
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result == "python"
-
-    @pytest.mark.asyncio
-    async def test_runs_the_fallback_when_the_bridge_is_unavailable(self, monkeypatch):
-        _hide_native_bridge(monkeypatch)
-
-        async def fallback():
-            return "python"
-
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result == "python"
+    assert lifecycle.wrap_sync(python)("anthropic/model", []) == "anthropic/model"
+    assert calls == [None]
 
 
-class TestFailureClassification:
-    """A failure the provider already saw must not be retried on the Python
-    path: it would bill the customer for the same work twice."""
+@pytest.mark.asyncio
+async def test_async_decline_is_caught_only_while_obtaining_coroutine() -> None:
+    entry_decline: Final = _RecordingAsync(error=RustBridgeDeclined("admission"))
+    lifecycle.set_rust_chat_completions(achat_completions=entry_decline)
+    wrapped: Final = lifecycle.wrap_async(_async_function)
+    python_result: Final = await wrapped("anthropic/model", [])
+    assert python_result == ("anthropic/model", [], {})
 
-    @pytest.fixture(autouse=True)
-    def _native_exceptions(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
+    execution_error: Final = RustBridgeDeclined("resume")
 
-    def test_a_decline_falls_back_because_nothing_was_sent(self):
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
-        assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
+    def fail_after_admission(
+        request: dict[str, object],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+        host: object,
+    ) -> Awaitable[object]:
+        async def fail() -> object:
+            await asyncio.sleep(0)
+            raise execution_error
 
-    def test_an_upstream_failure_is_surfaced_with_its_status(self):
-        from litellm.exceptions import APIError
+        return fail()
 
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(429, "429: rate limited")))
-        with pytest.raises(APIError) as raised:
-            bridge.chat_completions(**_call_kwargs(ModelResponse()))
-        assert raised.value.status_code == 429
-        assert "rate limited" in str(raised.value)
+    lifecycle.set_rust_chat_completions(achat_completions=fail_after_admission)
+    with pytest.raises(RustBridgeDeclined) as caught:
+        await wrapped("anthropic/model", [])
+    assert caught.value is execution_error
 
-    def test_a_transport_failure_with_no_response_surfaces_as_a_500(self):
-        from litellm.exceptions import APIError
 
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(0, "connection reset")))
-        with pytest.raises(APIError) as raised:
-            bridge.chat_completions(**_call_kwargs(ModelResponse()))
-        assert raised.value.status_code == 500
+def test_streaming_is_declined_by_the_same_native_entry() -> None:
+    rust: Final = _RecordingSync(error=RustBridgeDeclined("streaming"))
+    lifecycle.set_rust_chat_completions(chat_completions=rust)
+    wrapped: Final = lifecycle.wrap_sync(_sync_function)
 
-    def test_an_unrecognized_error_is_not_swallowed(self):
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=RuntimeError("something else")))
-        with pytest.raises(RuntimeError):
-            bridge.chat_completions(**_call_kwargs(ModelResponse()))
-
-    @pytest.mark.asyncio
-    async def test_the_async_wrapper_does_not_fall_back_on_an_upstream_failure(self):
-        from litellm.exceptions import APIError
-
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeUpstream(500, "500: boom")))
-        ran = []
-
-        async def fallback():
-            ran.append(True)
-            return "python"
-
-        with pytest.raises(APIError):
-            await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert ran == [], "a request the provider already served must not be re-issued"
-
-    @pytest.mark.asyncio
-    async def test_the_async_wrapper_falls_back_on_a_decline(self):
-        bridge.set_rust_chat_completions(
-            achat_completions=_RecordingAsyncCall(error=_FakeDeclined("blank message text"))
-        )
-
-        async def fallback():
-            return "python"
-
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result == "python"
+    assert wrapped("anthropic/model", [], stream=True) == ("anthropic/model", [], {"stream": True})
+    assert len(rust.calls) == 1
+    assert rust.calls[0][0]["host_facts"] == {"stream": True}

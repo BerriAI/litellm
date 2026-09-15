@@ -364,7 +364,7 @@ async def anthropic_messages(
     kwargs["is_async"] = True
 
     func: Final = partial(
-        anthropic_messages_handler,
+        _python_anthropic_messages_handler,
         max_tokens=max_tokens,
         messages=messages,
         model=model,
@@ -664,3 +664,16 @@ def anthropic_messages_handler(
         stream=stream,
         kwargs=kwargs,
     )
+
+
+from litellm.rust_bridge.messages.lifecycle import wrap_async as _wrap_messages_async
+from litellm.rust_bridge.messages.lifecycle import wrap_sync as _wrap_messages_sync
+
+_python_anthropic_messages: Final = anthropic_messages
+_python_anthropic_messages_handler: Final = anthropic_messages_handler
+anthropic_messages = _wrap_messages_async(  # rebind-ok: public selector wraps the captured Python lifecycle
+    _python_anthropic_messages
+)
+anthropic_messages_handler = _wrap_messages_sync(  # rebind-ok: public selector wraps the captured Python lifecycle
+    _python_anthropic_messages_handler
+)
