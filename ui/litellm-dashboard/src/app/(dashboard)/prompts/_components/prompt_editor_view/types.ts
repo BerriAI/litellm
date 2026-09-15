@@ -11,7 +11,7 @@ export interface Tool {
 
 export interface PromptType {
   name: string;
-  model: string;
+  model: string | null;
   config: {
     temperature?: number;
     max_tokens?: number;

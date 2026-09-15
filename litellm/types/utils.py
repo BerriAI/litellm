@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from collections.abc import Mapping, Sequence
 from enum import Enum
@@ -35,6 +36,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     PrivateAttr,
     SkipValidation,
     field_serializer,
@@ -46,6 +48,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
+    CachedTokensDetails,
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
@@ -168,6 +171,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
+    supports_anthropic_thinking_payload: ReadOnly[bool | None]
     supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -249,6 +253,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
+    cache_read_input_audio_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -272,7 +277,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens_flex: float | None
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
-    input_cost_per_query: float | None  # only for rerank models
+    input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
     input_cost_per_image: float | None  # only for vertex ai models
     input_cost_per_image_token: float | None  # for gpt-image-1 and similar models
     input_cost_per_video_token: float | None  # for gemini omni models with video input
@@ -318,6 +323,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float | None
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -1694,6 +1700,9 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: float | None = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    query_count: int | None = None
+    """Number of billable requests sent to the model. Used for embeddings priced per request, such as Bedrock Marengo."""
+
     cache_write_tokens: int | None = None
     """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
 
@@ -1702,6 +1711,9 @@ class PromptTokensDetailsWrapper(
 
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
+
+    cached_tokens_details: CachedTokensDetails | None = None
+    """Details of cached (cache-hit) tokens sent to the model. OpenAI realtime naming; carries the per-modality cache-read split."""
 
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
@@ -1735,6 +1747,8 @@ class PromptTokensDetailsWrapper(
             del self.video_length_seconds
         if self.audio_length_seconds is None:
             del self.audio_length_seconds
+        if self.query_count is None:
+            del self.query_count
         if self.web_search_requests is None:
             del self.web_search_requests
         if self.google_maps_grounding_requests is None:
@@ -1747,6 +1761,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.cached_tokens_details is None:
+            del self.cached_tokens_details
 
 
 class ServerToolUse(BaseModel):
@@ -2913,6 +2929,7 @@ RoutingDecisionCause = Literal[
     # same tier served instead. The displaced group rides in signals. Reported even on a kept
     # session pin, since the pinned model did not serve the request.
     "health_failover",
+    "health_default_fallback",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3367,7 +3384,12 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
-class StandardLoggingPayload(TypedDict):
+class ClassifierAudit(TypedDict, total=False):
+    classifier_input: ReadOnly[Mapping[str, JsonValue]]
+    originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
+
+
+class StandardLoggingPayload(ClassifierAudit):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
@@ -3517,6 +3539,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
+    output_cost_per_second_720p: float | None = None
     output_cost_per_second_4k: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
@@ -3631,6 +3654,38 @@ def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
 
+ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens$")
+
+_PRICING_FIELD_EXEMPTIONS: Final[frozenset[str]] = frozenset({"output_vector_size"})
+
+SERVER_DERIVED_PRICING_FIELDS: Final[frozenset[str]] = (
+    frozenset(CustomPricingLiteLLMParams.model_fields) - _PRICING_FIELD_EXEMPTIONS
+)
+
+
+def is_server_derived_pricing_key(key: str) -> bool:
+    """Whether ``/model/info`` can fill ``key`` into ``model_info`` from the cost map.
+
+    Two sources, because ``get_model_info`` emits two: the declared pricing fields, and
+    the tiered ``*_above_<N>_tokens`` rates that ride through on a pattern match and are
+    declared nowhere. Both are read here from the same objects the read path uses, so the
+    set cannot drift as new rates are added.
+    """
+    return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
+
+
+def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Drop the pricing ``/model/info`` derives for display, keeping everything else.
+
+    ``/model/info`` fills a deployment's missing pricing in from the cost map so the
+    Admin UI has a rate to show. Clients that echo that response back on save would
+    otherwise persist the display value as a real per-deployment override, freezing the
+    deployment at that day's price where no cost map refresh can reach it. A deployment's
+    own pricing belongs on ``litellm_params``, which is unaffected.
+    """
+    return MappingProxyType({k: v for k, v in model_info.items() if not is_server_derived_pricing_key(k)})
+
+
 # Server-controlled fields that bound or drive an interceptor's agentic loop
 # (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
 # in all_litellm_params so they are treated as LiteLLM-level and excluded from
@@ -3706,6 +3761,16 @@ all_litellm_params = (
         "model_file_id_mapping",
         "litellm_logging_obj",
         "litellm_call_id",
+        "completion_call_id",
+        "model_alias_map",
+        "custom_prompt_dict",
+        "stream_response",
+        "cost_per_query",
+        "ssl_verify",
+        "data_residency",
+        "async_call",
+        "aembedding",
+        "allm_passthrough_route",
         "_litellm_strip_stream_usage",
         "use_client",
         "id",

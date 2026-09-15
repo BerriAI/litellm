@@ -6,10 +6,9 @@ from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import PriorityReservationDict
-
-PROXY_LLM_PROVIDER_FALLBACK: Final = "litellm_proxy"
 
 
 def resolve_llm_provider_for_rate_limit(

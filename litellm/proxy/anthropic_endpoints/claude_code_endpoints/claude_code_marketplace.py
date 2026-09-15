@@ -2,14 +2,15 @@
 CLAUDE CODE MARKETPLACE
 
 Provides a registry/discovery layer for Claude Code plugins.
-Plugins are stored as metadata + git source references in LiteLLM database.
-Actual plugin files are hosted on GitHub/GitLab/Bitbucket.
+Plugins are stored as metadata + source references in LiteLLM database.
+Actual plugin files are hosted on GitHub/GitLab/Bitbucket or as a zip archive on
+any HTTPS host (S3, Artifactory, a static file server).
 
 Endpoints:
-/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated)
+/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated; `?key=` adds the key's granted skills)
 /claude-code/plugins           - POST - Register a new plugin (create-only, proxy admin only)
-/claude-code/plugins           - GET  - List plugins (any authenticated key)
-/claude-code/plugins/{name}    - GET  - Get plugin details (any authenticated key)
+/claude-code/plugins           - GET  - List plugins visible to the key (enabled, plus granted disabled ones)
+/claude-code/plugins/{name}    - GET  - Get plugin details (403 on a disabled plugin the key is not granted)
 /claude-code/plugins/{name}    - PUT  - Update an existing plugin (proxy admin only)
 /claude-code/plugins/{name}/enable  - POST - Enable a plugin (proxy admin only)
 /claude-code/plugins/{name}/disable - POST - Disable a plugin (proxy admin only)
@@ -21,12 +22,17 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Annotated, Final, Protocol, TypedDict
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
+    SkillVisibility,
+    skill_visibility,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
@@ -82,7 +88,7 @@ async def _get_prisma_client() -> object:
     "/claude-code/marketplace.json",
     tags=["Claude Code Marketplace"],
 )
-async def get_marketplace():
+async def get_marketplace(request: Request, key: str | None = None):
     """
     Serve marketplace.json for Claude Code plugin discovery.
 
@@ -90,24 +96,35 @@ async def get_marketplace():
     - claude plugin marketplace add <url>
     - claude plugin install <name>@<marketplace>
 
+    Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+    the key is authenticated and the catalog also holds the disabled plugins granted
+    to it through `object_permission.skills` on the key or its team.
+
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
 
     Example:
         ```bash
         claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json
+        claude plugin marketplace add "http://localhost:4000/claude-code/marketplace.json?key=sk-..."
         claude plugin install my-plugin@litellm
         ```
     """
     try:
         prisma_client: Final = await _get_prisma_client()
 
+        caller: Final[UserAPIKeyAuth | None] = (
+            await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
+        )
+        visibility: Final[SkillVisibility] = skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
-            where={"enabled": True}
+            where=visibility.where()
         )
 
         plugin_list: Final = []
         for plugin in plugins:
+            if not visibility.allows(plugin):
+                continue
             try:
                 manifest: Mapping[str, object] = json.loads(plugin.manifest_json or "{}")
             except json.JSONDecodeError:
@@ -147,7 +164,7 @@ async def get_marketplace():
 
         return JSONResponse(content=marketplace)
 
-    except HTTPException:
+    except (HTTPException, ProxyException):
         raise
     except Exception as e:
         verbose_proxy_logger.exception("Error generating marketplace: %s", e)
@@ -162,6 +179,15 @@ async def get_marketplace():
 # alphanumeric characters, dots, hyphens, and underscores.
 # This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
 _VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
+_VALID_SHA256_RE: Final = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _is_https_url_with_host(url: str) -> bool:
+    try:
+        parts: Final = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme == "https" and bool(parts.hostname)
 
 
 def _validate_plugin_source(source: Mapping[str, str]) -> None:
@@ -199,10 +225,24 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
                     "error": "git-subdir 'path' must be a relative path of the form 'segment/segment' (alphanumeric, dots, hyphens, underscores only)"
                 },
             )
+    elif source_type == "archive":
+        if not _is_https_url_with_host(source.get("url", "")):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "archive source must include an https 'url' field "
+                    "(e.g., 'https://bucket.s3.amazonaws.com/plugins/plugin-name.zip')"
+                },
+            )
+        if "sha256" in source and not _VALID_SHA256_RE.match(source["sha256"]):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "archive 'sha256' must be a 64-character hex digest"},
+            )
     else:
         raise HTTPException(
             status_code=400,
-            detail={"error": "source.source must be 'github', 'url', or 'git-subdir'"},
+            detail={"error": "source.source must be 'github', 'url', 'git-subdir', or 'archive'"},
         )
 
 
@@ -248,8 +288,8 @@ async def register_plugin(
     Register a new plugin in the LiteLLM marketplace.
 
     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
-    when users install.
+    GitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).
+    Claude Code clones the git source or downloads the archive when users install.
 
     This endpoint is create-only and never overwrites. If a plugin with
     the same name already exists it returns 409 Conflict; use
@@ -259,7 +299,7 @@ async def register_plugin(
 
     Parameters:
         - name: Plugin name (kebab-case)
-        - source: Git source reference (github, url, or git-subdir format)
+        - source: Plugin source reference (github, url, git-subdir, or archive format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)
@@ -370,13 +410,15 @@ async def list_plugins(
     try:
         prisma_client: Final = await _get_prisma_client()
 
-        where: Final = {"enabled": True} if enabled_only else {}
+        visibility: Final[SkillVisibility] = skill_visibility(user_api_key_dict)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
-            where=where
+            where={"enabled": True} if enabled_only else visibility.where()
         )
 
         plugin_list: Final = []
         for p in plugins:
+            if not visibility.allows(p):
+                continue
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
 
@@ -448,6 +490,12 @@ async def get_plugin(
                 detail={"error": f"Plugin '{plugin_name}' not found"},
             )
 
+        if not skill_visibility(user_api_key_dict).allows(plugin):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": f"Plugin '{plugin_name}' is not granted to this key"},
+            )
+
         manifest: Final[Mapping[str, object]] = json.loads(plugin.manifest_json or "{}") if plugin.manifest_json else {}
 
         return {
@@ -503,7 +551,7 @@ async def update_plugin(
 
     Parameters:
         - plugin_name: Name of the plugin to update (path parameter)
-        - source: Git source reference (github, url, or git-subdir format)
+        - source: Plugin source reference (github, url, git-subdir, or archive format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)

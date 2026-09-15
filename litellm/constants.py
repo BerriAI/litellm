@@ -53,6 +53,7 @@ S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
+MAX_FILE_LIST_LIMIT: Final = 10000
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 budget_reservation_disabled_info_emitted = False
@@ -143,6 +144,8 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = float(
     os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = int(os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150))
+MAX_LITELLM_CALL_ID_LENGTH: Final = 256
+MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH: Final = 2048
 
 DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS: Final = 2000
 
@@ -197,6 +200,7 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-adaptive-router-model",
     "x-litellm-applied-guardrails",
     "x-litellm-guardrail-scan-id",
+    "x-litellm-guardrail-scan-metadata",
     "x-litellm-cache-key",
 ]
 
@@ -222,6 +226,9 @@ PRE_CALL_EXECUTED_GUARDRAILS_KEY: Final = "_pre_call_executed_guardrails"
 
 # Attribute stamped on log_guardrail_information wrappers so __init_subclass__ does not wrap them again
 LOGS_GUARDRAIL_INFORMATION_MARKER: Final = "_litellm_logs_guardrail_information"
+
+# llm_provider stamped on proxy-side rate limit errors when the model resolves to no deployment
+PROXY_LLM_PROVIDER_FALLBACK: Final = "litellm_proxy"
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
@@ -307,6 +314,12 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
+BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
+BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
+BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.committed_failure"
+REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
+
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
 # This balances performance with broad compatibility
@@ -333,6 +346,7 @@ DEFAULT_SSL_CIPHERS: Final = os.getenv(
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY: Final = "litellm_spend_update_buffer"
+REDIS_GATEWAY_REQUESTS_BUFFER_KEY: Final = "litellm_gateway_requests_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
@@ -395,6 +409,18 @@ TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS: Final = get_env_int_in_range(
     minimum=1,
     maximum=TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS,
 )
+TOKEN_COUNTER_MAX_EXACT_CHARS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_EXACT_CHARS",
+    default=4_000_000,
+    minimum=1,
+    maximum=1_000_000_000,
+)
+TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_CONCURRENT_COUNTS",
+    default=4,
+    minimum=1,
+    maximum=256,
+)
 MAX_TILE_WIDTH: Final = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT: Final = int(os.getenv("MAX_TILE_HEIGHT", 512))
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = float(os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000))
@@ -444,6 +470,7 @@ REDIS_CIRCUIT_BREAKER_ENABLED: Final = os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED"
 # minimum seconds a timeout-only failure streak must span before it can open the breaker,
 # so one event-loop stall timing out many queued calls at once does not trip it
 REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION: Final = float(os.getenv("REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION", 5.0))
+REDIS_TIMEOUT_LOG_INTERVAL: Final = float(os.getenv("REDIS_TIMEOUT_LOG_INTERVAL", "5.0"))
 # Seconds of idle before a Redis cluster connection is validated with a PING and
 # reconnected if dead, so a connection silently dropped by a cluster restart
 # (e.g. ElastiCache Serverless maintenance) is not reused while broken
@@ -556,6 +583,7 @@ ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
+LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = int(
     os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50)
 )  # Percentage of queue to clear (default: 50%)
@@ -567,6 +595,7 @@ LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS: Final = float(
 LOGGING_EXECUTOR_MAX_THREADS: Final = get_env_int("LOGGING_EXECUTOR_MAX_THREADS", 100)
 LOGGING_EXECUTOR_MAX_PENDING_TASKS: Final = get_env_int("LOGGING_EXECUTOR_MAX_PENDING_TASKS", 10_000)
 LOGGING_EXECUTOR_DROPPED_TASK_LOG_INTERVAL_SECONDS: Final = 30.0
+AWS_SIGNING_MAX_THREADS: Final = 16
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
@@ -1374,6 +1403,7 @@ bedrock_embedding_models: Final[set] = set(
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",
         "twelvelabs.marengo-embed-2-7-v1:0",
+        "twelvelabs.marengo-embed-3-0-v1:0",
     ]
 )
 
@@ -1637,6 +1667,7 @@ CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME: Final = "cloudzero_export_usage_data"
 MAVVRIK_FOCUS_EXPORT_JOB_NAME: Final = "mavvrik_focus_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = int(os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000))
 SPEND_LOG_CLEANUP_JOB_NAME: Final = "spend_log_cleanup"
+BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME: Final = "background_health_check_db_save"
 KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
@@ -1665,6 +1696,7 @@ SPEND_LOG_QUEUE_POLL_INTERVAL: Final = float(os.getenv("SPEND_LOG_QUEUE_POLL_INT
 RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, int(os.getenv("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", "3")))
 RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = float(os.getenv("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", "0.2"))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
+PROXY_DB_LOOKUP_MAX_CONCURRENCY: Final = max(1, int(os.getenv("PROXY_DB_LOOKUP_MAX_CONCURRENCY", "25")))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597))
 RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_BATCH_SIZE", "500")))
@@ -1766,6 +1798,10 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
+SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
+SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
+SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS: Final = 5000
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
 # staleness so a transient DB error (which surfaces as an empty list) cannot
@@ -1976,6 +2012,10 @@ NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
         "avector_store_file_delete",
     }
 )
+
+UNKNOWN_MODEL_SPEND_LOG_MODEL: Final[str] = "unknown-model"
+MAX_SPEND_LOG_MODEL_NAME_LENGTH: Final[int] = 256
+MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request

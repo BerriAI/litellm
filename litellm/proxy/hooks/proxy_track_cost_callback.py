@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -23,10 +23,21 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_spend_update_writer import (
+    DBSpendUpdateWriter,
     debitable_model_access_groups,
     get_llm_router,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.spend_event import (
+    ObjectMapping,
+    SpendEventBuildError,
+    SpendEventDecodeError,
+    build_spend_event,
+    decode_spend_event,
+    is_offloadable_success,
+    spend_event_callback_args,
+)
+from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer
 from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,
     spend_log_error,
@@ -34,6 +45,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
     get_request_model_access_groups,
+    should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -52,6 +64,7 @@ _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
+        CallTypes.call_mcp_tool.value,
         # CheckBatchCost's synthetic logging_obj for a completed managed batch carries
         # whatever LiteLLM_ManagedObjectTable stored at create time, and all of it is
         # None for a batch created before those columns were persisted, or by the master
@@ -70,9 +83,52 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 
 
+def _proxy_spend_writer() -> DBSpendUpdateWriter:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    return proxy_logging_obj.db_spend_update_writer
+
+
 class _ProxyDBLogger(CustomLogger):
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+    def __init__(
+        self,
+        spend_event_producer: SpendEventProducer | None = None,
+        *,
+        turn_off_message_logging: bool = False,
+        message_logging: bool = True,
+        spend_writer: Callable[[], DBSpendUpdateWriter] = _proxy_spend_writer,
+    ) -> None:
+        super().__init__(turn_off_message_logging=turn_off_message_logging, message_logging=message_logging)
+        self.spend_event_producer = spend_event_producer
+        self._spend_writer: Final = spend_writer
+
+    async def async_log_success_event(
+        self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        if self.spend_event_producer is None or not is_offloadable_success(response_obj):
+            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            return
+        event: Final = build_spend_event(
+            kwargs,
+            response_obj,
+            start_time,
+            end_time,
+            store_bodies=should_store_prompts_and_responses_in_spend_logs(),
+        )
+        if isinstance(event, SpendEventBuildError):
+            verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
+            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            return
+        await self.spend_event_producer.publish(event)
+
+    async def run_spend_event(self, line: bytes) -> None:
+        """Run the unchanged cost pipeline on a serialized spend event (sidecar consumer and in-process fallback)."""
+        event: Final = decode_spend_event(line)
+        if isinstance(event, SpendEventDecodeError):
+            verbose_proxy_logger.error("collector: discarding undecodable spend event: %s", event.reason)
+            return
+        args: Final = spend_event_callback_args(event)
+        await self._PROXY_track_cost_callback(args.kwargs, args.response_obj, args.start_time, args.end_time)
 
     async def async_post_call_failure_hook(
         self,
@@ -104,8 +160,6 @@ class _ProxyDBLogger(CustomLogger):
         ):
             return
 
-        from litellm.proxy.proxy_server import proxy_logging_obj
-
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
@@ -127,7 +181,7 @@ class _ProxyDBLogger(CustomLogger):
         # here because the input above is constructed non-None.
         _error_information = cast(
             StandardLoggingPayloadErrorInformation,
-            _sanitize_error_information_for_spend_logs(_error_information),
+            _sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
         )
         _metadata["error_information"] = _error_information
 
@@ -181,13 +235,12 @@ class _ProxyDBLogger(CustomLogger):
             if request_data.get("litellm_trace_id") is None:
                 request_data["litellm_trace_id"] = getattr(_litellm_logging_obj, "litellm_trace_id", None)
 
-        # Use the actual request start time from the logging object so that
-        # failed requests record the real duration instead of 0.
-        actual_start_time = datetime.now()
-        if _litellm_logging_obj is not None:
-            obj_start: Final = getattr(_litellm_logging_obj, "start_time", None)
-            if obj_start is not None:
-                actual_start_time = obj_start
+        lifted_start_time: Final = request_data.get("start_time")
+        actual_start_time: Final = (
+            lifted_start_time
+            if isinstance(lifted_start_time, datetime)
+            else getattr(_litellm_logging_obj, "start_time", None) or datetime.now()
+        )
 
         # A stream that broke mid-flight still billed the provider for the
         # chunks already delivered. ``post_call_failure_hook`` lifts that
@@ -203,7 +256,7 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information")
         )
 
-        await proxy_logging_obj.db_spend_update_writer.update_database(
+        await self._spend_writer().update_database(
             token=user_api_key_dict.api_key,
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
@@ -501,6 +554,10 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
             for key, value in patch.items():
                 if bucket.get(key) is None:
                     bucket[key] = value
+
+
+async def run_spend_event(line: bytes) -> None:
+    await _ProxyDBLogger().run_spend_event(line)
 
 
 def _is_unbilled_interaction_response(completion_response: object) -> bool:

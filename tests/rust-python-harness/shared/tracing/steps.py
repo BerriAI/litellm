@@ -76,7 +76,7 @@ def _span_for(engine: Engine, function: str, mappings: Sequence[TraceMapping]) -
 
 
 def pipeline_projection(
-    engine: Engine, events: Sequence[FunctionTraceEvent], mappings: Sequence[TraceMapping]
+    engine: Engine, events: Sequence[FunctionTraceEvent], mappings: Sequence[TraceMapping] | None = None
 ) -> PipelineProjection:
     raw_parents: dict[int, int | None] = {}
     projected_ids: set[int] = set()
@@ -88,7 +88,7 @@ def pipeline_projection(
         if event.parent_id is not None and event.parent_id not in raw_parents:
             raise ValueError(f"trace event {event.id} references unknown or later parent {event.parent_id}")
         raw_parents[event.id] = event.parent_id
-        span = _span_for(engine, event.function, mappings)
+        span = event.function if mappings is None else _span_for(engine, event.function, mappings)
         if span is None:
             unmatched += 1
             continue
@@ -181,12 +181,7 @@ class TraceDiff:
 
     @property
     def matches(self) -> bool:
-        return (
-            not self.python_only
-            and not self.rust_only
-            and not self.missing_mappings
-            and self.shared_order_matches
-        )
+        return not self.python_only and not self.rust_only and not self.missing_mappings and self.shared_order_matches
 
 
 def _missing_mappings(
@@ -257,9 +252,7 @@ def trace_diff(
     rust_counts: Final = Counter(rust_spans)
     python_only_counts: Final = python_counts - rust_counts
     rust_only_counts: Final = rust_counts - python_counts
-    python_only: Final = tuple(
-        span for span, count in python_only_counts.items() for _ in range(count)
-    )
+    python_only: Final = tuple(span for span, count in python_only_counts.items() for _ in range(count))
     rust_only: Final = tuple(span for span, count in rust_only_counts.items() for _ in range(count))
     first_difference: Final = _first_difference(python, rust, mappings, contract)
     return TraceDiff(
