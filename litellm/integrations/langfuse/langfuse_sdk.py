@@ -431,22 +431,24 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
     bundle and client certificate; v4 ships every observation through its own
     OTLP exporter, so a private-CA deployment would fail TLS on every export in
     a background thread while ``auth_check`` (still on the httpx client) stays
-    green. Only built when custom TLS material is configured; endpoint and
-    headers mirror ``langfuse._client.span_processor``.
+    green. Only built when TLS is configured away from the default (a CA bundle,
+    a client certificate, or verification switched off); endpoint and headers
+    mirror ``langfuse._client.span_processor``.
     """
     import litellm
+    from litellm.llms.custom_httpx.http_handler import get_ssl_verify
 
-    ca_bundle: Final = litellm.ssl_verify if isinstance(litellm.ssl_verify, str) else None
+    ssl_verify: Final = get_ssl_verify()
     configured_certificate: Final = os.getenv("SSL_CERTIFICATE") or litellm.ssl_certificate
     client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
-    if ca_bundle is None and client_certificate is None:
+    if ssl_verify is True and client_certificate is None:
         return None
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH")
     endpoint: Final = f"{base_url}/{export_path}" if export_path else f"{base_url}/api/public/otel/v1/traces"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
-    return OTLPSpanExporter(
+    exporter: Final = OTLPSpanExporter(
         endpoint=endpoint,
         headers={  # mutable-ok: the exporter copies these into its session headers
             "Authorization": "Basic " + encoded_auth,
@@ -454,9 +456,12 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
             "x-langfuse-sdk-version": version("langfuse"),
             "x-langfuse-public-key": str(public_key),
         },
-        certificate_file=ca_bundle,
+        certificate_file=ssl_verify if isinstance(ssl_verify, str) else None,
         client_certificate_file=client_certificate,
     )
+    if ssl_verify is False:
+        exporter._certificate_file = False  # pyright: ignore[reportPrivateUsage]  # the ctor coerces a False certificate_file back to True
+    return exporter
 
 
 def acquire_langfuse_client(
