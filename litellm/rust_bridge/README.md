@@ -6,7 +6,7 @@ Every SDK API has one `NativeComponent` in the immutable `COMPONENTS` catalog. A
 
 `RustImplementationState` records whether Rust is unimplemented, experimental, or ready. `RolloutPolicy` independently selects unsupported, Python-only, Rust opt-in, Rust opt-out, or Rust-required execution. Optional Rust execution can fall back to Python. Rust-required execution cannot
 
-OCR completed delivery is ready and default-on. Messages, chat completions, token counting, and Responses WebSocket transport are experimental and opt-in. Other completed APIs remain Python-only. Bedrock transcription requires Rust because it has no Python implementation; Python-backed transcription providers remain on Python
+OCR completed delivery is ready and default-on. Messages, chat completions, raw-request input token counting, and Responses WebSocket transport are experimental and opt-in. The public `litellm.token_counter()` and other completed APIs remain Python-only. Bedrock transcription requires Rust because it has no Python implementation; Python-backed transcription providers remain on Python
 
 ```python
 execution = COMPONENT.resolve(
@@ -28,7 +28,11 @@ Provider failures, host callback failures, cancellation, conversion failures, an
 
 `invoke` and `ainvoke` return the native result or execute the supplied fallback directly. There is no public admission, prepare, accepts, or can-handle API
 
-Token counting follows the same component policy. Its one native counting entrypoint validates the tokenizer configuration and request body, obtains and caches the required tokenizer resource, then counts. Unsupported inputs decline, known resource loading failures report native unavailability, and unexpected counting failures propagate
+Token counting has two catalog entries. `UtilityName.TOKEN_COUNTER` declares the public `litellm.token_counter()` as Python-only, with no native exports. The public function continues to execute Python directly regardless of `litellm.rust(bool)` or `LITELLM_RUST`
+
+`UtilityName.REQUEST_INPUT_TOKEN_COUNTER` owns the experimental raw-request optimization. Budget reservation keeps its direct `litellm.rust_bridge.token_counter.count_input_tokens` import. That adapter uses `REQUEST_COMPONENT`; `COMPONENT` describes the public API
+
+The request optimization follows its component policy. Its one native counting entrypoint validates the tokenizer configuration and request body, obtains and caches the required tokenizer resource, then counts. Unsupported inputs decline, known resource loading failures report native unavailability, and unexpected counting failures propagate
 
 ## Package layout
 

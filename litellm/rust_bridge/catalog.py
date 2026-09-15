@@ -136,6 +136,11 @@ COMPONENTS: Final = MappingProxyType(
         ),
         UtilityName.TOKEN_COUNTER: _component(
             UtilityName.TOKEN_COUNTER,
+            _unimplemented(),
+            (),
+        ),
+        UtilityName.REQUEST_INPUT_TOKEN_COUNTER: _component(
+            UtilityName.REQUEST_INPUT_TOKEN_COUNTER,
             _experimental_completed,
             ("count_input_tokens",),
         ),

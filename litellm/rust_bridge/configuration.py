@@ -25,6 +25,7 @@ class RouteName(str, Enum):
 
 class UtilityName(str, Enum):
     TOKEN_COUNTER = "token_counter"
+    REQUEST_INPUT_TOKEN_COUNTER = "request_input_token_counter"
 
 
 class RustImplementationState(str, Enum):

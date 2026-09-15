@@ -8,7 +8,7 @@ import litellm
 from litellm.litellm_core_utils.default_encoding import cl100k_base_rank_file, o200k_base_rank_file
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding, uses_legacy_message_accounting
 from litellm.rust_bridge.runtime import BridgeErrorContext, ainvoke
-from litellm.rust_bridge.token_counter.definition import COMPONENT
+from litellm.rust_bridge.token_counter.definition import REQUEST_COMPONENT
 from litellm.rust_bridge.token_counter.types import InputTokenCount, RustTokenCounter, RustTokenizer
 from litellm.utils import claude_json_str, huggingface_tokenizer_kind
 
@@ -19,11 +19,11 @@ def _as_counter(value: object) -> RustTokenCounter | None:
     return cast(RustTokenCounter, value) if callable(value) else None
 
 
-TOKEN_COUNTER: Final = COMPONENT.bind("count_input_tokens", validate=_as_counter)
+TOKEN_COUNTER: Final = REQUEST_COMPONENT.bind("count_input_tokens", validate=_as_counter)
 
 
 def rust_tokenizer(model: str) -> RustTokenizer | None:
-    execution: Final = COMPONENT.resolve()
+    execution: Final = REQUEST_COMPONENT.resolve()
     if execution.select(TOKEN_COUNTER) is None:
         return None
     kind: Final = None if litellm.disable_hf_tokenizer_download is True else huggingface_tokenizer_kind(model)
@@ -49,7 +49,7 @@ def _tokenizer_resource(tokenizer: str) -> str:
 
 
 async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:
-    execution: Final = COMPONENT.resolve()
+    execution: Final = REQUEST_COMPONENT.resolve()
     counter: Final = execution.select(TOKEN_COUNTER)
 
     async def python_fallback() -> None:
@@ -71,5 +71,5 @@ async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputToke
         else None,
         python_fallback=python_fallback,
         adapt=_INPUT_TOKEN_COUNT.validate_python,
-        context=BridgeErrorContext(route=COMPONENT.name.value, provider="", model=""),
+        context=BridgeErrorContext(route=REQUEST_COMPONENT.name.value, provider="", model=""),
     )
