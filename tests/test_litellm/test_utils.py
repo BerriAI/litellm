@@ -4099,7 +4099,9 @@ def _capped_completion_kwargs(metadata_key: str, metadata: object) -> dict[str, 
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
-def test_num_retries_per_request_reads_request_retry_count_sync(monkeypatch, metadata_key, cap, metadata, refused):
+def test_num_retries_per_request_reads_request_retry_count_sync(
+    monkeypatch: pytest.MonkeyPatch, metadata_key: str, cap: int, metadata: object, refused: bool
+) -> None:
     monkeypatch.setattr(litellm, "num_retries_per_request", cap)
     kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
     if refused:
@@ -4112,7 +4114,9 @@ def test_num_retries_per_request_reads_request_retry_count_sync(monkeypatch, met
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
-async def test_num_retries_per_request_reads_request_retry_count_async(monkeypatch, metadata_key, cap, metadata, refused):
+async def test_num_retries_per_request_reads_request_retry_count_async(
+    monkeypatch: pytest.MonkeyPatch, metadata_key: str, cap: int, metadata: object, refused: bool
+) -> None:
     monkeypatch.setattr(litellm, "num_retries_per_request", cap)
     kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
     if refused:
