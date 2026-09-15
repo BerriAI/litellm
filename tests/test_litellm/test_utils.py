@@ -30,6 +30,7 @@ from litellm._logging import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
@@ -5615,6 +5616,49 @@ async def test_wrapper_async_fires_post_call_failure_deployment_hook_once_per_fa
     assert isinstance(received_exc, litellm.AuthenticationError)
     assert call_type == CallTypes.acompletion
     assert fallback_depth is None
+
+
+class _StreamConvertingLogger(CustomLogger):
+    """Mimics a guardrail that turns a streaming request into a non-streaming deployment call
+    and has the agentic loop fake-stream the resolved answer back to the client."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_payloads: list[object] = []
+
+    async def async_pre_call_deployment_hook(self, kwargs, call_type):
+        return {**kwargs, "stream": False, "_code_interpreter_interception_converted_stream": True}
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_payloads.append(kwargs.get("standard_logging_object"))
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_logs_standard_logging_object_for_converted_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: when a deployment hook flips stream=True to stream=False and the call still
+    returns a CustomStreamWrapper, the wrapper must log it as a stream. Logging it as a
+    non-streaming result left the cost callback without a standard_logging_object."""
+    recorder = _StreamConvertingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    response = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="Hello there!",
+        stream=True,
+    )
+    assert isinstance(response, CustomStreamWrapper)
+    await asyncio.sleep(0.5)
+    async for _ in response:
+        pass
+    await asyncio.sleep(0.5)
+
+    assert len(recorder.success_payloads) == 1
+    payload = recorder.success_payloads[0]
+    assert payload is not None
+    assert payload["response_cost"] > 0
 
 
 @pytest.mark.asyncio

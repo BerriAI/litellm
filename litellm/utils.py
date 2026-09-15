@@ -1926,7 +1926,11 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            if _is_streaming_request(
+            returns_stream: Final = _is_streaming_response_for_correlation(result)
+            if returns_stream and logging_obj.stream is not True:
+                logging_obj.stream = True
+
+            if returns_stream or _is_streaming_request(
                 kwargs=kwargs,
                 call_type=call_type,
             ):
