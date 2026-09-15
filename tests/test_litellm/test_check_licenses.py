@@ -17,7 +17,7 @@ import requests
 _CODE_COVERAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "code_coverage_tests"
 )
-sys.path.insert(0, _CODE_COVERAGE_DIR)
+sys.path.insert(0, _CODE_COVERAGE_DIR)  # test-quality-ok: required to import checker from its source directory
 
 import check_licenses  # noqa: E402
 

@@ -13,14 +13,8 @@ pass and ``_load_instance_from_remote_storage`` would exec the
 remote module.
 """
 
-import os
-import sys
 
 import pytest
-
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
 
 from litellm.proxy.proxy_server import (  # noqa: E402
     _scrub_db_overlay_remote_module_loads,
