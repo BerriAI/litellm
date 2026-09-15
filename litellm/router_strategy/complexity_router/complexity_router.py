@@ -2218,7 +2218,9 @@ class ComplexityRouter(CustomLogger):
         opening_task: Final = (
             "The delegated task in the following agent_message."
             if encrypted_task is not None
-            else asks_newest_first[-1] if asks_newest_first else prompt
+            else asks_newest_first[-1]
+            if asks_newest_first
+            else prompt
         )
         latest_follow_up: Final = asks_newest_first[0] if len(asks_newest_first) > 1 else None
         task_messages: list[AllMessageValues] = [  # mutable-ok: the latest message gains optional image parts below
