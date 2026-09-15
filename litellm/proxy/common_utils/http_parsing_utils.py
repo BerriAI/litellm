@@ -9,7 +9,7 @@ from fastapi import Request, UploadFile, status
 from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+from litellm.constants import CLIENT_REQUESTED_MODEL_SCOPE_KEY, MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -233,6 +233,13 @@ def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
         accepted_keys, parsed_body = request.scope["parsed_body"]
         return {key: parsed_body[key] for key in accepted_keys}
     return None
+
+
+def get_client_requested_model(request: Request | None) -> str | None:
+    if request is None or not hasattr(request, "scope"):
+        return None
+    model: Final = request.scope.get(CLIENT_REQUESTED_MODEL_SCOPE_KEY)
+    return model if isinstance(model, str) else None
 
 
 def _safe_get_request_query_params(request: Request | None) -> dict:
