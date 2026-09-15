@@ -1,3 +1,5 @@
+from types import MappingProxyType
+
 import pytest
 
 from litellm.llms.openai_like import dynamic_config
@@ -17,6 +19,105 @@ def _isolate_generated_class_cache():
     dynamic_config._responses_config_cache.clear()
     yield
     dynamic_config._responses_config_cache.clear()
+
+
+class TestBaseModelParamSupport:
+    TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    @pytest.mark.parametrize("base_class", ["openai_gpt", "openai_like"])
+    def test_generated_chat_config_uses_base_model_for_supported_params(self, local_model_cost_map, base_class):
+        config = dynamic_config.create_config_class(_provider("publicai", base_class=base_class))()
+
+        endpoint_params = config.get_supported_openai_params(model="ep-publicai")
+        assert "tools" not in endpoint_params
+        assert "reasoning_effort" not in endpoint_params
+
+        instruct_params = config.get_supported_openai_params(
+            model="ep-publicai",
+            base_model="publicai/allenai/Olmo-3-7B-Instruct",
+        )
+        assert "tools" in instruct_params
+        assert "reasoning_effort" not in instruct_params
+
+        thinking_params = config.get_supported_openai_params(
+            model="ep-publicai",
+            base_model="publicai/allenai/Olmo-3-7B-Think",
+        )
+        assert "tools" in thinking_params
+        assert "reasoning_effort" in thinking_params
+
+    @pytest.mark.parametrize("base_class", ["openai_gpt", "openai_like"])
+    @pytest.mark.parametrize("base_model", [None, "ep-publicai", "publicai/allenai/Olmo-3-7B-Think"])
+    def test_supported_params_allow_per_call_extensions_without_leaking(
+        self, local_model_cost_map, base_class, base_model
+    ):
+        config = dynamic_config.create_config_class(_provider("publicai", base_class=base_class))()
+        supported = config.get_supported_openai_params("ep-publicai", base_model=base_model)
+        original = tuple(supported)
+
+        supported.extend(["request_specific_param"])
+
+        assert supported[-1] == "request_specific_param"
+        assert tuple(config.get_supported_openai_params("ep-publicai", base_model=base_model)) == original
+
+    @pytest.mark.parametrize("base_class", ["openai_gpt", "openai_like"])
+    def test_mapping_preserves_caller_owned_output_and_accepts_readonly_input(self, local_model_cost_map, base_class):
+        config = dynamic_config.create_config_class(_provider("publicai", base_class=base_class))()
+        non_default_params = MappingProxyType({"tools": self.TOOLS, "reasoning_effort": "high"})
+        optional_params = {"temperature": 0.4}
+
+        mapped = config.map_openai_params_with_base_model(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="ep-publicai",
+            drop_params=False,
+            base_model="publicai/allenai/Olmo-3-7B-Think",
+        )
+
+        assert mapped is optional_params
+        assert optional_params == {"temperature": 0.4, "tools": self.TOOLS, "reasoning_effort": "high"}
+        assert non_default_params == {"tools": self.TOOLS, "reasoning_effort": "high"}
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    def test_get_optional_params_passes_base_model_to_json_provider(self, local_model_cost_map, drop_params):
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="ep-publicai",
+            custom_llm_provider="publicai",
+            tools=self.TOOLS,
+            reasoning_effort="high",
+            base_model="publicai/allenai/Olmo-3-7B-Think",
+            drop_params=drop_params,
+        )
+
+        assert optional_params["tools"] == self.TOOLS
+        assert optional_params["reasoning_effort"] == "high"
+        assert "base_model" not in optional_params
+
+    def test_non_json_provider_does_not_receive_base_model_kwarg(self):
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="a2a/test-agent",
+            custom_llm_provider="a2a",
+            tools=self.TOOLS,
+            base_model="publicai/allenai/Olmo-3-7B-Think",
+            drop_params=True,
+        )
+
+        assert "base_model" not in optional_params
 
 
 class TestClassCaching:
