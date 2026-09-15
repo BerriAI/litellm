@@ -13,20 +13,51 @@ where routing to a consistent deployment is still beneficial.
 """
 
 import hashlib
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
+from litellm.caching.affinity_cache import claim_affinity_pin, claim_affinity_pin_in_memory, set_local_affinity_pin
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
 
-class DeploymentAffinityCacheValue(TypedDict):
-    model_id: str
+class DeploymentAffinityCacheValue(TypedDict, closed=True):
+    model_id: ReadOnly[str]
+
+
+VALID_MODEL_GROUP_AFFINITY_FLAGS: Final = frozenset(
+    {
+        "deployment_affinity",
+        "responses_api_deployment_check",
+        "session_affinity",
+        "encrypted_content_affinity",
+    }
+)
+
+
+def warn_on_unknown_model_group_affinity_flags(model_group_affinity_config: Mapping[str, Sequence[str]] | None) -> None:
+    """`model_group_affinity_config` is one Router-level config consumed by two callbacks:
+    DeploymentAffinityCheck acts on three of the flags and EncryptedContentAffinityCheck
+    on the fourth, so typo detection lives here at the schema, not inside either consumer.
+    """
+    if model_group_affinity_config is None:
+        return
+    for group, flags in model_group_affinity_config.items():
+        unknown = set(flags) - VALID_MODEL_GROUP_AFFINITY_FLAGS
+        if unknown:
+            verbose_router_logger.warning(
+                "model_group_affinity_config: unknown flag(s) %s for model group '%s'; will be ignored. Valid flags: %s",
+                unknown,
+                group,
+                VALID_MODEL_GROUP_AFFINITY_FLAGS,
+            )
 
 
 class DeploymentAffinityCheck(CustomLogger):
@@ -38,14 +69,7 @@ class DeploymentAffinityCheck(CustomLogger):
     """
 
     CACHE_KEY_PREFIX = "deployment_affinity:v1"
-    VALID_FLAGS = frozenset(
-        {
-            "deployment_affinity",
-            "responses_api_deployment_check",
-            "session_affinity",
-            "encrypted_content_affinity",
-        }
-    )
+    USER_ID_AFFINITY_PREFIX: Final = "user_id:"
 
     def __init__(
         self,
@@ -63,15 +87,6 @@ class DeploymentAffinityCheck(CustomLogger):
         self.enable_responses_api_affinity = enable_responses_api_affinity
         self.enable_session_id_affinity = enable_session_id_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
-        for group, flags in self.model_group_affinity_config.items():
-            unknown = set(flags) - self.VALID_FLAGS
-            if unknown:
-                verbose_router_logger.warning(
-                    "DeploymentAffinityCheck: unknown flag(s) %s for model group '%s'; will be ignored. Valid flags: %s",
-                    unknown,
-                    group,
-                    self.VALID_FLAGS,
-                )
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -218,57 +233,60 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.CACHE_KEY_PREFIX}:{model_group}:{hashed_user_key}"
 
     @classmethod
-    def get_session_affinity_cache_key(cls, model_group: str, session_id: str) -> str:
-        return f"{cls.CACHE_KEY_PREFIX}:session:{model_group}:{session_id}"
+    def get_session_affinity_cache_key(cls, model_group: str, session_id: str, user_key: str | None) -> str:
+        """Session pins are scoped by the caller's hashed API key so two callers reusing
+        the same client-supplied session_id cannot read or steer each other's pin.
+        `"unscoped"` covers direct Router usage with no authenticated caller, matching
+        the complexity router's own session pin key."""
+        hashed_user_key: Final = cls._hash_user_key(user_key) if user_key is not None else "unscoped"
+        return f"{cls.CACHE_KEY_PREFIX}:session:{model_group}:{hashed_user_key}:{session_id}"
 
     @staticmethod
-    def _get_user_key_from_metadata_dict(metadata: dict) -> str | None:
-        # NOTE: affinity is keyed on the *API key hash* provided by the proxy (not the
-        # OpenAI `user` parameter, which is an end-user identifier).
-        user_key: Final = metadata.get("user_api_key_hash")
-        if user_key is None:
-            return None
-        return str(user_key)
-
-    @staticmethod
-    def _get_session_id_from_metadata_dict(metadata: dict) -> str | None:
+    def _get_session_id_from_metadata_dict(metadata: Mapping[object, object]) -> str | None:
         session_id: Final = metadata.get("session_id")
-        if session_id is None:
+        if session_id is None or metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
             return None
         return str(session_id)
 
     @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
+    def _iter_metadata_dicts(request_kwargs: Mapping[str, object]) -> tuple[Mapping[object, object], ...]:
         """
         Return all metadata dicts available on the request.
 
         Depending on the endpoint, Router may populate `metadata` or `litellm_metadata`.
         Users may also send one or both, so we check both (rather than using `or`).
         """
-        metadata_dicts: Final[list[dict]] = []
-        for key in ("litellm_metadata", "metadata"):
-            md = request_kwargs.get(key)
-            if isinstance(md, dict):
-                metadata_dicts.append(md)
-        return metadata_dicts
+        return tuple(
+            cast(Mapping[object, object], metadata)  # cast-ok: isinstance proves mapping shape; values remain opaque
+            for key in ("litellm_metadata", "metadata")
+            if isinstance(metadata := request_kwargs.get(key), dict)
+        )
 
     @staticmethod
-    def _get_user_key_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _first_metadata_value(metadata_dicts: Sequence[Mapping[object, object]], key: str) -> str | None:
+        value: Final = next((metadata[key] for metadata in metadata_dicts if metadata.get(key) is not None), None)
+        return None if value is None else str(value)
+
+    @classmethod
+    def get_user_key_from_request_kwargs(cls, request_kwargs: Mapping[str, object]) -> str | None:
         """
         Extract a stable affinity key from request kwargs.
 
-        Source (proxy): `metadata.user_api_key_hash`
+        Source (proxy): `metadata.user_api_key_hash` for virtual-key callers. JWT-authenticated
+        callers carry no key hash, so their `metadata.user_api_key_user_id` stands in for it,
+        namespaced under `USER_ID_AFFINITY_PREFIX` so a user id can never alias a key hash.
 
         Note: the OpenAI `user` parameter is an end-user identifier and is intentionally
         not used for deployment affinity.
         """
-        # Check metadata dicts (Proxy usage)
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            user_key = DeploymentAffinityCheck._get_user_key_from_metadata_dict(metadata=metadata)
-            if user_key is not None:
-                return user_key
-
-        return None
+        metadata_dicts: Final = cls._iter_metadata_dicts(request_kwargs)
+        user_api_key_hash: Final = cls._first_metadata_value(metadata_dicts, "user_api_key_hash")
+        if user_api_key_hash is not None:
+            return user_api_key_hash
+        user_id: Final = cls._first_metadata_value(metadata_dicts, "user_api_key_user_id")
+        if user_id is None:
+            return None
+        return f"{cls.USER_ID_AFFINITY_PREFIX}{user_id}"
 
     @staticmethod
     def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
@@ -277,6 +295,42 @@ class DeploymentAffinityCheck(CustomLogger):
             if session_id is not None:
                 return session_id
         return None
+
+    @staticmethod
+    def _get_marker_session_affinity_ttl(request_kwargs: dict) -> int | None:
+        """TTL from the session-affinity marker the Router stamps at pre-routing time
+        when an auto-router routed this request with session_affinity enabled.
+        Marker presence enables session pinning for this request only; anything that
+        is not a positive int is treated as absent."""
+        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
+            ttl = metadata.get(SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY)
+            if isinstance(ttl, int) and not isinstance(ttl, bool) and ttl > 0:
+                return ttl
+        return None
+
+    @staticmethod
+    def _pinned_model_id(stored: object) -> str | None:
+        """Deployment id held by a stored pin, for both the dict shape this writes and the
+        bare string older writers left behind. None when the value is neither."""
+        if isinstance(stored, dict):
+            model_id: Final = stored.get("model_id")
+            return str(model_id) if model_id is not None else None
+        if isinstance(stored, str):
+            return stored
+        return None
+
+    def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
+        set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
+
+    async def _claim_pin(self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int) -> str | None:
+        winner: Final = await claim_affinity_pin(self.cache, cache_key, pin_value, ttl_seconds)
+        return self._pinned_model_id(winner)
+
+    def _claim_pin_in_memory(
+        self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int
+    ) -> str | None:
+        winner: Final = claim_affinity_pin_in_memory(self.cache, cache_key, pin_value, ttl_seconds)
+        return self._pinned_model_id(winner)
 
     @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
@@ -304,6 +358,8 @@ class DeploymentAffinityCheck(CustomLogger):
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        if request_kwargs.get("_target_order") is not None:
+            return typed_healthy_deployments
 
         (
             enable_user_key,
@@ -334,12 +390,21 @@ class DeploymentAffinityCheck(CustomLogger):
         if stable_model_map_key is None:
             return typed_healthy_deployments
 
+        session_affinity_active: Final = (
+            enable_session_id or self._get_marker_session_affinity_ttl(request_kwargs=request_kwargs) is not None
+        )
+        user_key: Final = (
+            self.get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
+            if (session_affinity_active or enable_user_key)
+            else None
+        )
+
         # 2) Session-id -> deployment affinity
-        if enable_session_id:
+        if session_affinity_active:
             session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs=request_kwargs)
             if session_id is not None:
                 session_cache_key: Final = self.get_session_affinity_cache_key(
-                    model_group=stable_model_map_key, session_id=session_id
+                    model_group=stable_model_map_key, session_id=session_id, user_key=user_key
                 )
                 session_cache_result: Final = await self.cache.async_get_cache(key=session_cache_key)
 
@@ -371,7 +436,6 @@ class DeploymentAffinityCheck(CustomLogger):
         if not enable_user_key:
             return typed_healthy_deployments
 
-        user_key: Final = self._get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
         if user_key is None:
             return typed_healthy_deployments
 
@@ -400,9 +464,9 @@ class DeploymentAffinityCheck(CustomLogger):
             return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "DeploymentAffinityCheck: api-key affinity hit -> deployment=%s user_key=%s",
+            "DeploymentAffinityCheck: caller affinity hit -> deployment=%s user_key=%s",
             model_id,
-            self._shorten_for_logs(user_key),
+            self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
 
@@ -438,18 +502,22 @@ class DeploymentAffinityCheck(CustomLogger):
             enable_session_id,
         ) = self._get_effective_flags(deployment_model_name)
 
-        if not enable_user_key and not enable_session_id:
+        marker_session_ttl: Final = self._get_marker_session_affinity_ttl(request_kwargs=kwargs)
+        session_affinity_active: Final = enable_session_id or marker_session_ttl is not None
+
+        if not enable_user_key and not session_affinity_active:
             return None
 
-        user_key = None
-        if enable_user_key:
-            user_key = self._get_user_key_from_request_kwargs(request_kwargs=kwargs)
+        user_key: Final = (
+            self.get_user_key_from_request_kwargs(request_kwargs=kwargs)
+            if (enable_user_key or session_affinity_active)
+            else None
+        )
+        session_id: Final = (
+            self._get_session_id_from_request_kwargs(request_kwargs=kwargs) if session_affinity_active else None
+        )
 
-        session_id = None
-        if enable_session_id:
-            session_id = self._get_session_id_from_request_kwargs(request_kwargs=kwargs)
-
-        if user_key is None and session_id is None:
+        if not ((enable_user_key and user_key is not None) or session_id is not None):
             return None
 
         model_info = kwargs.get("model_info")
@@ -473,22 +541,31 @@ class DeploymentAffinityCheck(CustomLogger):
             verbose_router_logger.warning("DeploymentAffinityCheck: model_id missing; skipping affinity cache update.")
             return None
 
-        if user_key is not None:
+        pin_value: Final = DeploymentAffinityCacheValue(model_id=str(model_id))
+
+        if enable_user_key and user_key is not None:
             try:
                 cache_key: Final = self.get_affinity_cache_key(model_group=deployment_model_name, user_key=user_key)
-                await self.cache.async_set_cache(
-                    cache_key,
-                    DeploymentAffinityCacheValue(model_id=str(model_id)),
-                    ttl=self.ttl_seconds,
+                claimed_user_pin: Final = await self._claim_pin(
+                    cache_key=cache_key,
+                    pin_value=pin_value,
+                    ttl_seconds=self.ttl_seconds,
                 )
-
-                verbose_router_logger.debug(
-                    "DeploymentAffinityCheck: set affinity mapping model_map_key=%s deployment=%s ttl=%s user_key=%s",
-                    deployment_model_name,
-                    model_id,
-                    self.ttl_seconds,
-                    self._shorten_for_logs(user_key),
-                )
+                if claimed_user_pin == pin_value["model_id"]:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: set affinity mapping model_map_key=%s deployment=%s ttl=%s user_key=%s",
+                        deployment_model_name,
+                        model_id,
+                        self.ttl_seconds,
+                        self._shorten_for_logs(self._hash_user_key(user_key)),
+                    )
+                else:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: affinity pin already claimed model_map_key=%s existing=%s ours=%s",
+                        deployment_model_name,
+                        claimed_user_pin,
+                        model_id,
+                    )
             except Exception as e:
                 # Non-blocking: affinity is a best-effort optimization.
                 verbose_router_logger.debug(
@@ -500,21 +577,31 @@ class DeploymentAffinityCheck(CustomLogger):
         # Also persist Session-ID affinity if enabled and session-id is provided
         if session_id is not None:
             try:
+                session_affinity_ttl: Final = marker_session_ttl if marker_session_ttl is not None else self.ttl_seconds
                 session_cache_key: Final = self.get_session_affinity_cache_key(
-                    model_group=deployment_model_name, session_id=session_id
+                    model_group=deployment_model_name, session_id=session_id, user_key=user_key
                 )
-                await self.cache.async_set_cache(
-                    session_cache_key,
-                    DeploymentAffinityCacheValue(model_id=str(model_id)),
-                    ttl=self.ttl_seconds,
+                claimed_session_pin: Final = await self._claim_pin(
+                    cache_key=session_cache_key,
+                    pin_value=pin_value,
+                    ttl_seconds=session_affinity_ttl,
                 )
-                verbose_router_logger.debug(
-                    "DeploymentAffinityCheck: set session affinity mapping model_map_key=%s deployment=%s ttl=%s session_id=%s",
-                    deployment_model_name,
-                    model_id,
-                    self.ttl_seconds,
-                    session_id,
-                )
+                if claimed_session_pin == pin_value["model_id"]:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: set session affinity mapping model_map_key=%s deployment=%s ttl=%s session_id=%s",
+                        deployment_model_name,
+                        model_id,
+                        session_affinity_ttl,
+                        session_id,
+                    )
+                else:
+                    verbose_router_logger.debug(
+                        "DeploymentAffinityCheck: session pin already claimed model_map_key=%s existing=%s ours=%s session_id=%s",
+                        deployment_model_name,
+                        claimed_session_pin,
+                        model_id,
+                        session_id,
+                    )
             except Exception as e:
                 verbose_router_logger.debug(
                     "DeploymentAffinityCheck: failed to set session affinity cache. model_map_key=%s error=%s",

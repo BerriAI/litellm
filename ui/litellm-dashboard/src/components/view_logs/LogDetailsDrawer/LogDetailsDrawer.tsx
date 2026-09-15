@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer, Segmented } from "antd";
-import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
-import { Bot, Sparkles, Wrench } from "lucide-react";
+import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogEntry } from "../columns";
 import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { ClassifyTag } from "./ClassifyTag";
 import { DrawerHeader } from "./DrawerHeader";
+import { SidebarToggle } from "./SidebarToggle";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
@@ -48,7 +49,7 @@ interface TraceEventRowProps {
   onClick: () => void;
 }
 
-const TRACE_EVENT_ICON_CLASS = "text-slate-500 shrink-0";
+const TRACE_EVENT_ICON_CLASS = "text-muted-foreground shrink-0";
 
 function TraceEventIcon({ callType, isAutoRouted }: { callType: string; isAutoRouted: boolean }) {
   if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
@@ -69,19 +70,17 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   return (
     <button
       type="button"
-      className={`w-full text-left pl-8 pr-2 py-1 transition-colors ${
-        isSelected ? "bg-blue-50" : "hover:bg-slate-100"
-      }`}
+      className={`w-full text-left pl-8 pr-2 py-1 transition-colors ${isSelected ? "bg-info/10" : "hover:bg-accent"}`}
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
         <TraceEventIcon callType={row.call_type} isAutoRouted={isAutoRouted} />
-        <span className="text-xs font-medium text-slate-900 truncate">
+        <span className="text-xs font-medium text-foreground truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
         <ClassifyTag origin={row.metadata?.internal_call_origin} className="ml-auto" />
       </div>
-      <div className="text-[10px] text-slate-500 mt-0 flex items-center gap-1.5 font-mono">
+      <div className="text-[10px] text-muted-foreground mt-0 flex items-center gap-1.5 font-mono">
         <span>{durationValue}s</span>
         {row.spend ? (
           <>
@@ -279,6 +278,7 @@ export function LogDetailsDrawer({
   ).length;
   const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+  const cacheHitCount = sessionLogs.filter((row) => String(row.cache_hit ?? "").toLowerCase() === "true").length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
@@ -297,181 +297,179 @@ export function LogDetailsDrawer({
   if (!currentLog || !enrichedLog) return null;
 
   return (
-    <Drawer
-      title={null}
-      placement="right"
-      onClose={onClose}
+    <Sheet
       open={open}
-      width={DRAWER_WIDTH}
-      closable={false}
-      mask={true}
-      maskClosable={true}
-      styles={{
-        body: { padding: 0, overflow: "hidden" },
-        header: { display: "none" },
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
       }}
     >
-      <div style={{ height: "100%" }} className="flex relative">
-        {!isSidebarCollapsed ? (
-          <Button
-            type="text"
-            size="small"
-            icon={<LeftOutlined />}
-            onClick={() => setIsSidebarCollapsed(true)}
-            className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
-            aria-label="Collapse trace sidebar"
-          />
-        ) : (
-          <Button
-            type="text"
-            size="small"
-            icon={<RightOutlined />}
-            onClick={() => setIsSidebarCollapsed(false)}
-            className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
-            aria-label="Expand trace sidebar"
-          />
-        )}
-        {!isSidebarCollapsed && (
-          <div className="border-r border-slate-200 bg-slate-50 flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
-            <div className="pl-12 pr-3 py-2 border-b border-slate-200 bg-white">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                    {isSessionMode ? "Session" : "Trace"}
-                  </div>
-                  <div className="font-mono text-[12px] text-slate-900 leading-tight flex items-center gap-1">
-                    <span className="truncate">{leftPanelDisplayId}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyLeftPanelId}
-                      className="text-slate-400 hover:text-slate-600"
-                      aria-label="Copy trace id"
-                    >
-                      {copiedLeftPanelId ? (
-                        <CheckOutlined className="text-[11px]" />
-                      ) : (
-                        <CopyOutlined className="text-[11px]" />
-                      )}
-                    </button>
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none"
+        style={{ width: DRAWER_WIDTH }}
+      >
+        <SheetTitle className="sr-only">
+          {logEntry?.request_id ? `Request ${logEntry.request_id} details` : "Request details"}
+        </SheetTitle>
+        <div style={{ height: "100%" }} className="flex relative">
+          {!isSidebarCollapsed && (
+            <SidebarToggle
+              isCollapsed={false}
+              onToggle={() => setIsSidebarCollapsed(true)}
+              className="absolute top-2 left-2 z-raised"
+            />
+          )}
+          {!isSidebarCollapsed && (
+            <div className="border-r border-border bg-muted flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
+              <div className="pl-12 pr-3 py-2 border-b border-border bg-card">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {isSessionMode ? "Session" : "Trace"}
+                    </div>
+                    <div className="font-mono text-[12px] text-foreground leading-tight flex items-center gap-1">
+                      <span className="truncate">{leftPanelDisplayId}</span>
+                      <button
+                        type="button"
+                        onClick={handleCopyLeftPanelId}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label="Copy trace id"
+                      >
+                        {copiedLeftPanelId ? <Check className="size-3" /> : <Copy className="size-3" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="mt-1 text-[11px] text-slate-500 font-mono">
-                {logsForList.length} req
-                {[
-                  isSessionMode
-                    ? llmCount
-                    : logsForList.filter(
-                        (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
-                      ).length,
-                  isSessionMode
-                    ? agentCount
-                    : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
-                  isSessionMode ? mcpCount : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
-                ].map((count, i) => {
-                  const label = [" LLM", " Agent", " MCP"][i];
-                  return count > 0 ? (
-                    <span key={label}>
+                <div className="mt-1 text-[11px] text-muted-foreground font-mono">
+                  {logsForList.length} req
+                  {[
+                    isSessionMode
+                      ? llmCount
+                      : logsForList.filter(
+                          (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+                        ).length,
+                    isSessionMode
+                      ? agentCount
+                      : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
+                    isSessionMode
+                      ? mcpCount
+                      : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
+                  ].map((count, i) => {
+                    const label = [" LLM", " Agent", " MCP"][i];
+                    return count > 0 ? (
+                      <span key={label}>
+                        <span className="mx-1.5">·</span>
+                        {count}
+                        {label}
+                      </span>
+                    ) : null;
+                  })}
+                  <span className="mx-1.5">·</span>
+                  {isSessionMode ? getSpendString(totalSessionCost) : getSpendString(currentLog.spend || 0)}
+                  {isSessionMode && (
+                    <>
                       <span className="mx-1.5">·</span>
-                      {count}
-                      {label}
-                    </span>
-                  ) : null;
-                })}
-                <span className="mx-1.5">·</span>
-                {isSessionMode ? getSpendString(totalSessionCost) : getSpendString(currentLog.spend || 0)}
+                      {sessionDurationSeconds}s
+                    </>
+                  )}
+                </div>
                 {isSessionMode && (
-                  <>
-                    <span className="mx-1.5">·</span>
-                    {sessionDurationSeconds}s
-                  </>
+                  <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
+                    {cacheHitCount}/{logsForList.length} cached
+                  </div>
+                )}
+                {isSessionMode && sessionTruncated && (
+                  <div className="mt-1 text-[11px] text-warning font-mono">
+                    Showing most recent {logsForList.length} of {sessionTotalCount}
+                  </div>
+                )}
+                {isSessionMode && (
+                  <Tabs
+                    className="mt-1.5"
+                    value={sessionSortMode}
+                    onValueChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
+                  >
+                    <TabsList className="w-full">
+                      <TabsTrigger value="duration" className="text-[11px]">
+                        Duration
+                      </TabsTrigger>
+                      <TabsTrigger value="start_time" className="text-[11px]">
+                        Start time
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
                 )}
               </div>
-              {isSessionMode && sessionTruncated && (
-                <div className="mt-1 text-[11px] text-amber-600 font-mono">
-                  Showing most recent {logsForList.length} of {sessionTotalCount}
-                </div>
-              )}
-              {isSessionMode && (
-                <Segmented
-                  block
-                  size="small"
-                  className="mt-1.5 [&_.ant-segmented-item-label]:text-[11px]"
-                  options={[
-                    { label: "Duration", value: "duration" },
-                    { label: "Start time", value: "start_time" },
-                  ]}
-                  value={sessionSortMode}
-                  onChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
-                />
-              )}
-            </div>
 
-            <div className="flex-1 overflow-y-auto">
-              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
-                <div className="px-3 pt-2">
-                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
-                </div>
-              )}
-              {isSessionMode ? (
-                <div className="py-1">
-                  {/* Child events — vertical tree line with horizontal connectors */}
-                  <div className="relative pl-2">
-                    <div className="absolute left-4 top-1 bottom-1 border-l border-slate-300" />
-                    {logsForList.map((row, idx) => {
-                      const isLast = idx === logsForList.length - 1;
-                      return (
-                        <div key={row.request_id} className="relative">
-                          <div className="absolute left-4 top-3 w-3 border-t border-slate-300" />
-                          {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-slate-50" />}
-                          <TraceEventRow
-                            row={row}
-                            isSelected={row.request_id === currentLog.request_id}
-                            onClick={() => {
-                              setSelectedSessionRequestId(row.request_id);
-                              onSelectLog?.(row);
-                            }}
-                          />
-                        </div>
-                      );
-                    })}
+              <div className="flex-1 overflow-y-auto">
+                {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                  <div className="px-3 pt-2">
+                    <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
                   </div>
-                </div>
-              ) : (
-                <div className="py-1">
-                  {logsForList.map((row) => (
-                    <TraceEventRow
-                      key={row.request_id}
-                      row={row}
-                      isSelected={row.request_id === currentLog.request_id}
-                      onClick={() => onSelectLog?.(row)}
-                    />
-                  ))}
-                </div>
-              )}
+                )}
+                {isSessionMode ? (
+                  <div className="py-1">
+                    {/* Child events — vertical tree line with horizontal connectors */}
+                    <div className="relative pl-2">
+                      <div className="absolute left-4 top-1 bottom-1 border-l border-border" />
+                      {logsForList.map((row, idx) => {
+                        const isLast = idx === logsForList.length - 1;
+                        return (
+                          <div key={row.request_id} className="relative">
+                            <div className="absolute left-4 top-3 w-3 border-t border-border" />
+                            {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-muted" />}
+                            <TraceEventRow
+                              row={row}
+                              isSelected={row.request_id === currentLog.request_id}
+                              onClick={() => {
+                                setSelectedSessionRequestId(row.request_id);
+                                onSelectLog?.(row);
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-1">
+                    {logsForList.map((row) => (
+                      <TraceEventRow
+                        key={row.request_id}
+                        row={row}
+                        isSelected={row.request_id === currentLog.request_id}
+                        onClick={() => onSelectLog?.(row)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <DrawerHeader
-            log={currentLog}
-            onClose={onClose}
-            onPrevious={selectPreviousLog}
-            onNext={selectNextLog}
-            statusLabel={statusLabel}
-            statusColor={statusColor}
-            environment={environment}
-          />
-          <div className="flex-1 overflow-y-auto">
-            <LogDetailContent
-              logEntry={enrichedLog}
-              isLoadingDetails={isLoadingDetails}
-              accessToken={accessToken ?? null}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <DrawerHeader
+              log={currentLog}
+              onClose={onClose}
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggleSidebar={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+              onPrevious={selectPreviousLog}
+              onNext={selectNextLog}
+              statusLabel={statusLabel}
+              statusColor={statusColor}
+              environment={environment}
             />
+            <div className="flex-1 overflow-y-auto">
+              <LogDetailContent
+                logEntry={enrichedLog}
+                isLoadingDetails={isLoadingDetails}
+                accessToken={accessToken ?? null}
+              />
+            </div>
           </div>
         </div>
-      </div>
-    </Drawer>
+      </SheetContent>
+    </Sheet>
   );
 }

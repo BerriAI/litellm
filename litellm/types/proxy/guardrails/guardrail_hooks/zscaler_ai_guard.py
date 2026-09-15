@@ -79,6 +79,15 @@ class ZscalerAIGuardConfigModel(GuardrailConfigModel):
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
 
+    timeout: float | None = Field(
+        default=None,
+        description=(
+            "Timeout for each Zscaler AI Guard API call, in seconds. Must be positive. "
+            "Raise it if scans fail under load with 'Connection timed out'. "
+            "Defaults to 5 seconds."
+        ),
+    )
+
     @model_validator(mode="after")
     def validate_endpoint_configuration(self) -> "ZscalerAIGuardConfigModel":
         """

@@ -4,8 +4,9 @@ Expired UI session key cleanup manager.
 Deletes expired virtual keys created for LiteLLM dashboard sessions.
 """
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -14,7 +15,7 @@ from litellm.constants import (
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
     UI_SESSION_TOKEN_TEAM_ID,
 )
-from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken, UserAPIKeyAuth
+from litellm.proxy._types import KeyRequest, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -24,6 +25,11 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+
+
+class _ExpiredSessionKeyRow(Protocol):
+    @property
+    def token(self) -> str | None: ...
 
 
 class ExpiredUISessionKeyCleanupManager:
@@ -138,7 +144,7 @@ class ExpiredUISessionKeyCleanupManager:
 
         return len(tokens)
 
-    async def _find_expired_ui_session_keys(self) -> list[LiteLLM_VerificationToken]:
+    async def _find_expired_ui_session_keys(self) -> Sequence[_ExpiredSessionKeyRow]:
         """
         Find expired LiteLLM dashboard session keys.
         """

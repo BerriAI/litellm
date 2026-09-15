@@ -1,17 +1,16 @@
 import asyncio
 import concurrent.futures
-import os
+import socket
 import sys
+from typing import Final
 
 import aiohttp
+import aiohttp.abc
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,
@@ -127,9 +126,12 @@ async def test_client_payload_error_mid_stream_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == [b"chunk1"]
     assert mock_response.closed is True
@@ -151,9 +153,12 @@ async def test_client_payload_error_before_first_chunk_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == []
     assert mock_response.closed is True
@@ -171,9 +176,12 @@ async def test_connection_closed_runtime_error_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == [b"data1"]
     assert mock_response.closed is True
@@ -209,9 +217,12 @@ async def test_transfer_encoding_error_raises_read_error():
     stream = AiohttpResponseStream(mock_response)  # type: ignore
     received_chunks = []
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == [b"data1"]
     assert mock_response.closed is True
@@ -254,9 +265,12 @@ async def test_timeout_exception_gets_mapped():
     received_chunks = []
 
     # This should raise httpx.TimeoutException (mapped from aiohttp.ServerTimeoutError)
-    with pytest.raises(httpx.TimeoutException):
+    async def _drain():
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.TimeoutException):
+        await _drain()
 
     # Should have received the first chunk before the error
     assert received_chunks == [b"chunk1"]
@@ -1077,7 +1091,7 @@ async def test_session_closed_retry_does_not_close_concurrent_replacement():
         raise StopAsyncIteration("stop after retry dispatch")
 
     with patch.object(transport, "_make_aiohttp_request", side_effect=fake_make_request):
-        with pytest.raises(Exception):
+        with pytest.raises(StopAsyncIteration):
             await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
 
     try:
@@ -1130,3 +1144,55 @@ async def test_stopped_loop_session_disposed_synchronously_on_recycle():
     finally:
         await new_session.close()
         result["loop"].close()
+
+
+class _CancellingResolver(aiohttp.abc.AbstractResolver):
+    """Cancels the given task (or, by default, aiohttp's shielded DNS child task) mid-lookup."""
+
+    def __init__(self, task_to_cancel: "asyncio.Task[object] | None" = None):
+        self._task_to_cancel: Final = task_to_cancel
+
+    async def resolve(
+        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
+    ) -> list[aiohttp.abc.ResolveResult]:
+        target: Final = self._task_to_cancel or asyncio.current_task()
+        assert target is not None
+        target.cancel()
+        await asyncio.sleep(0)
+        raise OSError("resolver finished after the task was cancelled")
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.version_info < (3, 11), reason="Task.cancelling() is needed to tell the two cancellations apart"
+)
+async def test_internal_dns_cancellation_maps_to_connect_error():
+    """A CancelledError the request task never asked for must surface as a mapped httpx transport error."""
+    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_CancellingResolver()))
+    transport = LiteLLMAiohttpTransport(client=session)
+    try:
+        with pytest.raises(httpx.ConnectError):
+            await transport.handle_async_request(httpx.Request("GET", "http://example.invalid/"))
+        current = asyncio.current_task()
+        assert current is not None and current.cancelling() == 0
+    finally:
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_genuine_request_cancellation_still_propagates():
+    """Cancelling the request task itself (client disconnect, shutdown) must still propagate unmapped."""
+    current = asyncio.current_task()
+    assert current is not None
+    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_CancellingResolver(current)))
+    transport = LiteLLMAiohttpTransport(client=session)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await transport.handle_async_request(httpx.Request("GET", "http://example.invalid/"))
+    finally:
+        if sys.version_info >= (3, 11):
+            current.uncancel()
+        await transport.aclose()

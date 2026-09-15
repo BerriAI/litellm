@@ -15,19 +15,73 @@ shared fixtures build on it.
 
 import functools
 import os
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 import requests
 
-from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
+from e2e_config import (
+    CONTROL_PLANE_BASE_URL,
+    FIXTURE_DIR,
+    FIXTURE_MODE_RAW,
+    MANAGED_FILES_OPT_IN_ENV,
+    PROMPT_CACHING_OPT_IN_ENV,
+    PROXY_BASE_URL,
+    REDIS_CHAOS_OPT_IN_ENV,
+    WEEKLY_ANOMALY_OPT_IN_ENV,
+    unique_marker,
+)
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
+from e2e_http import unwrap
+from fixture_mode import fixture_mode_collection_error, fixture_report_lines
+from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
+from models import TeamNewBody, UserNewBody, UserNewResponse
+from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
 
-
 _E2E_TEST_RAN = pytest.StashKey[bool]()
+_CALL_PASSED = pytest.StashKey[bool]()
+
+OPT_IN_MARKERS: Final = MappingProxyType(
+    {
+        "weekly": WEEKLY_ANOMALY_OPT_IN_ENV,
+        "managed_files": MANAGED_FILES_OPT_IN_ENV,
+        "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
+        "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
+    }
+)
+
+
+@pytest.fixture(scope="session")
+def idp() -> Keycloak:
+    return keycloak_from_env()
+
+
+@pytest.fixture
+def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) -> Identity:
+    marker: Final = unique_marker()
+    identity: Final = idp.provision(marker=marker, group=f"e2e-jwt-team-{marker}", defer=resources.defer)
+    resources.defer(lambda: proxy.delete_user(identity.user_id))
+    # Seed the canonical user before any JWT call populates the auth cache.
+    # Group claims grant team access; management membership is added by the test.
+    unwrap(
+        proxy.transport.post(
+            "/user/new",
+            headers=proxy.transport.master,
+            json=UserNewBody(
+                user_id=identity.user_id, user_email=f"{identity.username}@example.com", user_role="internal_user"
+            ),
+            response_type=UserNewResponse,
+        )
+    )
+    team_id: Final = proxy.create_team(TeamNewBody(team_alias=f"e2e-jwt-{marker}", team_id=identity.group))
+    resources.defer(lambda: proxy.delete_team(team_id))
+    return identity
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -41,24 +95,74 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "replayable: edge-wired test whose provider traffic replays from a fixture bundle, so it makes "
+        "zero provider calls in replay mode; the record/replay CI lane selects it with -m replayable",
+    )
+    config.addinivalue_line(
+        "markers",
         "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
     )
     config.addinivalue_line(
         "markers",
         "weekly: real-provider anomaly load test that spends real money; deselected unless E2E_WEEKLY_ANOMALY is set",
     )
+    config.addinivalue_line(
+        "markers",
+        "managed_files: needs a proxy running with require_managed_files enabled; deselected unless E2E_MANAGED_FILES_STACK is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "prompt_caching_stack: needs a proxy running with router_settings.optional_pre_call_checks including "
+        "prompt_caching; deselected unless E2E_PROMPT_CACHING_STACK is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
+        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+    )
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Attach the two custom signals (suite package and covered cell ids) to every
-    test's user_properties so the standard JUnit report (`--junitxml`) records them
-    as `<property>` entries, on every outcome including skips and setup errors.
-    Downstream (Loki/Grafana) reads outcome and duration from the standard report
-    and these properties for package rollups and coverage drill-down. See
-    junit_properties.py.
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Abort before collection when E2E_FIXTURE_MODE can never work: an unknown
+    mode value, or replay against a missing, unreadable, or stale bundle (the
+    stale message names the bundle's age). Live and record modes pass through."""
+    reason = fixture_mode_collection_error(
+        FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc)
+    )
+    if reason is not None:
+        raise pytest.UsageError(reason)
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    return fixture_report_lines(FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc))
+
+
+def _needs_unset_opt_in(item: pytest.Item) -> bool:
+    return any(
+        item.get_closest_marker(marker) is not None and not os.environ.get(opt_in_env)
+        for marker, opt_in_env in OPT_IN_MARKERS.items()
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Deselect every test behind an opt-in marker whose env var is unset (see
+    OPT_IN_MARKERS): those tests need a proxy configured differently from the
+    default stack, so the coverage collector, which runs over the same collection,
+    counts their cells only where they actually run.
+
+    Attach the two custom signals (suite package and covered cell ids) to every
+    remaining test's user_properties so the standard JUnit report (`--junitxml`)
+    records them as `<property>` entries, on every outcome including skips and
+    setup errors. Downstream (Loki/Grafana) reads outcome and duration from the
+    standard report and these properties for package rollups and coverage
+    drill-down. See junit_properties.py.
 
     Also sort `load`-marked items last so a whole-tree run drives heavy throughput
     traffic only after the latency-sensitive suites have finished."""
+    deselected = [item for item in items if _needs_unset_opt_in(item)]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = [item for item in items if not _needs_unset_opt_in(item)]
     for item in items:
         attach_result_properties(item)
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
@@ -91,7 +195,8 @@ def _proxy_fail_reason() -> str | None:
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
     Unmarked tests (unit coverage of the harness) don't touch the proxy, so they
-    run even when none is up. Never skip for a missing proxy."""
+    run even when none is up. Never skip for a missing proxy. Replay mode needs
+    the proxy too: only provider-bound traffic replays from the bundle."""
     if item.get_closest_marker("e2e") is None:
         return
     reason = _proxy_fail_reason()
@@ -108,6 +213,36 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     if item.get_closest_marker("e2e") is None:
         return
     item.session.stash[_E2E_TEST_RAN] = True
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Stash the call-phase outcome so teardown can tell a passed test from a
+    failed one without re-deriving it."""
+    report = yield
+    if report.when == "call":
+        item.stash[_CALL_PASSED] = report.passed
+    return report
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, None, None]:
+    """In replay mode a passing test must consume its whole recording: leftover
+    interactions mean the test now makes fewer calls than it did at record time,
+    so the replay proved less than the bundle claims. The check runs after the
+    yield so fixture finalizers replay their recorded calls first. Failed tests
+    are left alone - their own failure already explains any unconsumed tail."""
+    result = yield
+    if not item.stash.get(_CALL_PASSED, False):
+        return result
+    reason = replay_leftover_error(
+        mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid
+    )
+    if reason is not None:
+        pytest.fail(reason)
+    return result
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

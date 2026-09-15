@@ -69,7 +69,7 @@ describe("MCPSemanticFilterTestPanel", () => {
 
   it("should enable the Test Filter button when testQuery is set and filter is enabled", () => {
     render(<MCPSemanticFilterTestPanel {...buildProps({ testQuery: "search query" })} />);
-    expect(screen.getByRole("button", { name: /test filter/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /test filter/i })).toBeEnabled();
   });
 
   it("should call onTest when the Test Filter button is clicked", async () => {
