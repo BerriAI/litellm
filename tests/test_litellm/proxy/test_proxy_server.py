@@ -7401,6 +7401,40 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to_db_ones():
+    """user_api_key_auth honours ``auth: false`` only for entries it finds in
+    general_settings["pass_through_endpoints"]. The DB overlay used to replace that
+    list wholesale, so once one endpoint existed in the DB the YAML-declared
+    auth-disabled route started answering 401 while staying registered."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {"path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": False}
+    db_endpoint: Final = {"id": "db-1", "path": "/v1/db-echo", "target": "https://example.com/post", "auth": True}
+
+    def request_without_key(path: str) -> MagicMock:
+        request: Final = MagicMock()
+        request.url.path = path
+        request.headers = {}
+        request.query_params = {}
+        return request
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        anonymous: Final = await user_api_key_auth(request=request_without_key("/v1/cuopt/request"), api_key=None)
+        assert anonymous.api_key is None
+
+        with pytest.raises(ProxyException) as still_protected:
+            await user_api_key_auth(request=request_without_key("/v1/db-echo"), api_key=None)
+        assert still_protected.value.code == "401"
+
+
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
     for index in range(count):
         cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
