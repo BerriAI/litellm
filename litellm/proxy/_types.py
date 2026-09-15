@@ -4,11 +4,12 @@ import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple
 
 import httpx
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     Json,
@@ -47,6 +48,7 @@ from litellm.types.proxy.carried_budget_state import (
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
@@ -887,6 +889,7 @@ class LiteLLMRoutes(enum.Enum):
         "/auto_router/validate_complexity_router_config",
         # Per-session auto-router read - the endpoint scopes the row to the caller's own key hash
         "/auto_router/session",
+        "/cost/predict-cache",
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
@@ -1980,8 +1983,14 @@ class OrgMember(MemberBase):
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
+RouterSettingsDict = Annotated[
+    dict[str, object],
+    BeforeValidator(validate_router_settings_dict, json_schema_input_type=UpdateRouterConfig),
+]
+
 
 class NewTeamRequest(TeamBase):
+    router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     tags: list | None = None
     guardrails: list[str] | None = None
@@ -2079,7 +2088,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
     enforced_file_expires_after: dict | None = None
-    router_settings: dict | None = None
+    router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
@@ -2635,9 +2644,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
+    allowed_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied",
+    )
     blocked_file_extensions: tuple[str, ...] | None = Field(
         None,
-        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -3882,6 +3895,7 @@ class SpendLogsPayload(TypedDict):
     session_id: str | None
     request_duration_ms: int | None
     status: Literal["success", "failure"]
+    litellm_call_id: ReadOnly[str | None]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -4413,6 +4427,9 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
+    # Parent org's model ceiling, reported only to callers who can manage the team.
+    # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
+    organization_models: list[str] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -4580,7 +4597,6 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     )
     metadata_doc_str = """Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }"""
     max_parallel_requests_doc_str = """Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x."""
-    soft_budget_doc_str = """Optional[float] - Get alerts when user crosses given budget, doesn't block requests."""
     model_max_budget_doc_str = """Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)"""
     model_rpm_limit_doc_str = """Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
     model_tpm_limit_doc_str = """Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
@@ -4837,6 +4853,14 @@ class JWTIssuerConfig(BaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    virtual_key_claim_field: str | None = Field(
+        default=None,
+        description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
+    )
+    unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior | None = Field(
+        default=None,
+        description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
+    )
 
     model_config = {
         "extra": "forbid",
@@ -5062,6 +5086,28 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             raise ValueError("scope_mappings must be set if enforce_scope_based_access is true.")
 
         super().__init__(**kwargs)
+
+    def get_issuer_config(self, issuer: str | None) -> JWTIssuerConfig | None:
+        if issuer is None or self.issuers is None:
+            return None
+        return next((config for config in self.issuers if config.issuer == issuer), None)
+
+    def is_virtual_key_mapping_configured(self) -> bool:
+        if self.virtual_key_claim_field is not None:
+            return True
+        return any(config.virtual_key_claim_field is not None for config in self.issuers or ())
+
+    def get_virtual_key_claim_field(self, issuer: str | None) -> str | None:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.virtual_key_claim_field is not None:
+            return issuer_config.virtual_key_claim_field
+        return self.virtual_key_claim_field
+
+    def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.unregistered_jwt_client_behavior is not None:
+            return issuer_config.unregistered_jwt_client_behavior
+        return self.unregistered_jwt_client_behavior
 
 
 class PrismaCompatibleUpdateDBModel(TypedDict, total=False):

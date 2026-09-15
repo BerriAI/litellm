@@ -21,6 +21,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/agent-skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_agent_skills_index_json_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/jwks.json": {
         parameters: {
             query?: never;
@@ -302,6 +322,26 @@ export interface paths {
         };
         /** Openid Configuration */
         get: operations["openid_configuration__well_known_openid_configuration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/skills/index.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Index
+         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         */
+        get: operations["agent_skills_index__well_known_skills_index_json_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3381,6 +3421,35 @@ export interface paths {
          *     ```
          */
         post: operations["estimate_cost_cost_estimate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cost/predict-cache": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Predict Cache Cost
+         * @description Compare the next native Anthropic request on two configured deployment IDs.
+         *
+         *     Estimates use provider token counting and recent successful cache telemetry for this key.
+         *     Unknown cache state uses the cold scenario when prices/counts are available. Cache observations
+         *     do not guarantee retention. v0 supports one message-content breakpoint, text and client tools;
+         *     system/tool-only breakpoints, thinking, images, nondefault Anthropic versions, beta headers and
+         *     request transforms are unknown.
+         *     Each provider count consumes one RPM unit and holds concurrency capacity; a comparison uses
+         *     up to four counts. The legacy rate limiter returns unknown without contacting the provider.
+         *     This endpoint does not generate tokens, prewarm caches, choose a model or alter routing.
+         */
+        post: operations["predict_cache_cost_cost_predict_cache_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8898,7 +8967,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -16741,7 +16810,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16847,7 +16915,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -19046,7 +19113,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -19977,6 +20044,26 @@ export interface paths {
          *     Returns: DeleteSkillResponse with type="skill_deleted"
          */
         delete: operations["delete_skill_v1_skills__skill_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{skill_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Skills Archive
+         * @description Stored skill upload, repacked so SKILL.md sits at the archive root.
+         */
+        get: operations["agent_skills_archive_v1_skills__skill_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -23138,6 +23225,32 @@ export interface components {
             /** Tags */
             tags?: string[];
         };
+        /** AgentSkillsIndex */
+        AgentSkillsIndex: {
+            /**
+             * $Schema
+             * @default https://schemas.agentskills.io/discovery/0.2.0/schema.json
+             */
+            $schema: string;
+            /** Skills */
+            skills: components["schemas"]["AgentSkillsIndexEntry"][];
+        };
+        /** AgentSkillsIndexEntry */
+        AgentSkillsIndexEntry: {
+            /** Description */
+            description: string;
+            /** Digest */
+            digest: string;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "archive";
+            /** Url */
+            url: string;
+        };
         /**
          * AlertType
          * @description Enum for alert types and management event types
@@ -24618,6 +24731,31 @@ export interface components {
             /** Failed Requests */
             failed_requests: number;
         };
+        /** CacheCostScenario */
+        CacheCostScenario: {
+            /** Input Cost */
+            input_cost: number;
+            tokens: components["schemas"]["CacheTokenBuckets"];
+        };
+        /** CacheEvidence */
+        CacheEvidence: {
+            /**
+             * Confidence
+             * @default observed
+             * @constant
+             */
+            confidence: "observed";
+            /** Expires At */
+            expires_at: number;
+            /** Observed At */
+            observed_at: number;
+            /**
+             * Source
+             * @default provider_usage
+             * @constant
+             */
+            source: "provider_usage";
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -24634,6 +24772,59 @@ export interface components {
             set_cache_response?: string | null;
             /** Status */
             status: string;
+        };
+        /** CachePredictionArm */
+        CachePredictionArm: {
+            /**
+             * Cache State
+             * @default unknown
+             * @enum {string}
+             */
+            cache_state: "warm" | "partial" | "stale" | "unknown" | "disabled";
+            cold?: components["schemas"]["CacheCostScenario"] | null;
+            /** Deployment Id */
+            deployment_id: string;
+            estimate?: components["schemas"]["CacheCostScenario"] | null;
+            evidence?: components["schemas"]["CacheEvidence"] | null;
+            /** Model */
+            model?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Token Count Source */
+            token_count_source?: "anthropic_count_tokens" | null;
+            warm?: components["schemas"]["CacheCostScenario"] | null;
+        };
+        /** CachePredictionRequest */
+        CachePredictionRequest: {
+            /** Candidate Deployment Id */
+            candidate_deployment_id: string;
+            /** Current Deployment Id */
+            current_deployment_id: string;
+            /** Request */
+            request: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        };
+        /** CachePredictionResponse */
+        CachePredictionResponse: {
+            /**
+             * Cache Guarantee
+             * @default false
+             * @constant
+             */
+            cache_guarantee: false;
+            /** Cache Rebuild Penalty */
+            cache_rebuild_penalty: number | null;
+            /**
+             * Pricing Basis
+             * @default input_before_discounts_and_margins
+             * @constant
+             */
+            pricing_basis: "input_before_discounts_and_margins";
+            stay: components["schemas"]["CachePredictionArm"];
+            switch: components["schemas"]["CachePredictionArm"];
+            /** Switch Delta */
+            switch_delta: number | null;
         };
         /** CacheSettingsField */
         CacheSettingsField: {
@@ -24715,6 +24906,29 @@ export interface components {
              * @description Connection status: 'success' or 'failed'
              */
             status: string;
+        };
+        /** CacheTokenBuckets */
+        CacheTokenBuckets: {
+            /**
+             * Cache Creation 1H Input Tokens
+             * @default 0
+             */
+            cache_creation_1h_input_tokens: number;
+            /**
+             * Cache Creation 5M Input Tokens
+             * @default 0
+             */
+            cache_creation_5m_input_tokens: number;
+            /**
+             * Cache Read Input Tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
+             * Uncached Input Tokens
+             * @default 0
+             */
+            uncached_input_tokens: number;
         };
         /**
          * CallTypes
@@ -25726,6 +25940,11 @@ export interface components {
              */
             allow_unmanaged_response_ids?: boolean | null;
             /**
+             * Allowed File Extensions
+             * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
+             */
+            allowed_file_extensions?: string[] | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25747,7 +25966,7 @@ export interface components {
             background_health_checks?: boolean | null;
             /**
              * Blocked File Extensions
-             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename
+             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set
              */
             blocked_file_extensions?: string[] | null;
             /**
@@ -28332,6 +28551,7 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
             /**
@@ -28374,6 +28594,8 @@ export interface components {
             team_id?: string | null;
             /** User Email */
             user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * KeyMetricWithMetadata
@@ -29551,6 +29773,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -29599,6 +29827,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -29625,6 +29857,8 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Batches */
+            input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -29635,6 +29869,8 @@ export interface components {
             input_cost_per_image_above_128k_tokens?: number | null;
             /** Input Cost Per Image Token */
             input_cost_per_image_token?: number | null;
+            /** Input Cost Per Image Token Batches */
+            input_cost_per_image_token_batches?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -29677,6 +29913,8 @@ export interface components {
             input_cost_per_video_per_second_above_8s_interval?: number | null;
             /** Input Cost Per Video Token */
             input_cost_per_video_token?: number | null;
+            /** Input Cost Per Video Token Batches */
+            input_cost_per_video_token_batches?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Keepalive Seconds */
@@ -29812,6 +30050,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -30772,6 +31012,12 @@ export interface components {
              * @description Enable content moderation to check for harmful content (harassment, hate speech, etc.).
              */
             content_moderation_check?: boolean | null;
+            /**
+             * Contextual Grounding From Messages
+             * @description ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.
+             * @default false
+             */
+            contextual_grounding_from_messages: boolean;
             /**
              * Credentials
              * @description Path to Google Cloud credentials JSON file or JSON string
@@ -32651,9 +32897,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Rpm Limit Type */
@@ -33404,9 +33648,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Secret Manager Settings */
@@ -38359,6 +38601,12 @@ export interface components {
             tag_routing_prefix?: string | null;
             /** Timeout */
             timeout?: number | null;
+            /** Weights */
+            weights?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
         };
         /** UpdateSearchToolRequest */
         UpdateSearchToolRequest: {
@@ -38456,9 +38704,7 @@ export interface components {
             /** Prompts */
             prompts?: string[] | null;
             /** Router Settings */
-            router_settings?: {
-                [key: string]: unknown;
-            } | null;
+            router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Secret Manager Settings */
@@ -39753,6 +39999,12 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Azure Password */
+            azure_password?: string | null;
+            /** Azure Scope */
+            azure_scope?: string | null;
+            /** Azure Username */
+            azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
             /** Budget Duration */
@@ -39801,6 +40053,10 @@ export interface components {
             cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
             /** Complexity Router Config */
             complexity_router_config?: {
                 [key: string]: unknown;
@@ -39827,6 +40083,8 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Batches */
+            input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Character Above 128K Tokens */
@@ -39837,6 +40095,8 @@ export interface components {
             input_cost_per_image_above_128k_tokens?: number | null;
             /** Input Cost Per Image Token */
             input_cost_per_image_token?: number | null;
+            /** Input Cost Per Image Token Batches */
+            input_cost_per_image_token_batches?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -39879,6 +40139,8 @@ export interface components {
             input_cost_per_video_per_second_above_8s_interval?: number | null;
             /** Input Cost Per Video Token */
             input_cost_per_video_token?: number | null;
+            /** Input Cost Per Video Token Batches */
+            input_cost_per_video_token_batches?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Keepalive Seconds */
@@ -40014,6 +40276,8 @@ export interface components {
             tag_regex?: string[] | null;
             /** Tags */
             tags?: string[] | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -40092,6 +40356,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_skills_index__well_known_agent_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
                 };
             };
         };
@@ -40420,6 +40704,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_skills_index__well_known_skills_index_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSkillsIndex"];
                 };
             };
         };
@@ -45154,6 +45458,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CostEstimateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    predict_cache_cost_cost_predict_cache_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CachePredictionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CachePredictionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -50322,7 +50659,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive). */
                 search?: string | null;
@@ -50346,7 +50683,7 @@ export interface operations {
                 access_group_id?: string | null;
                 /** @description Filter keys by agent ID */
                 agent_id?: string | null;
-                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                /** @description If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys. */
                 substring_matching?: boolean;
                 /** @description Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration. */
                 expires?: string | null;
@@ -65141,6 +65478,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSkillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_skills_archive_v1_skills__skill_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */

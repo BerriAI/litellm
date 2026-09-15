@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import MAX_LITELLM_CALL_ID_LENGTH, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -30,6 +30,7 @@ from litellm.proxy.common_request_processing import (
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
@@ -1400,6 +1401,51 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert "x-litellm-key-spend" in headers_7
         assert float(headers_7["x-litellm-key-spend"]) == 0.001  # Should use original spend on error
+
+    @pytest.mark.parametrize(
+        ("hidden_params", "request_data", "expected_call_id"),
+        [
+            (
+                {"litellm_call_id": "call-from-hidden-params"},
+                {"litellm_call_id": "call-from-request"},
+                "call-from-hidden-params",
+            ),
+            ({}, {"litellm_call_id": "call-from-request"}, "call-from-request"),
+            ({"model_id": "m-1"}, {"litellm_call_id": "call-from-request"}, "call-from-request"),
+        ],
+    )
+    def test_get_custom_headers_call_id_falls_back_to_hidden_params_then_request_data(
+        self, hidden_params, request_data, expected_call_id
+    ):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            hidden_params=hidden_params,
+            request_data=request_data,
+        )
+
+        assert headers["x-litellm-call-id"] == expected_call_id
+
+    def test_get_custom_headers_explicit_call_id_wins_over_fallbacks(self):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="explicit-call-id",
+            hidden_params={"litellm_call_id": "call-from-hidden-params"},
+            request_data={"litellm_call_id": "call-from-request"},
+        )
+
+        assert headers["x-litellm-call-id"] == "explicit-call-id"
 
     @pytest.mark.asyncio
     async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
@@ -3877,6 +3923,39 @@ class TestHandleLLMApiExceptionRetryAfter:
         )
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
+
+    async def test_handle_llm_api_exception_names_cooldown_when_every_deployment_is_cooled_down(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a", "dep-b"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "all_deployments_in_cooldown"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" in body["message"]
+        assert proxy_exc.headers["retry-after"] == "120"
+
+    async def test_handle_llm_api_exception_keeps_rate_limit_type_when_cooldown_is_partial(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "rate_limit_error"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" not in body["message"]
 
 
 class TestHandleLLMApiExceptionFramingHeaders:
@@ -6883,6 +6962,45 @@ class TestModelDeploymentsSupportStreamOptions:
         assert self._support(None, None) is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_settings, expected", [
+    (None, {"group": {"team": 100}}),
+    ({"weights": {"group": {"key": 100}}}, {"group": {"key": 100}}),
+    ({"timeout": 30}, None),
+    ({"weights": {"group": {"key": "legacy"}}}, None),
+])
+async def test_saved_weights_override_caller_input_and_preserve_key_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    key_settings: dict[str, int | dict[str, dict[str, int | str]]] | None,
+    expected: dict[str, dict[str, int]] | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "get_team_object", AsyncMock(
+        return_value=SimpleNamespace(router_settings={"weights": {"group": {"team": 100}}})
+    ))
+    forged = {"group": {"caller": 100}}
+    processor = ProxyBaseLLMRequestProcessing(data={
+        "model": "group", "weights": forged, "_router_weights": forged,
+        "router_settings_override": {"weights": forged},
+    })
+    logging = MagicMock(spec=ProxyLogging)
+    logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    data, _ = await processor.common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", team_id="team-a", router_settings=key_settings),
+        proxy_logging_obj=logging,
+        proxy_config=proxy_server.ProxyConfig(),
+        route_type="acompletion",
+        llm_router=litellm.Router(model_list=[]),
+    )
+    assert "weights" not in data
+    assert data.get("_router_weights") == expected
+    assert logging.pre_call_hook.call_args.kwargs["data"].get("_router_weights") == expected
+
+
 class TestPerRequestModelGroupAlias:
     """``router_settings.model_group_alias`` on a key or team has to be resolved
     by the proxy: the Router resolves aliases from its own shared instance
@@ -8060,6 +8178,19 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     assert (records[0].exc_info is not None) is expect_traceback
 
 
+class TestResolveLitellmCallId:
+    def test_client_call_id_within_the_bound_is_kept(self):
+        assert resolve_litellm_call_id("req-abc-123") == "req-abc-123"
+        at_bound: Final = "y" * MAX_LITELLM_CALL_ID_LENGTH
+        assert resolve_litellm_call_id(at_bound) == at_bound
+
+    @pytest.mark.parametrize("client_call_id", [None, "", "x" * (MAX_LITELLM_CALL_ID_LENGTH + 1), "z" * 3000])
+    def test_missing_empty_or_oversized_client_call_id_gets_a_generated_uuid(self, client_call_id):
+        resolved: Final = resolve_litellm_call_id(client_call_id)
+        assert resolved != client_call_id
+        assert uuid.UUID(resolved).version == 4
+
+
 class _FailureHookRecorder:
     """Stands in for ProxyLogging.post_call_failure_hook, recording what the detached-failure closure hands it."""
 
@@ -8384,6 +8515,41 @@ async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status
 
     assert exc_info.value.headers is not None
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-passthrough-500"
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_response_is_synthetic():
+    """Exception mapping hands the proxy a mapped error whose ``response`` is a synthetic empty
+    ``httpx.Response`` and parks the provider's real headers on ``litellm_response_headers``.
+    The client must still get the provider request id, as it does on a 200.
+    """
+    import httpx
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    mapped = litellm.BadRequestError(
+        message="OpenAIException - max_tokens is too large: 999999999.",
+        model="gpt-4o-mini",
+        llm_provider="openai",
+    )
+    mapped.litellm_response_headers = httpx.Headers({"x-request-id": "req_openai_400"})
+    assert dict(mapped.response.headers) == {}
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await processor._handle_llm_api_exception(
+            e=mapped,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert exc_info.value.code == "400"
+    assert "max_tokens is too large: 999999999." in exc_info.value.message
+    assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
 
 
 class TestBackgroundResponseRetrievalGovernance:

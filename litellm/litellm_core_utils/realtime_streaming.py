@@ -10,6 +10,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
+from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
@@ -33,9 +34,6 @@ if TYPE_CHECKING:
     CLIENT_CONNECTION_CLASS = ClientConnection
 else:
     CLIENT_CONNECTION_CLASS = Any
-
-
-REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,6 +443,12 @@ class RealTimeStreaming:
             )
             sent = False
             for msg in transformed:
+                if isinstance(msg, bytes):
+                    await self.provider_config.pace_backend_send(msg)
+                    await self.backend_ws.send(msg)
+                    self._content_sent_after_setup = True
+                    sent = True
+                    continue
                 try:
                     msg_obj = _decode_json_object(msg)
                 except (json.JSONDecodeError, TypeError):
@@ -1013,7 +1017,7 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked:
+                if not blocked and not self._is_transcription_session:
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
@@ -1147,6 +1151,7 @@ class RealTimeStreaming:
         self._logging_worker.ensure_initialized_and_enqueue(
             self.logging_obj.dispatch_failure_handlers(error, traceback.format_exc(), prefer_async_handlers=True)
         )
+        self.logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
     @staticmethod
     def _detect_beta_header(websocket: ScopedWebSocket) -> bool:
