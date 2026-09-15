@@ -143,6 +143,17 @@ def _logging_id(start_time: datetime | None, response_obj: object) -> str | None
     return litellm.utils.get_logging_id(start_time, response_obj)
 
 
+def _lookup_ids(litellm_call_id: str | None, response_obj: object) -> Mapping[str, str]:
+    """v2 carried the response id inside the generation id; v4 hashes ids to 16 hex chars, so they ride in metadata."""
+    response_id: Final[object] = (
+        cast(Mapping[str, object], response_obj).get("id")
+        if isinstance(response_obj, Mapping)
+        else getattr(response_obj, "id", None)
+    )
+    ids: Final[tuple[tuple[str, object], ...]] = (("litellm_call_id", litellm_call_id), ("response_id", response_id))
+    return MappingProxyType({key: str(value) for key, value in ids if value is not None})
+
+
 def _as_steering_flag(value: object) -> bool:
     """A string ``str_to_bool`` does not recognise falls back to its truthiness."""
     if isinstance(value, str):
@@ -923,6 +934,7 @@ class LangFuseLogger:
                     **(trace_params.get("metadata") or {}),
                     **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
                     **enrichments,
+                    **_lookup_ids(litellm_call_id, response_obj),
                 },
                 "level": level,
                 "version": _optional_str(clean_metadata.pop("version", None)),

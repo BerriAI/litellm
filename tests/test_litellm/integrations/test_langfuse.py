@@ -687,6 +687,44 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         assert generation_metadata["litellm_response_cost"] == 0.25
         assert generation_metadata["api_base"] == "https://real-api-base"
 
+    def test_generation_metadata_carries_the_call_id_and_response_id(self):
+        """
+        v2's generation id was ``time-<hh-mm-ss-us>_<response id>``, so a generation could
+        be found from the provider response id. v4 hashes that string onto 16 hex chars,
+        which leaves nothing searchable unless both ids are emitted as metadata.
+        """
+        payload = self._build_standard_logging_payload(trace_id="canary-trace-id")
+        kwargs = {**self._build_langfuse_kwargs(payload), "response_cost": 0.25}
+        metadata = self._canary_request_metadata()
+        self.use_real_langfuse_client()
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kw: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata=metadata,
+                litellm_params={"metadata": metadata},
+                output=None,
+                start_time=datetime.datetime(2024, 1, 1, 12, 0, 0),
+                end_time=datetime.datetime(2024, 1, 1, 12, 0, 1),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=litellm.ModelResponse(
+                    id="chatcmpl-canary-response", choices=[{"message": {"role": "assistant", "content": "OK"}}]
+                ),
+                level="DEFAULT",
+                litellm_call_id="canary-call-id",
+            )
+
+        generation_metadata = self.exported_generation_metadata()
+        assert generation_metadata["litellm_call_id"] == "canary-call-id"
+        assert generation_metadata["response_id"] == "chatcmpl-canary-response"
+        assert "chatcmpl-canary-response" in self._emitted_payload_text()
+
     def test_denied_steering_keys_and_enrichments(self):
         """
         endpoint is a plain string, so without the deny-list it would ride the
