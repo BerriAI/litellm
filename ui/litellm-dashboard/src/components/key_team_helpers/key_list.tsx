@@ -27,6 +27,8 @@ export interface Team {
   access_group_models?: string[];
   access_group_mcp_server_ids?: string[];
   access_group_agent_ids?: string[];
+  // Parent org's model ceiling. undefined = no org / not loaded; [] or ["all-proxy-models"] = no ceiling.
+  organization_models?: string[] | null;
 }
 
 export interface KeyResponse {

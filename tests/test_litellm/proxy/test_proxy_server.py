@@ -12796,6 +12796,45 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
 
 
 @pytest.mark.asyncio
+async def test_moderations_response_carries_litellm_call_id_header():
+    from fastapi import Response
+
+    from litellm.types.utils import ModerationCreateResponse
+
+    call_id = "moderation-call-id-123"
+    moderation_response = ModerationCreateResponse(id="modr-1", model="omni-moderation-latest", results=[])
+    moderation_response._hidden_params = {"litellm_call_id": call_id, "model_id": "mod-deployment-1"}
+
+    async def fake_llm_call():
+        return moderation_response
+
+    async def passthrough_add_litellm_data(data, **kwargs):
+        return {**data, "litellm_call_id": call_id}
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fastapi_response = Response()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", spend=0.0)
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "route_request", new=AsyncMock(return_value=fake_llm_call())),  # test-quality-ok: fakes the provider call so the response headers assembled by the real route are observable
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global, no injection point
+    ):
+        mock_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        mock_logging.update_request_status = AsyncMock()
+        result = await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert result is moderation_response
+    assert fastapi_response.headers["x-litellm-call-id"] == call_id
+    assert fastapi_response.headers["x-litellm-model-id"] == "mod-deployment-1"
+
+
+@pytest.mark.asyncio
 async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(monkeypatch):
     from litellm.proxy.agent_endpoints.agent_registry import (
         AGENT_RECONCILE_LOCK,

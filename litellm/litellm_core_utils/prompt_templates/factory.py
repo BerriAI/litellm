@@ -1757,7 +1757,7 @@ def convert_to_anthropic_tool_invoke(
     anthropic_tool_invoke: Final[list[AnthropicMessagesToolUseParam | dict[str, object]]] = []
 
     for tool in tool_calls:
-        if not get_attribute_or_key(tool, "type") == "function":
+        if get_attribute_or_key(tool, "type") != "function":
             continue
 
         tool_id = cast(str, get_attribute_or_key(tool, "id"))

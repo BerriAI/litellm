@@ -519,9 +519,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     renderWithStoredConfig(STORED_CONFIG);
 
     await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(
-      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
-    ).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -534,9 +532,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     renderWithStoredConfig({ ...STORED_CONFIG, deployment_affinity: false });
 
     await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(
-      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
-    ).not.toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -549,7 +545,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     renderWithStoredConfig(STORED_CONFIG);
 
     await user.click(await screen.findByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+    await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 

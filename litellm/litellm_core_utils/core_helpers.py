@@ -309,8 +309,8 @@ def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_re
     metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
     if not isinstance(metadata, Mapping):
         return False
-    attempted_retries: Final = metadata.get("attempted_retries")
-    return type(attempted_retries) is int and 0 < attempted_retries and num_retries_per_request <= attempted_retries
+    retry_count: Final = metadata.get("request_retry_count")
+    return type(retry_count) is int and 0 < retry_count and num_retries_per_request <= retry_count
 
 
 def get_or_create_metadata_bucket(
