@@ -8,6 +8,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     VertexAIPassThroughHandler,
     _base_vertex_proxy_route,
+    _resolve_vertex_model_from_router,
     _upstream_headers_for_vertex_route,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -835,3 +836,43 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
         )
 
     assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"
+
+
+def _router_without_deployment() -> MagicMock:
+    router = MagicMock()
+    router.get_available_deployment_for_pass_through.return_value = None
+    return router
+
+
+def _router_raising_on_lookup() -> MagicMock:
+    router = MagicMock()
+    router.get_available_deployment_for_pass_through.side_effect = ValueError("no healthy deployment")
+    return router
+
+
+@pytest.mark.parametrize(
+    "llm_router",
+    [None, _router_without_deployment(), _router_raising_on_lookup()],
+    ids=["no-router", "no-matching-deployment", "lookup-raises"],
+)
+def test_vertex_passthrough_without_a_resolved_deployment_keeps_the_url_and_reports_no_model_info(
+    llm_router: MagicMock | None,
+):
+    """A Vertex passthrough call that no router deployment serves must keep the URL-derived values and carry no
+    deployment model_info, so logging cannot attribute it to a deployment that never handled it."""
+    resolved = _resolve_vertex_model_from_router(
+        model_id="gemini-3.8-flash",
+        llm_router=llm_router,
+        encoded_endpoint="/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        endpoint="v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        vertex_project="url-project",
+        vertex_location="url-location",
+    )
+
+    assert resolved == (
+        "/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        "v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        "url-project",
+        "url-location",
+        None,
+    )
