@@ -15,10 +15,12 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_assistant_message_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     filter_messages_by_skip_flags,
     merge_guardrailed_scoped_messages,
+    role_out_of_guardrail_scope,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -102,14 +104,19 @@ def _pre_masking_scope_indices(
     on length and the caller's strict positional zip raises."""
     skip_system: Final = effective_skip_system_message_for_guardrail(guardrail)
     skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail)
+    skip_assistant: Final = effective_skip_assistant_message_for_guardrail(guardrail)
     return tuple(
         idx
         for idx, message in enumerate(messages)
         if isinstance(message, dict)
         and isinstance(message.get("content"), str)
         and message["content"]
-        and not (skip_system and str(message.get("role") or "").lower() == "system")
-        and not (skip_tool and str(message.get("role") or "").lower() == "tool")
+        and not role_out_of_guardrail_scope(
+            str(message.get("role") or "").lower(),
+            skip_system_message=skip_system,
+            skip_tool_message=skip_tool,
+            skip_assistant_message=skip_assistant,
+        )
     )
 
 
@@ -257,6 +264,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         skip_system_message_in_guardrail: bool | None = None,
         skip_tool_message_in_guardrail: bool | None = None,
         advisory_system_message: str | None = None,
+        skip_assistant_message_in_guardrail: bool | None = None,
         **kwargs,
     ):
         """
@@ -293,6 +301,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.dev_info: bool | None = dev_info
         self.skip_system_message_in_guardrail = skip_system_message_in_guardrail
         self.skip_tool_message_in_guardrail = skip_tool_message_in_guardrail
+        self.skip_assistant_message_in_guardrail = skip_assistant_message_in_guardrail
         self.on_flagged = on_flagged or "block"
         self.advisory_system_message = advisory_system_message
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
