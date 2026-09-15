@@ -58631,7 +58631,8 @@
         "source": "https://api.fireworks.ai/v1/serverless/models",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_response_schema": true
     },
     "fireworks_ai/glm-5p2-fast": {
         "cache_read_input_token_cost": 2.1e-07,
