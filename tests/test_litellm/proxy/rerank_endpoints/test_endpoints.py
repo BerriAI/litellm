@@ -12,6 +12,7 @@ import litellm.proxy.common_request_processing as common_request_processing_mod
 import litellm.proxy.proxy_server as proxy_server_mod
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.rerank_endpoints.endpoints import rerank
+from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 from litellm.types.utils import RerankResponse
 
 HIDDEN_PARAMS = {
@@ -170,3 +171,37 @@ async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatc
     error = await _rerank_failure(rejection, raised_before_routing=True, monkeypatch=monkeypatch)
 
     assert (error.type, error.param, error.code) == ("bad_request_error", "session_id", "400")
+
+
+@pytest.mark.asyncio
+async def test_rerank__missing_required_param_is_400():
+    """/rerank's except block only special-cased HTTPException, so a
+    ProxyMissingRequiredParamError (a ProxyException with code=400) fell into the
+    `else` branch's `getattr(e, "status_code", 500)` and surfaced as a 500."""
+    fastapi_response = Response()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs):
+        return kwargs["data"]
+
+    async def fake_route_request(**kwargs):
+        raise ProxyMissingRequiredParamError(route="/rerank", param="query")
+
+    with (
+        patch.object(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "route_request", fake_route_request),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "llm_router", MagicMock()),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "version", "1.2.3"),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await rerank(
+                request=_build_request(),
+                fastapi_response=fastapi_response,
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "query"
