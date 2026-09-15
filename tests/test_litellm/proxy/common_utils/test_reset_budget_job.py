@@ -19,7 +19,7 @@ from litellm.constants import (
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
-from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob, _RowReset
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 
 
@@ -243,7 +243,11 @@ def test_write_key_reset_updates_skips_none_token_and_still_writes_the_rest(rese
         LiteLLM_VerificationToken(token="tok-ok", budget_reset_at=reset_at),
     ]
 
-    asyncio.run(reset_budget_job._write_key_reset_updates(updated_keys=keys))
+    asyncio.run(
+        reset_budget_job._write_key_reset_updates(
+            updated_keys=[_RowReset(row=k, spend_decrement=(k.spend or 0.0)) for k in keys]
+        )
+    )
 
     assert _batch_writes(mock_prisma_client, "key") == [
         {
@@ -282,7 +286,7 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     assert len(key_writes) == 1
     write = key_writes[0]
     assert write["where"] == {"token": "tok-key-1"}
-    assert write["data"]["spend"] == 0
+    assert write["data"]["spend"] == {"decrement": 100.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
@@ -345,7 +349,7 @@ def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
     assert len(user_writes) == 1
     write = user_writes[0]
     assert write["where"] == {"user_id": "uid-1"}
-    assert write["data"]["spend"] == 0
+    assert write["data"]["spend"] == {"decrement": 200.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
@@ -374,7 +378,7 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     assert len(team_writes) == 1
     write = team_writes[0]
     assert write["where"] == {"team_id": "tid-1"}
-    assert write["data"]["spend"] == 0
+    assert write["data"]["spend"] == {"decrement": 500.0}
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
@@ -488,15 +492,15 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
 
     # key/user/team rows are written via batch_().<table>.update — verify each
     # one fired exactly once with the narrow {spend, budget_reset_at} payload.
-    for table_name, where in [
-        ("key", {"token": "tok-all-1"}),
-        ("user", {"user_id": "uid-all-1"}),
-        ("team", {"team_id": "tid-all-1"}),
+    for table_name, where, decrement in [
+        ("key", {"token": "tok-all-1"}, 100.0),
+        ("user", {"user_id": "uid-all-1"}, 200.0),
+        ("team", {"team_id": "tid-all-1"}, 500.0),
     ]:
         writes = _batch_writes(mock_prisma_client, table_name, op="update")
         assert len(writes) == 1, f"expected 1 {table_name} write, got {len(writes)}"
         assert writes[0]["where"] == where
-        assert writes[0]["data"]["spend"] == 0
+        assert writes[0]["data"]["spend"] == {"decrement": decrement}
         assert set(writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
 
     # The budget tier's cascade rides the same batch machinery.
@@ -2864,7 +2868,12 @@ class AmbiguousCommitClient(MockPrismaClient):
                 outer.commit_attempts += 1
                 result = await batch_commit()
                 for call in batcher.calls:
-                    if call["table"] == "key" and call["data"].get("spend") == 0:
+                    if call["table"] != "key":
+                        continue
+                    spend_field = call["data"].get("spend")
+                    if isinstance(spend_field, dict):
+                        outer.key_spend -= spend_field["decrement"]
+                    elif spend_field == 0:
                         outer.key_spend = 0.0
                 if outer.commit_attempts > 1:
                     return result
@@ -2886,7 +2895,12 @@ class AmbiguousCommitClient(MockPrismaClient):
     [
         (httpx.ReadError("response lost in transit"), 1, _SPEND_ACCRUED_AFTER_COMMIT, []),
         (httpx.ReadTimeout("response lost in transit"), 1, _SPEND_ACCRUED_AFTER_COMMIT, []),
-        (httpx.ConnectError("never left the client"), 2, 0.0, ["reset_budget_write_keys_failure"]),
+        (
+            httpx.ConnectError("never left the client"),
+            2,
+            _SPEND_ACCRUED_AFTER_COMMIT - _DUE_ROW_SPEND,
+            ["reset_budget_write_keys_failure"],
+        ),
     ],
     ids=["read_error", "read_timeout", "connect_error_erasure_control"],
 )
@@ -2898,7 +2912,8 @@ def test_ambiguous_commit_replay_does_not_erase_newly_accrued_spend(
 
     The `connect_error` case is the control: it is the one error class allowed
     to replay, and driving it through this same land-then-fail harness proves
-    the spend assertion can actually observe an erasure. In production a
+    the spend assertion can actually observe an erasure (the replayed decrement
+    both erases the accrued spend and over-decrements the row). In production a
     ConnectError means the statements never reached the database, so its replay
     has nothing to erase.
     """
@@ -3017,7 +3032,7 @@ def test_direct_reset_zeroes_under_budget_row_even_with_rollover(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
-    assert _batch_writes(mock_prisma_client, "key")[0]["data"]["spend"] == 0
+    assert _batch_writes(mock_prisma_client, "key")[0]["data"]["spend"] == {"decrement": 40.0}
     counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:tok-under", value=0.0, ttl=60)
 
 
@@ -3037,7 +3052,7 @@ def test_direct_reset_zeroes_row_without_max_budget_even_with_rollover(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
-    assert _batch_writes(mock_prisma_client, "key")[0]["data"]["spend"] == 0
+    assert _batch_writes(mock_prisma_client, "key")[0]["data"]["spend"] == {"decrement": 150.0}
 
 
 def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
@@ -3243,3 +3258,130 @@ def test_window_reset_zeroes_counter_when_rollover_disabled(monkeypatch):
 
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-off:window:1d", value=0.0)
     spend_counter_cache.async_get_cache.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Reset-vs-flush race (LIT-7814): the reset write must decrement by the spend
+# captured at read time, not set spend=0 absolutely, so spend the batch writer
+# lands between the job's read and its commit survives the reset.
+
+
+def _apply_spend_payload(db_spend: float, spend_field: Any) -> float:
+    if isinstance(spend_field, dict):
+        return db_spend - spend_field["decrement"]
+    return spend_field
+
+
+_RACE_TABLES = [
+    (
+        lambda job: job.reset_budget_for_litellm_keys(),
+        "key",
+        "token",
+        "tok-race",
+        lambda now: type(
+            "Key",
+            (),
+            {"spend": 5.0, "budget_duration": "1d", "budget_reset_at": now, "token": "tok-race"},
+        ),
+    ),
+    (
+        lambda job: job.reset_budget_for_litellm_users(),
+        "user",
+        "user_id",
+        "user-race",
+        lambda now: type(
+            "User",
+            (),
+            {"spend": 5.0, "budget_duration": "7d", "budget_reset_at": now, "user_id": "user-race"},
+        ),
+    ),
+    (
+        lambda job: job.reset_budget_for_litellm_teams(),
+        "team",
+        "team_id",
+        "team-race",
+        lambda now: type(
+            "Team",
+            (),
+            {"spend": 5.0, "budget_duration": "1mo", "budget_reset_at": now, "team_id": "team-race"},
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("run_phase, table, id_field, id_value, row_factory", _RACE_TABLES)
+def test_reset_decrement_preserves_spend_landed_after_read(
+    reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
+):
+    """Regression for LIT-7814: spend flushed between the read and the commit
+    must survive the reset. spend=5.0 at read, DB row grows to 5.4 before the
+    write applies; the decrement leaves 0.4, an absolute spend=0 erases it."""
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data[table] = [row_factory(now)]
+
+    asyncio.run(run_phase(reset_budget_job))
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert len(writes) == 1
+    assert writes[0]["where"] == {id_field: id_value}
+    assert writes[0]["data"]["spend"] == {"decrement": 5.0}
+    assert writes[0]["data"]["budget_reset_at"] > now
+    assert _apply_spend_payload(db_spend=5.4, spend_field=writes[0]["data"]["spend"]) == pytest.approx(0.4)
+
+
+@pytest.mark.parametrize("run_phase, table, id_field, id_value, row_factory", _RACE_TABLES)
+def test_reset_decrement_subsumes_rollover_cap(
+    rollover_enabled, reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
+):
+    """Rollover on, spend=5.0 over a max_budget=3.0 cap: decrement by the cap
+    leaves the 2.0 carry, matching the old max_budget decrement special case."""
+    now = datetime.now(timezone.utc)
+    row = row_factory(now)
+    row.max_budget = 3.0
+    mock_prisma_client.data[table] = [row]
+
+    asyncio.run(run_phase(reset_budget_job))
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert len(writes) == 1
+    assert writes[0]["data"]["spend"] == {"decrement": 3.0}
+    assert _apply_spend_payload(db_spend=5.4, spend_field=writes[0]["data"]["spend"]) == pytest.approx(2.4)
+
+
+@pytest.mark.parametrize("run_phase, table, id_field, id_value, row_factory", _RACE_TABLES)
+def test_reset_decrement_under_cap_with_rollover(
+    rollover_enabled, reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
+):
+    """Rollover on, spend=2.0 under a max_budget=3.0 cap: decrement by the
+    read-time spend (2.0), which used to be an absolute spend=0 write."""
+    now = datetime.now(timezone.utc)
+    row = row_factory(now)
+    row.spend = 2.0
+    row.max_budget = 3.0
+    mock_prisma_client.data[table] = [row]
+
+    asyncio.run(run_phase(reset_budget_job))
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert len(writes) == 1
+    assert writes[0]["data"]["spend"] == {"decrement": 2.0}
+    assert _apply_spend_payload(db_spend=2.4, spend_field=writes[0]["data"]["spend"]) == pytest.approx(0.4)
+
+
+@pytest.mark.parametrize("run_phase, table, id_field, id_value, row_factory", _RACE_TABLES)
+def test_reset_zero_spend_row_writes_absolute_zero(
+    reset_budget_job, mock_prisma_client, run_phase, table, id_field, id_value, row_factory
+):
+    """A row already at spend=0 still needs its window advanced, with an
+    absolute spend=0 (a decrement of 0 would be a no-op payload)."""
+    now = datetime.now(timezone.utc)
+    row = row_factory(now)
+    row.spend = 0.0
+    mock_prisma_client.data[table] = [row]
+
+    asyncio.run(run_phase(reset_budget_job))
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert len(writes) == 1
+    assert writes[0]["data"]["spend"] == 0
+    assert writes[0]["data"]["budget_reset_at"] > now
