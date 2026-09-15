@@ -10,9 +10,18 @@ use super::types::{
 /// `prepare`; SigV4 needs the serialized body, so the handler signs it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatCompletionsAuth {
-    Header { name: &'static str, value: String },
-    Bearer { token: String },
-    AwsSigV4 { region: String },
+    Header {
+        name: &'static str,
+        value: String,
+    },
+    Bearer {
+        token: String,
+    },
+    AwsSigV4 {
+        region: String,
+    },
+    /// Provider accepts unauthenticated calls.
+    None,
 }
 
 /// Why a request cannot be served by the Rust path.

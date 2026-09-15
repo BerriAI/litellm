@@ -89,7 +89,8 @@ pub struct ChatCompletionsUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
-    pub prompt_tokens_details: PromptTokensDetails,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,6 +101,12 @@ pub struct ChatCompletionsChoiceMessage {
     // while Converse assigns the joined string unconditionally. Each config
     // mirrors its own, so keep this optional and serialize it even when None.
     pub content: Option<String>,
+    // Ollama returns a model's chain of thought as a sibling `thinking` field,
+    // which Python remaps to `reasoning_content`; Anthropic and Bedrock decline
+    // thinking requests at the gate, so they leave this `None`. Serialized only
+    // when present so it is omitted, the way Python omits an absent value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -119,5 +126,9 @@ pub struct ChatCompletionsResponse {
     pub created: u64,
     pub model: String,
     pub choices: Vec<ChatCompletionsChoice>,
-    pub usage: ChatCompletionsUsage,
+    // `None` means the provider returned no token counters; the Python bridge then
+    // estimates them with `litellm.token_counter`, mirroring the Python ollama
+    // transform. Present-but-zero stays `Some({0,0,0})` and is not estimated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatCompletionsUsage>,
 }

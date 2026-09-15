@@ -1,0 +1,42 @@
+model = "ollama-chat"
+temperature = 0.0
+seed = 42
+
+[[messages]]
+role = "user"
+content = "Acknowledge with one word."
+
+[[mock.responses]]
+status = 200
+body = '''
+{
+  "model": "qwen3.8:27b",
+  "created_at": "2026-09-04T12:00:00Z",
+  "message": {"role": "assistant", "content": "Done"},
+  "done": true,
+  "done_reason": "stop"
+}
+'''
+
+[[mock.responses]]
+status = 200
+body = '''
+{
+  "model": "qwen3.8:27b",
+  "created_at": "2026-09-04T12:00:00Z",
+  "message": {"role": "assistant", "content": "Done"},
+  "done": true,
+  "done_reason": "stop"
+}
+'''
+
+[proxy]
+config = '''
+model_list:
+  - model_name: ollama-chat
+    litellm_params:
+      model: ollama_chat/qwen3.8:27b
+      api_base: http://127.0.0.1:$PORT
+general_settings:
+  master_key: sk-1234
+'''
