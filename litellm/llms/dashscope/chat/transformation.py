@@ -105,17 +105,17 @@ class DashScopeChatConfig(OpenAIGPTConfig):
             return resolved_api_base
         return f"{resolved_api_base}/chat/completions"
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited list contract of OpenAIGPTConfig
         base_params: Final = super().get_supported_openai_params(model)
         return [*base_params, "thinking", "reasoning_effort"]  # mutable-ok: inherited list contract
 
     def _map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict[str, object],
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: dict return contract of OpenAIGPTConfig
         supported_openai_params: Final = frozenset(self.get_supported_openai_params(model))
         passthrough_params: Final = MappingProxyType(
             {
