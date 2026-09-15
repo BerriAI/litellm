@@ -6,10 +6,20 @@ export const TEAM_ADMIN_EDITING_DISABLED_TITLE = "Team admins cannot edit team s
 export const TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION =
   "Ask a proxy admin to enable fields under Settings > UI > Team admin editable fields.";
 
+const callerEditAccessSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("unrestricted") }),
+  z.object({ kind: z.literal("team_admin"), editable_fields: z.array(z.string()) }),
+  z.object({ kind: z.literal("team_admin_disabled") }),
+  z.object({ kind: z.literal("none") }),
+]);
+
+export type CallerEditAccess = z.infer<typeof callerEditAccessSchema>;
+
 export type TeamEditAccess =
   | { readonly kind: "unrestricted" }
   | { readonly kind: "team_admin"; readonly editableFields: ReadonlySet<string> }
-  | { readonly kind: "team_admin_disabled" };
+  | { readonly kind: "team_admin_disabled" }
+  | { readonly kind: "none" };
 
 const fieldListSchema = z.array(z.string()).catch([]);
 
@@ -29,10 +39,11 @@ export const parseSupportedTeamAdminEditableFields = (uiSettingsFieldSchema: unk
   return items.success ? fieldListSchema.parse(items.data.enum) : [];
 };
 
-export const resolveTeamEditAccess = (editsAsTeamAdmin: boolean, uiSettingsValues: unknown): TeamEditAccess => {
-  if (!editsAsTeamAdmin) return { kind: "unrestricted" };
-  const editableFields = parseTeamAdminEditableFields(uiSettingsValues);
-  return editableFields.length === 0
-    ? { kind: "team_admin_disabled" }
-    : { kind: "team_admin", editableFields: new Set(editableFields) };
+export const parseTeamEditAccess = (callerEditAccess: unknown): TeamEditAccess => {
+  const parsed = callerEditAccessSchema.safeParse(callerEditAccess);
+  if (!parsed.success) return { kind: "none" };
+  if (parsed.data.kind === "team_admin") {
+    return { kind: "team_admin", editableFields: new Set(parsed.data.editable_fields) };
+  }
+  return parsed.data;
 };
