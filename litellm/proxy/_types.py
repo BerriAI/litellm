@@ -284,6 +284,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team's `team_member_permissions`, non-admin members of that team may set
     # `access_group_ids` on keys they create/update. Default-deny.
     KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
+    AUTO_ROUTER_MANAGE = "/auto_router/manage"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -650,6 +651,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
+        KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
 
     management_routes = (

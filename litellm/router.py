@@ -13463,7 +13463,7 @@ class Router:
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -13510,6 +13510,18 @@ class Router:
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
             return None
+
+        from litellm.proxy.auth.auto_router_checks import authorize_member_auto_router_inference
+
+        await authorize_member_auto_router_inference(
+            deployment=self._selected_strategy_marker_deployment(
+                model=registered_model_name,
+                strategy_tags=selected_strategy.tags,
+                request_kwargs=request_kwargs,
+            ),
+            request_kwargs=request_kwargs,
+            llm_router=self,
+        )
 
         from litellm.proxy.guardrails.auto_router_compression import (
             messages_for_routing,
@@ -13610,25 +13622,34 @@ class Router:
 
         return pre_routing_hook_response
 
+    def _selected_strategy_marker_deployment(
+        self, model: str, strategy_tags: tuple[str, ...], request_kwargs: Mapping[str, object]
+    ) -> DeploymentTypedDict | None:
+        markers: Final = tuple(
+            deployment
+            for deployment in self.deployments_for_request(model, request_kwargs)
+            if "model" in deployment["litellm_params"]
+            and str(deployment["litellm_params"]["model"]).startswith(AUTO_ROUTER_MODEL_PREFIX)
+        )
+        tag_matched: Final = tuple(
+            deployment
+            for deployment in markers
+            if (tuple(deployment["litellm_params"]["tags"] or ()) if "tags" in deployment["litellm_params"] else ())
+            == strategy_tags
+        )
+        return tag_matched[0] if tag_matched else (markers[0] if markers else None)
+
     def _forwardable_alias_marker_params(
         self, model: str, strategy_tags: tuple[str, ...], request_kwargs: Mapping[str, object]
     ) -> tuple[tuple[str, object], ...]:
-        marker_params: Final = tuple(
-            litellm_params
-            for deployment in self.deployments_for_request(model, request_kwargs)
-            if str((litellm_params := deployment["litellm_params"]).get("model", "")).startswith(
-                AUTO_ROUTER_MODEL_PREFIX
-            )
+        marker: Final = self._selected_strategy_marker_deployment(
+            model=model, strategy_tags=strategy_tags, request_kwargs=request_kwargs
         )
-        tag_matched: Final = tuple(
-            params for params in marker_params if tuple(params.get("tags") or ()) == strategy_tags
-        )
-        selected: Final = tag_matched[0] if tag_matched else (marker_params[0] if marker_params else None)
-        if selected is None:
+        if marker is None:
             return ()
         return tuple(
             (key, value)
-            for key, value in selected.items()
+            for key, value in marker["litellm_params"].items()
             if key not in _ALIAS_PARAMS_NEVER_FORWARDED
             and key not in CustomPricingLiteLLMParams.model_fields
             and value is not None

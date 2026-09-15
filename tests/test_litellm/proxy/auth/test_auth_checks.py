@@ -5114,8 +5114,9 @@ async def test_model_discovery_route_bypasses_user_budget():
     assert result is True
 
 
+@pytest.mark.parametrize("route", ["/health/services", "/auto_router/test_routing"])
 @pytest.mark.asyncio
-async def test_side_effectful_info_route_still_enforces_budget():
+async def test_side_effectful_info_route_still_enforces_budget(route: str) -> None:
     """#27923 keeps the bypass narrow: /health/services can fire Slack/email/webhook test
     messages, so an exhausted budget must still block it. Widening the exemption back to
     is_info_route() would regress this."""
@@ -5131,7 +5132,7 @@ async def test_side_effectful_info_route_still_enforces_budget():
             end_user_object=None,
             global_proxy_spend=None,
             general_settings={},
-            route="/health/services",
+            route=route,
             llm_router=None,
             proxy_logging_obj=AsyncMock(),
             valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
@@ -8146,3 +8147,33 @@ async def test_enforced_model_allowlists_reads_every_level_from_cache():
     ]
     assert [list(scope) for scope in personal] == [[], [], [], ["o3"], []]
     assert [list(scope) for scope in without_database] == [["gpt-4o"], ["gpt-4o-mini"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["team", "key"])
+async def test_access_group_model_fallback_uses_the_injected_database(channel: str) -> None:
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import can_key_call_model, can_team_access_model
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="group-a", access_group_name="allowed-models", access_model_names=["allowed"]
+    )
+    reader: Final = AsyncMock(return_value=group)
+    client: Final = MagicMock(db=MagicMock(litellm_accessgrouptable=MagicMock(find_unique=reader)))
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: [TQ008] prove reads stay on the injected connection
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),  # test-quality-ok: [TQ008] isolate the process cache
+    ):
+        if channel == "team":
+            assert await can_team_access_model(
+                model="allowed", team_object=LiteLLM_TeamTable(team_id="team-a", models=["other"], access_group_ids=["group-a"]),
+                llm_router=None, prisma_client=client,
+            ) is True
+        else:
+            assert await can_key_call_model(
+                model="allowed", llm_model_list=None,
+                valid_token=UserAPIKeyAuth(models=["other"], access_group_ids=["group-a"]),
+                llm_router=None, prisma_client=client,
+            ) is True
+    reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
