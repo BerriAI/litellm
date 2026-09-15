@@ -64,3 +64,11 @@ def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
     ) as exc_info:
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
+
+
+def test_validate_tool_choice_without_model_is_still_a_400():
+    """Callers that predate the model argument keep getting a 400, with an empty model on the error."""
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc_info:
+        validate_chat_completion_tool_choice({"type": "bogus"})
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == ""
