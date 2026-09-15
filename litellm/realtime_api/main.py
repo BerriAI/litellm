@@ -10,6 +10,7 @@ import litellm
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
+    REALTIME_HEALTH_CHECK_FIRST_EVENT_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
 )
@@ -37,7 +38,7 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
-from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.openai.realtime.handler import OpenAIRealtime, confirm_session_started
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
@@ -622,6 +623,7 @@ async def _realtime_health_check(
     api_version: str | None = None,
     realtime_protocol: str | None = None,
     model_params: dict | None = None,
+    first_event_timeout_seconds: float = REALTIME_HEALTH_CHECK_FIRST_EVENT_TIMEOUT_SECONDS,
 ):
     """
     Health check for realtime API - tries connection to the realtime API websocket
@@ -637,9 +639,12 @@ async def _realtime_health_check(
             without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
-        bool - True if connection is successful, False otherwise
+        bool - True once the connection is open, and for OpenAI once the first server event is not an error,
+            since OpenAI accepts the websocket handshake with missing or invalid credentials and only reports
+            the failure in its first server event
     Raises:
-        Exception - if the connection is not successful
+        Exception - if the connection is not successful, if OpenAI's first server event is an error, or if
+            OpenAI sends no server event within first_event_timeout_seconds
     """
     import websockets
 
@@ -719,5 +724,7 @@ async def _realtime_health_check(
         additional_headers=auth_headers,
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=ssl_context,
-    ):
-        return True
+    ) as connection:
+        if custom_llm_provider != "openai":
+            return True
+        return await confirm_session_started(connection, model, first_event_timeout_seconds)
