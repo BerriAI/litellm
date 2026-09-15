@@ -614,8 +614,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata.update(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
+        _request_state: Final = getattr(request, "state", None)
         deployment_model_info: Final = getattr(
-            getattr(request, "state", None), LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, None
+            _request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, None
         )
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
