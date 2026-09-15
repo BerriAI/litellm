@@ -13,7 +13,7 @@ already-present sparse entry (e.g. router model id with only
 ``{"id": ..., "db_model": True}``), the synthesized zeros get written
 back, and the entry flips from "no cost keys" → "cost keys = 0".
 
-That defeats ``_is_cost_explicitly_configured`` (added in #24949), which
+That defeats ``_group_declares_explicit_cost`` (added in #24949), which
 checks whether the cost keys are present in the raw entry — after the
 write-back they are. ``_is_model_cost_zero`` then returns ``True`` and
 ``common_checks`` skips every tag / key / team / user / org budget check

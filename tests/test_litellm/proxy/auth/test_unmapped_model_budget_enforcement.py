@@ -211,3 +211,111 @@ class TestUnmappedModelBudgetEnforcement:
 
         result = _is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False
+
+    def test_model_group_alias_to_free_model_bypasses_budget(self):
+        """An explicitly free model reached through model_group_alias should
+        bypass budget, same as when it is called by its own name."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "openai/nonexistent-but-free-model",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+            ],
+            model_group_alias={"free-model-alias": "free-model"},
+        )
+        assert _is_model_cost_zero(model="free-model", llm_router=router) is True
+        result = _is_model_cost_zero(model="free-model-alias", llm_router=router)
+        assert result is True, "Alias of an explicitly free model should bypass budget (return True)"
+
+    def test_model_group_alias_to_paid_model_enforces_budget(self):
+        """An alias must not waive budget checks for a paid model group."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-fake",
+                    },
+                },
+            ],
+            model_group_alias={"paid-model-alias": "paid-model"},
+        )
+        result = _is_model_cost_zero(model="paid-model-alias", llm_router=router)
+        assert result is False, "Alias of a paid model should enforce budget"
+
+    def test_hidden_model_group_alias_enforces_budget(self):
+        """A hidden alias has no resolvable model group, so budget stays enforced."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "openai/nonexistent-but-free-model",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+            ],
+            model_group_alias={"hidden-alias": {"model": "free-model", "hidden": True}},
+        )
+        result = _is_model_cost_zero(model="hidden-alias", llm_router=router)
+        assert result is False, "Hidden alias should enforce budget"
+
+    def test_dangling_model_group_alias_enforces_budget(self):
+        """An alias pointing at a model group that does not exist must not bypass budget."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "openai/nonexistent-but-free-model",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+            ],
+            model_group_alias={"dangling-alias": "no-such-model-group"},
+        )
+        result = _is_model_cost_zero(model="dangling-alias", llm_router=router)
+        assert result is False, "Alias to a missing model group should enforce budget"
+
+    def test_model_group_alias_to_ptu_flat_cost_enforces_budget(self):
+        """A PTU deployment bills reserved capacity as a flat cost and carries an explicit
+        zero per-token price. Reaching it through an alias must still enforce budget."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "ptu-model",
+                    "litellm_params": {
+                        "model": "azure/gpt-4o",
+                        "api_key": "sk-fake",
+                        "api_base": "https://example.openai.azure.com",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {
+                        "id": "ptu-model-id",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                        "ptu_count": 100,
+                        "cost_per_ptu_per_hour": 2.0,
+                    },
+                },
+            ],
+            model_group_alias={"ptu-model-alias": "ptu-model"},
+        )
+        assert _is_model_cost_zero(model="ptu-model", llm_router=router) is False
+        result = _is_model_cost_zero(model="ptu-model-alias", llm_router=router)
+        assert result is False, "Alias of a PTU flat-cost model should enforce budget"
