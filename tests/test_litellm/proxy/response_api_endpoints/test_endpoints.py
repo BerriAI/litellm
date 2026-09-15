@@ -1959,3 +1959,170 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
+
+
+class TestBackgroundResponseManagedObjectId:
+    """The managed row for a background response is keyed by the provider's own id.
+
+    The advertised ``response.id`` is encrypted with a fresh nonce per call, so storing it
+    in ``model_object_id`` leaves the row with no stable handle on the generation and every
+    later read of the same generation looks like a new object.
+    """
+
+    @staticmethod
+    def _encrypted_id(provider_response_id: str) -> str:
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.types.utils import SpecialEnums
+
+        managed_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+            provider_response_id, "u-1", "t-1"
+        )
+        return f"resp_{encrypt_value_helper(value=managed_id)}"
+
+    @staticmethod
+    def _queued_response(advertised_id: str, model_id: str | None = "deployment-1"):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            id=advertised_id,
+            created_at=0,
+            model="gpt-4o",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            status="queued",
+        )
+        response._hidden_params = {"model_id": model_id} if model_id else {}
+        return response
+
+    async def _stored_kwargs(self, advertised_id: str, model_id: str | None = "deployment-1"):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            store_background_response_object,
+        )
+
+        managed_files_obj = MagicMock()
+        managed_files_obj.store_unified_object_id = AsyncMock()
+
+        await store_background_response_object(
+            response=self._queued_response(advertised_id, model_id),
+            managed_files_obj=managed_files_obj,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1", team_id="t-1"),
+        )
+        return managed_files_obj.store_unified_object_id
+
+    @pytest.mark.asyncio
+    async def test_model_object_id_is_the_provider_response_id(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+        provider_response_id = "resp_provider68abc123"
+        advertised_id = self._encrypted_id(provider_response_id)
+        assert advertised_id != self._encrypted_id(provider_response_id), (
+            "advertised ids must be nonce-encrypted, otherwise this regression cannot occur"
+        )
+
+        store = await self._stored_kwargs(advertised_id)
+
+        store.assert_awaited_once()
+        kwargs = store.await_args.kwargs
+        assert kwargs["model_object_id"] == provider_response_id
+        assert kwargs["unified_object_id"] == advertised_id
+        assert kwargs["file_object"].id == advertised_id
+
+    @pytest.mark.asyncio
+    async def test_two_creates_of_one_generation_share_a_provider_id(self, monkeypatch):
+        """Re-encrypting the same generation must not look like a second object."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+        provider_response_id = "resp_provider_same_gen"
+
+        first = (await self._stored_kwargs(self._encrypted_id(provider_response_id))).await_args.kwargs
+        second = (await self._stored_kwargs(self._encrypted_id(provider_response_id))).await_args.kwargs
+
+        assert first["unified_object_id"] != second["unified_object_id"]
+        assert first["model_object_id"] == second["model_object_id"] == provider_response_id
+
+    @pytest.mark.asyncio
+    async def test_distinct_generations_keep_distinct_provider_ids(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+
+        first = (await self._stored_kwargs(self._encrypted_id("resp_providerAAA"))).await_args.kwargs
+        second = (await self._stored_kwargs(self._encrypted_id("resp_providerBBB"))).await_args.kwargs
+
+        assert first["model_object_id"] == "resp_providerAAA"
+        assert second["model_object_id"] == "resp_providerBBB"
+
+    @pytest.mark.asyncio
+    async def test_unencrypted_advertised_id_is_stored_as_is(self, monkeypatch):
+        """With response-id security disabled the advertised id is already the provider's."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+
+        store = await self._stored_kwargs("resp_rawprovider999")
+
+        assert store.await_args.kwargs["model_object_id"] == "resp_rawprovider999"
+
+    @pytest.mark.asyncio
+    async def test_response_without_a_deployment_is_not_stored(self, monkeypatch):
+        """No model_id means the poller could never route the read, so no row is written."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+
+        store = await self._stored_kwargs(self._encrypted_id("resp_no_deployment"), model_id=None)
+
+        store.assert_not_awaited()
+
+
+class TestShouldStoreBackgroundResponse:
+    """The gate `responses_api` applies before it writes a managed row.
+
+    Storing a foreground create would bill a generation whose usage the create already
+    reported, and storing one the provider has already finished leaves a row no poll can
+    retire, so both arms have to stay closed.
+    """
+
+    @staticmethod
+    def _response(status: str):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_abc",
+            created_at=0,
+            model="gpt-4o",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            status=status,
+        )
+
+    @pytest.mark.parametrize("status", ["queued", "in_progress"])
+    def test_a_background_create_the_provider_has_not_finished_is_stored(self, status):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response({"background": True}, self._response(status)) is True
+
+    @pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "incomplete"])
+    def test_a_background_create_already_terminal_is_not_stored(self, status):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response({"background": True}, self._response(status)) is False
+
+    @pytest.mark.parametrize("data", [{}, {"background": False}, {"background": None}])
+    def test_a_foreground_create_is_never_stored(self, data):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response(data, self._response("queued")) is False
+
+    def test_a_streaming_or_error_result_is_not_mistaken_for_a_response(self):
+        """The create path can hand back a streaming iterator, which has no status to read."""
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response({"background": True}, object()) is False
