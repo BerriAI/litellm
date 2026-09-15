@@ -31,6 +31,12 @@ spec:
     interval: {{ .interval }}
     scrapeTimeout: {{ .scrapeTimeout }}
     scheme: http
+    {{- if .authSecret.enabled }}
+    authorization:
+      credentials:
+        name: {{ required "serviceMonitor.authSecret.name is required when serviceMonitor.authSecret.enabled is true" .authSecret.name | quote }}
+        key: {{ required "serviceMonitor.authSecret.key is required when serviceMonitor.authSecret.enabled is true" .authSecret.key | quote }}
+    {{- end }}
   {{- if .relabelings }}
     relabelings:
 {{- toYaml .relabelings | nindent 4 }}
