@@ -2697,28 +2697,36 @@ class LiteLLMCompletionResponsesConfig:
                 )
                 message_output_items.extend(image_generation_items)
             elif choice.message.content is not None:
-                # Attach unsigned plain-text reasoning to the message item so
-                # the thinking process remains observable without emitting a
-                # standalone reasoning output item that agent clients may
-                # not understand.
+                # Unsigned plain-text reasoning is prepended into the message
+                # content as a separate output_text block. This keeps the thinking
+                # process observable to clients that scan message content while
+                # avoiding an unfamiliar standalone reasoning output item that
+                # agent clients may not understand.
                 reasoning_text: Final = getattr(choice.message, "reasoning_content", None) or ""
-
-                message_item = GenericResponseOutputItem(
-                    type="message",
-                    id=f"msg_{uuid.uuid4()}",
-                    status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                        choice.finish_reason
-                    ),
-                    role=choice.message.role,
-                    content=[  # mutable-ok: fresh output list for the message item
-                        LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(choice.message)
-                    ],
-                )
+                message_content: Final[list] = [
+                    LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(choice.message)
+                ]
                 if reasoning_text:
-                    message_item = message_item.model_copy(  # rebind-ok: model_copy returns updated item
-                        update={"reasoning_content": reasoning_text}
+                    message_content.insert(
+                        0,
+                        OutputText(
+                            type="output_text",
+                            text=reasoning_text,
+                            annotations=[],
+                        ),
                     )
-                message_output_items.append(message_item)
+
+                message_output_items.append(
+                    GenericResponseOutputItem(
+                        type="message",
+                        id=f"msg_{uuid.uuid4()}",
+                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                            choice.finish_reason
+                        ),
+                        role=choice.message.role,
+                        content=message_content,  # mutable-ok: fresh output list
+                    )
+                )
         return message_output_items
 
     @staticmethod
