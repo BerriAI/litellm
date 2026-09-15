@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, Mock
 
 import httpx
 
+from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
@@ -483,6 +484,43 @@ class TestXAIResponsesReportedCost:
             logging_obj=Mock(),
         )
         return response.usage
+
+    def test_reported_cost_reaches_the_cost_calculator(self):
+        usage = self._transformed_usage(
+            {
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": 37756000,
+            }
+        )
+
+        assert usage.cost == 0.0037756
+
+        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
+
+    def test_streamed_reported_cost_reaches_the_cost_calculator(self):
+        event = XAIResponsesAPIConfig().transform_streaming_response(
+            model="grok-4-latest",
+            parsed_chunk={
+                "type": "response.completed",
+                "sequence_number": 7,
+                "response": self._response_body(
+                    {
+                        "input_tokens": 100,
+                        "output_tokens": 200,
+                        "total_tokens": 300,
+                        "cost_in_usd_ticks": 37756000,
+                    }
+                ),
+            },
+            logging_obj=Mock(),
+        )
+
+        assert isinstance(event, ResponseCompletedEvent)
+        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
+        assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
 
     def test_usage_without_a_reported_cost_is_left_alone(self):
         usage = self._transformed_usage({"input_tokens": 100, "output_tokens": 200, "total_tokens": 300})
