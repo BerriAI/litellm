@@ -435,7 +435,7 @@ def compress(
         combined_scores = bm25_scores
 
     # Protected messages are never compressed
-    protected_indices: Final = get_protected_indices(normalized_messages)
+    protected_indices: Final = get_protected_indices(original_messages)
     kept_indices: set[int] = set(protected_indices)
 
     tool_exchange_spans: list[set[int]] = []
