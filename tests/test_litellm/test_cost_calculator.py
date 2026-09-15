@@ -4141,6 +4141,31 @@ def test_completion_cost_bills_interactions_video_output_at_video_rate():
     assert cost == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("video_count", [2, 3])
+def test_completion_cost_multiplies_video_cost_by_generated_video_count(video_count: int) -> None:
+    """Regression for LIT-6896: a Veo request for N samples generates N videos and must be billed N times."""
+    from litellm.types.videos.main import VideoObject
+
+    def _video(usage: dict[str, object]) -> VideoObject:
+        return VideoObject(id="v", object="video", status="processing", model="veo-3.1-fast-generate-001", usage=usage)
+
+    single_cost = completion_cost(
+        completion_response=_video({"duration_seconds": 4.0, "video_resolution": "720p"}),
+        model="veo-3.1-fast-generate-001",
+        custom_llm_provider="vertex_ai",
+        call_type="create_video",
+    )
+    multi_cost = completion_cost(
+        completion_response=_video({"duration_seconds": 4.0, "video_resolution": "720p", "video_count": video_count}),
+        model="veo-3.1-fast-generate-001",
+        custom_llm_provider="vertex_ai",
+        call_type="create_video",
+    )
+
+    assert single_cost > 0
+    assert multi_cost == pytest.approx(single_cost * video_count)
+
+
 @pytest.mark.parametrize(
     "batch_rate,expected_prompt,expected_completion",
     [
