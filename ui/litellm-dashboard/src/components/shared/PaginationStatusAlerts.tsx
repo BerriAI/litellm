@@ -12,6 +12,11 @@ interface PaginationStatusAlertsProps {
   failed?: boolean;
 }
 
+const failureMessage = (subject: string, progress: { currentPage: number; totalPages: number }) =>
+  progress.currentPage === 0
+    ? `Fetching ${subject} failed before any of it arrived, so the totals below are empty rather than final. Reload the page to try again.`
+    : `Fetching ${subject} failed, so the totals below cover only ${progress.currentPage} of ${progress.totalPages} pages of the range. Reload the page to try again.`;
+
 const PaginationStatusAlerts = ({
   isFetchingMore,
   cancelled,
@@ -42,10 +47,7 @@ const PaginationStatusAlerts = ({
     )}
     {failed && (
       <Alert variant="error" className="mb-2">
-        <AlertDescription className="text-inherit">
-          Fetching {subject} failed, so the totals below cover only part of the range ({progress.currentPage}/
-          {progress.totalPages} pages loaded). Reload the page to try again.
-        </AlertDescription>
+        <AlertDescription className="text-inherit">{failureMessage(subject, progress)}</AlertDescription>
       </Alert>
     )}
     {cancelled && !failed && (

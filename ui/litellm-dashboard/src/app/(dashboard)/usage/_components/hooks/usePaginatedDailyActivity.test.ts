@@ -180,6 +180,20 @@ describe("usePaginatedDailyActivity failure reporting", () => {
     consoleError.mockRestore();
   });
 
+  it("reports no pages loaded when the very first request is what failed", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchFn = vi.fn(() => Promise.reject(new Error("page 1 never came back")));
+
+    const { result } = renderHook(() =>
+      usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, null], enabled: true }),
+    );
+
+    await waitFor(() => expect(result.current.failed).toBe(true), { timeout: 5000 });
+
+    expect(result.current.progress).toEqual({ currentPage: 0, totalPages: 0 });
+    consoleError.mockRestore();
+  });
+
   it("stays unfailed when every page arrives", async () => {
     const pages = [
       firstPage,
@@ -220,5 +234,86 @@ describe("usePaginatedDailyActivity failure reporting", () => {
 
     await waitFor(() => expect(result.current.failed).toBe(false), { timeout: 5000 });
     consoleError.mockRestore();
+  });
+});
+
+describe("usePaginatedDailyActivity range coverage", () => {
+  const start = new Date("2026-08-10");
+  const end = new Date("2026-08-17");
+  const singlePage = { results: [dayOf("2026-08-16", 2)], metadata: { total_pages: 1, page: 1, total_spend: 2 } };
+
+  it("does not cover the range while the hook is disabled", () => {
+    const fetchFn = vi.fn(() => Promise.resolve(singlePage));
+
+    const { result } = renderHook(() =>
+      usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, null], enabled: false }),
+    );
+
+    expect(result.current.coversRange).toBe(false);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("covers the range only once every page of it has landed", async () => {
+    const pages = [
+      { results: [dayOf("2026-08-16", 2)], metadata: { total_pages: 2, page: 1, total_spend: 2 } },
+      { results: [dayOf("2026-08-15", 1)], metadata: { total_pages: 2, page: 2, total_spend: 1 } },
+    ];
+    const fetchFn = vi.fn((_token: string, _start: Date, _end: Date, page: number) => Promise.resolve(pages[page - 1]));
+
+    const { result } = renderHook(() =>
+      usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, null], enabled: true }),
+    );
+
+    expect(result.current.coversRange).toBe(false);
+    await waitFor(() => expect(result.current.coversRange).toBe(true), { timeout: 5000 });
+  });
+
+  it("never reports a range as covered while the data on screen is empty", async () => {
+    // Disabling the hook empties the data. Re-enabling it asks for the same args the last
+    // completed fetch used, so coverage that survives the disable would vouch for nothing.
+    const seen: Array<{ coversRange: boolean; rows: number }> = [];
+    const fetchFn = vi.fn(() => Promise.resolve(singlePage));
+
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => {
+        const activity = usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, null], enabled });
+        seen.push({ coversRange: activity.coversRange, rows: activity.data.results.length });
+        return activity;
+      },
+      { initialProps: { enabled: true } },
+    );
+
+    await waitFor(() => expect(result.current.coversRange).toBe(true), { timeout: 5000 });
+
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+
+    await waitFor(() => expect(result.current.coversRange).toBe(true), { timeout: 5000 });
+    expect(seen.filter((render) => render.coversRange && render.rows === 0)).toEqual([]);
+  });
+
+  it("stops covering the range on the very render the args change, not once an effect catches up", async () => {
+    // The render after a filter change still holds the previous filter's rows, so resetting
+    // coverage inside the fetch effect would leave a paint where the export reads them as the
+    // new range. That paint is the whole thing the gate exists to stop.
+    const seen: Array<{ filter: string; coversRange: boolean }> = [];
+    const fetchFn = vi.fn(() => Promise.resolve(singlePage));
+
+    const { result, rerender } = renderHook(
+      ({ filter }: { filter: string }) => {
+        const activity = usePaginatedDailyActivity({ fetchFn, args: ["tok", start, end, filter], enabled: true });
+        seen.push({ filter, coversRange: activity.coversRange });
+        return activity;
+      },
+      { initialProps: { filter: "team-a" } },
+    );
+
+    await waitFor(() => expect(result.current.coversRange).toBe(true), { timeout: 5000 });
+
+    rerender({ filter: "team-b" });
+
+    const rendersForNewFilter = seen.filter((render) => render.filter === "team-b");
+    expect(rendersForNewFilter.length).toBeGreaterThan(0);
+    expect(rendersForNewFilter.map((render) => render.coversRange)).not.toContain(true);
   });
 });

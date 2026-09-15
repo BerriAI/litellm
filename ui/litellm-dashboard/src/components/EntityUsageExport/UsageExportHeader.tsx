@@ -34,7 +34,6 @@ interface UsageExportHeaderProps {
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
-  /** Set to block the export and explain why; see getExportBlockedReason. */
   exportBlockedReason?: string;
 }
 

@@ -146,11 +146,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const {
     data: spendDataRaw,
-    loading,
     isFetchingMore,
     progress,
     cancelled,
     failed,
+    coversRange,
     cancel,
   } = usePaginatedDailyActivity({
     fetchFn,
@@ -664,7 +664,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
-  const spendFetchState = { loading, isFetchingMore, cancelled, failed };
+  const spendFetchState = { coversRange, cancelled, failed };
 
   return (
     <div style={{ width: "100%" }} className="relative">
