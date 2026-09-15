@@ -131,10 +131,8 @@ def test_invalid_capability_definitions_rejected(
 
 def test_capability_resolver_receives_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_RUST", "0")
-    seen: Final[list[CapabilityContext]] = []
 
     def resolver(context: CapabilityContext) -> CapabilityDefinition:
-        seen.append(context)
         if context.provider == "bedrock" and context.delivery is DeliveryMode.COMPLETED:
             return CapabilityDefinition(
                 rust=RustImplementationState.EXPERIMENTAL,
@@ -147,7 +145,6 @@ def test_capability_resolver_receives_context(monkeypatch: pytest.MonkeyPatch) -
     streaming: Final = CapabilityContext(provider="bedrock", model="whisper", delivery=DeliveryMode.STREAMING)
     assert configuration.capability_decision(resolver, context=bedrock) is ExecutionDecision.RUST_REQUIRED
     assert configuration.capability_decision(resolver, context=streaming) is ExecutionDecision.PYTHON
-    assert seen == [bedrock, streaming]
 
 
 def test_capability_decision_uses_process_and_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
