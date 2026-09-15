@@ -4906,3 +4906,18 @@ class TestStreamingSnapshotItemIds:
         reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
         assert len(reasoning_items) == 1
         assert reasoning_items[0].id == streamed_event.item_id
+
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Which fruit is red?",
+            tools=[{"type": "function", "name": "lookup_fruit", "parameters": {"type": "object"}}],
+            tool_choice={"type": "file_search"},
+            stream=stream,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
