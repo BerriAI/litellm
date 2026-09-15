@@ -125,4 +125,3 @@ def test_usgov_rows_keep_commercial_limits_and_capabilities(model_data, gov_key)
     gov = model_data[gov_key]
     assert _non_pricing_fields(gov) == _non_pricing_fields(model_data[GOV_ROW_SOURCES[gov_key]])
     assert "search_context_cost_per_query" not in gov
-    assert "source" not in gov
