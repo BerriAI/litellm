@@ -439,9 +439,10 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
     from litellm.llms.custom_httpx.http_handler import get_ssl_verify
 
     ssl_verify: Final = get_ssl_verify()
+    ca_bundle: Final = ssl_verify if isinstance(ssl_verify, str) and os.path.exists(ssl_verify) else None
     configured_certificate: Final = os.getenv("SSL_CERTIFICATE") or litellm.ssl_certificate
     client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
-    if ssl_verify is True and client_certificate is None:
+    if ssl_verify is not False and ca_bundle is None and client_certificate is None:
         return None
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
@@ -456,7 +457,7 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
             "x-langfuse-sdk-version": version("langfuse"),
             "x-langfuse-public-key": str(public_key),
         },
-        certificate_file=ssl_verify if isinstance(ssl_verify, str) else None,
+        certificate_file=ca_bundle,
         client_certificate_file=client_certificate,
     )
     if ssl_verify is False:
