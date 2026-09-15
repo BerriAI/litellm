@@ -10,6 +10,7 @@ vi.unmock("@/lib/toast");
 
 const fetchMock = vi.fn<typeof fetch>();
 const calls: { path: string; method: string; body: unknown; params: string }[] = [];
+const OFF = { enabled: false, everyone: true, user_ids: [] };
 let settings: components["schemas"]["MemorySettings"];
 let paginated = false;
 let failure = "";
@@ -42,7 +43,7 @@ beforeEach(async () => {
   await testQueryClient.cancelQueries();
   testQueryClient.clear();
   calls.length = 0;
-  settings = { enabled: false, everyone: true, user_ids: [] };
+  settings = { ...OFF, read: OFF };
   paginated = false;
   failure = "";
   canEdit = true;
@@ -70,6 +71,8 @@ beforeEach(async () => {
         return {
           active: settings.enabled && (settings.everyone || settings.user_ids?.includes("u1")),
           enabled: settings.enabled,
+          save_enabled: settings.enabled && (settings.everyone || settings.user_ids?.includes("u1")),
+          read_enabled: settings.read?.enabled && (settings.read.everyone || settings.read.user_ids?.includes("u1")),
           user_id: "u1",
           user_name: "Alex Rivera",
           team_ids: ["engineering"],
@@ -102,10 +105,31 @@ beforeEach(async () => {
 });
 
 describe("Memory dashboard", () => {
+  it("lets admins enable recall for selected users while saving remains off", async () => {
+    session("proxy_admin");
+    const user = userEvent.setup();
+    renderWithProviders(<Memory />);
+    await user.click(screen.getByRole("tab", { name: "Administration" }));
+    const recall = await screen.findByRole("switch", { name: "Use saved memories" });
+    expect(recall).not.toBeChecked();
+    await user.click(recall);
+    await user.click(screen.getByRole("combobox", { name: "Recall for" }));
+    await user.click(await screen.findByRole("option", { name: "Selected users" }));
+    await user.click(screen.getByLabelText("Add a user to recall"));
+    await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const expected = { ...OFF, read: { enabled: true, everyone: false, user_ids: ["u1"] } };
+    await waitFor(() => expect(settings).toEqual(expected));
+    expect(screen.getByRole("switch", { name: "Save memories" })).not.toBeChecked();
+    await user.click(screen.getByRole("tab", { name: "Memories" }));
+    expect(await screen.findByText("Saving off · Agent recall on")).toBeVisible();
+    expect(screen.getByText("Use port 8123")).toBeVisible();
+  });
+
   it("shows recent content and attribution while automatic memory is off", async () => {
     session("internal_user");
     renderWithProviders(<Memory />);
-    expect(await screen.findByText("Off for your account")).toBeVisible();
+    expect(await screen.findByText("Saving off · Agent recall off")).toBeVisible();
     expect(await screen.findByText("Use port 8123")).toBeVisible();
     expect(screen.getByText("Alex Rivera")).toBeVisible();
     expect(screen.getByText("Engineering")).toBeVisible();
@@ -119,7 +143,7 @@ describe("Memory dashboard", () => {
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
     await user.click(screen.getByRole("tab", { name: "Administration" }));
-    const toggle = await screen.findByRole("switch", { name: "Gateway memory" });
+    const toggle = await screen.findByRole("switch", { name: "Save memories" });
     expect(toggle).not.toBeChecked();
     await user.click(toggle);
     await user.click(screen.getByRole("button", { name: "Save changes" }));
@@ -128,7 +152,7 @@ describe("Memory dashboard", () => {
     await waitFor(() => expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument());
     expect(screen.getByRole("link", { name: "Manage team permissions" })).toHaveAttribute("href", "/ui/teams");
     await user.click(screen.getByRole("tab", { name: "Memories" }));
-    expect(await screen.findByText("On for your account")).toBeVisible();
+    expect(await screen.findByText("Saving on · Agent recall off")).toBeVisible();
     expect(calls.some(({ path }) => path.includes("policies") || path.includes("preference"))).toBe(false);
   });
 
@@ -137,14 +161,15 @@ describe("Memory dashboard", () => {
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
     await user.click(screen.getByRole("tab", { name: "Administration" }));
-    await user.click(await screen.findByRole("switch", { name: "Gateway memory" }));
-    await user.click(screen.getByRole("combobox", { name: "Enable for" }));
-    await user.click(screen.getByRole("option", { name: "Selected users" }));
-    await user.click(screen.getByLabelText("Add a user"));
+    await user.click(await screen.findByRole("switch", { name: "Save memories" }));
+    await user.click(screen.getByRole("combobox", { name: "Save for" }));
+    await user.click(await screen.findByRole("option", { name: "Selected users" }));
+    await user.click(screen.getByLabelText("Add a user to saving"));
     await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
-    expect(screen.getByRole("button", { name: "Remove alex@example.test" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Remove alex@example.test from saving" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(settings).toEqual({ enabled: true, everyone: false, user_ids: ["u1"] }));
+    const expected = { enabled: true, everyone: false, user_ids: ["u1"], read: OFF };
+    await waitFor(() => expect(settings).toEqual(expected));
   });
 
   it("shows saved user names after loading and sends only editable settings", async () => {
@@ -153,10 +178,11 @@ describe("Memory dashboard", () => {
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
     await user.click(screen.getByRole("tab", { name: "Administration" }));
-    expect(await screen.findByRole("button", { name: "Remove Alex Rivera" })).toBeVisible();
-    await user.click(screen.getByRole("switch", { name: "Gateway memory" }));
+    expect(await screen.findByRole("button", { name: "Remove Alex Rivera from saving" })).toBeVisible();
+    await user.click(screen.getByRole("switch", { name: "Save memories" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(settings).toEqual({ enabled: false, everyone: false, user_ids: ["u1"] }));
+    const expected = { enabled: false, everyone: false, user_ids: ["u1"], read: OFF };
+    await waitFor(() => expect(settings).toEqual(expected));
   });
 
   it("keeps an unsuccessful activation unsaved and shows the error", async () => {
@@ -165,7 +191,7 @@ describe("Memory dashboard", () => {
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
     await user.click(screen.getByRole("tab", { name: "Administration" }));
-    await user.click(await screen.findByRole("switch", { name: "Gateway memory" }));
+    await user.click(await screen.findByRole("switch", { name: "Save memories" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Memory service unavailable");
     expect(settings.enabled).toBe(false);
@@ -180,7 +206,7 @@ describe("Memory dashboard", () => {
     expect(screen.queryByRole("button", { name: "Edit memory" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close" }));
     await user.click(screen.getByRole("tab", { name: "Administration" }));
-    expect(await screen.findByRole("switch", { name: "Gateway memory" })).toHaveAttribute("aria-disabled", "true");
+    expect(await screen.findByRole("switch", { name: "Save memories" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
@@ -227,7 +253,7 @@ describe("Memory dashboard", () => {
     session("internal_user");
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
-    await screen.findByText("Off for your account");
+    await screen.findByText("Saving off · Agent recall off");
     fireEvent.change(screen.getByRole("textbox", { name: "Search memories" }), { target: { value: "demo" } });
     await user.click(screen.getByLabelText("Team"));
     await user.click(await screen.findByRole("option", { name: "Engineering" }));
@@ -242,7 +268,7 @@ describe("Memory dashboard", () => {
     session("proxy_admin");
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
-    await screen.findByText("Off for your account");
+    await screen.findByText("Saving off · Agent recall off");
     await user.click(screen.getByRole("combobox", { name: "Contributor" }));
     await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
     await waitFor(() => expect(calls.some(({ params }) => params.includes("user_id=u1"))).toBe(true));

@@ -20,12 +20,19 @@ MemoryQuery: TypeAlias = Annotated[
 ]
 
 
-class MemorySettings(BaseModel):
+class MemoryEnrollment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     enabled: bool = False
     everyone: bool = True
     user_ids: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=10000)
+
+    def allows(self, user_id: str | None) -> bool:
+        return self.enabled and (self.everyone or user_id in self.user_ids)
+
+
+class MemorySettings(MemoryEnrollment):
+    read: MemoryEnrollment = Field(default_factory=MemoryEnrollment)
 
 
 class MemorySettingsView(MemorySettings):
@@ -36,6 +43,8 @@ class MemoryStatus(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     active: bool
+    save_enabled: bool = False
+    read_enabled: bool = False
     user_id: str | None = None
     user_name: str | None = None
     enabled: bool = False

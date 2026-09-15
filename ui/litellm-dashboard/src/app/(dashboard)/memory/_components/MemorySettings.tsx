@@ -14,6 +14,90 @@ import { uiHref } from "@/utils/uiHref";
 import { MemoryUserPicker } from "./MemoryTargetPicker";
 
 type Settings = components["schemas"]["MemorySettings"];
+type Enrollment = components["schemas"]["MemoryEnrollment"];
+const OFF: Enrollment = { enabled: false, everyone: true, user_ids: [] };
+
+function EnrollmentEditor({
+  id,
+  title,
+  description,
+  value,
+  names,
+  busy,
+  onChange,
+  onName,
+}: Readonly<{
+  id: string;
+  title: string;
+  description: string;
+  value: Enrollment;
+  names: Record<string, string>;
+  busy: boolean;
+  onChange: (value: Enrollment) => void;
+  onName: (id: string, name: string) => void;
+}>) {
+  const addUser = (userId: string, name?: string) => {
+    if (!userId) return;
+    onChange({ ...value, user_ids: [...new Set([...(value.user_ids ?? []), userId])] });
+    onName(userId, name ?? userId);
+  };
+  return (
+    <div className="space-y-4 rounded-lg border p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-enabled`} className="text-base">
+            {title}
+          </Label>
+          <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
+        <Switch
+          id={`${id}-enabled`}
+          checked={value.enabled ?? false}
+          disabled={busy}
+          onCheckedChange={(enabled) => onChange({ ...value, enabled })}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor={`${id}-enrollment`}>{id === "save" ? "Save for" : "Recall for"}</Label>
+        <Select
+          value={value.everyone ? "everyone" : "selected"}
+          disabled={busy}
+          onValueChange={(selection) => onChange({ ...value, everyone: selection === "everyone" })}
+        >
+          <SelectTrigger id={`${id}-enrollment`} className="w-full sm:max-w-sm">
+            <SelectValue>{value.everyone ? "Everyone" : "Selected users"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="everyone">Everyone</SelectItem>
+            <SelectItem value="selected">Selected users</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {!value.everyone && (
+        <div className="space-y-3">
+          <Label htmlFor={`${id}-user`}>Add a user to {id === "save" ? "saving" : "recall"}</Label>
+          <MemoryUserPicker inputId={`${id}-user`} value="" disabled={busy} onChange={addUser} />
+          <ul className="divide-y">
+            {(value.user_ids ?? []).map((userId) => (
+              <li key={userId} className="flex items-center justify-between gap-3 py-2">
+                <span className="break-all text-sm">{names[userId] ?? userId}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  aria-label={`Remove ${names[userId] ?? userId} from ${id === "save" ? "saving" : "recall"}`}
+                  onClick={() => onChange({ ...value, user_ids: value.user_ids?.filter((item) => item !== userId) })}
+                >
+                  Remove
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function MemoryAdministration({
   userId,
@@ -30,8 +114,8 @@ export function MemoryAdministration({
   });
   const current = draft ?? settings.data;
   const save = useMutation({
-    mutationFn: ({ enabled, everyone, user_ids }: Settings) =>
-      fetchClient.PUT("/memory/v2/settings", { body: { enabled, everyone, user_ids } }),
+    mutationFn: ({ enabled, everyone, user_ids, read }: Settings) =>
+      fetchClient.PUT("/memory/v2/settings", { body: { enabled, everyone, user_ids, read: read ?? OFF } }),
     onSuccess: async ({ data }) => {
       cache.setQueryData(["memorySettings", userId], data);
       setDraft(null);
@@ -44,18 +128,15 @@ export function MemoryAdministration({
   });
   const busy = readOnly || save.isPending;
   const canShowSettings = Boolean(proxyAdmin && current && !settings.error);
-  const addUser = (id: string, label?: string) => {
-    if (!id || !current) return;
-    setDraft({ ...current, user_ids: [...new Set([...(current.user_ids ?? []), id])] });
-    setNames((previous) => ({ ...previous, [id]: label ?? id }));
-  };
   return (
     <section className="space-y-6" aria-labelledby="memory-administration-title">
       <div>
         <h2 id="memory-administration-title" className="text-xl font-semibold">
           Administration
         </h2>
-        <p className="mt-1 text-sm text-muted-foreground">Enable memory for the people who should use it.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Choose who can save memories and whose agents can use saved memories. Both are off by default.
+        </p>
       </div>
       {proxyAdmin && settings.isPending && <p role="status">Loading memory settings...</p>}
       {settings.error && (
@@ -64,66 +145,30 @@ export function MemoryAdministration({
         </p>
       )}
       {canShowSettings && current && (
-        <div className="space-y-6 rounded-lg border p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1">
-              <Label htmlFor="memory-enabled" className="text-base">
-                Gateway memory
-              </Label>
-              <p className="text-sm text-muted-foreground">
-                Off by default. When enabled, assistants can save and recall memories through the gateway.
-              </p>
-            </div>
-            <Switch
-              id="memory-enabled"
-              checked={current.enabled ?? false}
-              disabled={busy}
-              onCheckedChange={(enabled) => setDraft({ ...current, enabled })}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="memory-enrollment">Enable for</Label>
-            <Select
-              value={current.everyone ? "everyone" : "selected"}
-              disabled={busy}
-              onValueChange={(value) => setDraft({ ...current, everyone: value === "everyone" })}
-            >
-              <SelectTrigger id="memory-enrollment" className="w-full sm:max-w-sm">
-                <SelectValue>{current.everyone ? "Everyone" : "Selected users"}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="everyone">Everyone</SelectItem>
-                <SelectItem value="selected">Selected users</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {!current.everyone && (
-            <div className="space-y-3">
-              <Label htmlFor="memory-enrolled-user">Add a user</Label>
-              <MemoryUserPicker inputId="memory-enrolled-user" value="" disabled={busy} onChange={addUser} />
-              <ul className="divide-y">
-                {(current.user_ids ?? []).map((id) => (
-                  <li key={id} className="flex items-center justify-between gap-3 py-2">
-                    <span className="break-all text-sm">{names[id] ?? settings.data?.user_names?.[id] ?? id}</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={busy}
-                      aria-label={`Remove ${names[id] ?? settings.data?.user_names?.[id] ?? id}`}
-                      onClick={() =>
-                        setDraft({ ...current, user_ids: current.user_ids?.filter((value) => value !== id) })
-                      }
-                    >
-                      Remove
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+        <div className="space-y-6">
+          <EnrollmentEditor
+            id="save"
+            title="Save memories"
+            description="Allow assistants to save new facts and decisions. Applies across each selected user’s keys."
+            value={current}
+            names={{ ...settings.data?.user_names, ...names }}
+            busy={busy}
+            onName={(id, name) => setNames((previous) => ({ ...previous, [id]: name }))}
+            onChange={(value) => setDraft({ ...current, ...value })}
+          />
+          <EnrollmentEditor
+            id="read"
+            title="Use saved memories"
+            description="Allow assistants to search and read existing memories under their current user and team permissions. This does not change dashboard or API access."
+            value={current.read ?? OFF}
+            names={{ ...settings.data?.user_names, ...names }}
+            busy={busy}
+            onName={(id, name) => setNames((previous) => ({ ...previous, [id]: name }))}
+            onChange={(read) => setDraft({ ...current, read })}
+          />
           <p className="text-sm text-muted-foreground">
-            Turning memory off stops automatic saving and recall. Existing memories remain available to authorized
-            viewers. Enabling memory can add model calls, latency, and spend.
+            These controls are independent. Turn both off to stop automatic saving and recall. Existing memories remain
+            available to authorized viewers. Enabling memory can add model calls, latency, and spend.
           </p>
           {save.error && (
             <p role="alert" className="text-destructive">

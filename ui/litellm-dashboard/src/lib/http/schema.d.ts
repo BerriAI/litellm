@@ -32491,6 +32491,24 @@ export interface components {
             /** Key */
             key: string;
         };
+        /** MemoryEnrollment */
+        MemoryEnrollment: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Everyone
+             * @default true
+             */
+            everyone: boolean;
+            /**
+             * User Ids
+             * @default []
+             */
+            user_ids: string[];
+        };
         /** MemoryEntry */
         MemoryEntry: {
             /** Actor */
@@ -32572,6 +32590,7 @@ export interface components {
              * @default true
              */
             everyone: boolean;
+            read?: components["schemas"]["MemoryEnrollment"];
             /**
              * User Ids
              * @default []
@@ -32590,6 +32609,7 @@ export interface components {
              * @default true
              */
             everyone: boolean;
+            read?: components["schemas"]["MemoryEnrollment"];
             /**
              * User Ids
              * @default []
@@ -32614,6 +32634,16 @@ export interface components {
              * @default false
              */
             enabled: boolean;
+            /**
+             * Read Enabled
+             * @default false
+             */
+            read_enabled: boolean;
+            /**
+             * Save Enabled
+             * @default false
+             */
+            save_enabled: boolean;
             /**
              * Team Ids
              * @default []

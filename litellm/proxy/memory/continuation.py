@@ -63,14 +63,14 @@ class MemoryContinuations:
         if row is None:
             return None
         patch: Final = MemoryContinuation.model_validate(row.payload)
-        if patch.permission_revision != self.store.access.permission_revision:
+        if patch.permission_revision != self.store.access.continuation_revision:
             raise HTTPException(status_code=403, detail="Memory permissions changed; start a new conversation")
         return patch
 
     async def save(self, response_id: str, patch: MemoryContinuation) -> None:
         namespace: Final = await self.store.authorize_namespace()
         payload: Final = patch.model_copy(
-            update=MappingProxyType({"permission_revision": self.store.access.permission_revision})
+            update=MappingProxyType({"permission_revision": self.store.access.continuation_revision})
         ).model_dump_json()
         if len(payload.encode()) > _MAX_PATCH_BYTES:
             raise HTTPException(status_code=413, detail="Memory response exceeds one megabyte")

@@ -37,7 +37,8 @@ async def gateway_memory_is_configured(prisma_client: object, cache: DualCache) 
         shared: Final = await shared_cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
         if shared is False:
             return False
-    configured: Final = (await memory_settings(prisma_client)).enabled
+    settings: Final = await memory_settings(prisma_client)
+    configured: Final = settings.enabled or settings.read.enabled
     await cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
     if shared_cache is not None and cache.redis_cache is None:
         await shared_cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
@@ -116,18 +117,32 @@ class MemoryAccess:
 
     @property
     def active(self) -> bool:
-        return bool(
-            self.settings.enabled
-            and (self.identity.user_id or self.identity.key_id)
-            and (self.settings.everyone or self.identity.user_id in self.settings.user_ids)
+        return self.save_enabled or self.read_enabled
+
+    @property
+    def save_enabled(self) -> bool:
+        return (
+            bool(self.identity.user_id or self.identity.key_id)
+            and not self.identity.read_only
+            and self.settings.allows(self.identity.user_id)
         )
+
+    @property
+    def read_enabled(self) -> bool:
+        return bool(self.identity.user_id or self.identity.key_id) and self.settings.read.allows(self.identity.user_id)
+
+    @property
+    def continuation_revision(self) -> str:
+        return memory_digest(self.permission_revision, str(self.read_enabled))
 
     @property
     def status(self) -> MemoryStatus:
         return MemoryStatus(
             active=self.active,
+            save_enabled=self.save_enabled,
+            read_enabled=self.read_enabled,
             user_id=self.identity.user_id,
-            enabled=self.settings.enabled,
+            enabled=self.settings.enabled or self.settings.read.enabled,
             team_ids=self.team_ids,
             admin_view=self.admin_view,
         )

@@ -26,11 +26,11 @@ from litellm.proxy.memory.policy import MemoryAccess, MemoryIdentity, memory_dig
 from litellm.proxy.memory.responses import serve_memory_response
 from litellm.proxy.memory.store import MemoryStore
 from litellm.proxy.memory.transport import is_memory_continuation_round
-from litellm.types.memory_v2 import MemoryCapture, MemorySearch, MemorySettings
+from litellm.types.memory_v2 import MemoryCapture, MemoryEnrollment, MemorySearch, MemorySettings
 
 _NOW: Final = datetime(2026, 9, 12, tzinfo=timezone.utc)
 _IDENTITY: Final = MemoryIdentity("a" * 64, "owner", "team", "org", False)
-_SETTINGS: Final = MemorySettings(enabled=True)
+_SETTINGS: Final = MemorySettings(enabled=True, read=MemoryEnrollment(enabled=True))
 _CAPTURE: Final = MemoryCapture(key="demo", title="Demo", content="Use port 8347", evidence="User selected this port")
 
 
@@ -102,7 +102,7 @@ async def test_saved_response_reads_are_scoped_and_never_return_internal_input(
     prisma_edge: MagicMock, operation: str
 ) -> None:
     patch = MemoryContinuation(
-        permission_revision=access_for().permission_revision,
+        permission_revision=access_for().continuation_revision,
         response={"id": "resp_litellm_memory_test", "output": [{"type": "message", "content": []}]},
         upstream_ids=("native=one",),
     )
@@ -135,7 +135,7 @@ async def test_saved_response_reads_are_scoped_and_never_return_internal_input(
 @pytest.mark.parametrize("outcome", ["success", "already_missing", "missing_exception", "upstream_error", "readonly"])
 async def test_response_deletion_preserves_auth_paths_and_retry_state(prisma_edge: MagicMock, outcome: str) -> None:
     patch = MemoryContinuation(
-        permission_revision=access_for().permission_revision,
+        permission_revision=access_for().continuation_revision,
         response={"id": "resp_litellm_memory_test"},
         upstream_ids=("native=one", "native=two"),
     )
@@ -289,7 +289,9 @@ async def test_capture_rechecks_policy_on_its_transaction_connection(prisma_edge
         litellm_memorytable=prisma_edge.db.litellm_memorytable,
         litellm_config=SimpleNamespace(
             find_unique=AsyncMock(
-                return_value=SimpleNamespace(param_value=MemorySettings(enabled=not revoked).model_dump())
+                return_value=SimpleNamespace(
+                    param_value=MemorySettings(enabled=not revoked, read=MemoryEnrollment(enabled=True)).model_dump()
+                )
             )
         ),
         litellm_usertable=prisma_edge.db.litellm_usertable,
@@ -406,6 +408,27 @@ async def test_read_only_injection_and_forced_no_tools_do_not_request_reflection
     )
     await forced.prepare()
     assert forced.data["tool_choice"] == {"type": "none"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["acompletion", "aresponses", "anthropic_messages"])
+async def test_disabled_memory_tool_names_cannot_be_intercepted_as_application_tools(
+    prisma_edge: MagicMock, route: ServerToolRoute
+) -> None:
+    configure = MemorySettings(enabled=True)
+    prisma_edge.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=configure.model_dump())
+    access = await resolve_memory_access(prisma_edge, _IDENTITY)
+    client_tool = {"name": "litellm_memory_read"}
+    loop = GatewayMemoryLoop(
+        AsyncMock(),
+        request(),
+        {"tools": [{"type": "function", "function": client_tool}] if route == "acompletion" else [client_tool]},
+        route,
+        MemoryStore(prisma_edge, access),
+        UserAPIKeyAuth(),
+    )
+    with pytest.raises(ValueError, match="conflicts"):
+        await loop.prepare()
 
 
 @pytest.mark.parametrize("arguments,status", (('{"query":', "completed"),))
@@ -602,6 +625,41 @@ async def test_memory_lookup_failure_leaves_inference_unchanged_but_never_leaks_
 
 
 _ROUTES: Final = ("acompletion", "aresponses", "anthropic_messages")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", _ROUTES)
+async def test_malformed_nonstreaming_provider_body_returns_502(prisma_edge: MagicMock, route: ServerToolRoute) -> None:
+    from unittest.mock import patch
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.memory.gateway import process_gateway_memory
+
+    execute = AsyncMock(return_value=Response(b"not JSON", media_type="text/html"))
+    caller = UserAPIKeyAuth(user_id="owner", token="a" * 64)
+    with patch.multiple(  # test-quality-ok: Use external database, cache, and provider response boundaries.
+        "litellm.proxy.proxy_server", prisma_client=prisma_edge, user_api_key_cache=DualCache(), llm_router=None
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await process_gateway_memory({"messages": [], "input": "hi"}, request(), caller, route, execute)
+        assert exc.value.status_code == 502
+    execute.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [
+        {"type": "tool", "name": "litellm_memory_search"},
+        {"type": "function", "name": "litellm_memory_read"},
+        {"type": "function", "function": {"name": "litellm_memory_capture"}},
+    ],
+)
+def test_clients_cannot_force_private_memory_rounds(choice: Mapping[str, object]) -> None:
+    from litellm.proxy.memory.gateway import validate_memory_request
+
+    with pytest.raises(HTTPException) as exc:
+        validate_memory_request({"tool_choice": choice}, request())
+    assert exc.value.status_code == 400
 
 
 def provider_response(
@@ -931,7 +989,7 @@ async def test_rounds_share_trace_and_keep_live_auth_objects(prisma_edge: MagicM
 async def test_previous_response_uses_owned_upstream_and_pending_tool_outputs(prisma_edge: MagicMock) -> None:
     pending = {"type": "function_call_output", "call_id": "memory-call", "output": "Memory saved"}
     patch = MemoryContinuation(
-        permission_revision=access_for().permission_revision,
+        permission_revision=access_for().continuation_revision,
         response={"id": "resp_litellm_memory_owned"},
         upstream_ids=("native-first", "native-last"),
         pending_results=(pending,),

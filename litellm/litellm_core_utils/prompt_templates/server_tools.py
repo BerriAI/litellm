@@ -118,12 +118,17 @@ def append_server_instructions(
 
 
 def inject_server_tools(
-    data: Mapping[str, object], route: ServerToolRoute, functions: Sequence[Mapping[str, object]], instructions: str
+    data: Mapping[str, object],
+    route: ServerToolRoute,
+    functions: Sequence[Mapping[str, object]],
+    instructions: str,
+    *,
+    reserved_names: frozenset[str] = frozenset(),
 ) -> Mapping[str, object]:
     client_tools: Final = _items(data.get("tools"))
     tool_choice: Final = data.get("tool_choice")
     names: Final = frozenset(str(function["name"]) for function in functions)
-    if any(_tool_name(tool) in names for tool in client_tools):
+    if any(_tool_name(tool) in names | reserved_names for tool in client_tools):
         raise ValueError("A client tool conflicts with a gateway memory tool name")
     tools: Final = tuple(
         {  # mutable-ok: Native provider JSON containers.

@@ -44,7 +44,7 @@ async def serve_memory_response(
             status_code=501,
             detail="Input history is unavailable for gateway memory responses; retain the original client input",
         )
-    await store.authorize_namespace(write=True)
+    await store.authorize_namespace(write=True, require_active=False)
 
     async def dispatch(identifier: str) -> Mapping[str, object]:
         path: Final = "/v1/responses/" + identifier

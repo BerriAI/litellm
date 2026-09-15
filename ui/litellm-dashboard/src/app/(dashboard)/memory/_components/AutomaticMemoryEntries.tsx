@@ -111,12 +111,11 @@ export function AutomaticMemoryEntries({
     setFilterUserId("");
     setSearch("");
   };
-  const accessDescription = status.data?.active
-    ? "Your assistant can save and search memories using your gateway permissions."
-    : "Automatic memory is off for your account. Saved memories remain available here.";
-  const gettingStarted = status.data?.active
-    ? "Use your assistant as usual. Its memories will appear here."
-    : "Your administrator can enable memory. Existing access permissions decide what you can see.";
+  const accessDescription =
+    "Your administrator controls saving and agent recall separately. These settings apply across your keys; existing permissions decide which memories you can see.";
+  const gettingStarted = status.data?.save_enabled
+    ? "Use your assistant as usual. Its saved memories will appear here."
+    : "Your administrator can enable saving. Existing access permissions decide what you can see.";
   const moreLabel = entries.isError ? "Try again" : "Load more memories";
   return (
     <section className="space-y-6" aria-labelledby="memory-title">
@@ -131,7 +130,7 @@ export function AutomaticMemoryEntries({
         </div>
         {status.isSuccess && (
           <span className="rounded-full border px-3 py-1 text-sm" role="status">
-            {status.data?.active ? "On for your account" : "Off for your account"}
+            Saving {status.data?.save_enabled ? "on" : "off"} · Agent recall {status.data?.read_enabled ? "on" : "off"}
           </span>
         )}
       </div>

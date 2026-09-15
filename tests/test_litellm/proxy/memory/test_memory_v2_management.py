@@ -17,10 +17,13 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.record_permissions import can_read_team_records
 from litellm.proxy.memory import management
 from litellm.proxy.memory.continuation import MemoryContinuation, MemoryContinuations
+from litellm.proxy.memory.gateway import gateway_memory_store
+from litellm.proxy.memory.knowledge import execute_memory_tool, memory_functions
 from litellm.proxy.memory.policy import MemoryIdentity, resolve_memory_access
 from litellm.proxy.memory.store import MemoryStore
 from litellm.types.memory_v2 import (
     MemoryCapture,
+    MemoryEnrollment,
     MemoryRecallRequest,
     MemorySearch,
     MemorySettings,
@@ -269,7 +272,7 @@ async def test_revocation_blocks_existing_store_and_private_continuation(databas
     original = await management.memory_store(auth())
     patch = MemoryContinuation(
         response={"output": [{"role": "assistant", "content": "Team secret"}]},
-        permission_revision=original.access.permission_revision,
+        permission_revision=original.access.continuation_revision,
     )
     database.db.litellm_teamtable.find_many.return_value = [team()]
     with pytest.raises(HTTPException) as exc:
@@ -298,6 +301,66 @@ async def test_disable_stops_tools_but_keeps_dashboard_and_ownership_checks(data
     with pytest.raises(HTTPException):
         await viewer.delete("entry")
     database.db.litellm_memorytable.delete_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save,read", [(False, False), (True, False), (False, True), (True, True)])
+async def test_admin_controls_saving_and_agent_recall_independently(
+    database: MagicMock, save: bool, read: bool
+) -> None:
+    configure(database, enabled=save, read={"enabled": read})
+    store = await management.memory_store(auth())
+    sibling = await management.memory_store(auth().model_copy(update={"token": "b" * 64}))
+    assert store.access.status.save_enabled is save
+    assert store.access.status.read_enabled is read
+    assert store.access.visible_rows() == sibling.access.visible_rows()
+    assert sibling.access.status == store.access.status
+    assert (await gateway_memory_store(auth()) is not None) is (save or read)
+    expected = ({"litellm_memory_capture"} if save else set()) | (
+        {"litellm_memory_search", "litellm_memory_read"} if read else set()
+    )
+    assert {function["name"] for function in memory_functions(store.access)} == expected
+    database.db.litellm_memorytable.find_first.return_value = row()
+    result = await execute_memory_tool(
+        store, {"id": "read", "name": "litellm_memory_read", "arguments": {"id": "entry"}}, ()
+    )
+    if read:
+        assert result["content"] == _CAPTURE.content
+    else:
+        assert result["status"] == 403
+        database.db.litellm_memorytable.find_first.assert_not_awaited()
+    if save:
+        assert (await store.capture(_CAPTURE)).content == _CAPTURE.content
+    else:
+        with pytest.raises(HTTPException):
+            await store.capture(_CAPTURE)
+        database.db.litellm_memorytable.create.assert_not_awaited()
+    assert (await store.read("entry", require_active=False)).content == _CAPTURE.content
+
+
+@pytest.mark.asyncio
+async def test_read_enrollment_names_and_revocation_without_disabling_saving(database: MagicMock) -> None:
+    database.db.litellm_usertable.find_many.return_value = [
+        SimpleNamespace(user_id="owner", user_alias="Alex", user_email=None)
+    ]
+    settings = await management.set_settings(
+        MemorySettings(enabled=True, read=MemoryEnrollment(enabled=True, everyone=False, user_ids=("owner", "owner"))),
+        auth(role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert settings.read.user_ids == ("owner",) and settings.user_names == {"owner": "Alex"}
+    configure(database, read=settings.read)
+    original = await management.memory_store(auth())
+    other = await management.memory_store(auth("other"))
+    assert other.access.save_enabled and not other.access.read_enabled
+    patch = MemoryContinuation(permission_revision=original.access.continuation_revision, upstream_ids=("provider",))
+    configure(database)
+    fresh = await management.memory_store(auth())
+    assert fresh.access.save_enabled and not fresh.access.read_enabled
+    database.db.litellm_memorycontinuation.find_first.return_value = SimpleNamespace(payload=patch.model_dump())
+    with pytest.raises(HTTPException, match="start a new conversation"):
+        await MemoryContinuations(fresh).load_response("resp_litellm_memory_prior")
+    with pytest.raises(HTTPException):
+        await original.authorize(require_recall=True)
 
 
 @pytest.mark.asyncio

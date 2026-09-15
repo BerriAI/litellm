@@ -21,6 +21,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.memory_v2 import (
     MemoryCapture,
+    MemoryEnrollment,
     MemoryEntry,
     MemoryQuery,
     MemorySearch,
@@ -39,12 +40,13 @@ def require_memory_admin(auth: UserAPIKeyAuth, *, write: bool = False) -> None:
 
 
 async def settings_view(settings: MemorySettings) -> MemorySettingsView:
+    selected: Final = tuple(frozenset((*settings.user_ids, *settings.read.user_ids)))
     users: Final = (
         await UserRepository(memory_primary_client(require_memory_prisma())).table.find_many(
-            where={"user_id": {"in": list(settings.user_ids)}},  # mutable-ok: Prisma requires native JSON.
-            take=len(settings.user_ids),
+            where={"user_id": {"in": list(selected)}},  # mutable-ok: Prisma requires native JSON.
+            take=len(selected),
         )
-        if settings.user_ids
+        if selected
         else ()
     )
     return MemorySettingsView(
@@ -65,9 +67,17 @@ async def get_settings(auth: UserAPIKeyAuth = _AUTH) -> MemorySettingsView:
 async def set_settings(settings: MemorySettings, auth: UserAPIKeyAuth = _AUTH) -> MemorySettingsView:
     require_memory_admin(auth, write=True)
     prisma: Final = memory_primary_client(require_memory_prisma())
-    selected: Final = tuple(sorted(frozenset(settings.user_ids))) if not settings.everyone else ()
-    if settings.enabled and not settings.everyone and not selected:
+    enrollments: Final = tuple(
+        MemoryEnrollment(
+            enabled=item.enabled,
+            everyone=item.everyone,
+            user_ids=tuple(sorted(frozenset(item.user_ids))) if not item.everyone else (),
+        )
+        for item in (settings, settings.read)
+    )
+    if any(item.enabled and not item.everyone and not item.user_ids for item in enrollments):
         raise HTTPException(status_code=422, detail="Select at least one user or enable memory for everyone")
+    selected: Final = tuple(frozenset(user_id for item in enrollments for user_id in item.user_ids))
     if selected:
         users: Final = await UserRepository(prisma).table.find_many(
             where={"user_id": {"in": list(selected)}},  # mutable-ok: Prisma requires native query JSON.
@@ -75,7 +85,7 @@ async def set_settings(settings: MemorySettings, auth: UserAPIKeyAuth = _AUTH) -
         )
         if frozenset(user.user_id for user in users) != frozenset(selected):
             raise HTTPException(status_code=422, detail="One or more selected users no longer exist")
-    saved: Final = settings.model_copy(update=MappingProxyType({"user_ids": selected}))
+    saved: Final = MemorySettings(**enrollments[0].model_dump(), read=enrollments[1])
     await ConfigRepository(prisma).set_param(MEMORY_CONFIG_PARAM, saved.model_dump(mode="json"))
     await invalidate_memory_configuration()
     return await settings_view(saved)

@@ -35,11 +35,12 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import wrap_passthrough_sse_bytes_with_keepalive_pings
 from litellm.proxy.memory.continuation import MemoryContinuation, MemoryContinuations
 from litellm.proxy.memory.knowledge import (
-    MEMORY_FUNCTIONS,
+    MEMORY_CAPTURE_WORKFLOW,
     MEMORY_READ_ONLY_WORKFLOW,
     MEMORY_TOOL_NAMES,
     MEMORY_WORKFLOW,
     execute_memory_tool,
+    memory_functions,
 )
 from litellm.proxy.memory.policy import (
     MemoryIdentity,
@@ -104,11 +105,7 @@ class GatewayMemoryLoop:
         if isinstance(previous, str) and previous.startswith("resp_litellm_memory_") and previous_patch is None:
             raise HTTPException(status_code=404, detail="Memory response not found or expired")
         field: Final = "input" if self.route == "aresponses" else "messages"
-        functions: Final = tuple(
-            function
-            for function in MEMORY_FUNCTIONS
-            if not self.store.access.identity.read_only or function["name"] != "litellm_memory_capture"
-        )
+        functions: Final = memory_functions(self.store.access)
         injected: Final = inject_server_tools(
             {  # mutable-ok: Native provider JSON containers.
                 **self.original,
@@ -127,7 +124,12 @@ class GatewayMemoryLoop:
             },
             self.route,
             functions,
-            MEMORY_READ_ONLY_WORKFLOW if self.store.access.identity.read_only else MEMORY_WORKFLOW,
+            MEMORY_WORKFLOW
+            if self.store.access.save_enabled and self.store.access.read_enabled
+            else MEMORY_CAPTURE_WORKFLOW
+            if self.store.access.save_enabled
+            else MEMORY_READ_ONLY_WORKFLOW,
+            reserved_names=MEMORY_TOOL_NAMES,
         )
         self.replaced_input = trailing_system_messages(injected, self.route)
         self.data = injected
@@ -135,8 +137,8 @@ class GatewayMemoryLoop:
             self.data = append_server_reference(
                 prepare_server_tool_context(self.data, MEMORY_TOOL_NAMES),
                 self.route,
-                "If needed, prepare memory context for this request. Search or read relevant memories and save "
-                "useful observations. The final response will be generated separately with the client's output "
+                "If needed, use the available memory tools for this request. "
+                "The final response will be generated separately with the client's output "
                 "format and application tools. Do not call application tools during this preparation.",
             )
 
@@ -380,6 +382,10 @@ class GatewayMemoryLoop:
 
 
 def validate_memory_request(data: Mapping[str, object], request: Request) -> None:
+    choice: Final = object_value(data.get("tool_choice"))
+    forced_name: Final = choice.get("name") or object_value(choice.get("function")).get("name")
+    if isinstance(forced_name, str) and forced_name in MEMORY_TOOL_NAMES:
+        raise HTTPException(status_code=400, detail="Gateway memory tools cannot be forced through tool_choice")
     if request.url.path.startswith("/cursor/"):
         raise HTTPException(
             status_code=400,
@@ -429,11 +435,11 @@ async def process_gateway_memory(
         ping_interval_seconds=ttft_keepalive_interval(data, llm_router, default_interval=5.0),
         upstream_headers=MappingProxyType({"content-type": "text/event-stream"}),
     )
-    if not loop.streaming:
-        async for _ in iterator:
-            pass
-        return JSONResponse(loop.stream.response(), headers=loop.response_headers())
     try:
+        if not loop.streaming:
+            async for _ in iterator:
+                pass
+            return JSONResponse(loop.stream.response(), headers=loop.response_headers())
         first: Final = await anext(iterator)
     except StopAsyncIteration as exc:
         raise HTTPException(status_code=502, detail="The gateway memory stream was empty") from exc
@@ -481,17 +487,15 @@ async def gateway_memory_store(auth: UserAPIKeyAuth) -> MemoryStore | None:
 
     identity: Final = MemoryIdentity.from_auth(auth)
     allowed_tools: Final = effective_tool_allowlist(auth)
-    required_tools: Final = MEMORY_TOOL_NAMES - (
-        frozenset(("litellm_memory_capture",)) if identity.read_only else frozenset()
-    )
-    if allowed_tools is not None and not required_tools.issubset(allowed_tools):
-        return None
     if not identity.user_id and not identity.key_id:
         return None
     try:
         if not await gateway_memory_is_configured(prisma_client, user_api_key_cache):
             return None
         access: Final = await resolve_memory_access(prisma_client, identity)
+        required_tools: Final = frozenset(str(function["name"]) for function in memory_functions(access))
+        if allowed_tools is not None and not required_tools.issubset(allowed_tools):
+            return None
         return MemoryStore(prisma_client, access) if access.active else None
     except Exception:
         verbose_proxy_logger.warning("Memory access is unavailable; continuing without automatic memory")

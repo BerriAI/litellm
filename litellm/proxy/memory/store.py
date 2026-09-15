@@ -76,13 +76,20 @@ class MemoryStore:
         self.actor = access.identity.user_id or access.identity.key_id
         self.table = MemoryRepository(self.prisma_client).table
 
-    async def authorize(self, *, write: bool = False, require_active: bool = True) -> MemoryAccess:
+    async def authorize(
+        self, *, write: bool = False, require_active: bool = True, require_recall: bool = False
+    ) -> MemoryAccess:
         current: Final = await resolve_memory_access(self.prisma_client, self.access.identity)
+        operation_enabled: Final = (
+            current.save_enabled if write else current.active
+        ) and current.read_enabled == self.access.read_enabled
         if (
             not (current.identity.user_id or current.identity.key_id)
             or current.permission_revision != self.access.permission_revision
             or require_active
-            and not current.active
+            and not operation_enabled
+            or require_recall
+            and not current.read_enabled
             or write
             and current.identity.read_only
         ):
