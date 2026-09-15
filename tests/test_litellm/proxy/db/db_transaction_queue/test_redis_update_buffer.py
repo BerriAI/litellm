@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -278,8 +279,8 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
         SpendUpdateQueue,
     )
 
-    member_key = "organization_id::org-1::user_id::user-1"
-    pod_json = json.dumps({"org_member_list_transactions": {member_key: 0.25}})
+    member_key: Final = "organization_id::org-1::user_id::user-1"
+    pod_json: Final = json.dumps({"org_member_list_transactions": {member_key: 0.25}})
     mock_redis_cache.async_lpop_pipeline = AsyncMock(
         return_value=[[pod_json, pod_json], None, None, None, None, None, None]
     )
@@ -290,7 +291,7 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
     assert db_spend["org_member_list_transactions"] == {member_key: 0.5}
 
     mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis went away"))
-    spend_queue = SpendUpdateQueue()
+    spend_queue: Final = SpendUpdateQueue()
     await spend_queue.add_update(
         {
             "entity_type": Litellm_EntityType.ORGANIZATION_MEMBER,
@@ -307,7 +308,7 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
         daily_agent_spend_update_queue=DailySpendUpdateQueue(),
     )
 
-    restored_spend = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    restored_spend: Final = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert restored_spend["org_member_list_transactions"] == {member_key: 1.5}
 
 
