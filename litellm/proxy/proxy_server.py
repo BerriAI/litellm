@@ -663,8 +663,8 @@ from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.shutdown.scheduled_jobs import (
     AwaitableAsyncIOExecutor,
-    cancel_in_flight_scheduler_jobs,
     pause_scheduled_jobs,
+    stop_in_flight_scheduler_jobs,
 )
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import (
@@ -1414,6 +1414,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await _drain_spend_event_producer_on_shutdown()
 
+    # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
+    if scheduler is not None and scheduler_executor is not None:
+        try:
+            await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+        except Exception as e:
+            verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
+
     await flush_spend_counters_on_shutdown()
 
     await _flush_spend_logs_queue_on_shutdown()
@@ -1421,13 +1428,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     await proxy_config.stop_config_sync_subscriber()
 
     await proxy_config.stop_auth_cache_invalidation_subscriber()
-
-    # Shutdown event - cancel and await in-flight scheduled jobs while the DB is still connected
-    if scheduler is not None and scheduler_executor is not None:
-        try:
-            await cancel_in_flight_scheduler_jobs(scheduler, scheduler_executor)
-        except Exception as e:
-            verbose_proxy_logger.error("Error cancelling in-flight scheduled jobs: %s", e)
 
     await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
