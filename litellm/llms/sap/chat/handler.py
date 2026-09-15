@@ -33,8 +33,13 @@ def _now_ts() -> int:
 
 
 def normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic types
-    choices: list[object] = list(raw.get("choices") or [])  # explicit cast: raw values are object, pyright can't infer iterability
-    return {**raw, "choices": [normalize_choice(c) for c in choices if isinstance(c, dict)]}  # mutable-ok: sentinel default, never mutated
+    choices: list[object] = list(
+        raw.get("choices") or []
+    )  # explicit cast: raw values are object, pyright can't infer iterability
+    return {
+        **raw,
+        "choices": [normalize_choice(c) for c in choices if isinstance(c, dict)],
+    }  # mutable-ok: sentinel default, never mutated
 
 
 def normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic dict from raw JSON
