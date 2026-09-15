@@ -470,7 +470,10 @@ const classifierWireFields = (
   >,
 ): Partial<ComplexityRouterConfigPayload> => ({
   ...(usesLlmClassifier(effectiveType) &&
-    classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
+    classifierLlmConfig && {
+      classifier_llm_config:
+        effectiveType === "capability" ? classifierLlmConfig : normalizeClassifierLlmConfig(classifierLlmConfig),
+    }),
   ...(usesLlmClassifier(effectiveType) &&
     classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
   ...(effectiveType === "heuristic_first" &&

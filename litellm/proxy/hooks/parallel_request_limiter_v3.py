@@ -9,10 +9,12 @@ import binascii
 import logging
 import os
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -23,6 +25,7 @@ from typing import (
     TypedDict,
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
@@ -82,6 +85,9 @@ if TYPE_CHECKING:
 else:
     Span = Any
     InternalUsageCache = Any
+
+
+_REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
 BATCH_RATE_LIMITER_SCRIPT: Final = """
@@ -390,6 +396,8 @@ CacheCounterValue: TypeAlias = int | float | str | bytes
 
 CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 
+ReservationWindowIdentity: TypeAlias = tuple[str, str, Literal["redis", "local"]]
+
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
 
 
@@ -536,6 +544,7 @@ class RequestRateLimiterStash:
         default_factory=frozenset
     )
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
+    batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
 
 
@@ -677,6 +686,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._batch_rate_limiter = _PROXY_BatchRateLimiter(
                     internal_usage_cache=self.internal_usage_cache,
                     parallel_request_limiter=self,
+                    time_provider=self._time_provider,
                 )
             except Exception as e:
                 verbose_proxy_logger.debug("Could not load batch rate limiter: %s", e)
@@ -1817,6 +1827,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         applied: Final[list[list[AtomicCounterMeta]]] = []
         statuses: Final[list[RateLimitStatus]] = []
+        reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         raw: list[CacheCounterValue]
 
         for _idx, (keys, args, meta) in enumerate(descriptor_groups):
@@ -1854,11 +1865,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return response
             applied.append(meta)
             statuses.extend(response["statuses"])
+            reservation_windows.update(response.get("reservation_windows", frozenset()))
 
         return RateLimitResponse(
             overall_code="OK",
             statuses=statuses,
-            reservation_windows=frozenset(),
+            reservation_windows=frozenset(reservation_windows),
         )
 
     async def _refund_applied_descriptor_groups(
@@ -2673,12 +2685,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns list of descriptors for API key, user, team, team member, end user,
         model-specific, agent, and agent-session limits.
         """
-        from litellm.proxy.auth.auth_utils import (
-            get_team_model_rpm_limit,
-            get_team_model_tpm_limit,
-        )
-
-        descriptors: Final = []
+        descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: existing descriptor helpers append in place
 
         # API Key rate limits
         if user_api_key_dict.api_key and (
@@ -2803,34 +2810,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptors=descriptors,
             )
 
-        if (
-            get_team_model_rpm_limit(user_api_key_dict) is not None
-            or get_team_model_tpm_limit(user_api_key_dict) is not None
-        ):
-            _tpm_limit_for_team_model: Final = get_team_model_tpm_limit(user_api_key_dict) or {}
-            _rpm_limit_for_team_model: Final = get_team_model_rpm_limit(user_api_key_dict) or {}
-            should_check_rate_limit = False
-            if requested_model in _tpm_limit_for_team_model or requested_model in _rpm_limit_for_team_model:
-                should_check_rate_limit = True
-
-            if should_check_rate_limit:
-                model_specific_tpm_limit = None
-                model_specific_rpm_limit = None
-                if requested_model in _tpm_limit_for_team_model:
-                    model_specific_tpm_limit = _tpm_limit_for_team_model[requested_model]
-                if requested_model in _rpm_limit_for_team_model:
-                    model_specific_rpm_limit = _rpm_limit_for_team_model[requested_model]
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_team",
-                        value=f"{user_api_key_dict.team_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
+        self._add_team_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model if isinstance(requested_model, str) else None,
+            descriptors=descriptors,
+        )
 
         # Agent-level and session-level rate limits
         resolved_agent_id: Final = self._get_resolved_agent_id(user_api_key_dict, data)
@@ -3416,6 +3400,108 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model,
         )
 
+    async def _build_request_rate_limit_descriptors(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: Mapping[str, object],
+        call_type: str | None,
+    ) -> list[RateLimitDescriptor]:  # mutable-ok: the shared generation reservation helpers require a list
+        metadata: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(
+            user_api_key_dict.metadata or MappingProxyType({})  # pyright: ignore[reportUnknownMemberType]  # validates the legacy auth metadata boundary
+        )
+        rpm_value: Final = metadata.get("rpm_limit_type")
+        tpm_value: Final = metadata.get("tpm_limit_type")
+        rpm_limit_type: Final = rpm_value if isinstance(rpm_value, str) else None
+        tpm_limit_type: Final = tpm_value if isinstance(tpm_value, str) else None
+        model_value: Final = data.get("model")
+        requested_model: Final = model_value if isinstance(model_value, str) else None
+        model_has_failures: Final = (
+            await self._check_model_has_recent_failures(
+                model=requested_model,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+            if requested_model and self._is_dynamic_rate_limiting_enabled(rpm_limit_type, tpm_limit_type)
+            else False
+        )
+        descriptors: Final = self._create_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # legacy helper reads a dictionary with validated keys
+            user_api_key_dict=user_api_key_dict,
+            data=dict(data),  # mutable-ok: legacy descriptor helpers accept a request dictionary
+            rpm_limit_type=rpm_limit_type,
+            tpm_limit_type=tpm_limit_type,
+            model_has_failures=model_has_failures,
+            call_type=call_type,
+        )
+        self._add_project_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+        self.add_project_io_token_rate_limit_descriptors_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+        return [  # mutable-ok: the shared generation reservation helpers require a list
+            *descriptors,
+            *self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model),
+        ]
+
+    async def _release_request_capacity_when_admitted(
+        self,
+        admission: asyncio.Task[RateLimitResponse],
+        acquisition: ParallelSlotAcquisition,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        response: Final = await admission
+        if response["overall_code"] == "OK":
+            await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
+
+    @asynccontextmanager
+    async def request_capacity(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: str,
+        *,
+        request_data: Mapping[str, object] | None = None,
+    ) -> AsyncGenerator[None, None]:
+        """Charge one non-generation provider request to RPM and hold its concurrency slot."""
+        data: Final = MappingProxyType({**(request_data or MappingProxyType({})), "model": model})
+        descriptors: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
+        acquisition: Final = ParallelSlotAcquisition(
+            slot_id=uuid.uuid4().hex,
+            counter_keys=[  # mutable-ok: the shared slot-release contract requires a list
+                self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
+                for d in descriptors
+                if d["rate_limit"] is not None and d["rate_limit"].get("max_parallel_requests") is not None
+            ],
+        )
+        admission: Final = asyncio.create_task(
+            self.should_rate_limit(
+                descriptors=descriptors,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                skip_tpm_check=True,
+                parallel_slot_id=acquisition["slot_id"],
+            )
+        )
+        try:
+            response: Final = await asyncio.shield(admission)
+            if response["overall_code"] == "OVER_LIMIT":
+                self._handle_rate_limit_error(response, descriptors, model)
+            yield
+        finally:
+            cleanup: Final = asyncio.create_task(
+                self._release_request_capacity_when_admitted(admission, acquisition, user_api_key_dict)
+            )
+            cancellation: asyncio.CancelledError | None = None  # rebind-ok: retain cancellation until cleanup finishes
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError as exc:
+                    cancellation = exc  # rebind-ok: retain the latest cancellation without interrupting slot release
+            cleanup.result()
+            if cancellation is not None:
+                raise cancellation
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3444,58 +3530,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 call_type=call_type,
             )
 
-        # Get rate limit types from metadata
-        metadata: Final = user_api_key_dict.metadata or {}
-        rpm_limit_type: Final = metadata.get("rpm_limit_type")
-        tpm_limit_type: Final = metadata.get("tpm_limit_type")
-
-        # For dynamic mode, check if the model has recent failures
-        model_has_failures = False
-        requested_model: Final = data.get("model", None)
-
-        if (
-            self._is_dynamic_rate_limiting_enabled(
-                rpm_limit_type=rpm_limit_type,
-                tpm_limit_type=tpm_limit_type,
-            )
-            and requested_model
-        ):
-            model_has_failures = await self._check_model_has_recent_failures(
-                model=requested_model,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
-
-        # Create rate limit descriptors
-        descriptors: Final = self._create_rate_limit_descriptors(
+        request_data: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
+        model_value: Final = request_data.get("model")
+        requested_model: Final = model_value if isinstance(model_value, str) else None
+        descriptors: Final = await self._build_request_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
-            data=data,
-            rpm_limit_type=rpm_limit_type,
-            tpm_limit_type=tpm_limit_type,
-            model_has_failures=model_has_failures,
+            data=request_data,
             call_type=call_type,
         )
-
-        # Add team model rate limits from team_metadata
-        self._add_team_model_rate_limit_descriptor_from_metadata(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=requested_model,
-            descriptors=descriptors,
-        )
-
-        # Project Level Rate Limits
-        self._add_project_model_rate_limit_descriptor_from_metadata(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=requested_model,
-            descriptors=descriptors,
-        )
-        self.add_project_io_token_rate_limit_descriptors_from_metadata(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=requested_model,
-            descriptors=descriptors,
-        )
-
-        # Org Level Rate Limits
-        descriptors.extend(self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model))
 
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
@@ -4787,6 +4829,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.batch_enqueued_reservation = None
+
+            if stash.batch_tpd_refund_ops:
+                await self.async_increment_reservation_aware_tokens(
+                    pipeline_operations=stash.batch_tpd_refund_ops,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                stash.batch_tpd_refund_ops = ()
 
             if stash.reservation_released:
                 return

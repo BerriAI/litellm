@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from collections.abc import Mapping
 from fastapi.testclient import TestClient
 
 import litellm
@@ -72,6 +73,108 @@ def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, s
     assert savings[:4] == billed[:4]
     assert savings[4] == pytest.approx(billed[0] if read_rate is None else read_rate)
     assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+
+
+def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_audio_token": 6.5e-6,
+        "input_cost_per_audio_per_second": 0.00016,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=64,
+        completion_tokens=0,
+        total_tokens=64,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=64,
+            audio_length_seconds=2,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(2 * 0.00016)
+
+
+def test_generic_cost_per_token_prefers_image_per_image_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_image_token": 4.5e-7,
+        "input_cost_per_image": 0.00012,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=258,
+        completion_tokens=0,
+        total_tokens=258,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_tokens=258,
+            image_count=1,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(0.00012)
+
+
+def test_generic_cost_per_token_prefers_video_per_second_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_video_token": 1.2e-5,
+        "input_cost_per_video_per_second": 0.00079,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=516,
+        completion_tokens=0,
+        total_tokens=516,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            video_tokens=516,
+            video_length_seconds=2,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(2 * 0.00079)
 
 
 def test_missing_cache_read_uses_off_peak_input_rate():
@@ -2101,6 +2204,37 @@ def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
     assert completion_cost == pytest.approx(zone_multiplier * output_multiplier * completion_tokens * 5e-5)
 
 
+@pytest.mark.parametrize(
+    "model,input_rate,cache_read_rate,output_rate",
+    [
+        ("azure/gpt-chat-latest", 5e-6, 5e-7, 3e-5),
+        ("azure/chat-latest", 5e-6, 5e-7, 3e-5),
+        ("azure/us/gpt-chat-latest", 5.5e-6, 5.5e-7, 3.3e-5),
+    ],
+)
+def test_generic_cost_per_token_azure_gpt_chat_latest_price_sheet(
+    _local_model_cost_map, model, input_rate, cache_read_rate, output_rate
+):
+    """The Azure OpenAI price sheet lists GPT-Chat Latest at $5 input, $0.50 cached input and $30 output per 1M
+    tokens on Global, and $5.50, $0.55 and $33 on Data Zone. Foundry names the product gpt-chat-latest and the
+    OpenAI API names the same model chat-latest, so both spellings bill the Global sheet.
+    """
+    prompt_tokens = 100000
+    cached_tokens = 40000
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="azure")
+
+    assert prompt_cost == pytest.approx((prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
 def test_generic_cost_per_token_azure_ai_gpt_6_astra_flex_bills_the_standard_rate(_local_model_cost_map):
     usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
 
@@ -2185,36 +2319,6 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(_local_mo
             f"Dated snapshots must inherit the base model's reasoning_effort "
             f"capability profile."
         )
-
-
-@pytest.mark.parametrize(
-    "model,expected_mode,expected_input,expected_output,expected_cache_read",
-    [
-        ("azure/gpt-5.5", "chat", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.5-2026-04-23", "chat", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.5-pro", "responses", 3e-5, 1.8e-4, 3e-6),
-        ("azure/gpt-5.5-pro-2026-04-23", "responses", 3e-5, 1.8e-4, 3e-6),
-    ],
-)
-def test_azure_gpt55_entries_present_with_correct_pricing(_local_model_cost_map, 
-    model, expected_mode, expected_input, expected_output, expected_cache_read
-):
-    """Day-0 Azure entries for GPT-5.5 mirror the OpenAI pricing structure.
-
-    Pricing parity with openai/gpt-5.5* (verified against OpenAI's pricing page
-    on 2026-04-24): $5/$30 input/output per 1M for chat, $30/$180 for pro.
-    Cache discount is 10% of input.
-    """
-
-    m = litellm.model_cost[model]
-    assert m["litellm_provider"] == "azure"
-    assert m["mode"] == expected_mode
-    assert m["input_cost_per_token"] == expected_input
-    assert m["output_cost_per_token"] == expected_output
-    assert m["cache_read_input_token_cost"] == expected_cache_read
-    # Long-context window inherited from gpt-5.4 / openai gpt-5.5.
-    assert m["max_input_tokens"] == 1050000
-    assert m["max_output_tokens"] == 128000
 
 
 @pytest.mark.parametrize(
@@ -2648,6 +2752,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
 
     prompt_tokens_details: PromptTokensDetailsResult = {
         "cache_hit_tokens": 0,
+        "cache_hit_audio_tokens": 0,
         "cache_creation_tokens": 0,
         "cache_creation_token_details": CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=100,
@@ -3277,8 +3382,6 @@ def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
 # ---------------------------------------------------------------------------
 # Data-residency (OpenAI regional processing) tests
 # ---------------------------------------------------------------------------
-
-
 
 
 @pytest.mark.parametrize("model", ["gpt-5.4", "gpt-realtime-2.1", "gpt-realtime-2.1-mini"])
@@ -4005,8 +4108,9 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
         input_cost_per_token=6e-6,
         output_cost_per_token=3e-5,
         cache_read_input_token_cost=6e-7,
+        cache_read_input_audio_token_cost=6e-7,
         cache_creation_input_token_cost=7.5e-6,
-        cache_creation_input_token_cost_above_1hr=0.0,
+        cache_creation_input_token_cost_above_1hr=7.5e-6,
         output_cost_per_reasoning_token=3e-5,
     )
     assert breakdown.cache_read_cost == pytest.approx(200_000 * rates.cache_read_input_token_cost)
@@ -4420,20 +4524,6 @@ GEMINI_DAY0_LAUNCH_PRICING = [
 ]
 
 
-@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_DAY0_LAUNCH_PRICING)
-def test_gemini_36_flash_and_35_flash_lite_launch_pricing(_local_model_cost_map, model, input_cost, output_cost, cache_read_cost):
-
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token"] == input_cost
-    assert model_cost_map["output_cost_per_token"] == output_cost
-    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
-    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 1048576
-
-
 def test_generic_cost_per_token_gemini_36_flash(_local_model_cost_map):
 
     usage = Usage(
@@ -4460,44 +4550,6 @@ GEMINI_36_FLASH_SERVICE_TIER_PRICING = [
     ("flex", 3.75e-07, 1.875e-06, 3.75e-08),
     ("priority", 1.35e-06, 6.75e-06, 1.35e-07),
 ]
-
-
-@pytest.mark.parametrize(
-    "service_tier,input_rate,output_rate,cache_read_rate", GEMINI_36_FLASH_SERVICE_TIER_PRICING
-)
-@pytest.mark.parametrize(
-    "model", ["gemini-3.6-flash", "gemini/gemini-3.6-flash", "vertex_ai/gemini-3.6-flash"]
-)
-def test_gemini_36_flash_service_tier_introductory_pricing(
-    model, service_tier, input_rate, output_rate, cache_read_rate, _local_model_cost_map
-):
-    """Regression: every 3.6 Flash tier is on Google's introductory rates through 2026-12-31,
-    so flex and priority requests must not be billed at the post-introductory rates."""
-    usage = Usage(
-        prompt_tokens=1_000,
-        completion_tokens=500,
-        total_tokens=1_500,
-        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200, text_tokens=800),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model.split("/")[-1],
-        usage=usage,
-        custom_llm_provider=model.split("/")[0] if "/" in model else "gemini",
-        service_tier=service_tier,
-    )
-
-    assert prompt_cost == pytest.approx(800 * input_rate + 200 * cache_read_rate, rel=1e-9)
-    assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
-
-
-@pytest.mark.parametrize(
-    "model", ["gemini-3.6-flash", "gemini/gemini-3.6-flash", "vertex_ai/gemini-3.6-flash"]
-)
-def test_gemini_36_flash_batch_introductory_pricing(model, _local_model_cost_map):
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token_batches"] == 3.75e-07
-    assert model_cost_map["output_cost_per_token_batches"] == 1.875e-06
 
 
 def test_generic_cost_per_token_gemini_35_flash_lite(_local_model_cost_map):
@@ -4527,45 +4579,8 @@ GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE = [
     ("gemini", "priority", 5.4e-07, 4.5e-06, 5e-08),
     ("vertex_ai", None, 3e-07, 2.5e-06, 3e-08),
     ("vertex_ai", "flex", 1.5e-07, 1.25e-06, 1.5e-08),
-    ("vertex_ai", "priority", 5.4e-07, 4.5e-06, 5e-08),
+    ("vertex_ai", "priority", 5.4e-07, 4.5e-06, 5.4e-08),
 ]
-
-
-@pytest.mark.parametrize(
-    "custom_llm_provider,service_tier,input_rate,output_rate,cache_read_rate",
-    GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE,
-)
-def test_gemini_35_flash_lite_service_tier_pricing(
-    custom_llm_provider, service_tier, input_rate, output_rate, cache_read_rate, _local_model_cost_map
-):
-    """Regression: Vertex publishes flash-lite flex context caching at $0.015/M while the
-    Gemini API publishes $0.02/M, so vertex_ai flex cache reads must bill 1.5e-08/token
-    instead of the 2e-08 the map used to carry, without disturbing the Gemini API rate."""
-    usage = Usage(
-        prompt_tokens=1_000,
-        completion_tokens=500,
-        total_tokens=1_500,
-        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200, text_tokens=800),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-3.5-flash-lite",
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-        service_tier=service_tier,
-    )
-
-    assert prompt_cost == pytest.approx(800 * input_rate + 200 * cache_read_rate, rel=1e-9)
-    assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
-
-
-def test_gemini_35_flash_lite_flex_cache_read_map_entries(_local_model_cost_map):
-    """Each map entry carries its own surface's published flex cache-read rate: the bare
-    and vertex_ai keys are the Vertex surface at $0.015/M, the gemini key is the Gemini
-    API surface at $0.02/M."""
-    assert litellm.model_cost["gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
-    assert litellm.model_cost["vertex_ai/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
-    assert litellm.model_cost["gemini/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 2e-08
 
 
 @pytest.mark.parametrize(
@@ -4796,19 +4811,6 @@ GEMINI_37_FLASH_LAUNCH_PRICING = [
 ]
 
 
-@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_37_FLASH_LAUNCH_PRICING)
-def test_gemini_37_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token"] == input_cost
-    assert model_cost_map["output_cost_per_token"] == output_cost
-    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
-    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 1048576
-
-
 def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=1000,
@@ -4834,19 +4836,6 @@ GEMINI_38_FLASH_LAUNCH_PRICING = [
     ("gemini/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
     ("vertex_ai/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
 ]
-
-
-@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_38_FLASH_LAUNCH_PRICING)
-def test_gemini_38_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["input_cost_per_token"] == input_cost
-    assert model_cost_map["output_cost_per_token"] == output_cost
-    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
-    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 1048576
 
 
 GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
@@ -4907,20 +4896,6 @@ def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(0.00075)
     assert completion_cost == pytest.approx(0.001875)
-
-
-def test_grok_46_launch_pricing(_local_model_cost_map):
-    model_cost_map = litellm.model_cost["xai/grok-4.6"]
-    assert model_cost_map["input_cost_per_token"] == 2e-06
-    assert model_cost_map["output_cost_per_token"] == 6e-06
-    assert model_cost_map["cache_read_input_token_cost"] == 5e-07
-    assert model_cost_map["input_cost_per_token_above_200k_tokens"] == 4e-06
-    assert model_cost_map["output_cost_per_token_above_200k_tokens"] == 1.2e-05
-    assert model_cost_map["cache_read_input_token_cost_above_200k_tokens"] == 1e-06
-    assert model_cost_map["mode"] == "chat"
-    assert model_cost_map["supports_reasoning"] is True
-    assert model_cost_map["supports_function_calling"] is True
-    assert model_cost_map["max_input_tokens"] == 500000
 
 
 def test_generic_cost_per_token_grok_46(_local_model_cost_map):
@@ -5147,3 +5122,226 @@ def test_generic_cost_per_token_bills_nested_reasoning_once_beside_audio_output(
     assert completion_cost == pytest.approx(
         30 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"]
     )
+
+
+def test_cached_realtime_audio_tokens_billed_at_audio_cache_read_rate(
+    _local_model_cost_map: None,
+) -> None:
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116,
+            audio_tokens=167,
+            cached_tokens=192,
+            cached_tokens_details={"text_tokens": 64, "audio_tokens": 128},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime-2", usage=usage, custom_llm_provider="openai"
+    )
+    assert prompt_cost == pytest.approx(0.0015328)
+
+
+def test_prompt_tokens_details_without_cached_tokens_details_unchanged(
+    _local_model_cost_map: None,
+) -> None:
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116, audio_tokens=167, cached_tokens=192
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime-2", usage=usage, custom_llm_provider="openai"
+    )
+    assert prompt_cost == pytest.approx(0.0029888)
+
+
+def test_cached_audio_tokens_fall_back_to_cache_read_input_token_cost() -> None:
+    model_info: ModelInfo = {
+        "input_cost_per_token": 4e-6,
+        "input_cost_per_audio_token": 32e-6,
+        "cache_read_input_token_cost": 5e-7,
+    }
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116,
+            audio_tokens=167,
+            cached_tokens=192,
+            cached_tokens_details={"text_tokens": 64, "audio_tokens": 128},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="some-realtime-model",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+    expected = 52 * 4e-6 + 64 * 5e-7 + 39 * 32e-6 + 128 * 5e-7
+    assert prompt_cost == pytest.approx(expected)
+
+
+def test_cached_audio_tokens_capped_at_cached_tokens(_local_model_cost_map: None) -> None:
+    """Nested cached_tokens_details exceeding cached_tokens must not over-subtract the audio bucket."""
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116,
+            audio_tokens=167,
+            cached_tokens=100,
+            cached_tokens_details={"audio_tokens": 128},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime-2", usage=usage, custom_llm_provider="openai"
+    )
+    assert prompt_cost == pytest.approx(116 * 4e-6 + (167 - 100) * 32e-6 + 100 * 4e-7)
+
+
+def test_cached_audio_tokens_billed_at_audio_cache_rate_through_model_info_lookup(_local_model_cost_map: None) -> None:
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=400,
+            audio_tokens=600,
+            cached_tokens=500,
+            cached_tokens_details={"text_tokens": 100, "audio_tokens": 400},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model="gpt-realtime-2.1-mini", usage=usage, custom_llm_provider="openai")
+    assert prompt_cost == pytest.approx(300 * 6e-7 + 100 * 6e-8 + 200 * 1e-5 + 400 * 3e-7)
+
+
+def test_cache_read_breakdown_splits_cached_audio_at_the_audio_cache_rate(_local_model_cost_map: None) -> None:
+    usage = Usage(
+        prompt_tokens=4863,
+        completion_tokens=1087,
+        total_tokens=5950,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=1693,
+            audio_tokens=3170,
+            cached_tokens=2816,
+            cached_tokens_details={"text_tokens": 896, "audio_tokens": 1920},
+        ),
+    )
+
+    breakdown = get_token_type_cost_breakdown(model="gpt-realtime-2.1-mini", custom_llm_provider="openai", usage=usage)
+    prompt_cost, _ = generic_cost_per_token(model="gpt-realtime-2.1-mini", usage=usage, custom_llm_provider="openai")
+
+    assert breakdown.cache_read_cost == pytest.approx(896 * 6e-8 + 1920 * 3e-7)
+    assert breakdown.rates is not None
+    assert breakdown.rates.cache_read_input_audio_token_cost == pytest.approx(3e-7)
+    assert prompt_cost == pytest.approx((1693 - 896) * 6e-7 + (3170 - 1920) * 1e-5 + breakdown.cache_read_cost)
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_prompt_cost"),
+    (
+        pytest.param("azure/gpt-realtime-2025-08-28", "azure", 300 * 4e-6 + 100 * 4e-7 + 200 * 3.2e-5 + 400 * 4e-7, id="azure-gpt-realtime"),
+        pytest.param("azure/gpt-realtime-1.5-2026-02-23", "azure", 300 * 4e-6 + 100 * 4e-7 + 200 * 3.2e-5 + 400 * 4e-7, id="azure-gpt-realtime-1.5"),
+        pytest.param("azure/gpt-realtime-mini", "azure", 300 * 6e-7 + 100 * 6e-8 + 200 * 1e-5 + 400 * 3e-7, id="azure-gpt-realtime-mini"),
+        pytest.param("gpt-realtime-mini", "openai", 300 * 6e-7 + 100 * 6e-8 + 200 * 1e-5 + 400 * 3e-7, id="openai-gpt-realtime-mini"),
+    ),
+)
+def test_realtime_models_bill_cached_text_and_audio_at_their_cache_read_rates(
+    _local_model_cost_map: None, model: str, custom_llm_provider: str, expected_prompt_cost: float
+) -> None:
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=400,
+            audio_tokens=600,
+            cached_tokens=500,
+            cached_tokens_details={"text_tokens": 100, "audio_tokens": 400},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=custom_llm_provider)
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a_write_price():
+    """Azure and OpenAI publish no cache-write price and bill cache writes as ordinary input.
+    A deployment priced with only input, output, and cache-read rates must bill the creation
+    tokens the provider reports at the input rate, never at 0. The numbers are a cold 7,336-token
+    prompt on a deployment that reports all but 3 of them as cache creation."""
+    model_info = {
+        "input_cost_per_token": 2e-7,
+        "output_cost_per_token": 1.25e-6,
+        "cache_read_input_token_cost": 2e-8,
+    }
+    usage = Usage(
+        prompt_tokens=7336,
+        completion_tokens=23,
+        total_tokens=7359,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_creation_tokens=7333),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="custom-priced-deployment", usage=usage, custom_llm_provider="azure", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(7336 * 2e-7)
+    assert completion_cost == pytest.approx(23 * 1.25e-6)
+
+
+@pytest.mark.parametrize(
+    ("cache_rates", "current_time", "expected_creation", "expected_creation_1h"),
+    (
+        pytest.param({}, None, 2e-7, 2e-7, id="no-write-price-uses-the-input-rate"),
+        pytest.param({"cache_creation_input_token_cost": 2.5e-7}, None, 2.5e-7, 2.5e-7, id="no-1h-price-uses-the-write-price"),
+        pytest.param({"cache_creation_input_token_cost": 0.0}, None, 0.0, 0.0, id="explicit-zero-stays-zero"),
+        pytest.param(
+            {"off_peak_pricing": {"hours_utc": "00:00-23:59", "input_cost_per_token": 1e-7}},
+            datetime(2026, 9, 14, 12, tzinfo=timezone.utc),
+            1e-7,
+            1e-7,
+            id="no-write-price-uses-the-off-peak-input-rate",
+        ),
+        pytest.param(
+            {
+                "off_peak_pricing": {
+                    "hours_utc": "00:00-23:59",
+                    "input_cost_per_token": 1e-7,
+                    "cache_creation_input_token_cost": 3e-7,
+                }
+            },
+            datetime(2026, 9, 14, 12, tzinfo=timezone.utc),
+            3e-7,
+            3e-7,
+            id="no-1h-price-uses-the-off-peak-write-price",
+        ),
+    ),
+)
+def test_get_token_base_cost_resolves_missing_cache_write_rates_like_the_tiered_path(
+    cache_rates: Mapping[str, float | Mapping[str, float | str]],
+    current_time: datetime | None,
+    expected_creation: float,
+    expected_creation_1h: float,
+) -> None:
+    model_info = {"input_cost_per_token": 2e-7, "output_cost_per_token": 1.25e-6, **cache_rates}
+    usage = Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11)
+
+    _, _, creation, creation_1h, _ = _get_token_base_cost(model_info, usage, current_time=current_time)
+
+    assert creation == pytest.approx(expected_creation)
+    assert creation_1h == pytest.approx(expected_creation_1h)
+

@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -2581,6 +2582,15 @@ class PrometheusLogger(CustomLogger):
             )
             return None
 
+    @staticmethod
+    def _extract_api_provider_from_exception(exception: Exception) -> str | None:
+        if not isinstance(exception, litellm.exceptions.RateLimitError):
+            return None
+        llm_provider: Final = exception.llm_provider
+        if not llm_provider or llm_provider == PROXY_LLM_PROVIDER_FALLBACK:
+            return None
+        return llm_provider
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -2600,12 +2610,6 @@ class PrometheusLogger(CustomLogger):
             StandardLoggingPayloadSetup,
         )
 
-        if self._should_skip_metrics_for_invalid_key(
-            user_api_key_dict=user_api_key_dict,
-            exception=original_exception,
-        ):
-            return
-
         status_code: Final = self._extract_status_code(exception=original_exception)
 
         try:
@@ -2616,12 +2620,14 @@ class PrometheusLogger(CustomLogger):
             _metadata: Final = request_data.get("metadata", {}) or {}
             model_id: Final = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
-            api_provider: Final = self._extract_api_provider_from_request_data(request_data)
+            api_provider: Final = self._extract_api_provider_from_request_data(
+                request_data
+            ) or self._extract_api_provider_from_exception(original_exception)
             enum_values: Final = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
                 user_email=user_api_key_dict.user_email,
-                hashed_api_key=user_api_key_dict.api_key,
+                hashed_api_key=None if status_code == 401 else user_api_key_dict.api_key,
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,

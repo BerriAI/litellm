@@ -3470,6 +3470,30 @@ async def test_ProxyConfig__update_general_settings_cleared_db_max_batch_file_si
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_allowed_file_extensions(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"allowed_file_extensions": [".jsonl"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("allowed_file_extensions") == [".jsonl"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_allowed_file_extensions_wins_over_db(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allowed_file_extensions": [".pdf"]},
+    )
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"allowed_file_extensions"}
+    await pc._update_general_settings({"allowed_file_extensions": [".jsonl"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("allowed_file_extensions") == [".pdf"]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_none_input_noop():
     pc = ProxyConfig()
     # None input returns early.
@@ -3738,6 +3762,55 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
         "config-agent",
         "db-agent",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agents_source", ["config", "db", "api"])
+async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_registry(
+    clean_agent_registry, agents_source
+):
+    """A JWT agent claim must resolve against every agent the proxy knows, including ones created after startup."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.agents import AgentResponse
+
+    original_lookup = proxy_server.jwt_handler.agent_lookup
+    try:
+        proxy_server.ProxyStartupEvent._initialize_jwt_auth(
+            general_settings={"litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+        if agents_source == "config":
+            await ProxyConfig()._init_non_llm_configs(
+                config={"agents": [_config_agent("loaded-agent")]},
+                config_file_path=None,
+            )
+        elif agents_source == "db":
+            prisma_client = MagicMock()
+            prisma_client.db.litellm_agentstable.find_many = AsyncMock(
+                return_value=[_FakeAgentRow("db-id", "loaded-agent")]
+            )
+            await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+        else:
+            clean_agent_registry.register_agent(
+                agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
+            )
+
+        resolved = JWTAuthManager.resolve_agent_id(
+            jwt_handler=proxy_server.jwt_handler,
+            jwt_valid_token={"appid": "loaded-agent"},
+            agent_registry=proxy_server.jwt_handler.agent_lookup,
+        )
+    finally:
+        proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
+        proxy_server.jwt_handler.update_environment(
+            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth()
+        )
+
+    assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
 
 
 @pytest.mark.asyncio
