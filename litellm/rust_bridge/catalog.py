@@ -5,11 +5,10 @@ from litellm.rust_bridge.configuration import (
     CapabilityContext,
     CapabilityDefinition,
     CapabilitySpec,
+    ComponentName,
     DeliveryMode,
     RolloutPolicy,
-    RouteName,
     RustImplementationState,
-    UtilityName,
 )
 from litellm.rust_bridge.route import NativeComponent
 
@@ -84,7 +83,7 @@ def _transcription_capability(context: CapabilityContext) -> CapabilityDefinitio
 
 
 def _component(
-    name: RouteName | UtilityName,
+    name: ComponentName,
     capability: CapabilitySpec,
     exports: tuple[str, ...],
 ) -> NativeComponent:
@@ -93,8 +92,8 @@ def _component(
 
 COMPONENTS: Final = MappingProxyType(
     {
-        RouteName.OCR: _component(
-            RouteName.OCR,
+        ComponentName.OCR: _component(
+            ComponentName.OCR,
             _ocr_capability,
             (
                 "ocr",
@@ -106,42 +105,41 @@ COMPONENTS: Final = MappingProxyType(
                 "_ocr_lifecycle",
             ),
         ),
-        RouteName.MESSAGES: _component(
-            RouteName.MESSAGES,
+        ComponentName.MESSAGES: _component(
+            ComponentName.MESSAGES,
             _experimental_completed,
             ("messages", "amessages", "_messages_lifecycle"),
         ),
-        RouteName.CHAT_COMPLETIONS: _component(
-            RouteName.CHAT_COMPLETIONS,
+        ComponentName.CHAT_COMPLETIONS: _component(
+            ComponentName.CHAT_COMPLETIONS,
             _experimental_completed,
             ("chat_completions", "achat_completions", "_chat_completions_lifecycle"),
         ),
-        RouteName.TRANSCRIPTION: _component(
-            RouteName.TRANSCRIPTION,
+        ComponentName.TRANSCRIPTION: _component(
+            ComponentName.TRANSCRIPTION,
             _transcription_capability,
             ("transcription", "atranscription", "_transcription_lifecycle"),
         ),
-        RouteName.EMBEDDINGS: _component(RouteName.EMBEDDINGS, _python_completed, ("_embeddings_lifecycle",)),
-        RouteName.RERANK: _component(RouteName.RERANK, _python_completed, ("_rerank_lifecycle",)),
-        RouteName.IMAGE_GENERATION: _component(
-            RouteName.IMAGE_GENERATION, _python_completed, ("_image_generation_lifecycle",)
+        ComponentName.EMBEDDINGS: _component(ComponentName.EMBEDDINGS, _python_completed, ("_embeddings_lifecycle",)),
+        ComponentName.RERANK: _component(ComponentName.RERANK, _python_completed, ("_rerank_lifecycle",)),
+        ComponentName.IMAGE_GENERATION: _component(
+            ComponentName.IMAGE_GENERATION, _python_completed, ("_image_generation_lifecycle",)
         ),
-        RouteName.IMAGE_EDIT: _component(RouteName.IMAGE_EDIT, _python_completed, ("_image_edit_lifecycle",)),
-        RouteName.SPEECH: _component(RouteName.SPEECH, _python_completed, ("_speech_lifecycle",)),
-        RouteName.MODERATION: _component(RouteName.MODERATION, _python_completed, ("_moderation_lifecycle",)),
-        RouteName.RESPONSES: _component(
-            RouteName.RESPONSES,
+        ComponentName.IMAGE_EDIT: _component(ComponentName.IMAGE_EDIT, _python_completed, ("_image_edit_lifecycle",)),
+        ComponentName.SPEECH: _component(ComponentName.SPEECH, _python_completed, ("_speech_lifecycle",)),
+        ComponentName.MODERATION: _component(ComponentName.MODERATION, _python_completed, ("_moderation_lifecycle",)),
+        ComponentName.RESPONSES: _component(
+            ComponentName.RESPONSES,
             _responses_capability,
             ("ResponsesWebSocketConnection", "_responses_lifecycle"),
         ),
-        UtilityName.TOKEN_COUNTER: _component(
-            UtilityName.TOKEN_COUNTER,
-            _unimplemented(),
-            (),
-        ),
-        UtilityName.REQUEST_INPUT_TOKEN_COUNTER: _component(
-            UtilityName.REQUEST_INPUT_TOKEN_COUNTER,
-            _experimental_completed,
+        ComponentName.TOKEN_COUNTER: _component(
+            ComponentName.TOKEN_COUNTER,
+            CapabilityDefinition(
+                rust=RustImplementationState.EXPERIMENTAL,
+                python_available=True,
+                rollout=RolloutPolicy.PYTHON_ONLY,
+            ),
             ("count_input_tokens",),
         ),
     }

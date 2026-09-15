@@ -404,7 +404,7 @@ async def test_rust_decline_falls_back_to_python_count(rust_counter: None, model
 
 
 @pytest.mark.asyncio
-async def test_disabled_rust_never_sees_the_raw_body(rust_counter: None) -> None:
+async def test_direct_budget_counter_ignores_disabled_public_rollout(rust_counter: None) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(False)
     rust_token_counter.TOKEN_COUNTER.override(factory)
@@ -417,9 +417,16 @@ async def test_disabled_rust_never_sees_the_raw_body(rust_counter: None) -> None
         raw_body=json.dumps(body).encode(),
     )
 
-    assert factory.calls == []
-    assert set(counts) == {ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL, O200K_MODEL}
-    assert not set(counts.values()) & set(RUST_INPUT_TOKENS_BY_TOKENIZER.values())
+    assert factory.calls == [
+        ("anthropic", json.dumps(body).encode()),
+        ("cl100k_base", json.dumps(body).encode()),
+        ("o200k_base", json.dumps(body).encode()),
+    ]
+    assert counts == {
+        ANTHROPIC_TOKENIZER_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["anthropic"],
+        CL100K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"],
+        O200K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"],
+    }
 
 
 @pytest.mark.asyncio

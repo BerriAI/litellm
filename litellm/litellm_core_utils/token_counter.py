@@ -422,6 +422,42 @@ def token_counter(
     Returns:
     int: The number of tokens in the text.
     """
+    from functools import partial
+
+    from litellm.rust_bridge.runtime import BridgeErrorContext, invoke
+    from litellm.rust_bridge.token_counter.definition import COMPONENT
+
+    return invoke(
+        execution=COMPONENT.resolve(),
+        native_call=None,
+        python_fallback=partial(
+            _token_counter_python,
+            model=model,
+            custom_tokenizer=custom_tokenizer,
+            text=text,
+            messages=messages,
+            count_response_tokens=count_response_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            use_default_image_token_count=use_default_image_token_count,
+            default_token_count=default_token_count,
+        ),
+        adapt=lambda count: count,
+        context=BridgeErrorContext(route=COMPONENT.name.value, provider="", model=model),
+    )
+
+
+def _token_counter_python(
+    model="",
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+    text: str | list[str] | None = None,
+    messages: Sequence[AllMessageValues | Message] | None = None,
+    count_response_tokens: bool | None = False,
+    tools: list[ChatCompletionToolParam] | None = None,
+    tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
+    use_default_image_token_count: bool | None = False,
+    default_token_count: int | None = None,
+) -> int:
     from litellm.utils import convert_list_message_to_dict
 
     #########################################################

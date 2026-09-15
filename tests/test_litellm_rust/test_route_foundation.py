@@ -8,7 +8,7 @@ from litellm.rust_bridge import _native
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import NATIVE_EXPORTS
 from litellm.rust_bridge.chat_completions.lifecycle import LIFECYCLE as CHAT_COMPLETIONS
-from litellm.rust_bridge.configuration import ExecutionDecision, RouteName
+from litellm.rust_bridge.configuration import ComponentName, ExecutionDecision
 from litellm.rust_bridge.embeddings.lifecycle import LIFECYCLE as EMBEDDINGS
 from litellm.rust_bridge.image_edit.lifecycle import LIFECYCLE as IMAGE_EDIT
 from litellm.rust_bridge.image_generation.lifecycle import LIFECYCLE as IMAGE_GENERATION
@@ -23,17 +23,17 @@ from litellm.rust_bridge.transcription.lifecycle import LIFECYCLE as TRANSCRIPTI
 
 pytestmark = pytest.mark.requires_rust_extension
 
-UNIMPLEMENTED: Final[dict[RouteName, NativeBinding[NativeLifecycle[object, object]]]] = {
-    RouteName.MESSAGES: MESSAGES,
-    RouteName.CHAT_COMPLETIONS: CHAT_COMPLETIONS,
-    RouteName.TRANSCRIPTION: TRANSCRIPTION,
-    RouteName.EMBEDDINGS: EMBEDDINGS,
-    RouteName.RERANK: RERANK,
-    RouteName.IMAGE_GENERATION: IMAGE_GENERATION,
-    RouteName.IMAGE_EDIT: IMAGE_EDIT,
-    RouteName.SPEECH: SPEECH,
-    RouteName.MODERATION: MODERATION,
-    RouteName.RESPONSES: RESPONSES,
+UNIMPLEMENTED: Final[dict[ComponentName, NativeBinding[NativeLifecycle[object, object]]]] = {
+    ComponentName.MESSAGES: MESSAGES,
+    ComponentName.CHAT_COMPLETIONS: CHAT_COMPLETIONS,
+    ComponentName.TRANSCRIPTION: TRANSCRIPTION,
+    ComponentName.EMBEDDINGS: EMBEDDINGS,
+    ComponentName.RERANK: RERANK,
+    ComponentName.IMAGE_GENERATION: IMAGE_GENERATION,
+    ComponentName.IMAGE_EDIT: IMAGE_EDIT,
+    ComponentName.SPEECH: SPEECH,
+    ComponentName.MODERATION: MODERATION,
+    ComponentName.RESPONSES: RESPONSES,
 }
 
 
@@ -49,7 +49,7 @@ def test_catalog_exports_are_registered() -> None:
 @pytest.mark.parametrize(("route_name", "binding"), tuple(UNIMPLEMENTED.items()))
 @pytest.mark.parametrize("asynchronous", (False, True))
 def test_package_lifecycle_binding_declines_without_input_reads(
-    route_name: RouteName,
+    route_name: ComponentName,
     binding: NativeBinding[NativeLifecycle[object, object]],
     asynchronous: bool,
 ) -> None:
@@ -62,7 +62,7 @@ def test_package_lifecycle_binding_declines_without_input_reads(
 
 @pytest.mark.parametrize(("route_name", "binding"), tuple(UNIMPLEMENTED.items()))
 def test_package_stub_decline_selects_python(
-    route_name: RouteName,
+    route_name: ComponentName,
     binding: NativeBinding[NativeLifecycle[object, object]],
 ) -> None:
     native: Final[NativeLifecycle[object, object] | None] = binding.load()

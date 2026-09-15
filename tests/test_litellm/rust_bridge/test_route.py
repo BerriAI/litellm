@@ -12,10 +12,10 @@ from litellm.rust_bridge.catalog import COMPONENTS
 from litellm.rust_bridge.configuration import (
     CapabilityContext,
     CapabilityDefinition,
+    ComponentName,
     DeliveryMode,
     ExecutionDecision,
     RolloutPolicy,
-    RouteName,
     RustImplementationState,
 )
 from litellm.rust_bridge.errors import RustRouteUnavailableError, RustRouteUnsupportedError
@@ -39,14 +39,14 @@ def _unexpected_load() -> ModuleType:
 
 def test_python_decision_does_not_load_native(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LITELLM_RUST", raising=False)
-    component: Final = COMPONENTS[RouteName.MESSAGES]
+    component: Final = COMPONENTS[ComponentName.MESSAGES]
     binding: Final = component.bind("messages", validate=_string, module_loader=_unexpected_load)
     assert component.resolve().select(binding) is None
 
 
 def test_delivery_mode_uses_one_component_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
-    component: Final = COMPONENTS[RouteName.MESSAGES]
+    component: Final = COMPONENTS[ComponentName.MESSAGES]
     completed: Final = component.resolve(CapabilityContext(delivery=DeliveryMode.COMPLETED))
     streaming: Final = component.resolve(CapabilityContext(delivery=DeliveryMode.STREAMING))
     assert completed.decision is ExecutionDecision.RUST_WITH_FALLBACK
@@ -56,7 +56,7 @@ def test_delivery_mode_uses_one_component_policy(monkeypatch: pytest.MonkeyPatch
 def test_binding_discovery_validation_and_override() -> None:
     module: Final = ModuleType("fake_native")
     setattr(module, "messages", "native")
-    component: Final = COMPONENTS[RouteName.MESSAGES]
+    component: Final = COMPONENTS[ComponentName.MESSAGES]
     binding: Final = component.bind("messages", validate=_string, module_loader=lambda: module)
     assert binding.load() == "native"
     binding.configure("override")
@@ -72,7 +72,7 @@ def test_binding_discovery_validation_and_override() -> None:
 
 def test_component_rejects_undeclared_binding() -> None:
     with pytest.raises(ValueError, match="not declared"):
-        COMPONENTS[RouteName.MESSAGES].bind("typo", validate=_string)
+        COMPONENTS[ComponentName.MESSAGES].bind("typo", validate=_string)
 
 
 class ModelCapability:
@@ -97,7 +97,7 @@ class ModelCapability:
 def test_dynamic_capability_resolves_once_before_binding_selection() -> None:
     resolver: Final = ModelCapability()
     component: Final = NativeComponent(
-        name=RouteName.TRANSCRIPTION,
+        name=ComponentName.TRANSCRIPTION,
         capability=resolver,
         exports=("transcription",),
     )
@@ -116,7 +116,7 @@ def test_bedrock_transcription_requires_rust_regardless_of_overrides(
     monkeypatch.setenv("LITELLM_RUST", environment_override)
     if process_override is not None:
         configuration.rust(process_override)
-    component: Final = COMPONENTS[RouteName.TRANSCRIPTION]
+    component: Final = COMPONENTS[ComponentName.TRANSCRIPTION]
     binding: Final = component.bind("transcription", validate=_string, module_loader=lambda: None)
     execution: Final = component.resolve(CapabilityContext(provider="bedrock", model="model"))
     assert execution.decision is ExecutionDecision.RUST_REQUIRED
@@ -127,7 +127,7 @@ def test_bedrock_transcription_requires_rust_regardless_of_overrides(
 @pytest.mark.parametrize("provider", ("openai", "azure", "azure_ai", "groq", "mistral", "nvidia_riva", "soniox"))
 def test_python_transcription_providers_skip_native_discovery(provider: str) -> None:
     configuration.rust(True)
-    component: Final = COMPONENTS[RouteName.TRANSCRIPTION]
+    component: Final = COMPONENTS[ComponentName.TRANSCRIPTION]
     binding: Final = component.bind("transcription", validate=_string, module_loader=_unexpected_load)
     execution: Final = component.resolve(CapabilityContext(provider=provider, model="model"))
     assert execution.decision is ExecutionDecision.PYTHON
@@ -136,7 +136,7 @@ def test_python_transcription_providers_skip_native_discovery(provider: str) -> 
 
 @pytest.mark.parametrize("provider", ("unknown-provider", "anthropic"))
 def test_unsupported_transcription_never_selects_an_implementation(provider: str) -> None:
-    component: Final = COMPONENTS[RouteName.TRANSCRIPTION]
+    component: Final = COMPONENTS[ComponentName.TRANSCRIPTION]
     binding: Final = component.bind("transcription", validate=_string, module_loader=_unexpected_load)
     execution: Final = component.resolve(CapabilityContext(provider=provider, model="model"))
     assert execution.decision is ExecutionDecision.UNSUPPORTED
@@ -154,6 +154,7 @@ def test_unsupported_transcription_never_selects_an_implementation(provider: str
         (RustImplementationState.UNIMPLEMENTED, False, RolloutPolicy.RUST_REQUIRED),
         (RustImplementationState.UNIMPLEMENTED, True, RolloutPolicy.UNSUPPORTED),
         (RustImplementationState.READY, False, RolloutPolicy.UNSUPPORTED),
+        (RustImplementationState.EXPERIMENTAL, False, RolloutPolicy.PYTHON_ONLY),
     ),
 )
 def test_invalid_capability_definitions_rejected(

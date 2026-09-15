@@ -12,10 +12,16 @@ from litellm.litellm_core_utils import token_counter as python_counter
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import token_counter as bridge
 from litellm.rust_bridge.configuration import (
+    CapabilityDefinition,
+    ComponentName,
     ExecutionDecision,
+    RolloutPolicy,
+    RustImplementationState,
     _parse_env_bool,  # pyright: ignore[reportPrivateUsage]  # directly test env parsing contract
 )
-from litellm.rust_bridge.token_counter import COMPONENT
+from litellm.rust_bridge.errors import RustRouteUnsupportedError
+from litellm.rust_bridge.route import NativeComponent
+from litellm.rust_bridge.token_counter import COMPONENT, definition
 
 
 @pytest.mark.parametrize(("value", "expected"), (("1", True), ("0", False), (" 1 ", True), (" 0 ", False)))
@@ -64,10 +70,34 @@ def test_public_token_counter_stays_python_only(
         configuration.reset_rust_configuration()
 
 
+@pytest.mark.parametrize("disabled", (False, True))
+@pytest.mark.parametrize("through_compatibility_wrapper", (False, True))
+def test_public_counter_enforces_catalog_decision(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool, through_compatibility_wrapper: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", disabled)
+    monkeypatch.setattr(
+        definition,
+        "COMPONENT",
+        NativeComponent(
+            name=ComponentName.TOKEN_COUNTER,
+            capability=CapabilityDefinition(
+                rust=RustImplementationState.UNIMPLEMENTED,
+                python_available=False,
+                rollout=RolloutPolicy.UNSUPPORTED,
+            ),
+            exports=(),
+        ),
+    )
+    counter: Final = litellm.token_counter if through_compatibility_wrapper else python_counter.token_counter
+    with pytest.raises(RustRouteUnsupportedError, match="token_counter"):
+        counter(model="gpt-4o", text="hello")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("environment", (None, "0", "1"))
 @pytest.mark.parametrize("override", (None, False, True))
-async def test_budget_direct_import_follows_request_rollout(
+async def test_budget_direct_import_bypasses_public_rollout(
     monkeypatch: pytest.MonkeyPatch, environment: str | None, override: bool | None
 ) -> None:
     from litellm.proxy.spend_tracking.budget_reservation import count_request_input_tokens
@@ -96,13 +126,12 @@ async def test_budget_direct_import_follows_request_rollout(
         return {"model": model, "input_tokens": 42}
 
     bridge.TOKEN_COUNTER.override(counter)
-    enabled: Final = override if override is not None else environment == "1"
     try:
         budget: Final = await count_request_input_tokens(
             request_body=json.loads(body), route="/v1/messages", llm_router=None, raw_body=body
         )
-        assert budget == {model: 42 if enabled else litellm.token_counter(model=model, messages=messages)}
-        assert native_calls == ([body] if enabled else [])
+        assert budget == {model: 42}
+        assert native_calls == [body]
     finally:
         bridge.TOKEN_COUNTER.reset()
         configuration.reset_rust_configuration()

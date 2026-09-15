@@ -7,8 +7,10 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.default_encoding import cl100k_base_rank_file, o200k_base_rank_file
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding, uses_legacy_message_accounting
+from litellm.rust_bridge.configuration import ExecutionDecision
+from litellm.rust_bridge.route import ComponentExecution
 from litellm.rust_bridge.runtime import BridgeErrorContext, ainvoke
-from litellm.rust_bridge.token_counter.definition import REQUEST_COMPONENT
+from litellm.rust_bridge.token_counter.definition import COMPONENT
 from litellm.rust_bridge.token_counter.types import InputTokenCount, RustTokenCounter, RustTokenizer
 from litellm.utils import claude_json_str, huggingface_tokenizer_kind
 
@@ -19,13 +21,10 @@ def _as_counter(value: object) -> RustTokenCounter | None:
     return cast(RustTokenCounter, value) if callable(value) else None
 
 
-TOKEN_COUNTER: Final = REQUEST_COMPONENT.bind("count_input_tokens", validate=_as_counter)
+TOKEN_COUNTER: Final = COMPONENT.bind("count_input_tokens", validate=_as_counter)
 
 
-def rust_tokenizer(model: str) -> RustTokenizer | None:
-    execution: Final = REQUEST_COMPONENT.resolve()
-    if execution.select(TOKEN_COUNTER) is None:
-        return None
+def rust_tokenizer(model: str) -> RustTokenizer:
     kind: Final = None if litellm.disable_hf_tokenizer_download is True else huggingface_tokenizer_kind(model)
     encoding: Final = openai_tokenizer_encoding(model).name if kind is None else ""
     return RustTokenizer(
@@ -49,14 +48,13 @@ def _tokenizer_resource(tokenizer: str) -> str:
 
 
 async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:
-    execution: Final = REQUEST_COMPONENT.resolve()
-    counter: Final = execution.select(TOKEN_COUNTER)
+    counter: Final = TOKEN_COUNTER.load()
 
     async def python_fallback() -> None:
         return None
 
     return await ainvoke(
-        execution=execution,
+        execution=ComponentExecution(COMPONENT.name, ExecutionDecision.RUST_WITH_FALLBACK),
         native_call=(
             lambda: counter(
                 body,
@@ -71,5 +69,5 @@ async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputToke
         else None,
         python_fallback=python_fallback,
         adapt=_INPUT_TOKEN_COUNT.validate_python,
-        context=BridgeErrorContext(route=REQUEST_COMPONENT.name.value, provider="", model=""),
+        context=BridgeErrorContext(route=COMPONENT.name.value, provider="", model=""),
     )

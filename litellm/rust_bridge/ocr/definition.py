@@ -1,6 +1,6 @@
 from typing import Final
 
 from litellm.rust_bridge.catalog import COMPONENTS
-from litellm.rust_bridge.configuration import RouteName
+from litellm.rust_bridge.configuration import ComponentName
 
-COMPONENT: Final = COMPONENTS[RouteName.OCR]
+COMPONENT: Final = COMPONENTS[ComponentName.OCR]

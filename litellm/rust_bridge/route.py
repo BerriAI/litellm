@@ -9,9 +9,8 @@ from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.configuration import (
     CapabilityContext,
     CapabilitySpec,
+    ComponentName,
     ExecutionDecision,
-    RouteName,
-    UtilityName,
     capability_decision,
 )
 from litellm.rust_bridge.errors import RustRouteUnavailableError, RustRouteUnsupportedError
@@ -61,7 +60,7 @@ def _lifecycle(value: object) -> NativeLifecycle[object, object] | None:
 
 @dataclass(frozen=True, slots=True)
 class ComponentExecution:
-    route_name: RouteName | UtilityName
+    route_name: ComponentName
     decision: ExecutionDecision
 
     def require_supported(self) -> None:
@@ -84,7 +83,7 @@ class ComponentExecution:
 
 @dataclass(frozen=True, slots=True)
 class NativeComponent:
-    name: RouteName | UtilityName
+    name: ComponentName
     capability: CapabilitySpec
     exports: tuple[str, ...]
 

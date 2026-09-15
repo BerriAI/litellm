@@ -69,12 +69,12 @@ def reset_bridge(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", TOKENIZERS)
-async def test_disabled_bridge_never_calls_native(tokenizer: bridge.RustTokenizer) -> None:
+async def test_direct_bridge_bypasses_disabled_public_rollout(tokenizer: bridge.RustTokenizer) -> None:
     counter: Final = _RecordingCounter()
     bridge.TOKEN_COUNTER.override(counter)
     litellm.rust(False)
-    assert await bridge.count_input_tokens(BODY, tokenizer) is None
-    assert counter.calls == []
+    assert await bridge.count_input_tokens(BODY, tokenizer) == bridge.InputTokenCount(model=MODEL, input_tokens=42)
+    assert counter.calls == [(BODY, tokenizer, tokenizer.kind or tokenizer.encoding)]
 
 
 @pytest.mark.asyncio

@@ -9,9 +9,10 @@ import pytest
 
 from litellm.exceptions import APIError
 from litellm.rust_bridge import bindings, runtime
-from litellm.rust_bridge.configuration import ExecutionDecision, RouteName
+from litellm.rust_bridge.configuration import ComponentName, ExecutionDecision
 from litellm.rust_bridge.errors import RustRouteDeclinedError, RustRouteUnavailableError, RustRouteUnsupportedError
 from litellm.rust_bridge.route import ComponentExecution
+
 
 class RustBridgeDeclined(Exception):
     pass
@@ -47,7 +48,7 @@ async def _invoke(
     adapt: Callable[[object], object],
     fallback: Callable[[], object] = lambda: "python",
 ) -> object:
-    execution: Final = ComponentExecution(route_name=RouteName.MESSAGES, decision=decision)
+    execution: Final = ComponentExecution(route_name=ComponentName.MESSAGES, decision=decision)
     context: Final = runtime.BridgeErrorContext(route="messages", provider="anthropic", model="model")
     if not asynchronous:
         return runtime.invoke(

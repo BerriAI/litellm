@@ -9,7 +9,7 @@ DEFAULT_RUST_ENABLED: Final = False
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
 
 
-class RouteName(str, Enum):
+class ComponentName(str, Enum):
     OCR = "ocr"
     MESSAGES = "messages"
     CHAT_COMPLETIONS = "chat_completions"
@@ -21,11 +21,7 @@ class RouteName(str, Enum):
     SPEECH = "speech"
     MODERATION = "moderation"
     RESPONSES = "responses"
-
-
-class UtilityName(str, Enum):
     TOKEN_COUNTER = "token_counter"
-    REQUEST_INPUT_TOKEN_COUNTER = "request_input_token_counter"
 
 
 class RustImplementationState(str, Enum):
@@ -78,7 +74,9 @@ class CapabilityDefinition:
                 raise ValueError("an unimplemented Rust capability must use its Python implementation")
             return
         if self.rollout is RolloutPolicy.PYTHON_ONLY:
-            raise ValueError("an implemented Rust capability must declare a Rust rollout")
+            if not self.python_available:
+                raise ValueError("a Python-only capability requires a Python implementation")
+            return
         if self.rollout is RolloutPolicy.RUST_OPT_IN or self.rollout is RolloutPolicy.RUST_OPT_OUT:
             if not self.python_available:
                 raise ValueError("an optional Rust capability requires a Python fallback")
