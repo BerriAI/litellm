@@ -205,7 +205,7 @@ async def list_spend_log_end_users(
     Example curl:
     ```
     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     return await _list_spend_log_facet(

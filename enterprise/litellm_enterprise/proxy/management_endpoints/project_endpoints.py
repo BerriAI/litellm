@@ -430,7 +430,7 @@ async def new_project(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/project/new' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_API_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_alias": "flight-search-assistant",
@@ -457,7 +457,7 @@ async def new_project(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/project/new' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_API_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_alias": "hotel-recommendations",
@@ -644,7 +644,7 @@ async def update_project(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/project/update' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_API_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_id": "project-123",
@@ -870,7 +870,7 @@ async def delete_project(
     Example:
     ```bash
     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \\
-    --header 'Authorization: Bearer sk-1234' \\
+    --header "Authorization: Bearer $LITELLM_API_KEY" \\
     --header 'Content-Type: application/json' \\
     --data '{
         "project_ids": ["project-123", "project-456"]
@@ -976,7 +976,7 @@ async def project_info(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -1045,7 +1045,7 @@ async def list_projects(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/project/list' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client

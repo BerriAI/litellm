@@ -328,7 +328,7 @@ async def get_memory_summary(
     - garbage_collector: GC status and pending object counts
 
     Example usage:
-    curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
+    curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer $LITELLM_API_KEY"
 
     For detailed analysis, call GET /debug/memory/details
     For cache management, use the cache management endpoints
@@ -689,7 +689,7 @@ async def get_memory_details(
     - include_process_info: Include process-level memory info using psutil (default: true)
 
     Example usage:
-    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
+    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer $LITELLM_API_KEY"
 
     All memory sizes are reported in both bytes and MB.
     """
@@ -751,10 +751,10 @@ async def configure_gc_thresholds_endpoint(
     - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
 
     Example for more aggressive collection:
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer sk-1234"
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer $LITELLM_API_KEY"
 
     Example for less aggressive collection:
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer sk-1234"
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer $LITELLM_API_KEY"
 
     Monitor memory usage with GET /debug/memory/summary after changes.
     """

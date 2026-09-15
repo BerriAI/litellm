@@ -274,7 +274,7 @@ async def health_services_endpoint(
     Example:
     ```
     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
-    -H 'Authorization: Bearer sk-1234'
+    -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     try:
@@ -2046,7 +2046,7 @@ async def test_model_connection(
     ```bash
     # If model is configured in proxy_config.yaml, you only need to specify the model name:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_API_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
@@ -2059,7 +2059,7 @@ async def test_model_connection(
     
     # You can also override specific params or test with custom credentials:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_API_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {

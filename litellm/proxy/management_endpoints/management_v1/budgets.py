@@ -164,7 +164,7 @@ async def list_budgets(
     Example curl:
     ```
     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     try:

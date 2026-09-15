@@ -13,7 +13,7 @@ class Config:
     LITELLM_PROXY_URL = os.getenv("LITELLM_PROXY_URL", "http://localhost:4000")
 
     # LiteLLM API key (master key or virtual key)
-    LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "sk-1234")
+    LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "sk-<your-litellm-api-key>")
 
     # Model name as configured in LiteLLM (e.g., "bedrock-claude-sonnet-4", "gpt-4", etc.)
     LITELLM_MODEL = os.getenv("LITELLM_MODEL", "bedrock-claude-sonnet-4.5")

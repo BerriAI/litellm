@@ -403,7 +403,7 @@ async def spend_key_fn(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/keys" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
 
@@ -471,13 +471,13 @@ async def spend_user_fn(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     View User Table row for user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -542,13 +542,13 @@ async def view_spend_tags(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
 
@@ -2046,13 +2046,13 @@ async def global_view_spend_tags(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     import traceback
@@ -2196,7 +2196,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_API_KEY"
     --header 'Content-Type: application/json'
     --data '{
         "model": "anthropic.claude-v2",
@@ -2208,7 +2208,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_API_KEY"
     --header 'Content-Type: application/json'
     --data '{
         "completion_response": {
@@ -2461,7 +2461,7 @@ async def ui_view_spend_logs(
     Example:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -3369,31 +3369,31 @@ async def view_spend_logs(
     Example Request for all logs
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Example Request for specific request_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Example Request for specific api_key
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Example Request for specific user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Example Request for date range with individual logs (unsummarized)
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -4169,7 +4169,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
     ```bash
     curl -X GET http://localhost:4000/provider/budgets \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     Example Response

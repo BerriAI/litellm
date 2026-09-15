@@ -133,7 +133,7 @@ async def cache_delete(request: Request):
 
     ```shell
     curl -X POST "http://0.0.0.0:4000/cache/delete" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_API_KEY" \
     -d '{"keys": ["key1", "key2"]}'
     ```
 
@@ -226,7 +226,7 @@ async def cache_flushall():
 
     Usage:
     ```
-    curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer sk-1234"
+    curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     try:

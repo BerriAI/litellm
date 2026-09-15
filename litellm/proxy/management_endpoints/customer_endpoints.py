@@ -155,7 +155,7 @@ async def block_user(data: BlockUsers):
 
         ```
         curl -X POST "http://0.0.0.0:8000/user/block"
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_API_KEY"
         -d '{
         "user_ids": [<user_id>, ...]
         }'
@@ -207,7 +207,7 @@ async def unblock_user(data: BlockUsers):
     Example
     ```
     curl -X POST "http://0.0.0.0:8000/user/unblock"
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_API_KEY"
     -d '{
     "user_ids": [<user_id>, ...]
     }'
@@ -358,7 +358,7 @@ async def new_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/new' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_API_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
@@ -369,7 +369,7 @@ async def new_end_user(
 
     # With object permissions
     curl -L -X POST 'http://localhost:4000/customer/new' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H 'Content-Type: application/json' \
         -d '{
             "user_id": "user_1",
@@ -513,7 +513,7 @@ async def end_user_info(
     Example curl:
     ```
     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     try:
@@ -592,7 +592,7 @@ async def update_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
@@ -601,7 +601,7 @@ async def update_end_user(
 
     # Updating object permissions
     curl -L -X POST 'http://localhost:4000/customer/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "user_1",
@@ -751,7 +751,7 @@ async def delete_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/delete' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_API_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "user_ids" :["ishaan-jaff-5"]
@@ -826,7 +826,7 @@ async def list_end_user(
     Example curl:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/customer/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_API_KEY"
     ```
 
     """

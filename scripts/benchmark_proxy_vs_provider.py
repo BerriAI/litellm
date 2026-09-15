@@ -9,7 +9,7 @@ USAGE EXAMPLES:
    # Set required environment variables
    export LITELLM_PROXY_URL='http://localhost:4000/chat/completions'
    export PROVIDER_URL='https://api.openai.com/v1/chat/completions'
-   export LITELLM_PROXY_API_KEY='sk-1234'
+   export LITELLM_PROXY_API_KEY='sk-<your-litellm-api-key>'
    export PROVIDER_API_KEY='sk-openai-key'
    
    # Run from scripts directory
@@ -537,7 +537,7 @@ Examples:
   # 1. Basic usage (recommended - sequential execution)
   export LITELLM_PROXY_URL='http://localhost:4000/chat/completions'
   export PROVIDER_URL='https://api.openai.com/v1/chat/completions'
-  export LITELLM_PROXY_API_KEY='sk-1234'
+  export LITELLM_PROXY_API_KEY='sk-<your-litellm-api-key>'
   export PROVIDER_API_KEY='sk-openai-key'
   python scripts/benchmark_proxy_vs_provider.py
   

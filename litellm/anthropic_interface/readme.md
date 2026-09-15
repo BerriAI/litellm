@@ -86,7 +86,7 @@ import anthropic
 # point anthropic sdk to litellm proxy 
 client = anthropic.Anthropic(
     base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",
+    api_key="sk-<your-litellm-api-key>",
 )
 
 response = client.messages.create(
@@ -101,7 +101,7 @@ response = client.messages.create(
 ```bash showLineNumbers title="Example using LiteLLM Proxy Server"
 curl -L -X POST 'http://0.0.0.0:4000/v1/messages' \
 -H 'content-type: application/json' \
--H 'x-api-key: $LITELLM_API_KEY' \
+-H "x-api-key: $LITELLM_API_KEY" \
 -H 'anthropic-version: 2023-06-01' \
 -d '{
   "model": "anthropic-claude",

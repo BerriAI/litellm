@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # QA: code interpreter sandbox stickiness via metadata.session_id
 #   bash qa_sticky_session.sh
-#   LITELLM_BASE_URL=http://localhost:4000 LITELLM_KEY=sk-1234 bash qa_sticky_session.sh
+#   LITELLM_BASE_URL=http://localhost:4000 LITELLM_KEY=sk-<your-litellm-api-key> bash qa_sticky_session.sh
 
 set -euo pipefail
 
 BASE="${LITELLM_BASE_URL:-http://localhost:4000}"
-KEY="${LITELLM_KEY:-sk-1234}"
+KEY="${LITELLM_KEY:-sk-<your-litellm-api-key>}"
 MODEL="${LITELLM_MODEL:-gpt-4o-mini}"
-# proxy running at http://localhost:4000 (master key: sk-1234)
+# proxy running at http://localhost:4000 (master key: sk-<your-litellm-master-key>)
 SESSION_A="qa-session-$(date +%s)-A"
 SESSION_B="qa-session-$(date +%s)-B"
 
