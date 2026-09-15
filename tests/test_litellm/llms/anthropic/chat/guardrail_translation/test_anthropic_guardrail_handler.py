@@ -2499,6 +2499,29 @@ class PerRowTextGuardrail(CustomGuardrail):
         return {**inputs, "texts": [str(row.get("content")).replace("123-45-6789", "<US_SSN>") for row in rows]}
 
 
+class PerSlotTextGuardrail(CustomGuardrail):
+    """Answers one redacted text per text slot of every chat row it was shown, the
+    way a guardrail that counts slots per message does, and hands back only texts."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="per-slot-redactor")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts
+
+        rows = inputs.get("structured_messages") or []
+        return {
+            **inputs,
+            "texts": [text.replace("123-45-6789", "<US_SSN>") for row in rows for text in message_slot_texts(row)],
+        }
+
+
 class TestPerMessageTextWriteBack:
     """Texts that no longer pair one-to-one with what the handler extracted must be
     rejected by name instead of sliding onto the wrong messages."""
@@ -2536,6 +2559,25 @@ class TestPerMessageTextWriteBack:
         assert excinfo.value.guardrail_name == "per-row-redactor"
         assert data["system"] == original["system"], "a rejected rewrite must leave the request untouched"
         assert data["messages"] == original["messages"], "a rejected rewrite must leave the request untouched"
+
+    @pytest.mark.asyncio
+    async def test_one_text_per_slot_over_a_system_prompt_with_an_empty_block_is_applied(self):
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": [
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "Reply with exactly the SSN you were given."},
+            ],
+            "messages": [{"role": "user", "content": "My SSN is 123-45-6789."}],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=PerSlotTextGuardrail())
+
+        assert data["system"] == [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "Reply with exactly the SSN you were given."},
+        ]
+        assert data["messages"] == [{"role": "user", "content": "My SSN is <US_SSN>."}]
 
     @pytest.mark.asyncio
     async def test_one_text_per_row_without_a_system_prompt_is_applied(self):

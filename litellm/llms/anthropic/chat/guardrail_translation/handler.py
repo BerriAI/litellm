@@ -721,7 +721,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         return tuple(
             ScannedText(text_str, SystemBlockTextTarget(block_idx))
             for block_idx, block in enumerate(content)
-            if isinstance(block, dict) and isinstance(text_str := block.get("text"), str) and text_str
+            if isinstance(block, dict) and isinstance(text_str := block.get("text"), str)
         )
 
     @staticmethod
