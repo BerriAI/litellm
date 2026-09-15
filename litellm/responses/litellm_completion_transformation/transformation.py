@@ -2697,28 +2697,6 @@ class LiteLLMCompletionResponsesConfig:
                 )
                 message_output_items.extend(image_generation_items)
             elif choice.message.content is not None:
-                # Unsigned plain-text reasoning is prepended into the message
-                # content as a separate output_text block. This keeps the thinking
-                # process observable to clients that scan message content while
-                # avoiding an unfamiliar standalone reasoning output item that
-                # agent clients may not understand.
-                reasoning_text: Final = getattr(choice.message, "reasoning_content", None) or ""
-                reasoning_block: Final[list] = (
-                    [  # mutable-ok: fresh block list for reasoning
-                        OutputText(
-                            type="output_text",
-                            text=reasoning_text,
-                            annotations=[],  # mutable-ok: fresh annotations list
-                        )
-                    ]
-                    if reasoning_text
-                    else []  # mutable-ok: empty reasoning block
-                )
-                message_content: Final[list] = [  # mutable-ok: fresh output list for the message item
-                    *reasoning_block,
-                    LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(choice.message),
-                ]
-
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -2727,7 +2705,11 @@ class LiteLLMCompletionResponsesConfig:
                             choice.finish_reason
                         ),
                         role=choice.message.role,
-                        content=message_content,  # mutable-ok: list built above is owned by this item
+                        content=[
+                            LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
+                                choice.message
+                            )
+                        ],
                     )
                 )
         return message_output_items
