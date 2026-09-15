@@ -5206,11 +5206,12 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     from litellm.proxy.proxy_server import model_info_v1
 
     # Mock user authentication
-    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
-    mock_user_api_key_dict.user_id = "test-user"
-    mock_user_api_key_dict.api_key = "test-key"
-    mock_user_api_key_dict.team_models = []
-    mock_user_api_key_dict.models = ["oci-grok-test"]
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user",
+        api_key="test-key",
+        team_models=[],
+        models=["oci-grok-test"],
+    )
 
     # Mock model data with OCI sensitive information
     mock_model_data = {

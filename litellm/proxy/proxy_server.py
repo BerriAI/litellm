@@ -6511,7 +6511,7 @@ class ProxyConfig:
 
         added_models = 0
         ## ADD MODEL LOGIC
-        for m in sorted(db_models, key=lambda m: (getattr(m, "created_at", None) or datetime.min, m.model_id)):
+        for m in sorted(db_models, key=lambda m: (m.created_at or datetime.min, m.model_id)):
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, dict):
                 # decrypt values
@@ -15051,9 +15051,9 @@ def _model_info_json_response(
     data: Sequence[Mapping[str, object]] | Mapping[str, object],
     dropped_deployments: Sequence[Mapping[str, object]] | None = None,
 ) -> Response:
-    response_data: Final = {"data": data}
-    if dropped_deployments is not None:
-        response_data["dropped_deployments"] = dropped_deployments
+    response_data: Final = (
+        {"data": data} if dropped_deployments is None else {"data": data, "dropped_deployments": dropped_deployments}
+    )
     return Response(
         content=orjson.dumps(response_data, default=jsonable_encoder, option=orjson.OPT_NON_STR_KEYS),
         media_type="application/json",
@@ -15276,7 +15276,7 @@ async def model_info_v1(
     verbose_proxy_logger.debug("all_models: %s", visible_models)
     dropped_deployments: Final = (
         [asdict(dropped_deployment) for dropped_deployment in llm_router.dropped_deployments.values()]
-        if hasattr(user_api_key_dict, "user_role") and _user_has_admin_view(user_api_key_dict)
+        if _user_has_admin_view(user_api_key_dict)
         else None
     )
     return _model_info_json_response(visible_models, dropped_deployments=dropped_deployments)

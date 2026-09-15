@@ -491,14 +491,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     data.pop("enable_tag_filtering", None)
 
     team_id: Final = get_team_id_from_data(data)
-    dropped_model_names: Final = (
-        frozenset(dropped_deployment.model_name for dropped_deployment in llm_router.dropped_deployments.values())
-        if llm_router is not None
-        else frozenset()
-    )
-    router_model_names: Final = (
-        (frozenset(llm_router.model_names) - dropped_model_names) if llm_router is not None else frozenset()
-    )
+    router_model_names: Final = llm_router.model_names if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
@@ -656,14 +649,11 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif data["model"] not in dropped_model_names and (
-            (
-                is_proxy_admin_without_team
-                and data["model"] not in router_model_names
-                and data["model"] in llm_router.team_public_model_names
-            )
-            or llm_router.is_recognized_model(data["model"])
-        ):
+        elif (
+            is_proxy_admin_without_team
+            and data["model"] not in router_model_names
+            and data["model"] in llm_router.team_public_model_names
+        ) or llm_router.is_recognized_model(data["model"]):
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:

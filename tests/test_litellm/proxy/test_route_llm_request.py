@@ -1,10 +1,9 @@
 
-import pytest
-
-
-
+from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock
+
+import pytest
 
 from fastapi import HTTPException
 
@@ -54,7 +53,7 @@ async def test_route_request_distinguishes_dropped_deployments_from_unknown_mode
                 "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
             },
             {
-                "model_name": "x",
+                "model_name": "live",
                 "litellm_params": {
                     "model": "auto_router/complexity_router",
                     "complexity_router_config": {
@@ -62,28 +61,32 @@ async def test_route_request_distinguishes_dropped_deployments_from_unknown_mode
                         "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
                     },
                 },
-                "model_info": {"id": "id-x"},
-            },
-            {
-                "model_name": "y",
-                "litellm_params": {
-                    "model": "auto_router/complexity_router",
-                    "complexity_router_config": {
-                        "classifier_type": "heuristic_v2",
-                        "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
-                    },
-                },
-                "model_info": {"id": "id-y"},
+                "model_info": {"id": "id-live"},
             },
         ],
         auto_router_capability_limit=lambda: 1,
         ignore_invalid_deployments=True,
     )
-    assert "id-y" in router.dropped_deployments
+    from litellm.types.router import Deployment
+
+    assert router.upsert_deployment(
+        Deployment(
+            model_name="x",
+            litellm_params={
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": "heuristic_v2",
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                },
+            },
+            model_info={"id": "id-x"},
+        )
+    ) is None
+    assert "id-x" in router.dropped_deployments
 
     with pytest.raises(HTTPException) as dropped_error:
         await route_request(
-            data={"model": "y", "messages": [{"role": "user", "content": "Hello"}]},
+            data={"model": "x", "messages": [{"role": "user", "content": "Hello"}]},
             llm_router=router,
             user_model=None,
             route_type="acompletion",
@@ -1205,6 +1208,7 @@ def _db_model_row(model_name: str, mock_response: str):
         litellm_params={"model": "openai/gpt-4o", "api_key": "fake", "mock_response": mock_response},
         model_info={},
         blocked=False,
+        created_at=datetime.min,
     )
 
 
