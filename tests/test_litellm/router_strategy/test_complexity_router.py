@@ -2409,6 +2409,79 @@ def _capability_reply(
 
 
 class TestCapabilityClassifierConfig:
+    def test_selective_policy_overrides_raw_threshold(self) -> None:
+        config: Final = CapabilityClassifierConfig.model_validate(
+            {
+                "efficient_tier": "SIMPLE",
+                "capable_tier": "REASONING",
+                "base_threshold": 0.5,
+                "selective_policy": {
+                    "version": "test",
+                    "feature_schema": "cap-v1",
+                    "target": "paired",
+                    "threshold": 0.05,
+                    "heads": [{"constant": 2}],
+                },
+            }
+        )
+        verdict: Final = CapabilityClassifierVerdict.model_validate(
+            {
+                "crux": "A local parser change",
+                "primary_rule": "SUP-1",
+                "capability_boundary": "supported",
+                "p_solve": 0.1,
+            }
+        )
+        result: Final = config.classify(verdict)
+        assert result.meets_routing_threshold()
+        assert result.p_solve == 0.1
+        assert result.selective_decision is not None
+        assert result.selective_decision.score == -1.0
+
+    def test_selective_policy_rejects_another_classifier_feature_schema(self) -> None:
+        with pytest.raises(ValidationError, match="cap-v1"):
+            CapabilityClassifierConfig.model_validate(
+                {
+                    "efficient_tier": "SIMPLE",
+                    "capable_tier": "REASONING",
+                    "base_threshold": 0.5,
+                    "selective_policy": {
+                        "version": "test",
+                        "feature_schema": "v2-v1",
+                        "target": "rescue",
+                        "threshold": 0.05,
+                        "heads": [{"constant": 1}],
+                    },
+                }
+            )
+
+    @pytest.mark.parametrize(
+        "offsets",
+        (
+            [{"rule": "SUP-1", "intercept": 1.0}] * 2,
+            [{"rule": "invented", "intercept": 1.0}],
+            [{"rule": "SUP-1", "intercept": float("nan")}],
+        ),
+    )
+    def test_rejects_invalid_rule_offsets(self, offsets: list[dict[str, object]]) -> None:
+        with pytest.raises(ValidationError):
+            CapabilityCalibrationConfig.model_validate(
+                {"version": "rules-v1", "slope": 1.0, "intercept": 0.0, "rule_intercepts": offsets}
+            )
+
+    def test_rule_adjustments_match_only_the_active_rule_after_round_trip(self) -> None:
+        calibration: Final = CapabilityCalibrationConfig.model_validate(
+            {
+                "version": "rules-v1",
+                "slope": 1.0,
+                "intercept": 0.0,
+                "rule_intercepts": [{"rule": "UNC-2", "intercept": -2.0}],
+            }
+        )
+        restored: Final = CapabilityCalibrationConfig.model_validate_json(calibration.model_dump_json())
+        assert restored.calibrate(0.9, "UNC-2") == pytest.approx(0.5491469396)
+        assert restored.calibrate(0.9, "SUP-1") == pytest.approx(0.9)
+
     @pytest.mark.parametrize(
         "calibration",
         (
@@ -2587,6 +2660,47 @@ class TestCapabilityClassifier:
             litellm_router_instance=mock_router_instance,
             complexity_router_config=_capability_router_config(**overrides),
         )
+
+    @pytest.mark.asyncio
+    async def test_trained_card_and_rule_adjustment_reach_the_live_routing_policy(
+        self, mock_router_instance: MagicMock
+    ) -> None:
+        mock_router_instance.acompletion = AsyncMock(
+            return_value=_llm_response(
+                _capability_reply(p_solve=0.9, primary_rule="UNC-2", capability_boundary="uncertain")
+            )
+        )
+        router: Final = self._router(
+            mock_router_instance,
+            capability_classifier_config={
+                "efficient_tier": "SIMPLE",
+                "capable_tier": "REASONING",
+                "base_threshold": 0.6,
+                "card": {
+                    "version": "test-card-v1",
+                    "text": "UNC-2 [uncertain]: Coupled changes need inspection",
+                    "empirical": True,
+                },
+                "calibration": {
+                    "version": "rules-v1",
+                    "slope": 1.0,
+                    "intercept": 0.0,
+                    "rule_intercepts": [{"rule": "UNC-2", "intercept": -2.0}],
+                },
+            },
+        )
+        result: Final = await router.async_pre_routing_hook(
+            model="capability-router", request_kwargs={}, messages=[{"role": "user", "content": "Fix the issue"}]
+        )
+        assert result is not None and result.model == "capable-model"
+        assert result.routing_decision is not None
+        assert result.routing_decision["classifier_p_solve"] == 0.9
+        assert result.routing_decision["classifier_calibrated_p_solve"] == pytest.approx(0.5491469396)
+        sent: Final = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
+        assert "Coupled changes need inspection" in sent
+        assert "Only explicitly supplied training counts" in sent
+        assert "Route to the Efficient model" not in sent
+        mock_router_instance.acompletion.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_encrypted_task_is_not_replaced_by_plaintext_envelope(self, mock_router_instance: MagicMock) -> None:
@@ -6169,10 +6283,16 @@ class TestTierModelAffinity:
         returned: Final = await self._route(router, metadata, "model-b")
 
         assert (first.model, repeated.model, reasoning.model, returned.model) == (
-            "model-a", "model-a", "model-b", "model-a"
+            "model-a",
+            "model-a",
+            "model-b",
+            "model-a",
         )
         assert tuple(result.routing_decision["tier"] for result in (first, repeated, reasoning, returned)) == (
-            "SIMPLE", "SIMPLE", "REASONING", "SIMPLE"
+            "SIMPLE",
+            "SIMPLE",
+            "REASONING",
+            "SIMPLE",
         )
         assert returned.litellm_params == {"temperature": 0.1}
         assert reasoning.litellm_params == {"temperature": 0.9}
@@ -6210,9 +6330,7 @@ class TestTierModelAffinity:
         deployment_affinity: bool,
         plugins: bool,
     ) -> None:
-        router: Final = self._router(
-            mock_router_instance, deployment_affinity=deployment_affinity, plugins=plugins
-        )
+        router: Final = self._router(mock_router_instance, deployment_affinity=deployment_affinity, plugins=plugins)
         assert (await self._route(router, metadata, "model-a")).model == "model-a"
         assert (await self._route(router, metadata, "model-b")).model == "model-b"
 
@@ -6285,9 +6403,7 @@ class TestTierModelAffinity:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": [IMG_PART] if gate == "image" else "done"},
         ]
@@ -6332,9 +6448,7 @@ class TestTierModelAffinity:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": "done"},
         ]
@@ -6364,8 +6478,7 @@ class TestTierModelAffinity:
                     "SIMPLE": "base",
                     **{
                         tier: [
-                            {"model_name": model, "litellm_params": {"temperature": temperature}}
-                            for model in models
+                            {"model_name": model, "litellm_params": {"temperature": temperature}} for model in models
                         ]
                         for tier, models, temperature in (
                             ("MEDIUM", ("shared", "middle"), 0.4),
@@ -6439,7 +6552,11 @@ class TestTierModelAffinity:
             model_name="affinity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config=_custom_tier_config(
-                tiers={"SIMPLE": ["model-a", "model-b"], "SECURITY_REVIEW": ["model-a", "model-b"], "COMPLEX": "model-a"},
+                tiers={
+                    "SIMPLE": ["model-a", "model-b"],
+                    "SECURITY_REVIEW": ["model-a", "model-b"],
+                    "COMPLEX": "model-a",
+                },
                 deployment_affinity=True,
                 classification_mode=classification_mode,
                 keyword_tier_rules=[
