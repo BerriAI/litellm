@@ -2710,12 +2710,14 @@ class LiteLLMCompletionResponsesConfig:
                         choice.finish_reason
                     ),
                     role=choice.message.role,
-                    content=[
+                    content=[  # mutable-ok: fresh output list for the message item
                         LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(choice.message)
                     ],
                 )
                 if reasoning_text:
-                    message_item = message_item.model_copy(update={"reasoning_content": reasoning_text})
+                    message_item = message_item.model_copy(  # rebind-ok: model_copy returns updated item
+                        update={"reasoning_content": reasoning_text}
+                    )
                 message_output_items.append(message_item)
         return message_output_items
 
