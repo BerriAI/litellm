@@ -33,13 +33,13 @@ describe("PiiConfiguration", () => {
     expect(screen.getByText("NO FODSELSNUMMER")).toBeInTheDocument();
   });
 
-  it("adds a normalized custom entity with the first action", () => {
+  it("adds a normalized custom entity with MASK", () => {
     const onEntitySelect = vi.fn();
     const onActionSelect = vi.fn();
     render(
       <PiiConfiguration
         entities={["PERSON"]}
-        actions={["MASK", "BLOCK"]}
+        actions={["BLOCK", "MASK"]}
         selectedEntities={[]}
         selectedActions={{}}
         onEntitySelect={onEntitySelect}

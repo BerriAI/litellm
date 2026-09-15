@@ -78,7 +78,7 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
     }
 
     onEntitySelect(normalizedEntityName);
-    onActionSelect(normalizedEntityName, actions[0] ?? "MASK");
+    onActionSelect(normalizedEntityName, "MASK");
   };
 
   return (
