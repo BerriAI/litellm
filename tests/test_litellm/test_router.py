@@ -5494,6 +5494,7 @@ def test_update_kwargs_with_deployment_passthrough_honors_stream_timeout():
                 "litellm_params": {
                     "model": "anthropic/claude-sonnet-4-5",
                     "api_key": "fake-key",
+                    "timeout": 60,
                     "stream_timeout": 1800,
                 },
             },
@@ -5505,37 +5506,42 @@ def test_update_kwargs_with_deployment_passthrough_honors_stream_timeout():
                 },
             },
         ],
+        timeout=120,
         stream_timeout=900,
     )
     per_deployment, router_default = router.model_list
 
-    with patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"pass_through_request_timeout": 6},
-    ):
-        kwargs: dict = {"stream": True}
-        router._update_kwargs_with_deployment(
-            deployment=per_deployment,
-            kwargs=kwargs,
-            function_name="_ageneric_api_call_with_fallbacks",
-        )
-        assert kwargs["timeout"] == 1800.0
+    kwargs: dict = {"stream": True}
+    router._update_kwargs_with_deployment(
+        deployment=per_deployment,
+        kwargs=kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+    assert kwargs["timeout"] == 1800.0
 
-        kwargs = {"stream": True}
-        router._update_kwargs_with_deployment(
-            deployment=router_default,
-            kwargs=kwargs,
-            function_name="_ageneric_api_call_with_fallbacks",
-        )
-        assert kwargs["timeout"] == 900.0
+    kwargs = {"stream": True}
+    router._update_kwargs_with_deployment(
+        deployment=router_default,
+        kwargs=kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+    assert kwargs["timeout"] == 900.0
 
-        kwargs = {"stream": False}
-        router._update_kwargs_with_deployment(
-            deployment=per_deployment,
-            kwargs=kwargs,
-            function_name="_ageneric_api_call_with_fallbacks",
-        )
-        assert kwargs["timeout"] == 6.0
+    kwargs = {"stream": False}
+    router._update_kwargs_with_deployment(
+        deployment=per_deployment,
+        kwargs=kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+    assert kwargs["timeout"] == 60.0
+
+    kwargs = {"stream": False}
+    router._update_kwargs_with_deployment(
+        deployment=router_default,
+        kwargs=kwargs,
+        function_name="_ageneric_api_call_with_fallbacks",
+    )
+    assert kwargs["timeout"] == 120.0
 
 
 @pytest.mark.asyncio
