@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from hashlib import sha256
 from importlib.metadata import version
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 from weakref import WeakKeyDictionary, WeakSet
@@ -350,15 +351,20 @@ def lease_langfuse_client(client: Langfuse, renew: Callable[[], Langfuse]) -> Ge
     it registers as a holder and the reference count degrades the queued teardown to a flush, or a
     fresh bundle once the old one is gone.
     """
-    state: Final = _lifecycle_state(client)
-    if not state.open_lease(client):
-        with lease_langfuse_client(renew(), renew) as leased:
-            yield leased
-        return
+    leased, state = _open_lease(client, renew)
     try:
-        yield client
+        yield leased
     finally:
         _run_teardowns(state, state.release_lease())
+
+
+def _open_lease(client: Langfuse, renew: Callable[[], Langfuse]) -> tuple[Langfuse, _LangfuseLifecycleState]:
+    """The first of ``client`` then ``renew()``'s clients that is not already retired, with its lease taken."""
+    return next(
+        (candidate, state)
+        for candidate in chain((client,), iter(renew, None))
+        if (state := _lifecycle_state(candidate)).open_lease(candidate)
+    )
 
 
 def _run_teardowns(state: _LangfuseLifecycleState, clients: tuple[Langfuse, ...]) -> None:
