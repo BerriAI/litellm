@@ -78,7 +78,7 @@
   auth_family: none
   assertions: [succeeds]
   source: "mcp_server_manager.py:1485-1492"
-  rationale: Public/anonymous servers; delegate_auth_to_upstream
+  rationale: Explicitly anonymous true_passthrough servers
 - id: mcp.call_tool.none.succeeds
   module: mcp
   tier: P1

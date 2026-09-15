@@ -56,6 +56,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -495,11 +496,16 @@ class OpenAIResponsesHandler(BaseTranslation):
                 data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
         elif isinstance(input_data, str):
             guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(guardrailed_texts) > 1:
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
+            rewritten_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(rewritten_texts) != len(extracted.task_mappings):
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             await self._apply_guardrail_responses_to_input(
                 messages=input_data,
-                responses=guardrailed_inputs.get("texts") or (),
+                responses=rewritten_texts,
                 task_mappings=extracted.task_mappings,
             )
         verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
@@ -635,10 +641,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Apply guardrail responses back to input messages.
 
+        ``responses`` pairs positionally with ``task_mappings``; the caller rejects
+        the request when the two disagree, so this never has to guess an alignment.
+
         Override this method to customize how responses are applied.
         """
-        for task_idx, guardrail_response in enumerate(responses):
-            mapping = task_mappings[task_idx]
+        for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
 
