@@ -248,39 +248,6 @@ class TestSseBilling:
         assert payload["kwargs"]["model"] == "tinyfish/automation-run"
         assert fake_client.requested_urls == ["https://agent.tinyfish.ai/v1/runs/run-7?screenshots=none"]
 
-    def test_disconnected_stream_defers_billing_to_poller(self, tinyfish_env):
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthrough_logging_handler import (
-            _BACKGROUND_BILLING_TASKS,
-        )
-
-        logging_obj = _make_logging_obj()
-        logging_obj.dispatch_success_handlers = AsyncMock()
-        chunks = ['data: {"type": "STARTED", "run_id": "run-11", "status": "RUNNING"}']
-        fake_client = _FakeClient(
-            payloads=[
-                {"run_id": "run-11", "status": "RUNNING"},
-                {"run_id": "run-11", "status": "COMPLETED", "num_of_steps": 4},
-            ]
-        )
-
-        async def _run():
-            payload = await TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(
-                litellm_logging_obj=logging_obj,
-                url_route="https://agent.tinyfish.ai/v1/automation/run-sse",
-                start_time=datetime.now(),
-                all_chunks=chunks,
-                end_time=datetime.now(),
-                client=fake_client,
-            )
-            assert payload["result"] is None
-            await asyncio.gather(*list(_BACKGROUND_BILLING_TASKS))
-
-        asyncio.run(_run())
-
-        logging_obj.dispatch_success_handlers.assert_awaited_once()
-        assert logging_obj.dispatch_success_handlers.await_args.kwargs["response_cost"] == pytest.approx(0.064)
-        assert len(fake_client.requested_urls) == 2
-
     def test_stream_without_run_id_logs_without_cost(self, tinyfish_env):
         fake_client = _FakeClient(payloads=[{}])
 

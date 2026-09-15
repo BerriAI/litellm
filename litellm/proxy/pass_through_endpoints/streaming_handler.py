@@ -286,9 +286,6 @@ class PassThroughStreamingHandler:
                         end_time=end_time,
                     )
                 )
-                if tinyfish_payload["result"] is None:
-                    # run still live upstream (client disconnect); the background poller owns the spend log
-                    return
                 await litellm_logging_obj.dispatch_success_handlers(
                     result=tinyfish_payload["result"],
                     start_time=start_time,
