@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_judge import (
     judge_acompletion,
     parse_json_verdict,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import get_last_user_message
 from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
 from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN, GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -56,6 +57,8 @@ JUDGE_SYSTEM_PROMPTS: Final[MappingProxyType[JudgeInputType, str]] = MappingProx
 _JUDGE_SUBJECT_LABELS: Final[MappingProxyType[JudgeInputType, str]] = MappingProxyType(
     {"request": "Latest request turn to evaluate", "response": "Assistant response to evaluate"}
 )
+
+_REQUEST_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call)
 
 _VALID_ON_FAILURE: Final = frozenset({"block", "log"})
 
@@ -136,10 +139,12 @@ def _coerce_event_hook(mode: JudgeModeParam) -> JudgeEventHook:
     return GuardrailEventHooks(mode)
 
 
-def _text_under_review(texts: Sequence[str], input_type: JudgeInputType) -> str:
-    if input_type == "request":
-        return texts[-1] if texts else ""
-    return "\n".join(texts)
+def _text_under_review(inputs: GenericGuardrailAPIInputs, input_type: JudgeInputType) -> str:
+    all_text: Final = "\n".join(inputs.get("texts") or [])
+    if input_type == "response":
+        return all_text
+    latest_user_turn: Final = get_last_user_message(inputs.get("structured_messages") or [])
+    return latest_user_turn if latest_user_turn is not None else all_text
 
 
 def _build_judge_prompt(
@@ -232,7 +237,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        text_under_review: Final = _text_under_review(inputs.get("texts") or [], input_type)
+        text_under_review: Final = _text_under_review(inputs, input_type)
         if not text_under_review:
             return inputs
 
@@ -241,7 +246,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         judge_result: dict[str, object] = {}
 
         try:
-            messages: Final[Sequence[JudgeMessage]] = request_data.get("messages") or []
+            messages: Final[Sequence[JudgeMessage]] = (
+                inputs.get("structured_messages") or request_data.get("messages") or []
+            )
 
             try:
                 judge_result = await self._run_judge(messages, text_under_review, input_type)
@@ -308,14 +315,14 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 event_type=self._event_type_for(input_type),
             )
 
-    def _event_type_for(self, input_type: JudgeInputType) -> GuardrailEventHooks:
+    def _event_type_for(self, input_type: JudgeInputType) -> GuardrailEventHooks | None:
+        """Returns None (log the configured mode as-is) when the active request hook is ambiguous."""
         if self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
             return GuardrailEventHooks.logging_only
         if input_type == "response":
             return GuardrailEventHooks.post_call
-        if self._event_hook_is_event_type(GuardrailEventHooks.pre_call):
-            return GuardrailEventHooks.pre_call
-        return GuardrailEventHooks.during_call
+        configured: Final = tuple(hook for hook in _REQUEST_EVENT_HOOKS if self._event_hook_is_event_type(hook))
+        return configured[0] if len(configured) == 1 else None
 
 
 def initialize_guardrail(
