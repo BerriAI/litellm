@@ -411,6 +411,12 @@ class TestProcessEmbedContentResponseUsage:
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json=response_json,
+            resolved_files={
+                "files/img123": {
+                    "mime_type": "image/png",
+                    "uri": "https://example.com/img123",
+                }
+            },
         )
         assert result.usage.prompt_tokens_details.image_tokens == 258
         assert result.usage.prompt_tokens_details.text_tokens == 0
@@ -437,6 +443,12 @@ class TestProcessEmbedContentResponseUsage:
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json=response_json,
+            resolved_files={
+                "files/clip1": {
+                    "mime_type": "audio/mpeg",
+                    "uri": "https://example.com/clip1",
+                }
+            },
         )
         assert result.usage.prompt_tokens_details.audio_tokens == 64
         assert result.usage.prompt_tokens_details.image_tokens == 0
@@ -477,3 +489,51 @@ class TestProcessEmbedContentResponseUsage:
             custom_llm_provider="vertex_ai",
         )
         assert prompt_cost == pytest.approx(516 * 1.2e-5 + 64 * 6.5e-6)
+
+    def test_image_without_modality_details_uses_image_rate(self):
+        response_json = {
+            "embedding": {"values": [0.1]},
+            "usageMetadata": {
+                "promptTokenCount": 258,
+                "totalTokenCount": 258,
+            },
+        }
+        result = process_embed_content_response(
+            input=IMAGE_DATA_URI,
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens_details.image_tokens == 258
+        assert result.usage.prompt_tokens_details.text_tokens == 0
+
+        prompt_cost, _ = generic_cost_per_token(
+            model=self.MODEL,
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        assert prompt_cost == pytest.approx(258 * 4.5e-7)
+
+    def test_text_without_modality_details_uses_text_rate(self):
+        response_json = {
+            "embedding": {"values": [0.1]},
+            "usageMetadata": {
+                "promptTokenCount": 12,
+                "totalTokenCount": 12,
+            },
+        }
+        result = process_embed_content_response(
+            input="a short caption",
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens_details.text_tokens == 0
+        assert result.usage.prompt_tokens_details.image_tokens == 0
+
+        prompt_cost, _ = generic_cost_per_token(
+            model=self.MODEL,
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        assert prompt_cost == pytest.approx(12 * 2e-7)
