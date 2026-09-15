@@ -1312,6 +1312,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        # gpt-5.4+ occasionally emits more than one `message` output item per turn
+        # (#37299). When a later message item repeats text that was already streamed
+        # (#41109), its deltas are buffered and dropped once the repetition is
+        # confirmed; message items with new text are flushed verbatim.
+        self._streamed_message_text: str = ""
+        self._pending_message_item_id: str | None = None
+        self._pending_message_text: str = ""
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1610,16 +1617,89 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Parse a Responses API streaming chunk and convert to OpenAI format.
 
         Args:
-            chunk: Dict containing the Responses API event chunk
+            chunk: Dict containing the Responses API streaming chunk
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
+        from pydantic import BaseModel
+
+        if isinstance(chunk, BaseModel):
+            return self._parse_event_chunk(chunk.model_dump())
+        if isinstance(chunk, dict):
+            return self._parse_event_chunk(chunk)
         return self._with_stream_scoped_id(
             OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 chunk, tool_call_index_map=self._tool_call_index_map
             )
+        )
+
+    def _parse_event_chunk(self, parsed_chunk: dict) -> "ModelResponseStream":
+        """Per-stream event handling: applies the duplicate message-item suppression
+        from #41109 around the stateless event translation."""
+        raw_event_type = parsed_chunk.get("type")
+        event_type = raw_event_type.value if isinstance(raw_event_type, ResponsesAPIStreamEvents) else raw_event_type
+
+        if event_type == "response.output_item.added":
+            item: Final = parsed_chunk.get("item") or {}
+            if isinstance(item, dict) and item.get("type") == "message" and self._streamed_message_text:
+                # a later message item: buffer its deltas until the item completes so
+                # a verbatim repeat of already-streamed content can be dropped
+                self._pending_message_item_id = item.get("id")
+                self._pending_message_text = ""
+        elif event_type == "response.output_text.delta" and self._pending_message_item_id is not None:
+            delta_text = parsed_chunk.get("delta")
+            if isinstance(delta_text, str):
+                self._pending_message_text += delta_text
+            return self._with_stream_scoped_id(self._empty_chat_chunk())
+
+        flush: Final = self._consume_pending_message_buffer(event_type, parsed_chunk)
+        result = self._with_stream_scoped_id(
+            OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+                parsed_chunk, tool_call_index_map=self._tool_call_index_map
+            )
+        )
+        if event_type == "response.output_text.delta" and self._pending_message_item_id is None:
+            delta_text = parsed_chunk.get("delta")
+            if isinstance(delta_text, str):
+                self._streamed_message_text += delta_text
+        if flush and result.choices:
+            # the buffered text was new content: attach it to this event's chunk, so
+            # a terminal event still carries both the flush and its finish_reason
+            result.choices[0].delta.content = flush
+        return result
+
+    def _consume_pending_message_buffer(self, event_type: object, parsed_chunk: dict) -> str:
+        """Drop a buffered message item that repeats already-streamed text; return
+        the buffered text when it is new content that still has to be emitted."""
+        if self._pending_message_item_id is None:
+            return ""
+        if event_type == "response.output_item.done":
+            done_item = parsed_chunk.get("item") or {}
+            if not isinstance(done_item, dict) or done_item.get("id") != self._pending_message_item_id:
+                return ""  # an unrelated item completed: leave the message buffer alone
+        elif event_type not in ("response.completed", "response.incomplete", "response.failed"):
+            return ""
+        buffered: Final = self._pending_message_text
+        self._pending_message_item_id = None
+        self._pending_message_text = ""
+        if buffered == self._streamed_message_text:
+            return ""  # verbatim repeat of already-streamed content: drop
+        self._streamed_message_text += buffered
+        return buffered
+
+    def _empty_chat_chunk(self) -> "ModelResponseStream":
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=""),
+                    finish_reason=None,
+                )
+            ]
         )
 
     def _with_stream_scoped_id(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
