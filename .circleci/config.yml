@@ -2986,8 +2986,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - provider_replay_harness:
-          filters: *main_branches
+      - provider_replay_harness
       - base_sdk_install:
           filters: *main_branches
       - local_testing_part1:
