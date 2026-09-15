@@ -4,9 +4,10 @@ import functools
 import json
 import logging
 import os
+import sys
 import threading
-from datetime import datetime
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,36 +16,37 @@ import httpx
 import openai
 import pytest
 import respx
-
-
+from fastapi import HTTPException
 
 import litellm
+from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
-from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
-from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, ProxyException, UserAPIKeyAuth
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     FallbackAwareAnthropicMessagesStream,
     _anthropic_stream_commits_now,
+    _anthropic_stream_error_is_gateway_verdict,
     _anthropic_stream_fallback_error_for_raised,
+    _anthropic_stream_forwards_ping_live,
     _anthropic_stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
-    _anthropic_stream_error_is_gateway_verdict,
-    _anthropic_stream_forwards_ping_live,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
-from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, RetryPolicy
+from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -896,6 +898,46 @@ def test_arouter_test_team_model():
     assert result is not None
 
 
+def test_team_model_has_alternatives():
+    def team_deployment(
+        deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False
+    ) -> DeploymentTypedDict:
+        return {
+            "model_name": f"model_name_{team_id}_{deployment_id}",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            "model_info": {
+                "id": deployment_id,
+                "team_id": team_id,
+                "team_public_model_name": public_model_name,
+                "blocked": blocked,
+            },
+        }
+
+    router = litellm.Router(
+        model_list=[
+            team_deployment("team-a-1", "team-a", "shared-model"),
+            team_deployment("team-a-2", "team-a", "shared-model"),
+            team_deployment("team-a-solo", "team-a", "solo-model"),
+            team_deployment("team-b-1", "team-b", "shared-model"),
+            team_deployment("team-c-1", "team-c", "paused-sibling-model"),
+            team_deployment("team-c-paused", "team-c", "paused-sibling-model", blocked=True),
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "plain-1"},
+            },
+        ],
+    )
+
+    assert router.team_model_has_alternatives("team-a-1") is True
+    assert router.team_model_has_alternatives("team-a-2") is True
+    assert router.team_model_has_alternatives("team-a-solo") is False
+    assert router.team_model_has_alternatives("team-b-1") is False
+    assert router.team_model_has_alternatives("team-c-1") is False
+    assert router.team_model_has_alternatives("plain-1") is False
+    assert router.team_model_has_alternatives("missing-deployment") is False
+
+
 def test_arouter_ignore_invalid_deployments():
     """
     Test that router.ignore_invalid_deployments is set to True
@@ -1316,6 +1358,56 @@ def test_add_invalid_provider_to_router():
         )
 
     assert router.pattern_router.patterns == {}
+
+
+@pytest.fixture
+def registered_custom_provider(monkeypatch: pytest.MonkeyPatch) -> str:
+    from litellm import CustomLLM
+    from litellm.types.utils import ModelResponse
+
+    class OnPremLLM(CustomLLM):
+        def completion(self, *args, **kwargs) -> ModelResponse:
+            return litellm.completion(
+                model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], mock_response="served by onprem handler"
+            )
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "test-onprem-llm", "custom_handler": OnPremLLM()}])
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
+    return "test-onprem-llm"
+
+
+def test_router_init_accepts_custom_provider_map_prefix_before_first_completion(registered_custom_provider: str):
+    assert registered_custom_provider not in litellm.provider_list
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "onprem", "litellm_params": {"model": f"{registered_custom_provider}/my-model"}},
+        ],
+    )
+
+    assert router.get_model_list(model_name="onprem")[0]["litellm_params"]["model"] == (
+        f"{registered_custom_provider}/my-model"
+    )
+    response = router.completion(model="onprem", messages=[{"role": "user", "content": "hi"}])
+    assert response.choices[0].message.content == "served by onprem handler"
+
+
+def test_router_add_deployment_accepts_explicit_custom_provider_from_custom_provider_map(
+    registered_custom_provider: str,
+):
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(model_list=[])
+
+    router.add_deployment(
+        Deployment(
+            model_name="onprem",
+            litellm_params={"model": "my-model", "custom_llm_provider": registered_custom_provider},
+        )
+    )
+
+    assert router.get_model_list(model_name="onprem")[0]["litellm_params"]["model"] == "my-model"
 
 
 @pytest.mark.asyncio
@@ -3652,6 +3744,111 @@ async def test_aresponses_streaming_iterator_fallback():
     assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_content_policy_error_event_routes_to_content_policy_fallback():
+    """Regression: a mid-stream content_policy_violation error event never reached
+    content_policy_fallbacks. The iterator raised a bare APIError the wrapper does not
+    catch, and even once wrapped, the MidStreamFallbackError envelope was handed to the
+    fallback dispatch, whose isinstance branch on ContentPolicyViolationError never matched.
+    The stream below is the customer's shape: a raw OpenAI error event with code
+    content_policy_violation, transformed by the real OpenAI config, and the router must
+    call the content_policy_fallbacks target, not the general fallbacks one."""
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k1"}},
+            {
+                "model_name": "content-fallback",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "k2"},
+            },
+            {"model_name": "general-fallback", "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k3"}},
+        ],
+        fallbacks=[{"primary": ["general-fallback"]}],
+        content_policy_fallbacks=[{"primary": ["content-fallback"]}],
+    )
+    error_event = {
+        "type": "error",
+        "sequence_number": 2,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "content_policy_violation",
+            "message": "This content was flagged for possible cybersecurity risk. The response was halted mid-stream.",
+            "param": None,
+        },
+    }
+
+    async def aiter_bytes():
+        yield f"data: {json.dumps(error_event)}\n\n".encode()
+
+    raw_response = MagicMock()
+    raw_response.headers = {}
+    raw_response.aiter_bytes = aiter_bytes
+    logging_obj = MagicMock(spec=LiteLLMLogging)
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.completion_start_time = None
+    source = ResponsesAPIStreamingIterator(
+        response=raw_response,
+        model="gpt-5.4",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    fallback_chunks = [MagicMock(type="response.output_text.delta"), MagicMock(type="response.completed")]
+    fallback_call = AsyncMock(return_value=_AsyncList(fallback_chunks))
+
+    wrapped = await router._aresponses_streaming_iterator(
+        response=source,
+        initial_kwargs={
+            "model": "primary",
+            "stream": True,
+            "input": "Hi",
+            "original_generic_function": fallback_call,
+        },
+    )
+    collected = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+    fallback_call.assert_awaited_once()
+    assert fallback_call.await_args.kwargs["model"] == "gemini/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_unwraps_content_policy_trigger_for_fallback_dispatch():
+    """The fallback dispatch matches on the trigger's own type, so the wrapper must hand it the
+    ContentPolicyViolationError carried inside MidStreamFallbackError, not the envelope."""
+    router = _make_router_with_fallback("openai/gpt-5.4", "openai/gpt-5-mini")
+    content_policy_error = litellm.ContentPolicyViolationError(
+        message="flagged mid-stream", llm_provider="openai", model="openai/gpt-5.4"
+    )
+    src = _make_responses_iterator(
+        chunks=[MagicMock(type="response.created")],
+        error=MidStreamFallbackError(
+            message=str(content_policy_error),
+            model="openai/gpt-5.4",
+            llm_provider="openai",
+            original_exception=content_policy_error,
+            is_pre_first_chunk=True,
+        ),
+        model="openai/gpt-5.4",
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_AsyncList([MagicMock(type="response.completed")])),
+    ) as mock_fallback_utils:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={"model": "openai/gpt-5.4", "stream": True, "input": "Hi"},
+        )
+        [chunk async for chunk in wrapped]
+
+    mock_fallback_utils.assert_awaited_once()
+    assert mock_fallback_utils.await_args.kwargs["e"] is content_policy_error
 
 
 @pytest.mark.asyncio
@@ -8373,6 +8570,106 @@ class TestAdvisorSubCallCooldown:
         assert "dep-1" not in self._cooled_down_ids(router)
 
 
+class TestCallerTimeoutCooldown:
+    """A timeout the caller set (the proxy's `timeout` body field or x-litellm-timeout
+    header) comes back as a 408 whatever the deployment's health, so it must neither
+    count toward allowed_fails nor bench the deployment. A 408 without that marker, or
+    one that arrives before the caller's deadline could have fired, is the provider's
+    and keeps cooling the deployment down."""
+
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "slow-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=120,
+            num_retries=0,
+        )
+
+    def _kwargs(self, marker, started=None, ended=None):
+        exception = litellm.Timeout(message="Request timed out", model="gpt-5.6", llm_provider="openai")
+        return {
+            "exception": exception,
+            "api_call_start_time": started,
+            "end_time": ended,
+            "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}, **marker},
+        }
+
+    def _fail_count(self, router):
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        return get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["dep-1"], parent_otel_span=None)
+        return [entry[0] for entry in active]
+
+    @pytest.mark.asyncio
+    async def test_caller_timeout_408_leaves_failure_counter_and_cooldown_untouched(self):
+        router = self._router()
+        started = datetime.now()
+        ended = started + timedelta(seconds=2.05)
+        kwargs = self._kwargs({"client_side_timeout": True, "timeout": 2}, started=started, ended=ended)
+        assert router.deployment_callback_on_failure(kwargs, None, started, ended) is False
+        assert self._fail_count(router) == 0
+        assert self._cooled_down_ids(router) == []
+
+    @pytest.mark.asyncio
+    async def test_provider_timeout_408_still_counts_and_cools_down(self):
+        router = self._router()
+        now = datetime.now()
+        assert router.deployment_callback_on_failure(self._kwargs({}), None, now, now) is True
+        assert self._fail_count(router) == 1
+        assert self._cooled_down_ids(router) == ["dep-1"]
+
+    @pytest.mark.asyncio
+    async def test_provider_408_before_caller_deadline_still_counts_and_cools_down(self):
+        """The marker only says the caller configured a timeout. A 408 that comes back
+        well before that deadline was raised by the provider, so it is a real health
+        signal and must not hide behind the caller's timeout."""
+        router = self._router()
+        started = datetime.now()
+        ended = started + timedelta(seconds=0.4)
+        kwargs = self._kwargs({"client_side_timeout": True, "timeout": 30}, started=started, ended=ended)
+        assert router.deployment_callback_on_failure(kwargs, None, started, ended) is True
+        assert self._fail_count(router) == 1
+        assert self._cooled_down_ids(router) == ["dep-1"]
+
+    @pytest.mark.asyncio
+    async def test_caller_timeout_marker_reaches_failure_callback_end_to_end(self):
+        router = self._router()
+        seen = []
+        recorded = threading.Event()
+
+        def record(kwargs, completion_response, start_time, end_time):
+            seen.append(kwargs)
+            recorded.set()
+
+        litellm.failure_callback.append(record)
+        try:
+            with pytest.raises(litellm.Timeout):
+                await router.acompletion(
+                    model="slow-model",
+                    messages=[{"role": "user", "content": "hello"}],
+                    mock_timeout=True,
+                    timeout=0.001,
+                    client_side_timeout=True,
+                )
+            assert await asyncio.to_thread(recorded.wait, 5)
+        finally:
+            litellm.failure_callback.remove(record)
+        assert seen[0]["litellm_params"]["client_side_timeout"] is True
+        assert self._fail_count(router) == 0
+        assert self._cooled_down_ids(router) == []
+
+
 def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     from litellm.router import _stream_chunks_have_generated_content
     from litellm.types.utils import (
@@ -10921,6 +11218,66 @@ async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypa
     ]
 
 
+def _failing_group_with_healthy_fallback_router(num_retries: int) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "broken-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "healthy-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake", "mock_response": "ok"},
+            },
+        ],
+        fallbacks=[{"broken-group": ["healthy-group"]}],
+        num_retries=num_retries,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cap, planted_count, hop_refused",
+    [(2, None, True), (4, None, False), (2, -100, True)],
+    ids=["cap-spent-before-the-hop", "cap-not-reached-by-the-hop", "planted-negative-count-does-not-lift-the-cap"],
+)
+async def test_num_retries_per_request_counts_retries_across_fallback_hops(
+    monkeypatch: pytest.MonkeyPatch, cap: int, planted_count: int | None, hop_refused: bool
+) -> None:
+    """num_retries_per_request caps the retries of one request, fallback hops included. Each hop starts a
+    fresh per-hop attempted_retries at zero, so a cap read from that counter let every hop retry from zero
+    and a request could spend far more retries than the cap allows. A caller who plants a negative count
+    in the request metadata must not push the cap further away either."""
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    router = _failing_group_with_healthy_fallback_router(num_retries=1)
+    recorder = _FallbackAttemptRecorder()
+    litellm.callbacks.append(recorder)
+    try:
+        metadata = {} if planted_count is None else {"request_retry_count": planted_count}
+        request = router.acompletion(
+            model="broken-group", messages=[{"role": "user", "content": "hi"}], metadata=metadata
+        )
+        if not hop_refused:
+            assert (await request).choices[0].message.content == "ok"
+            return
+        with pytest.raises(litellm.InternalServerError):
+            await request
+    finally:
+        litellm.callbacks.remove(recorder)
+
+    assert recorder.failed_targets == ["healthy-group"]
+    hop_refusals = [
+        record["attempted_retries"]
+        for record in recorder.breadcrumbs_per_target[0]
+        if record["model_group"] == "healthy-group" and "Max retries per request hit!" in record["exception_string"]
+    ]
+    assert hop_refusals == [0, 1]
+
+
 @pytest.mark.asyncio
 async def test_fallback_traceback_stays_available_at_debug_level():
     """Dropping the stack from the ERROR line is only safe because the fallback path still
@@ -11847,6 +12204,83 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
     assert result is not None
     assert result.supported_reasoning_efforts is None
 
+
+
+@pytest.mark.parametrize(
+    "model,provider,expected",
+    [
+        ("anthropic/claude-opus-5", None, True),
+        ("claude-opus-4-8", None, True),
+        ("anthropic/claude-opus-4-7", None, False),
+        ("anthropic/claude-opus-4-6", None, False),
+        ("anthropic/claude-sonnet-5", None, False),
+        ("anthropic/off-map-opus", None, False),
+        ("vertex_ai/claude-opus-5", None, False),
+        ("bedrock/claude-opus-5", None, False),
+        ("claude-opus-5", "vertex_ai", False),
+        ("claude-opus-5", "bedrock", False),
+    ],
+)
+@pytest.mark.parametrize("operator_flag", [True, False])
+def test_model_group_info_fast_mode_uses_exact_provider_catalog(
+    local_model_cost_map: None, model: str, provider: str | None, expected: bool, operator_flag: bool
+) -> None:
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": model, "custom_llm_provider": provider, "api_key": "fake-key"},
+        "model_info": {"supports_fast_mode": operator_flag},
+    }])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is expected
+
+
+@pytest.mark.parametrize("flag", [None, False, "true", 1])
+def test_model_group_info_fast_mode_fails_closed_without_explicit_boolean(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, flag: object
+) -> None:
+    entry: Final = {key: value for key, value in litellm.model_cost["claude-opus-5"].items()
+                   if key != "supports_fast_mode"}
+    if flag is not None:
+        entry["supports_fast_mode"] = flag
+    monkeypatch.setitem(litellm.model_cost, "claude-opus-5", entry)
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "fake-key"},
+        "model_info": {"supports_fast_mode": True},
+    }])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is False
+
+
+@pytest.mark.parametrize("other_model,expected", [
+    ("anthropic/claude-opus-4-8", True),
+    ("anthropic/claude-opus-4-7", False),
+    ("anthropic/off-map-opus", False),
+    ("vertex_ai/claude-opus-5", False),
+    ("bedrock/claude-opus-5", False),
+])
+@pytest.mark.parametrize("reverse", [True, False])
+def test_model_group_info_fast_mode_requires_every_deployment(
+    local_model_cost_map: None, other_model: str, expected: bool, reverse: bool
+) -> None:
+    models: Final = (other_model, "anthropic/claude-opus-5") if reverse else (
+        "anthropic/claude-opus-5", other_model
+    )
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": model, "api_key": "fake-key"},
+    } for model in models])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is expected
 
 
 def test_model_group_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
@@ -15766,3 +16200,288 @@ async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warni
     assert binding is None
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_model_name_colliding_with_a_deployment_id_still_load_balances_the_group():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "k", "weight": 0, "mock_response": "A"},
+                "model_info": {"id": "gpt-5-nano"},
+            },
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k", "weight": 1, "mock_response": "B"},
+                "model_info": {"id": "gpt-5-mini-dep"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    by_group = await router.acompletion(model="gpt-5-nano", messages=[{"role": "user", "content": "hi"}])
+    by_id = await router.acompletion(model="gpt-5-mini-dep", messages=[{"role": "user", "content": "hi"}])
+
+    assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
+    assert by_group.choices[0].message.content == "B"
+    assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+
+
+def test_sync_completion_runs_pre_call_checks_for_a_model_name_colliding_with_a_deployment_id():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "k", "weight": 0, "mock_response": "A"},
+                "model_info": {"id": "gpt-5-nano"},
+            },
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k", "weight": 1, "mock_response": "B"},
+                "model_info": {"id": "gpt-5-mini-dep"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    with patch.object(router, "routing_strategy_pre_call_checks") as pre_call_checks:
+        by_group = router.completion(model="gpt-5-nano", messages=[{"role": "user", "content": "hi"}])
+        assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
+        assert pre_call_checks.call_args.kwargs["deployment"]["model_info"]["id"] == "gpt-5-mini-dep"
+
+        by_id = router.completion(model="gpt-5-mini-dep", messages=[{"role": "user", "content": "hi"}])
+        assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
+
+
+class TestMemberAutoRouterInference:
+    @pytest.fixture(autouse=True)
+    def runtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+        self.cache = UserApiKeyCache()
+        self.team = LiteLLM_TeamTable(
+            team_id="router-team", models=["member-router", "permitted-model"],
+            members_with_roles=[Member(user_id="router-member", role="user")],
+        )
+        self.actor = UserAPIKeyAuth(
+            user_id="router-member", team_id="router-team", user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["member-router", "permitted-model"], api_key="test-key-hash", config={"timeout": 60},
+        )
+        self.database = SimpleNamespace(db=SimpleNamespace(
+            litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
+            litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+            litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
+        ))
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
+        monkeypatch.setattr(proxy_server, "prisma_client", self.database)
+
+    @staticmethod
+    def _marker(*, member: bool = True, classifier: bool = False) -> dict[str, object]:
+        target: Final = "permitted-model" if member else "restricted-model"
+        return {
+            "model_name": "model_name_router-team_member-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router", "complexity_router_default_model": target,
+                "complexity_router_config": {
+                    "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), target), "adaptive": False,
+                    **({"classifier_type": "llm", "classifier_llm_config": {"model": target}} if classifier else {}),
+                },
+                "tags": ["member" if member else "admin"], "timeout": 13.0 if member else 29.0,
+            },
+            "model_info": {
+                "team_id": "router-team", "team_public_model_name": "member-router", "member_auto_router": member,
+            },
+        }
+
+    @classmethod
+    def _router(cls, *markers: dict[str, object]) -> Router:
+        return Router(model_list=[
+            *(markers or (cls._marker(),)),
+            {"model_name": "permitted-model", "litellm_params": {
+                "model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://api.openai.com/v1",
+            }},
+            {"model_name": "restricted-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"}},
+        ])
+
+    def _request(
+        self, *, actor: UserAPIKeyAuth | None = None, metadata_name: str = "metadata", tag: str = "member",
+    ) -> dict[str, object]:
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        return LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+            data={metadata_name: {"tags": [tag]}, **({"metadata": {"user_api_key_auth": {"user_role": "proxy_admin"}}}
+                  if metadata_name == "litellm_metadata" else {})},
+            user_api_key_dict=actor or self.actor, _metadata_variable_name=metadata_name,
+        )
+
+    async def _route(
+        self, router: Router, request: dict[str, object] | None = None, model: str = "member-router",
+    ) -> PreRoutingHookResponse:
+        response: Final = await router.async_pre_routing_hook(
+            model=model, request_kwargs=request if request is not None else self._request(),
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+        assert response is not None
+        return response
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("metadata_name", ("metadata", "litellm_metadata"))
+    async def test_cached_roster_revocation_blocks_classifier_and_session_rebinding(
+        self, metadata_name: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm.proxy.auth.auth_checks import delete_cache_team_object
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        router: Final = self._router(self._marker(classifier=True))
+        classify: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(200, json={
+            "id": "classifier", "object": "chat.completion", "created": 0, "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "message": {"content": '{"tier":"SIMPLE"}', "role": "assistant"},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+        request: Final = {**self._request(metadata_name=metadata_name), "proxy_server_request": {"headers": {
+            "x-claude-code-session-id": "member-router-session", "x-app": "cli",
+        }}}
+        first: Final = await self._route(router, request)
+        assert first.model == "permitted-model" and first.routing_decision is not None
+        assert first.routing_decision["cause"] == "llm_classifier"
+        assert (await self._route(router, request)).model == "permitted-model"
+        assert self.database.db.litellm_teamtable.find_unique.await_count == 1
+        assert self.database.db.litellm_teammembership.find_unique.await_count == 1
+        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(update={"members_with_roles": []})
+        await delete_cache_team_object(
+            team_id=self.team.team_id, team_alias=None, user_api_key_cache=self.cache, proxy_logging_obj=None,
+        )
+        with pytest.raises(HTTPException, match="no longer a member"):
+            await self._route(router, request)
+        rebound: Final = {**request, "proxy_server_request": {"headers": {
+            "x-claude-code-session-id": "member-router-session", "x-app": "cli", "x-claude-code-agent-id": "subagent",
+        }}}
+        with pytest.raises(HTTPException, match="no longer a member"):
+            await self._route(router, rebound, model="restricted-model")
+        assert classify.call_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", ("forged", "blocked", "deleted", "unavailable", "empty-user"))
+    async def test_member_router_fails_closed(self, state: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+
+        request: Final = {"metadata": {"user_api_key_team_id": "router-team", "user_api_key_auth": {
+            "team_id": "router-team", "user_role": "proxy_admin",
+        }}} if state == "forged" else self._request(actor=self.actor.model_copy(
+            update={"user_id": ""} if state == "empty-user" else {},
+        ))
+        self.database.db.litellm_teamtable.find_unique.return_value = (
+            None if state == "deleted" else self.team.model_copy(update={"blocked": state == "blocked"})
+        )
+        if state == "unavailable":
+            monkeypatch.setattr(proxy_server, "prisma_client", None)
+        with pytest.raises(HTTPException) as error:
+            await self._route(self._router(), request)
+        assert error.value.status_code == (503 if state == "unavailable" else 403)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("user_id,role", [(None, LitellmUserRoles.INTERNAL_USER), ("admin", LitellmUserRoles.PROXY_ADMIN)])
+    async def test_service_key_and_admin_preserve_runtime_access(self, user_id: str | None, role: LitellmUserRoles) -> None:
+        assert (await self._route(self._router(), self._request(
+            actor=self.actor.model_copy(update={"user_id": user_id, "user_role": role}),
+        ))).model == "permitted-model"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("ceiling", ("team", "key", "member", "organization", "project"))
+    async def test_runtime_dependency_ceilings_use_cached_auth_state(self, ceiling: str) -> None:
+        from litellm.models.budget import LiteLLM_BudgetTable
+        from litellm.models.organization import LiteLLM_OrganizationTable
+        from litellm.models.team_membership import LiteLLM_TeamMembership
+        from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+        from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(update={
+            "models": ["member-router"] if ceiling == "team" else self.team.models,
+            "organization_id": "router-org" if ceiling == "organization" else None,
+        })
+        if ceiling == "member":
+            await self.cache.async_set_cache(
+                key=team_membership_reservation_cache_key(user_id="router-member", team_id="router-team"),
+                value=LiteLLM_TeamMembership(user_id="router-member", team_id="router-team",
+                    litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["restricted-model"])),
+                model_type=LiteLLM_TeamMembership,
+            )
+        elif ceiling == "organization":
+            await self.cache.async_set_cache(
+                key="org_id:router-org", value=LiteLLM_OrganizationTable(
+                    organization_id="router-org", budget_id="org-budget", created_by="admin", updated_by="admin",
+                    models=["restricted-model"],
+                ), model_type=LiteLLM_OrganizationTable,
+            )
+        elif ceiling == "project":
+            await self.cache.async_set_cache(
+                key="project_id:router-project", value=LiteLLM_ProjectTableCachedObj(
+                    project_id="router-project", team_id="router-team", models=["restricted-model"],
+                ), model_type=LiteLLM_ProjectTableCachedObj,
+            )
+        with pytest.raises(ProxyException, match="not allowed to access model"):
+            await self._route(self._router(), self._request(actor=self.actor.model_copy(update={
+                "models": ["member-router"] if ceiling == "key" else self.actor.models,
+                "project_id": "router-project" if ceiling == "project" else None,
+            })))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("group_owner", ("team", "key"))
+    async def test_access_group_grants_are_cached_and_revoked(self, group_owner: str) -> None:
+        from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+
+        group: Final = LiteLLM_AccessGroupTable(
+            access_group_id="router-group", access_group_name="Router targets", access_model_names=["permitted-model"],
+        )
+        self.database.db.litellm_accessgrouptable.find_unique.return_value = group
+        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(update={
+            "models": ["member-router"] if group_owner == "team" else self.team.models,
+            "access_group_ids": ["router-group"] if group_owner == "team" else [],
+        })
+        request: Final = self._request(actor=self.actor.model_copy(update={
+            "models": ["member-router"] if group_owner == "key" else self.actor.models,
+            "access_group_ids": ["router-group"] if group_owner == "key" else [],
+        }))
+        router: Final = self._router()
+        assert (await self._route(router, request)).model == "permitted-model"
+        assert (await self._route(router, request)).model == "permitted-model"
+        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
+        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(update={"access_model_names": []})
+        await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
+        with pytest.raises(ProxyException, match="not allowed to access model"):
+            await self._route(router, request)
+        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_tagged_marker_owns_authorization_and_forwarded_parameters(self) -> None:
+        router: Final = self._router(self._marker(member=False), self._marker())
+        request: Final = self._request()
+        selected: Final = router._selected_strategy_marker_deployment(
+            model="model_name_router-team_member-router", strategy_tags=("member",), request_kwargs=request,
+        )
+        assert selected is not None and selected["model_info"]["member_auto_router"] is True
+        assert (await self._route(router, request)).model == "permitted-model"
+        assert request["timeout"] == 13.0
+        await self.cache.async_set_cache(
+            key="team_id:router-team", model_type=LiteLLM_TeamTable,
+            value=self.team.model_copy(update={"models": ["member-router"]}),
+        )
+        with pytest.raises(ProxyException, match="not allowed to access model"):
+            await self._route(router, self._request())
+        self.database.db.litellm_teamtable.find_unique.reset_mock()
+        admin: Final = self._request(tag="admin")
+        assert (await self._route(router, admin)).model == "restricted-model"
+        assert admin["timeout"] == 29.0
+        self.database.db.litellm_teamtable.find_unique.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sdk_router_does_not_import_proxy_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        router: Final = self._router(self._marker(member=False))
+        monkeypatch.setitem(sys.modules, "fastapi", None)
+        monkeypatch.delitem(sys.modules, "litellm.proxy.auth.auto_router_checks", raising=False)
+        assert (await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})).model == "restricted-model"

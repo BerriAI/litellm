@@ -89,8 +89,8 @@ def test_ensure_trace_bridge_reports_failed_rebuild(tmp_path: Final, monkeypatch
     assert "boom" in message
 
 
-def test_ensure_trace_bridge_flags_missing_trace_feature_without_rebuild(
-    tmp_path: Final, monkeypatch: pytest.MonkeyPatch
+def test_ensure_trace_bridge_rebuilds_when_trace_feature_is_missing(
+    tmp_path: Final, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     native: Final = tmp_path / "_native.abi3.so"
     native.write_bytes(b"")
@@ -105,12 +105,17 @@ def test_ensure_trace_bridge_flags_missing_trace_feature_without_rebuild(
         state.rebuilt = True
         return True, ""
 
+    def fake_get_native_bridge() -> SimpleNamespace:
+        assert state.rebuilt
+        return SimpleNamespace(_trace=object())
+
     monkeypatch.setattr(native_build, "_native_module_path", lambda: native)
     monkeypatch.setattr(native_build, "_rebuild", fake_rebuild)
-    monkeypatch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=None))
+    monkeypatch.setattr(native_build, "_installed_bridge_has_trace", lambda repo_root: False)
+    monkeypatch.setattr(native_build, "get_native_bridge", fake_get_native_bridge)
 
     message: Final = native_build.ensure_trace_bridge(tmp_path)
 
-    assert message is not None
-    assert "_trace" in message
-    assert state.rebuilt is False
+    assert message is None
+    assert state.rebuilt is True
+    assert "Rebuilding native Rust bridge" in capsys.readouterr().out

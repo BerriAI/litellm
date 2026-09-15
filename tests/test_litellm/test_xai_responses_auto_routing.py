@@ -204,6 +204,17 @@ class TestXAIResponsesAutoRouting:
         assert model_info.get("mode") == "responses"
         assert updated_model == model
 
+    def test_responses_api_bridge_check_with_web_search_options_on_unmapped_model(self):
+        """web search must reach /responses even for a model missing from the cost map, chat returns 410"""
+        model_info, updated_model = responses_api_bridge_check(
+            model="grok-not-in-cost-map",
+            custom_llm_provider="xai",
+            web_search_options={"search_context_size": "medium"},
+        )
+
+        assert model_info.get("mode") == "responses"
+        assert updated_model == "grok-not-in-cost-map"
+
     @patch("litellm.completion_extras.responses_api_bridge.completion")
     def test_completion_with_tools_routes_to_responses_api(
         self, mock_responses_completion

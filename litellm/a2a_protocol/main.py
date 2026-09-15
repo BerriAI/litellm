@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -507,7 +508,7 @@ async def asend_message(
         prompt_tokens,
         completion_tokens,
         _,
-    ) = A2ARequestUtils.calculate_usage_from_request_response(
+    ) = await asyncify(A2ARequestUtils.calculate_usage_from_request_response)(
         request=request,
         response_dict=response_dict,
     )

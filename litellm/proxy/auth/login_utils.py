@@ -270,6 +270,7 @@ async def authenticate_user(
 
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
+                llm_router=None,
                 request_type="key",
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
@@ -347,6 +348,7 @@ async def authenticate_user(
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
+                    llm_router=None,
                     request_type="key",
                     **{
                         "user_role": user_role,

@@ -124,10 +124,7 @@ class RecordingCallback(CustomLogger):
         if isinstance(value, Mapping):
             if any(not isinstance(map_key, str) for map_key in value):
                 raise TypeError("callback kwarg mappings must use string keys")
-            return {
-                map_key: self._normalized_kwargs(map_value, map_key)
-                for map_key, map_value in value.items()
-            }
+            return {map_key: self._normalized_kwargs(map_value, map_key) for map_key, map_value in value.items()}
         if isinstance(value, (list, tuple)):
             return [self._normalized_kwargs(item) for item in value]
         raise TypeError(f"unsupported callback kwarg type: {type(value)}")
