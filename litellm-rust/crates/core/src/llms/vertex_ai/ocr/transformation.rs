@@ -2,7 +2,6 @@ use super::common_utils::validate_destination;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
-use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
@@ -25,14 +24,14 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<reqwest::Request, crate::ocr::Error> {
         validate_destination(&request.connection)?;
         let params = self.map_ocr_params(&request.model, &request.optional_params);
         let config = VertexConfig::from_sourced_optional_params(
             &request.optional_params,
             &request.input_sources,
         )
-        .map_err(Error::from)?;
+        .map_err(crate::ocr::Error::from)?;
         let authentication = client
             .vertex_auth()
             .validate_environment(
@@ -42,7 +41,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
                 &credential_env,
             )
             .await
-            .map_err(Error::from)?;
+            .map_err(crate::ocr::Error::from)?;
         let location = vertex::get_vertex_ai_location(&config, &credential_env)
             .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         let url = get_complete_url(
@@ -76,7 +75,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: MistralOcrResponse,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         MistralOCRConfig.transform_ocr_response(request, response)
     }
 }
@@ -86,7 +85,7 @@ fn get_complete_url(
     project: &str,
     location: &str,
     model: &str,
-) -> Result<String, Error> {
+) -> Result<String, crate::ocr::Error> {
     validate_location(location)?;
     let default_base = format!("https://{location}-aiplatform.googleapis.com");
     let base = api_base
@@ -109,12 +108,12 @@ fn get_complete_url(
             ])
         })
         .map(|url| url.into_string())
-        .map_err(|_| Error::RequestField {
+        .map_err(|_| crate::ocr::Error::RequestField {
             path: "api_base".into(),
         })
 }
 
-fn validate_location(location: &str) -> Result<(), Error> {
+fn validate_location(location: &str) -> Result<(), crate::ocr::Error> {
     let valid = !location.is_empty()
         && location
             .bytes()
@@ -130,7 +129,7 @@ fn validate_location(location: &str) -> Result<(), Error> {
     if valid {
         return Ok(());
     }
-    Err(Error::RequestField {
+    Err(crate::ocr::Error::RequestField {
         path: "vertex_location".into(),
     })
 }

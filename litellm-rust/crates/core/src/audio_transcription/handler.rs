@@ -1,6 +1,5 @@
 use serde_json::Value;
 
-use crate::audio_transcription::Error;
 use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
@@ -8,9 +7,10 @@ use super::types::ProviderAudioTranscriptionRequest;
 
 pub async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
-) -> Result<Value, Error> {
-    let body = serde_json::to_vec(&request.body)
-        .map_err(|error| Error::InvalidRequest(format!("invalid audio request body: {error}")))?;
+) -> Result<Value, super::Error> {
+    let body = serde_json::to_vec(&request.body).map_err(|error| {
+        super::Error::InvalidRequest(format!("invalid audio request body: {error}"))
+    })?;
     let headers = signed_headers(&request, &body).await?;
     let mut request_builder = http_client().post(&request.url).body(body);
     for (key, value) in headers {
@@ -19,22 +19,22 @@ pub async fn execute_audio_transcription_provider_call(
     if let Some(duration) = request.timeout {
         request_builder = request_builder.timeout(duration);
     }
-    let response = http_request(request_builder)
-        .await
-        .map_err(|error| Error::Transport(crate::transport::Error::Network(error.to_string())))?;
+    let response = http_request(request_builder).await.map_err(|error| {
+        super::Error::Transport(crate::transport::Error::Network(error.to_string()))
+    })?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| Error::Transport(crate::transport::Error::Network(error.to_string())))?;
+    let text = response.text().await.map_err(|error| {
+        super::Error::Transport(crate::transport::Error::Network(error.to_string()))
+    })?;
     if !status.is_success() {
-        return Err(Error::Transport(crate::transport::Error::Http {
+        return Err(super::Error::Transport(crate::transport::Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
         }));
     }
-    let response_json = serde_json::from_str(&text)
-        .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
+    let response_json = serde_json::from_str(&text).map_err(|error| {
+        super::Error::InvalidResponse(format!("invalid audio response JSON: {error}"))
+    })?;
     Ok(request
         .config
         .transform_transcription_response(&request.model, response_json)?
@@ -44,7 +44,7 @@ pub async fn execute_audio_transcription_provider_call(
 async fn signed_headers(
     request: &ProviderAudioTranscriptionRequest,
     body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, super::Error> {
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 

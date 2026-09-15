@@ -229,7 +229,6 @@ fn epoch_seconds() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messages::Error;
     use std::pin::Pin;
     use std::sync::Mutex;
 
@@ -255,9 +254,9 @@ mod tests {
     }
 
     impl CallLifecycleHooks<String, String, String> for RecordingHooks {
-        type Error = Error;
-        type PreCallFuture<'a> = BoxFuture<'a, Result<String, Error>>;
-        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, Error>>;
+        type Error = crate::messages::Error;
+        type PreCallFuture<'a> = BoxFuture<'a, Result<String, crate::messages::Error>>;
+        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, crate::messages::Error>>;
         type SuccessFuture<'a> = BoxFuture<'a, ()>;
         type FailureFuture<'a> = BoxFuture<'a, ()>;
 
@@ -299,7 +298,7 @@ mod tests {
         fn async_log_failure_event<'a>(
             &'a self,
             _context: &'a CallLifecycleContext,
-            _error: &'a Error,
+            _error: &'a crate::messages::Error,
             _timing: &'a CallLifecycleTiming,
         ) -> Self::FailureFuture<'a> {
             Box::pin(async move {
@@ -309,9 +308,9 @@ mod tests {
     }
 
     impl CallLifecycleHooks<RecordingRequest, String, String> for RecordingHooks {
-        type Error = Error;
-        type PreCallFuture<'a> = BoxFuture<'a, Result<RecordingRequest, Error>>;
-        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, Error>>;
+        type Error = crate::messages::Error;
+        type PreCallFuture<'a> = BoxFuture<'a, Result<RecordingRequest, crate::messages::Error>>;
+        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, crate::messages::Error>>;
         type SuccessFuture<'a> = BoxFuture<'a, ()>;
         type FailureFuture<'a> = BoxFuture<'a, ()>;
 
@@ -351,7 +350,7 @@ mod tests {
         fn async_log_failure_event<'a>(
             &'a self,
             _context: &'a CallLifecycleContext,
-            _error: &'a Error,
+            _error: &'a crate::messages::Error,
             _timing: &'a CallLifecycleTiming,
         ) -> Self::FailureFuture<'a> {
             Box::pin(async move {
@@ -389,9 +388,9 @@ mod tests {
                 "request".to_string(),
                 &hooks,
                 |_request| async move {
-                    Err::<String, Error>(Error::Transport(crate::transport::Error::Network(
-                        "provider down".to_string(),
-                    )))
+                    Err::<String, crate::messages::Error>(crate::messages::Error::Transport(
+                        crate::transport::Error::Network("provider down".to_string()),
+                    ))
                 },
             )
             .await
@@ -399,7 +398,7 @@ mod tests {
 
         assert_eq!(
             error,
-            Error::Transport(crate::transport::Error::Network(
+            crate::messages::Error::Transport(crate::transport::Error::Network(
                 "provider down".to_string()
             ))
         );

@@ -1,6 +1,5 @@
 use std::sync::OnceLock;
 
-use crate::ocr::Error;
 use crate::ocr::types::OcrConnection;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
@@ -8,7 +7,7 @@ use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 pub(super) async fn resolve_entra(
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Option<Sourced<String>>, Error> {
+) -> Result<Option<Sourced<String>>, crate::ocr::Error> {
     static SERVICE: OnceLock<AzureAuthService> = OnceLock::new();
     SERVICE
         .get_or_init(AzureAuthService::default)
@@ -25,13 +24,13 @@ pub(super) async fn resolve_entra(
                 Sourced::new(value, source)
             })
         })
-        .map_err(Error::from)
+        .map_err(crate::ocr::Error::from)
 }
 
 pub(super) fn validate_destination(
     connection: &OcrConnection,
     credential_source: InputSource,
-) -> Result<(), Error> {
+) -> Result<(), crate::ocr::Error> {
     if connection.api_base.is_some()
         && connection.api_base_source == InputSource::Request
         && credential_source != InputSource::Request

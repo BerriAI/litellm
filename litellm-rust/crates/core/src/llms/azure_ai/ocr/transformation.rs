@@ -2,7 +2,6 @@ use crate::constants::AZURE_AI_OCR_PATH;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
-use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
@@ -28,7 +27,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.model, &request.optional_params);
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
@@ -36,7 +35,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
                 &request.optional_params,
                 &request.input_sources,
             )
-            .map_err(Error::from)?
+            .map_err(crate::ocr::Error::from)?
         };
         let url = get_complete_url(request.connection.api_base.as_deref(), &credential_env)?;
         let headers = validate_environment(&request.connection, &config, &credential_env).await?;
@@ -65,7 +64,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: MistralOcrResponse,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         MistralOCRConfig.transform_ocr_response(request, response)
     }
 }
@@ -73,15 +72,15 @@ impl BaseOcrConfig for AzureAIOCRConfig {
 fn get_complete_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, crate::ocr::Error> {
     let base = nonblank(api_base.map(str::to_string))
         .or_else(|| nonblank(env_lookup(AZURE_AI_API_BASE_ENV)))
-        .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter".into())))?;
+        .ok_or_else(|| crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter".into())))?;
     let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
     ApiUrl::parse(&base)
         .and_then(|url| url.complete_path(&path))
         .map(|url| url.into_string())
-        .map_err(|_| Error::RequestField {
+        .map_err(|_| crate::ocr::Error::RequestField {
             path: "api_base".into(),
         })
 }
@@ -90,7 +89,7 @@ pub(super) async fn validate_environment(
     connection: &OcrConnection,
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, crate::ocr::Error> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
         if config.azure_ad_token_provider.is_some() {
             super::common_utils::resolve_entra(config, env_lookup).await?;
@@ -110,7 +109,7 @@ pub(super) async fn validate_environment(
     }
     let key = super::common_utils::resolve_entra(config, env_lookup)
         .await?
-        .ok_or(Error::MissingAzureAiCredentials)?;
+        .ok_or(crate::ocr::Error::MissingAzureAiCredentials)?;
     super::common_utils::validate_destination(connection, key.source())?;
     Ok(bearer_headers(connection, key.value()))
 }

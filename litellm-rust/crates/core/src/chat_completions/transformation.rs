@@ -1,4 +1,3 @@
-use crate::chat_completions::Error;
 use serde_json::Value;
 
 use super::types::{
@@ -34,7 +33,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Result<String, super::Error>;
 
     fn auth(
         &self,
@@ -42,7 +41,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error>;
+    ) -> Result<ChatCompletionsAuth, super::Error>;
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[("content-type", "application/json")]
@@ -80,13 +79,13 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         messages: Vec<ChatMessage>,
         optional_params: OpaqueParams,
-    ) -> Result<ProviderChatRequestData, Error>;
+    ) -> Result<ProviderChatRequestData, super::Error>;
 
     fn transform_response(
         &self,
         model: &str,
         response: ProviderChatResponseData,
-    ) -> Result<ChatCompletionsResponse, Error>;
+    ) -> Result<ChatCompletionsResponse, super::Error>;
 }
 
 pub fn unsupported_param(optional_params: &OpaqueParams) -> Option<Unsupported> {

@@ -1,9 +1,8 @@
 use std::marker::PhantomData;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
-use thiserror::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum ModelNameError {
     #[error("model name cannot be empty")]
     EmptyModel,
@@ -75,7 +74,7 @@ impl<'de, N: ModelNamespace> Deserialize<'de> for ProviderModel<N> {
         let value = String::deserialize(deserializer)?;
         RoutedModel::new(&value)
             .and_then(RoutedModel::into_provider::<N>)
-            .map_err(D::Error::custom)
+            .map_err(<D::Error as serde::de::Error>::custom)
     }
 }
 

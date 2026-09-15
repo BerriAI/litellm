@@ -28,7 +28,6 @@ impl From<reqwest::Error> for Error {
 
 #[cfg(test)]
 mod tests {
-    use super::Error;
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
         let error = reqwest::Client::builder()
@@ -39,8 +38,8 @@ mod tests {
             .send()
             .await
             .expect_err("invalid port");
-        let error = Error::from_reqwest_before_dispatch(error);
-        assert!(matches!(error, Error::Connect(_)));
+        let error = crate::transport::Error::from_reqwest_before_dispatch(error);
+        assert!(matches!(error, crate::transport::Error::Connect(_)));
         assert!(!error.to_string().contains("secret"));
         assert!(!error.to_string().contains("private"));
     }
@@ -69,8 +68,8 @@ mod tests {
         let error = response.expect_err("server does not respond");
         assert!(error.is_timeout());
         assert!(matches!(
-            Error::from_reqwest_before_dispatch(error),
-            Error::Network(_)
+            crate::transport::Error::from_reqwest_before_dispatch(error),
+            crate::transport::Error::Network(_)
         ));
     }
 }

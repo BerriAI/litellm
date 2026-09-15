@@ -1,4 +1,3 @@
-use crate::messages::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -49,7 +48,7 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<String, crate::messages::Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
@@ -57,8 +56,8 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        resolve_anthropic_api_key(api_key, env_lookup).map_err(Error::from)
+    ) -> Result<String, crate::messages::Error> {
+        resolve_anthropic_api_key(api_key, env_lookup).map_err(crate::messages::Error::from)
     }
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {

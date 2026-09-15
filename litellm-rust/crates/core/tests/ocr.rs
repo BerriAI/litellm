@@ -686,7 +686,7 @@ async fn missing_host_result_preserves_pending_operation() {
 async fn read_bounded_response(
     response: Vec<u8>,
     limit: usize,
-) -> Result<bytes::Bytes, super::Error> {
+) -> Result<bytes::Bytes, crate::ocr::Error> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -715,8 +715,6 @@ async fn read_bounded_response(
 
 #[tokio::test]
 async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_overflow() {
-    use super::Error;
-
     for response in [
         "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabcdefgh",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n4\r\nefgh\r\n0\r\n\r\n",
@@ -734,7 +732,7 @@ async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_over
     ] {
         assert!(matches!(
             read_bounded_response(response.as_bytes().to_vec(), 8).await,
-            Err(Error::TooLarge { limit: 8 })
+            Err(crate::ocr::Error::TooLarge { limit: 8 })
         ));
     }
 }
@@ -753,7 +751,7 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
             .await
             .unwrap_err();
         match error {
-            super::Error::Transport(crate::transport::Error::Http { status, body }) => {
+            crate::ocr::Error::Transport(crate::transport::Error::Http { status, body }) => {
                 assert_eq!(status, 429);
                 assert_eq!(
                     body,

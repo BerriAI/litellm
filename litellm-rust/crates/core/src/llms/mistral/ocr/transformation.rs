@@ -3,7 +3,6 @@ use serde_json::{Map, Value};
 
 use crate::constants::MISTRAL_OCR_API_BASE;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
@@ -33,7 +32,7 @@ pub(crate) struct MistralOcrResponse {
 pub(crate) fn transform_ocr_response(
     model: &str,
     response: MistralOcrResponse,
-) -> Result<LiteLLMOcrResponse, Error> {
+) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
     Ok(LiteLLMOcrResponse {
         pages: response.pages,
         model: response.model.unwrap_or_else(|| model.to_string()),
@@ -55,7 +54,7 @@ impl MistralOCRConfig {
         model: &str,
         document: OcrDocument,
         params: &OpaqueParams,
-    ) -> Result<MistralOcrRequest, Error> {
+    ) -> Result<MistralOcrRequest, crate::ocr::Error> {
         Ok(MistralOcrRequest {
             model: model.to_string(),
             document,
@@ -89,7 +88,7 @@ impl BaseOcrConfig for MistralOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.model, &request.optional_params);
         let headers = validate_environment(&request.connection, &credential_env)?;
         let url = get_complete_url(request.connection.api_base.as_deref())?;
@@ -101,12 +100,12 @@ impl BaseOcrConfig for MistralOCRConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: MistralOcrResponse,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         transform_ocr_response(&request.model, response)
     }
 }
 
-pub(crate) fn get_complete_url(api_base: Option<&str>) -> Result<String, Error> {
+pub(crate) fn get_complete_url(api_base: Option<&str>) -> Result<String, crate::ocr::Error> {
     let base = api_base
         .map(str::trim)
         .filter(|base| !base.is_empty())
@@ -114,7 +113,7 @@ pub(crate) fn get_complete_url(api_base: Option<&str>) -> Result<String, Error> 
     ApiUrl::parse(base)
         .and_then(|url| url.complete_path(&["v1", "ocr"]))
         .map(|url| url.into_string())
-        .map_err(|_| Error::RequestField {
+        .map_err(|_| crate::ocr::Error::RequestField {
             path: "api_base".into(),
         })
 }
@@ -122,7 +121,7 @@ pub(crate) fn get_complete_url(api_base: Option<&str>) -> Result<String, Error> 
 fn validate_environment(
     connection: &OcrConnection,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, crate::ocr::Error> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
         return Ok(connection.extra_headers.clone());
     }
@@ -430,10 +429,12 @@ mod tests {
     fn environment_rejects_missing_key() {
         assert!(matches!(
             validate_environment(&OcrConnection::default(), &|_| None),
-            Err(Error::Auth(litellm_auth::Error::MissingApiKey {
-                provider: "Mistral",
-                environment_variable: MISTRAL_API_KEY_ENV,
-            }))
+            Err(crate::ocr::Error::Auth(
+                litellm_auth::Error::MissingApiKey {
+                    provider: "Mistral",
+                    environment_variable: MISTRAL_API_KEY_ENV,
+                }
+            ))
         ));
     }
 }

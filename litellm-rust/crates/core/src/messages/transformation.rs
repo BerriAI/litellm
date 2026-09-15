@@ -1,5 +1,4 @@
 use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
-use crate::messages::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {
@@ -22,13 +21,13 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Result<String, super::Error>;
 
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Result<String, super::Error>;
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {
         MessagesAuthStrategy::Header("x-api-key")
@@ -48,7 +47,7 @@ pub trait AnthropicMessagesProviderConfig: Sync {
     fn transform_request(
         &self,
         request: AnthropicMessagesRequest,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<AnthropicMessagesRequest, super::Error> {
         Ok(request)
     }
 
@@ -56,7 +55,7 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         &self,
         _model: &str,
         response: AnthropicMessagesResponse,
-    ) -> Result<AnthropicMessagesResponse, Error> {
+    ) -> Result<AnthropicMessagesResponse, super::Error> {
         Ok(response)
     }
 }

@@ -21,12 +21,11 @@ use crate::llms::vertex_ai::ocr::deepseek_transformation::{
     DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig,
 };
 use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
-use crate::ocr::Error;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
     request: LiteLLMOcrRequest,
-) -> Result<LiteLLMOcrResponse, Error> {
+) -> Result<LiteLLMOcrResponse, super::Error> {
     request.response_format()?;
     let context = CallLifecycleContext::new(
         "ocr",
@@ -62,7 +61,7 @@ impl PreparedOcrCall {
     pub(crate) async fn prepare(
         client: OcrClient,
         request: LiteLLMOcrRequest,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, super::Error> {
         let http = match request.config {
             OcrConfigKind::Cohere => CohereParseConfig.prepare_request(&request, &client).await?,
             OcrConfigKind::Mistral => MistralOCRConfig.prepare_request(&request, &client).await?,
@@ -101,7 +100,7 @@ impl PreparedOcrCall {
         })
     }
 
-    pub(crate) async fn execute(self) -> Result<OcrProviderResponse, Error> {
+    pub(crate) async fn execute(self) -> Result<OcrProviderResponse, super::Error> {
         let url = self.http.url().to_string();
         let headers = request_headers(&self.http)?;
         let response =
@@ -162,7 +161,7 @@ impl PreparedOcrCall {
     }
 }
 
-fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, Error> {
+fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, super::Error> {
     request
         .headers()
         .iter()
@@ -195,7 +194,7 @@ pub(crate) struct OcrProviderResponse {
 }
 
 impl OcrProviderResponse {
-    pub(crate) fn normalize(self) -> Result<LiteLLMOcrResponse, Error> {
+    pub(crate) fn normalize(self) -> Result<LiteLLMOcrResponse, super::Error> {
         let (response, native) = match self.data {
             OcrProviderData::Cohere(decoded) => (
                 CohereParseConfig.transform_ocr_response(&self.request, decoded.data)?,
@@ -242,7 +241,7 @@ impl OcrProviderResponse {
     }
 }
 
-pub(crate) async fn post_call(hooks: &Arc<dyn OcrHooks>, bytes: &[u8]) -> Result<(), Error> {
+pub(crate) async fn post_call(hooks: &Arc<dyn OcrHooks>, bytes: &[u8]) -> Result<(), super::Error> {
     let original_response = serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned());
     hooks
         .post_call(OcrPostCallRequest { original_response })

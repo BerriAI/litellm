@@ -1,4 +1,3 @@
-use crate::messages::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{
     AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
@@ -28,12 +27,12 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
 pub fn resolve_azure_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, crate::messages::Error> {
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            Error::from(litellm_auth::Error::MissingApiKey {
+            crate::messages::Error::from(litellm_auth::Error::MissingApiKey {
                 provider: "Azure",
                 environment_variable: AZURE_API_KEY_ENV,
             })
@@ -43,11 +42,11 @@ pub fn resolve_azure_api_key(
 pub fn complete_azure_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, crate::messages::Error> {
     let api_base = non_empty(api_base)
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::from(litellm_auth::Error::MissingAzureApiBase))?;
+        .ok_or_else(|| crate::messages::Error::from(litellm_auth::Error::MissingAzureApiBase))?;
 
     let api_base = api_base.trim_end_matches('/');
 
@@ -141,7 +140,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<String, crate::messages::Error> {
         complete_azure_anthropic_url(api_base, env_lookup)
     }
 
@@ -149,7 +148,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<String, crate::messages::Error> {
         resolve_azure_api_key(api_key, env_lookup)
     }
 
@@ -168,7 +167,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
     fn transform_request(
         &self,
         request: AnthropicMessagesRequest,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<AnthropicMessagesRequest, crate::messages::Error> {
         let mut request = fold_system_role_messages(request);
         if let Some(system) = request.system.as_mut() {
             strip_scope_from_system(system);
@@ -184,7 +183,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         &self,
         model: &str,
         response: AnthropicMessagesResponse,
-    ) -> Result<AnthropicMessagesResponse, Error> {
+    ) -> Result<AnthropicMessagesResponse, crate::messages::Error> {
         self.anthropic.transform_response(model, response)
     }
 }
@@ -262,7 +261,7 @@ mod tests {
             "https://env.services.ai.azure.com/anthropic/v1/messages"
         );
         let err = complete_azure_anthropic_url(Some("  "), &|_| None).expect_err("missing base");
-        assert!(matches!(err, Error::Auth(_)));
+        assert!(matches!(err, crate::messages::Error::Auth(_)));
     }
 
     #[test]

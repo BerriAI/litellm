@@ -1,4 +1,3 @@
-use crate::messages::Error;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
@@ -8,7 +7,7 @@ use serde_json::{Map, Value};
 
 pub(super) fn prepare_provider_request(
     request: MessagesRequest<'_>,
-) -> Result<ProviderMessagesRequest, Error> {
+) -> Result<ProviderMessagesRequest, super::Error> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .or_else(|| {
             request
@@ -19,7 +18,7 @@ pub(super) fn prepare_provider_request(
                 })
         })
         .ok_or_else(|| {
-            Error::InvalidProvider(
+            super::Error::InvalidProvider(
                 "unable to resolve custom_llm_provider for messages request".to_string(),
             )
         })?;
@@ -27,22 +26,22 @@ pub(super) fn prepare_provider_request(
     let provider = provider_info.custom_llm_provider;
 
     let config = messages_provider_config(provider)
-        .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
+        .ok_or_else(|| super::Error::InvalidProvider(provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let headers =
         validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
 
     let params: crate::params::OpaqueParams = serde_json::from_value(request.body)
-        .map_err(|_| Error::InvalidRequest("messages body must be an object".into()))?;
+        .map_err(|_| super::Error::InvalidRequest("messages body must be an object".into()))?;
     let mut fields = params.into_provider_body()?;
     fields.insert("model".into(), Value::String(model.clone()));
     let typed_request = serde_json::from_value(Value::Object(fields)).map_err(|err| {
-        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+        super::Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
     let transformed = config.transform_request(typed_request)?;
     let body = serde_json::to_value(transformed).map_err(|err| {
-        Error::InvalidRequest(format!(
+        super::Error::InvalidRequest(format!(
             "failed to serialize Anthropic messages request: {err}"
         ))
     })?;
@@ -65,7 +64,7 @@ fn validate_environment(
     extra_headers: Option<Map<String, Value>>,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, super::Error> {
     let mut headers = string_headers(extra_headers)?;
 
     let auth_strategy = config.auth_strategy();

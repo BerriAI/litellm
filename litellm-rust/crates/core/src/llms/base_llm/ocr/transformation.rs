@@ -2,7 +2,6 @@ use std::future::Future;
 
 use serde::de::DeserializeOwned;
 
-use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrResponseFormat};
 use crate::ocr::wire::DecodedOcrResponse;
@@ -23,13 +22,13 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> impl Future<Output = Result<reqwest::Request, Error>> + Send;
+    ) -> impl Future<Output = Result<reqwest::Request, crate::ocr::Error>> + Send;
 
     fn transform_ocr_response(
         &self,
         request: &LiteLLMOcrRequest,
         response: Self::ProviderResponse,
-    ) -> Result<LiteLLMOcrResponse, Error>;
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error>;
 
     fn read_response(
         &self,
@@ -38,7 +37,7 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
         _url: &str,
         _headers: &[(String, String)],
         request: &LiteLLMOcrRequest,
-    ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ProviderResponse>, Error>> + Send
+    ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ProviderResponse>, crate::ocr::Error>> + Send
     {
         async move {
             let bytes = crate::ocr::client::read_response_bytes(
