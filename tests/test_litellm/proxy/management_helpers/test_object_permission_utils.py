@@ -339,7 +339,7 @@ async def test_validate_key_servers_outside_team_scope_raises(
 
 
 @pytest.mark.asyncio
-@patch(
+@patch(  # test-quality-ok: registry mock is this suite's seam for injecting MCP servers; no HTTP boundary exists
     "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(
         servers=[
@@ -348,18 +348,7 @@ async def test_validate_key_servers_outside_team_scope_raises(
         ]
     ),
 )
-@patch(
-    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
-    return_value=set(),
-)
-@patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
-    new_callable=AsyncMock,
-    return_value=[],
-)
-async def test_validate_key_servers_outside_team_scope_error_uses_names(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_servers_outside_team_scope_error_uses_names():
     """The 403 detail should show server aliases and the team alias, not raw IDs."""
     team_obj = _make_team_obj(
         team_id="team-uuid",
@@ -382,7 +371,7 @@ async def test_validate_key_servers_outside_team_scope_error_uses_names(
 
 
 @pytest.mark.asyncio
-@patch(
+@patch(  # test-quality-ok: registry mock is this suite's seam for injecting MCP servers; no HTTP boundary exists
     "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager(
         servers=[
@@ -391,18 +380,7 @@ async def test_validate_key_servers_outside_team_scope_error_uses_names(
         ]
     ),
 )
-@patch(
-    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
-    return_value=set(),
-)
-@patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
-    new_callable=AsyncMock,
-    return_value=[],
-)
-async def test_validate_key_servers_no_team_error_uses_names(
-    mock_access_groups, mock_allow_all
-):
+async def test_validate_key_servers_no_team_error_uses_names():
     """The teamless 403 detail should show server aliases, not raw IDs."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
