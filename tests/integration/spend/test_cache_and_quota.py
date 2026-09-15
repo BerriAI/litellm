@@ -22,7 +22,9 @@ def test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost(gate
             self.resources = ExitStack()
             try:
                 self.scenario = self.resources.enter_context(gateway.scenario())
-                self.upstream = self.resources.enter_context(httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False))
+                self.upstream = self.resources.enter_context(
+                    httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False)
+                )
                 self.model = self.scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
                 self.key = self.scenario.key(models=[self.model])
                 self.prefix = uuid.uuid4().hex
@@ -46,13 +48,22 @@ def test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost(gate
 
         def perform_request(self, marker: int) -> None:
             self.upstream.get("/__observations").raise_for_status()
-            response: Final = gateway.request("POST", "/v1/chat/completions", {
-                "model": self.model, "messages": [{"role": "user", "content": f"{self.prefix}-{marker}"}],
-            }, key=self.key)
+            response: Final = gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": f"{self.prefix}-{marker}"}],
+                },
+                key=self.key,
+            )
             assert response.status_code == 200, response.text
             self.requests += 1
             body: Final = response.json()
-            assert body["choices"][0]["message"]["content"] == "Hello! This is a mock response from the fake OpenAI endpoint."
+            assert (
+                body["choices"][0]["message"]["content"]
+                == "Hello! This is a mock response from the fake OpenAI endpoint."
+            )
             assert body["usage"]["total_tokens"] == 40
             observed: Final = self.upstream.get("/__observations").json()["requests"]
             expected_calls: Final = 0 if marker in self.seen else 1
@@ -70,10 +81,15 @@ def test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost(gate
         def teardown(self) -> None:
             try:
                 if self.requests and not self.failed:
-                    rows: Final = eventually(lambda: read_rows(
-                        'SELECT request_id, spend, cache_hit, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
-                        (sha256(self.key.encode()).hexdigest(),),
-                    ), lambda values: len(values) == self.requests, seconds=70)
+                    rows: Final = eventually(
+                        lambda: read_rows(
+                            "SELECT request_id, spend, cache_hit, prompt_tokens, "
+                            'completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+                            (sha256(self.key.encode()).hexdigest(),),
+                        ),
+                        lambda values: len(values) == self.requests,
+                        seconds=70,
+                    )
                     assert len({row["request_id"] for row in rows}) == self.requests
                     assert sum(float(row["spend"]) for row in rows) == pytest.approx(self.paid * 0.06)
                     assert sum(row["cache_hit"] == "True" for row in rows) == self.requests - self.paid
@@ -81,7 +97,10 @@ def test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost(gate
                         assert row["prompt_tokens"] == 20 and row["completion_tokens"] == 20
                         if row["cache_hit"] == "True":
                             assert float(row["spend"]) == 0 and "_cache_hit" in row["request_id"]
-                            assert any(row["request_id"].startswith(identity + "_cache_hit") for identity in self.identities.values())
+                            assert any(
+                                row["request_id"].startswith(identity + "_cache_hit")
+                                for identity in self.identities.values()
+                            )
                         else:
                             assert row["request_id"] in self.identities.values()
                             assert float(row["spend"]) == pytest.approx(0.06)
@@ -95,7 +114,10 @@ def test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost(gate
 
 @pytest.mark.covers("quota_management.response_cache.repeated_hits_preserve_identity_and_single_charge")
 def test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         key: Final = scenario.key(models=[model])
         prompt: Final = f"repeated cache {uuid.uuid4().hex}"
@@ -104,9 +126,19 @@ def test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows
         assert len(upstream.get("/__observations").json()["requests"]) == 1
         assert len({result["id"] for result in results}) == 1
         for result in results:
-            assert result["choices"][0]["message"]["content"] == "Hello! This is a mock response from the fake OpenAI endpoint."
+            assert (
+                result["choices"][0]["message"]["content"]
+                == "Hello! This is a mock response from the fake OpenAI endpoint."
+            )
             assert result["usage"]["total_tokens"] == 40
-        rows: Final = eventually(lambda: read_rows('SELECT request_id, spend, cache_hit FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (sha256(key.encode()).hexdigest(),)), lambda values: len(values) == 3, seconds=70)
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id, spend, cache_hit FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda values: len(values) == 3,
+            seconds=70,
+        )
         assert len({row["request_id"] for row in rows}) == 3
         assert sorted(float(row["spend"]) for row in rows) == [0, 0, 0.06]
         for row in rows:
@@ -119,39 +151,74 @@ def test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows
 
 @pytest.mark.covers("quota_management.budget.key.boundary_blocks_before_provider_and_reset_restores")
 def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         key: Final = scenario.key(models=[model], max_budget=0.06)
         control: Final = scenario.key(models=[model])
         first: Final = gateway.chat(model, key=key, text=f"budget {uuid.uuid4().hex}")
         assert first["usage"]["total_tokens"] == 40
         digest: Final = sha256(key.encode()).hexdigest()
-        spent: Final = eventually(lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)), lambda values: len(values) == 1 and float(values[0]["spend"]) >= 0.06, seconds=70)
+        spent: Final = eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
+            lambda values: len(values) == 1 and float(values[0]["spend"]) >= 0.06,
+            seconds=70,
+        )
         assert float(spent[0]["spend"]) == pytest.approx(0.06)
         upstream.get("/__observations").raise_for_status()
-        denied: Final = gateway.request("POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": f"over budget {uuid.uuid4().hex}"}]}, key=key)
+        denied: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"over budget {uuid.uuid4().hex}"}]},
+            key=key,
+        )
         assert denied.status_code == 429 and denied.json()["error"]["type"] == "budget_exceeded", denied.text
         assert upstream.get("/__observations").json()["requests"] == []
         assert gateway.chat(model, key=control, text=f"control {uuid.uuid4().hex}")["usage"]["total_tokens"] == 40
         gateway.post("/key/update", {"key": key, "spend": 0})
-        assert read_rows('SELECT spend, max_budget FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == [{"spend": 0.0, "max_budget": 0.06}]
+        assert read_rows('SELECT spend, max_budget FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == [
+            {"spend": 0.0, "max_budget": 0.06}
+        ]
         assert gateway.chat(model, key=key, text=f"reset {uuid.uuid4().hex}")["usage"]["total_tokens"] == 40
-        eventually(lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)), lambda values: len(values) == 1 and float(values[0]["spend"]) >= 0.06, seconds=70)
+        eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
+            lambda values: len(values) == 1 and float(values[0]["spend"]) >= 0.06,
+            seconds=70,
+        )
         upstream.get("/__observations").raise_for_status()
-        denied_again: Final = gateway.request("POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": f"boundary again {uuid.uuid4().hex}"}]}, key=key)
-        assert denied_again.status_code == 429 and denied_again.json()["error"]["type"] == "budget_exceeded", denied_again.text
+        denied_again: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"boundary again {uuid.uuid4().hex}"}]},
+            key=key,
+        )
+        assert denied_again.status_code == 429 and denied_again.json()["error"]["type"] == "budget_exceeded", (
+            denied_again.text
+        )
         assert upstream.get("/__observations").json()["requests"] == []
 
 
 @pytest.mark.covers("quota_management.response_cache.system_messages_partition_cache_identity")
 def test_different_system_messages_do_not_share_a_cached_response(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
         model: Final = scenario.model()
         prompt: Final = uuid.uuid4().hex
         identities: dict[str, str] = {}
         for system, expected_calls in (("first policy", 1), ("second policy", 1), ("first policy", 0)):
             upstream.get("/__observations").raise_for_status()
-            response: Final = gateway.request("POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]})
+            response: Final = gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                },
+            )
             assert response.status_code == 200 and response.json()["usage"]["total_tokens"] == 40, response.text
             calls: Final = upstream.get("/__observations").json()["requests"]
             assert len(calls) == expected_calls
@@ -161,4 +228,7 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
                 assert response.json()["id"] not in identities.values()
                 identities = {**identities, system: response.json()["id"]}
             if calls:
-                assert calls[0]["body"]["messages"] == [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+                assert calls[0]["body"]["messages"] == [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ]
