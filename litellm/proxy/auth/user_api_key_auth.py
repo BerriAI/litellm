@@ -998,6 +998,43 @@ async def _auto_register_jwt_mapping(
     return auto_registered_key
 
 
+async def _lookup_jwt_mapping_token_hash(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    virtual_key_claim_field: str,
+    claim_value: str,
+    normalized_issuer: str | None,
+    cache_key: str,
+    ttl: float,
+) -> str | None:
+    issuer_scoped: Final = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=claim_value,
+        prisma_client=prisma_client,
+        jwt_issuer=normalized_issuer,
+    )
+    if issuer_scoped is not None:
+        await user_api_key_cache.async_set_cache(key=cache_key, value=issuer_scoped, ttl=ttl)
+        return issuer_scoped
+    if normalized_issuer is None:
+        return None
+    # Another issuer may have already resolved (and cached) this same
+    # global mapping -- check its cache entry before re-querying the DB.
+    global_cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, claim_value)
+    cached_global: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=global_cache_key)
+    if isinstance(cached_global, str) and cached_global != "__NO_MAPPING__":
+        return cached_global
+    global_row: Final = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=claim_value,
+        prisma_client=prisma_client,
+        jwt_issuer=None,
+    )
+    if global_row is not None:
+        await user_api_key_cache.async_set_cache(key=global_cache_key, value=global_row, ttl=ttl)
+    return global_row
+
+
 async def _resolve_jwt_to_virtual_key(
     jwt_claims: dict,
     jwt_handler: JWTHandler,
@@ -1119,33 +1156,19 @@ async def _resolve_jwt_to_virtual_key(
     # can affect. Caching a global-row hit under the requesting issuer's key
     # would leave every OTHER issuer that had fallen back to that same global
     # mapping serving its stale token until TTL after the row changes.
-    ttl: Final = jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl
-    token_hash: str | None = None
-    if prisma_client is not None:
-        token_hash = await get_jwt_key_mapping_object(
-            jwt_claim_name=virtual_key_claim_field,
-            jwt_claim_value=str(claim_value),
+    token_hash: Final = (
+        await _lookup_jwt_mapping_token_hash(
             prisma_client=prisma_client,
-            jwt_issuer=normalized_issuer,
+            user_api_key_cache=user_api_key_cache,
+            virtual_key_claim_field=virtual_key_claim_field,
+            claim_value=str(claim_value),
+            normalized_issuer=normalized_issuer,
+            cache_key=cache_key,
+            ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
         )
-        if token_hash is not None:
-            await user_api_key_cache.async_set_cache(key=cache_key, value=token_hash, ttl=ttl)
-        elif normalized_issuer is not None:
-            # Another issuer may have already resolved (and cached) this same
-            # global mapping -- check its cache entry before re-querying the DB.
-            global_cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value))
-            cached_global: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=global_cache_key)
-            if isinstance(cached_global, str) and cached_global != "__NO_MAPPING__":
-                token_hash = cached_global
-            else:
-                token_hash = await get_jwt_key_mapping_object(
-                    jwt_claim_name=virtual_key_claim_field,
-                    jwt_claim_value=str(claim_value),
-                    prisma_client=prisma_client,
-                    jwt_issuer=None,
-                )
-                if token_hash is not None:
-                    await user_api_key_cache.async_set_cache(key=global_cache_key, value=token_hash, ttl=ttl)
+        if prisma_client is not None
+        else None
+    )
 
     if token_hash is not None:
         return IdentityStore.key_from_principal(
