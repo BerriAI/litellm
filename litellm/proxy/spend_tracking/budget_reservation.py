@@ -325,7 +325,6 @@ async def _reserve_counters(
                     counter=counter,
                     reserved_cost=reservation_cost,
                 )
-                applied_entries.append(entry)
                 try:
                     reserved_value = await _reserve_counter(
                         counter=counter,
@@ -337,11 +336,11 @@ async def _reserve_counters(
                             entries=[entry],
                             default_reserved_cost=reservation_cost,
                         )
-                    applied_entries.remove(entry)
                     if fail_closed_budget_enforcement:
                         _raise_reservation_unavailable(counter_key=counter.counter_key)
                     continue
 
+                applied_entries.append(entry)
                 if reserved_value is not None:
                     current_spend = reserved_value
                 else:
@@ -434,13 +433,45 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
     try:
-        await asyncio.shield(
-            reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
-        )
+        await asyncio.shield(_reconcile_entries_to_their_input_cost(budget_reservation=budget_reservation))
     except (asyncio.CancelledError, Exception):
         pass
+
+
+async def _reconcile_entries_to_their_input_cost(
+    budget_reservation: dict[str, object],  # mutable-ok: the reservation is stamped finalized in place
+) -> None:
+    """Entries folded in by ``merge_budget_reservation`` carry the input cost of the request that
+    went upstream; the rest were priced at auth and settle to the reservation's own input cost."""
+    shared_input_cost: Final = float(cast(SupportsFloat, budget_reservation.get("input_cost") or 0.0))
+    reserved_cost: Final = float(cast(SupportsFloat, budget_reservation.get("reserved_cost") or 0.0))
+    entries: Final = cast(list[dict[str, float | str]], budget_reservation.get("entries") or [])
+    for input_cost in dict.fromkeys(_entry_input_cost(entry, shared_input_cost) for entry in entries):
+        await _set_reserved_entries_actual_cost(
+            entries=[entry for entry in entries if _entry_input_cost(entry, shared_input_cost) == input_cost],
+            actual_cost=input_cost,
+            default_reserved_cost=reserved_cost,
+        )
+    budget_reservation["finalized"] = True  # rebind-ok: the settlement paths share this one dict
+
+
+def _entry_input_cost(entry: Mapping[str, float | str], shared_input_cost: float) -> float:
+    return float(entry.get("input_cost", shared_input_cost))
+
+
+def merge_budget_reservation(
+    existing: dict[str, object],  # mutable-ok: the request's reservation, extended in place
+    added: Mapping[str, object],
+) -> None:
+    """Fold a later reservation's entries into the request's reservation so every settlement path sees one.
+    Each added entry keeps the input cost it was priced with, since a pre-call hook may have rewritten the
+    request between the two estimates and a cancellation settles each entry to that cost."""
+    added_entries: Final = cast(list[dict[str, float | str]], added.get("entries") or [])
+    added_input_cost: Final = float(cast(SupportsFloat, added.get("input_cost") or 0.0))
+    for entry in added_entries:
+        entry["input_cost"] = added_input_cost  # rebind-ok: the entry settles to the cost it was priced with
+    cast(list[dict[str, float | str]], existing["entries"]).extend(added_entries)  # rebind-ok: one dict for all paths
 
 
 async def invalidate_budget_reservation_counters(

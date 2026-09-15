@@ -18,6 +18,8 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import (
     count_request_input_tokens,
     estimate_request_max_cost,
+    merge_budget_reservation,
+    release_budget_reservation_on_cancel,
     reserve_budget_for_added_tags,
     reserve_budget_for_request,
 )
@@ -237,6 +239,35 @@ async def test_reserve_budget_for_added_tags_skips_routes_auth_never_reserves(sp
     assert spend_counter_cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") is None
 
 
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_settles_each_entry_to_its_own_input_cost(
+    spend_counter_cache: DualCache,
+):
+    """Auth priced the key before the hook rewrote the prompt; the hook tag was priced after. A cancellation
+    charges each counter the input cost its own estimate saw instead of the auth-time one for both."""
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:key:hashed-hook-tag-key", value=0.5)
+    auth_reservation: Final[dict[str, object]] = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:hashed-hook-tag-key", "entity_type": "Key", "reserved_cost": 0.5}],
+        "finalized": False,
+        "input_cost": 0.2,
+        "input_tokens": 40,
+    }
+    hook_reservation: Final = await _reserve_added_tags(
+        "/v1/chat/completions", _budgeted_tag_prisma((HOOK_TAG,), max_budget=1.0)
+    )
+    assert hook_reservation is not None
+    hook_input_cost: Final = hook_reservation["input_cost"]
+    assert isinstance(hook_input_cost, float) and 0 < hook_input_cost < 0.2
+
+    merge_budget_reservation(existing=auth_reservation, added=hook_reservation)
+    await release_budget_reservation_on_cancel(auth_reservation)
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:hashed-hook-tag-key") == pytest.approx(0.2)
+    assert spend_counter_cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") == pytest.approx(hook_input_cost)
+    assert auth_reservation["finalized"] is True
+
+
 class _ParkingIncrementCache(DualCache):
     """A spend-counter cache whose increment of ``parked_key`` never returns, so a test can cancel mid-reservation."""
 
@@ -253,12 +284,15 @@ class _ParkingIncrementCache(DualCache):
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)
 async def test_reserve_budget_for_added_tags_releases_the_reserved_tag_when_cancelled_mid_acquisition(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A client disconnect under SSE keepalives cancels the request while the second tag is being reserved;
-    the first tag's counter must not stay charged for a request that never reached the provider."""
+    the first tag's counter must not stay charged for a request that never reached the provider, and the
+    second tag, whose increment never happened, must not be refunded for it either."""
     cache: Final = _ParkingIncrementCache(parked_key=f"spend:tag:{SECOND_HOOK_TAG}")
+    cache.in_memory_cache.set_cache(key=f"spend:tag:{SECOND_HOOK_TAG}", value=0.3)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     prisma: Final = _budgeted_tag_prisma((HOOK_TAG, SECOND_HOOK_TAG), max_budget=1.0)
@@ -273,6 +307,7 @@ async def test_reserve_budget_for_added_tags_releases_the_reserved_tag_when_canc
         await reserving
 
     assert cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") == pytest.approx(0.0)
+    assert cache.in_memory_cache.get_cache(key=f"spend:tag:{SECOND_HOOK_TAG}") == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio

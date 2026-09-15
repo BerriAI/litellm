@@ -656,14 +656,14 @@ class TestProxyBaseLLMRequestProcessing:
         assert tag_check.await_count == (1 if checked else 0)
 
     @staticmethod
-    def _reservation(counter_key: str) -> dict:
+    def _reservation(counter_key: str, input_cost: float = 0.1) -> dict:
         return {
             "reserved_cost": 0.5,
             "entries": [
                 {"counter_key": counter_key, "entity_type": "Tag", "entity_id": counter_key, "reserved_cost": 0.5}
             ],
             "finalized": False,
-            "input_cost": 0.1,
+            "input_cost": input_cost,
             "input_tokens": 3,
         }
 
@@ -677,7 +677,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_request, mock_proxy_logging_obj, _ = self._tag_budget_rig(
             monkeypatch, request_data={"model": "live-mini", "metadata": {"tags": []}}, pre_call_hook=mock_pre_call_hook
         )
-        reserve = AsyncMock(return_value=self._reservation("spend:tag:guardrail-tag"))
+        reserve = AsyncMock(return_value=self._reservation("spend:tag:guardrail-tag", input_cost=0.02))
         monkeypatch.setattr(litellm.proxy.common_request_processing, "reserve_budget_for_added_tags", reserve)
         await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
@@ -715,6 +715,8 @@ class TestProxyBaseLLMRequestProcessing:
             "spend:key:test-token",
             "spend:tag:guardrail-tag",
         ]
+        assert [entry.get("input_cost") for entry in auth_reservation["entries"]] == [None, 0.02]
+        assert auth_reservation["input_cost"] == 0.1
         assert "user_api_key_budget_reservation" not in processing_obj.data["metadata"]
 
     @pytest.mark.asyncio

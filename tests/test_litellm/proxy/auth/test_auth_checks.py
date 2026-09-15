@@ -2517,6 +2517,8 @@ def test_route_skips_budget_checks_matches_auth_scope(route, expected):
             False,
             False,
         ),
+        ("/bria", {"pass_through_endpoints": "not-a-list"}, "sk-master", False, False),
+        ("/bria", {"pass_through_endpoints": [{"path": "/bria", "auth": False}, "junk"]}, "sk-master", False, False),
     ],
 )
 def test_auth_skips_common_checks_names_the_requests_that_never_run_them(

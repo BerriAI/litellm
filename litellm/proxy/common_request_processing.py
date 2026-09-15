@@ -77,7 +77,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_added_tags
+from litellm.proxy.spend_tracking.budget_reservation import merge_budget_reservation, reserve_budget_for_added_tags
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
@@ -2156,7 +2156,7 @@ class ProxyBaseLLMRequestProcessing:
             return
         existing: Final = user_api_key_dict.budget_reservation
         if existing is not None:
-            existing["entries"].extend(reservation["entries"])
+            merge_budget_reservation(existing=existing, added=reservation)
             return
         user_api_key_dict.budget_reservation = reservation  # rebind-ok: the failure and cancel paths read it here
         _, metadata_bucket = get_or_create_metadata_bucket(self.data)
