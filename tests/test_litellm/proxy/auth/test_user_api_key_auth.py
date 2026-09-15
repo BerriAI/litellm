@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -48,6 +49,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _user_api_key_auth_builder,
     get_api_key,
     user_api_key_auth,
+    user_api_key_auth_websocket,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 
@@ -7851,3 +7853,125 @@ async def test_auth_flow_enters_virtual_key_mapping_when_only_an_issuer_configur
     assert resolve_mock.await_args.kwargs["jwt_claims"][JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == ISSUER_TWO
     assert result.api_key == "hashed-mapped-key"
     assert result.team_id == "svc-team"
+
+
+def _websocket_for_auth(headers: dict | None = None) -> MagicMock:
+    from fastapi import WebSocket
+    from starlette.datastructures import URL
+
+    websocket: Final = MagicMock(spec=WebSocket)
+    websocket.query_params = {"model": "test-model"}
+    websocket.headers = headers or {}
+    websocket.scope = {
+        "type": "websocket",
+        "path": "/v1/responses",
+        "headers": [(name.lower().encode(), value.encode()) for name, value in (headers or {}).items()],
+    }
+    websocket.url = URL(url="/v1/responses")
+    websocket.close = AsyncMock()
+    return websocket
+
+
+_KEYLESS_PROXY_STATE: Final = {
+    "prisma_client": None,
+    "user_custom_auth": None,
+    "general_settings": {},
+    "llm_model_list": [],
+    "llm_router": None,
+    "jwt_handler": None,
+    "open_telemetry_logger": None,
+}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        pytest.param({}, id="no headers at all"),
+        pytest.param({"sec-websocket-protocol": "realtime"}, id="subprotocol carrying no key"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_websocket_auth_forwards_a_missing_key_as_none(headers):
+    """A missing key must reach user_api_key_auth as None, the value
+    APIKeyHeader(auto_error=False) gives the HTTP routes for an absent header.
+    Rejecting it here meant a proxy with no master key refused the WebSocket
+    while accepting every HTTP route."""
+    websocket: Final = _websocket_for_auth(headers)
+
+    with patch(  # test-quality-ok: what is under test is the value handed to the delegate, so it has to be observed
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_auth:
+        await user_api_key_auth_websocket(websocket)
+
+    assert mock_auth.call_args.kwargs["api_key"] is None
+    websocket.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_websocket_auth_without_master_key_returns_an_internal_user():
+    """With no master key configured, a keyless connection authenticates."""
+    websocket: Final = _websocket_for_auth({})
+
+    with patch.multiple(  # test-quality-ok: master_key is a proxy_server module global with no injection seam
+        "litellm.proxy.proxy_server", master_key=None, **_KEYLESS_PROXY_STATE
+    ):
+        result = await user_api_key_auth_websocket(websocket)
+
+    assert isinstance(result, UserAPIKeyAuth)
+    assert result.user_role == LitellmUserRoles.INTERNAL_USER
+
+
+@pytest.mark.asyncio
+async def test_websocket_auth_with_master_key_still_refuses_a_keyless_client():
+    """Delegating the decision is only correct if the delegate still says no."""
+    from starlette.exceptions import WebSocketException
+
+    websocket: Final = _websocket_for_auth({})
+
+    with patch.multiple(  # test-quality-ok: master_key is a proxy_server module global with no injection seam
+        "litellm.proxy.proxy_server", master_key="sk-master-key", **_KEYLESS_PROXY_STATE
+    ):
+        with pytest.raises(WebSocketException):
+            await user_api_key_auth_websocket(websocket)
+
+
+@pytest.mark.asyncio
+async def test_websocket_auth_rejects_a_malformed_header_without_closing_first():
+    """Closing the socket and then raising an HTTPException makes Starlette
+    start an HTTP response on a closed socket, which surfaces as a RuntimeError
+    on top of the real auth failure."""
+    from starlette.exceptions import WebSocketException
+
+    websocket: Final = _websocket_for_auth({"authorization": "Token sk-1234"})
+
+    with pytest.raises(WebSocketException) as exc_info:
+        await user_api_key_auth_websocket(websocket)
+
+    assert exc_info.value.code == status.WS_1008_POLICY_VIOLATION
+    websocket.close.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "headers,expected",
+    [
+        pytest.param({"authorization": "Bearer sk-abc"}, "Bearer sk-abc", id="bearer token"),
+        pytest.param({"api-key": "sk-abc"}, "Bearer sk-abc", id="api-key header"),
+        pytest.param(
+            {"sec-websocket-protocol": "realtime, openai-insecure-api-key.sk-abc"},
+            "Bearer sk-abc",
+            id="browser subprotocol",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_websocket_auth_still_reads_every_key_source(headers, expected):
+    """Accept control: forwarding None for every request would satisfy the
+    keyless assertions above and drop real keys on the floor."""
+    websocket: Final = _websocket_for_auth(headers)
+
+    with patch(  # test-quality-ok: what is under test is the value handed to the delegate, so it has to be observed
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_auth:
+        await user_api_key_auth_websocket(websocket)
+
+    assert mock_auth.call_args.kwargs["api_key"] == expected
