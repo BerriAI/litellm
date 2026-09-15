@@ -1,4 +1,4 @@
-use litellm_core::Error;
+use litellm_core::messages::Error;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 use pyo3::prelude::*;

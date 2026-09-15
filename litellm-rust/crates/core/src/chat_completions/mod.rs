@@ -6,7 +6,8 @@
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
-use crate::Error;
+mod error;
+pub use error::Error;
 mod client;
 mod common_utils;
 pub mod conversation;

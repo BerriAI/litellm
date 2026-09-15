@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::audio_transcription::Error;
 use crate::http_utils::{has_header, string_headers};
 use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};

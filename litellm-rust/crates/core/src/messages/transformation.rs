@@ -1,5 +1,5 @@
 use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
-use crate::Error;
+use crate::messages::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {

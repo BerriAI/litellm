@@ -7,8 +7,8 @@ use serde_json::{Map, Value};
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
-use crate::Error;
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
+use crate::ocr::Error;
 use crate::params::OpaqueParams;
 use litellm_auth::{InputSource, TokenProviderHandle};
 
@@ -124,14 +124,11 @@ impl LiteLLMOcrRequest {
         })
     }
 
-    pub(crate) fn response_format(
-        &self,
-    ) -> Result<OcrResponseFormat, super::error::OcrRequestError> {
+    pub(crate) fn response_format(&self) -> Result<OcrResponseFormat, super::Error> {
         self.optional_params
             .get("req_format")
             .map(|value| {
-                serde_json::from_value(value.clone())
-                    .map_err(|_| super::error::OcrRequestError::RequestFormat)
+                serde_json::from_value(value.clone()).map_err(|_| super::Error::RequestFormat)
             })
             .transpose()
             .map(|format| format.unwrap_or_default())

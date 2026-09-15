@@ -196,7 +196,7 @@ impl OcrHooks for RecordingHooks {
         Box::pin(async move {
             self.events.lock().unwrap().push("pre");
             if self.block {
-                return Err(crate::Error::InvalidRequest("blocked".into()));
+                return Err(crate::ocr::Error::InvalidRequest("blocked".into()));
             }
             Ok(request)
         })
@@ -233,7 +233,7 @@ impl OcrHooks for RecordingHooks {
     fn failure<'a>(
         &'a self,
         _context: &'a CallLifecycleContext,
-        _error: &'a crate::Error,
+        _error: &'a crate::ocr::Error,
         _timing: &'a CallLifecycleTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async move {
@@ -307,7 +307,7 @@ async fn lifecycle_blocking_prevents_execution_and_emits_one_failure() {
         ..request
     };
     let error = perform_ocr(request).await.unwrap_err();
-    assert!(matches!(error, crate::Error::InvalidRequest(_)));
+    assert!(matches!(error, crate::ocr::Error::InvalidRequest(_)));
     assert_eq!(*events.lock().unwrap(), ["pre", "failure"]);
 }
 
@@ -414,7 +414,7 @@ async fn fallible_host_phases_do_not_replay_or_reach_transport() {
                     OcrHostOperation::PreCall(request) => {
                         phases.push("pre");
                         result = Some(OcrHostResult::PreCall(if failure_phase == "pre" {
-                            Err(crate::Error::InvalidRequest("pre failed".into()))
+                            Err(crate::ocr::Error::InvalidRequest("pre failed".into()))
                         } else {
                             Ok(request)
                         }));
@@ -422,7 +422,7 @@ async fn fallible_host_phases_do_not_replay_or_reach_transport() {
                     OcrHostOperation::DuringCall(request) => {
                         phases.push("during");
                         result = Some(OcrHostResult::DuringCall(if failure_phase == "during" {
-                            Err(crate::Error::InvalidRequest("during failed".into()))
+                            Err(crate::ocr::Error::InvalidRequest("during failed".into()))
                         } else {
                             Ok(request)
                         }));
@@ -433,7 +433,7 @@ async fn fallible_host_phases_do_not_replay_or_reach_transport() {
                 Ok(OcrCallStep::Complete(_)) => panic!("failed call completed"),
             }
         };
-        assert!(matches!(error, crate::Error::InvalidRequest(_)));
+        assert!(matches!(error, crate::ocr::Error::InvalidRequest(_)));
         assert_eq!(
             phases
                 .iter()
@@ -476,7 +476,10 @@ async fn invalid_provider_response_runs_post_call_before_normalization_failure()
         }
     };
     server.await.unwrap();
-    assert!(matches!(error, crate::Error::InvalidResponse(_)));
+    assert!(matches!(
+        error,
+        crate::ocr::Error::ResponseField { ref path } if path == "pages"
+    ));
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(post_calls, [json!(r#"{"pages":"invalid"}"#)]);
 }
@@ -553,7 +556,7 @@ async fn direct_native_host_drives_the_same_state_machine() {
     );
     assert!(matches!(
         call.resume(None).await,
-        Err(crate::Error::InvalidRequest(_))
+        Err(crate::ocr::Error::InvalidRequest(_))
     ));
 }
 
@@ -572,7 +575,7 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
     ) else {
         panic!("supported call declined")
     };
-    let selected = crate::Error::InvalidRequest("public metadata failed".into());
+    let selected = crate::ocr::Error::InvalidRequest("public metadata failed".into());
     let host = NoopOcrHost;
     let mut result = None;
     let mut failures = Vec::new();
@@ -587,7 +590,7 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
                         assert_eq!(error, selected);
                         failures.push("sync");
                         OcrHostResult::Lifecycle(Err(HostFailure::Error(
-                            crate::Error::InvalidRequest("failure callback failed".into()),
+                            crate::ocr::Error::InvalidRequest("failure callback failed".into()),
                         )))
                     }
                     OcrHostOperation::Lifecycle(HostPhase::AsyncFailure) => {
@@ -646,7 +649,7 @@ async fn cancellation_at_provider_hook_prevents_execution_and_further_resumption
             OcrCallStep::Complete(_) => panic!("provider executed before pre-call result"),
         }
     }
-    let selected = crate::Error::InvalidRequest("cancelled".into());
+    let selected = crate::ocr::Error::InvalidRequest("cancelled".into());
     assert!(matches!(
         call.interrupt(HostFailure::Cancelled(selected.clone())).await,
         Err(error) if error == selected
@@ -683,7 +686,7 @@ async fn missing_host_result_preserves_pending_operation() {
 async fn read_bounded_response(
     response: Vec<u8>,
     limit: usize,
-) -> Result<bytes::Bytes, super::error::OcrError> {
+) -> Result<bytes::Bytes, super::Error> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -712,7 +715,7 @@ async fn read_bounded_response(
 
 #[tokio::test]
 async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_overflow() {
-    use super::error::{OcrError, OcrResponseError};
+    use super::Error;
 
     for response in [
         "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabcdefgh",
@@ -731,7 +734,7 @@ async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_over
     ] {
         assert!(matches!(
             read_bounded_response(response.as_bytes().to_vec(), 8).await,
-            Err(OcrError::Response(OcrResponseError::TooLarge { limit: 8 }))
+            Err(Error::TooLarge { limit: 8 })
         ));
     }
 }
@@ -750,10 +753,7 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
             .await
             .unwrap_err();
         match error {
-            super::error::OcrError::Transport(crate::error::TransportError::Http {
-                status,
-                body,
-            }) => {
+            super::Error::Transport(crate::transport::Error::Http { status, body }) => {
                 assert_eq!(status, 429);
                 assert_eq!(
                     body,
@@ -811,8 +811,8 @@ impl Drop for TokenFutureDrop {
     }
 }
 
-impl crate::auth::TokenProvider for PendingToken {
-    fn acquire(&self) -> crate::auth::TokenFuture<'_> {
+impl litellm_auth::TokenProvider for PendingToken {
+    fn acquire(&self) -> litellm_auth::TokenFuture<'_> {
         Box::pin(async move {
             let _guard = TokenFutureDrop(self.dropped.clone());
             self.entered.notify_one();
@@ -837,7 +837,7 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
                 extra_headers: vec![("authorization".into(), "Bearer test-key".into())],
                 ..request.connection
             },
-            azure_ad_token_provider: Some(crate::auth::TokenProviderHandle::new(Arc::new(
+            azure_ad_token_provider: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
                 PendingToken {
                     entered: entered.clone(),
                     dropped: dropped.clone(),
@@ -867,7 +867,7 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
             }
         }).await.unwrap();
         assert!(!dropped.load(Ordering::SeqCst));
-        let selected = crate::Error::InvalidRequest("cancelled".into());
+        let selected = crate::ocr::Error::InvalidRequest("cancelled".into());
         if interrupt_acknowledgement {
             let mut acknowledgement =
                 Box::pin(call.interrupt(HostFailure::Cancelled(selected.clone())));

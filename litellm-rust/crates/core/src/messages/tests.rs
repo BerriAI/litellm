@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::Error;
+use crate::messages::Error;
 
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
@@ -77,7 +77,14 @@ fn truncate_error_body_caps_long_payloads() {
 fn string_headers_rejects_non_string_values() {
     let headers = json!({"x-count": 3}).as_object().unwrap().clone();
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert!(matches!(err, Error::InvalidRequest(_)));
+    assert_eq!(
+        err,
+        Error::Headers(crate::http_utils::HeaderError {
+            context: "messages",
+            name: "x-count".to_string(),
+            actual: "number",
+        })
+    );
 }
 
 #[test]
@@ -431,7 +438,10 @@ async fn messages_maps_provider_error_status_to_http_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, Error::Http { status: 401, .. }));
+    assert!(matches!(
+        err,
+        Error::Transport(crate::transport::Error::Http { status: 401, .. })
+    ));
 }
 
 #[tokio::test]

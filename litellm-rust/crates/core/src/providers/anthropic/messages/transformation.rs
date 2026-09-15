@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::messages::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -17,15 +17,13 @@ pub fn non_empty(value: Option<&str>) -> Option<&str> {
 pub fn resolve_anthropic_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, litellm_auth::Error> {
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| {
-            Error::from(crate::AuthError::MissingApiKey {
-                provider: "Anthropic",
-                environment_variable: ANTHROPIC_API_KEY_ENV,
-            })
+        .ok_or(litellm_auth::Error::MissingApiKey {
+            provider: "Anthropic",
+            environment_variable: ANTHROPIC_API_KEY_ENV,
         })
 }
 
@@ -60,7 +58,7 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        resolve_anthropic_api_key(api_key, env_lookup)
+        resolve_anthropic_api_key(api_key, env_lookup).map_err(Error::from)
     }
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {

@@ -1,10 +1,8 @@
-use crate::ocr::error::OcrRequestError;
-use crate::ocr::error::OcrResponseError;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
-use crate::Error;
+use crate::ocr::Error;
 use crate::params::OpaqueParams;
 use litellm_auth::InputSource;
 use serde::{
@@ -123,18 +121,16 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
         .unwrap_or_default()
         .into_iter()
         .map(|(name, value)| {
-            let value = value
-                .as_str()
-                .ok_or_else(|| OcrRequestError::RequestField {
-                    path: format!("extra_headers.{name}"),
-                })?;
+            let value = value.as_str().ok_or_else(|| Error::RequestField {
+                path: format!("extra_headers.{name}"),
+            })?;
             Ok((name, value.to_string()))
         })
-        .collect::<Result<Vec<_>, OcrRequestError>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
     let timeout = wire
         .timeout_seconds
         .map(|seconds| {
-            Duration::try_from_secs_f64(seconds).map_err(|_| OcrRequestError::RequestField {
+            Duration::try_from_secs_f64(seconds).map_err(|_| Error::RequestField {
                 path: "timeout_seconds".into(),
             })
         })
@@ -148,7 +144,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
                 .as_u64()
                 .and_then(|value| usize::try_from(value).ok())
                 .filter(|value| *value > 0 && *value <= defaults.max_response_bytes)
-                .ok_or_else(|| OcrRequestError::RequestField {
+                .ok_or_else(|| Error::RequestField {
                     path: "max_response_bytes".into(),
                 })
         })
@@ -182,12 +178,12 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
     })
 }
 
-fn decode_document(value: Value) -> Result<OcrDocument, OcrRequestError> {
+fn decode_document(value: Value) -> Result<OcrDocument, Error> {
     let kind = value.get("type").and_then(Value::as_str);
     let missing_url = matches!(kind, Some("document_url")) && value.get("document_url").is_none()
         || matches!(kind, Some("image_url")) && value.get("image_url").is_none();
     if missing_url {
-        return Err(OcrRequestError::MissingDocumentUrl);
+        return Err(Error::MissingDocumentUrl);
     }
     decode_request_value(value, "document")
 }
@@ -201,12 +197,9 @@ fn nonblank(value: Option<String>) -> Option<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
-pub fn decode_request_value<T: DeserializeOwned>(
-    value: Value,
-    prefix: &str,
-) -> Result<T, OcrRequestError> {
+pub fn decode_request_value<T: DeserializeOwned>(value: Value, prefix: &str) -> Result<T, Error> {
     serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
-        OcrRequestError::RequestField {
+        Error::RequestField {
             path: format!("{prefix}.{}", error.path()),
         }
     })
@@ -215,21 +208,19 @@ pub fn decode_request_value<T: DeserializeOwned>(
 pub fn decode_response<T: DeserializeOwned>(
     bytes: &[u8],
     native: bool,
-) -> Result<DecodedOcrResponse<T>, OcrResponseError> {
+) -> Result<DecodedOcrResponse<T>, Error> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let data = serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
-        OcrResponseError::ResponseField {
+        Error::ResponseField {
             path: error.path().to_string(),
         }
     })?;
-    deserializer
-        .end()
-        .map_err(|_| OcrResponseError::ResponseField {
-            path: "response".into(),
-        })?;
+    deserializer.end().map_err(|_| Error::ResponseField {
+        path: "response".into(),
+    })?;
     let native = if native {
         Some(
-            serde_json::from_slice(bytes).map_err(|_| OcrResponseError::ResponseField {
+            serde_json::from_slice(bytes).map_err(|_| Error::ResponseField {
                 path: "response".into(),
             })?,
         )
@@ -307,10 +298,18 @@ mod tests {
             serde_json::json!({"type": "document_url"}),
             serde_json::json!({"type": "image_url"}),
         ] {
-            assert_eq!(
-                decode_document(document),
-                Err(OcrRequestError::MissingDocumentUrl)
-            );
+            let wire = serde_json::from_value(serde_json::json!({
+                "model": "mistral/model",
+                "document": document,
+            }))
+            .unwrap();
+            let error = decode_request(wire).err().expect("missing document URL");
+            assert_eq!(error, Error::MissingDocumentUrl);
+            let error = crate::Error::from(error);
+            assert!(matches!(
+                error,
+                crate::Error::Ocr(Error::MissingDocumentUrl)
+            ));
         }
     }
 }

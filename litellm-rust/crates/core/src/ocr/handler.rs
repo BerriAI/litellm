@@ -5,7 +5,6 @@ use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
 use super::provider_config::OcrConfigKind;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use super::wire::DecodedOcrResponse;
-use crate::Error;
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
 use crate::llms::azure_ai::ocr::document_intelligence::AzureDocumentIntelligenceOperation;
@@ -22,6 +21,7 @@ use crate::llms::vertex_ai::ocr::deepseek_transformation::{
     DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig,
 };
 use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
+use crate::ocr::Error;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
@@ -170,10 +170,9 @@ fn request_headers(request: &reqwest::Request) -> Result<Vec<(String, String)>, 
             value
                 .to_str()
                 .map(|value| (name.to_string(), value.to_string()))
-                .map_err(|_| super::error::OcrRequestError::RequestField {
+                .map_err(|_| super::Error::RequestField {
                     path: "headers".into(),
                 })
-                .map_err(Error::from)
         })
         .collect()
 }

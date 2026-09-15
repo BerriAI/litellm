@@ -3,12 +3,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::Error;
 use crate::constants::{REDUCTO_API_BASE, REDUCTO_API_KEY_ENV, REDUCTO_ID_PREFIX};
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
-use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{
     _prepare_ocr_request, ParsedProviderParams, build_http_request, credential_env,
     guardrail_document, merge_extra_params,
@@ -152,7 +151,7 @@ fn transform_v3_ocr_request(
     _model: &str,
     document: OcrDocument,
     params: &ReductoV3Params,
-) -> Result<ReductoV3Request, OcrRequestError> {
+) -> Result<ReductoV3Request, Error> {
     Ok(ReductoV3Request {
         input: document.source().to_string(),
         params: params.clone(),
@@ -169,7 +168,7 @@ fn transform_legacy_ocr_request(
     _model: &str,
     document: OcrDocument,
     params: &ReductoLegacyParams,
-) -> Result<ReductoLegacyRequest, OcrRequestError> {
+) -> Result<ReductoLegacyRequest, Error> {
     Ok(ReductoLegacyRequest {
         document_url: document.source().to_string(),
         options: params.enhance.as_ref().map(|_| params.clone()),
@@ -179,7 +178,7 @@ fn transform_legacy_ocr_request(
 pub(crate) fn transform_ocr_response(
     model: &str,
     response: ReductoResponse,
-) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+) -> Result<LiteLLMOcrResponse, Error> {
     let result = match response.result {
         Some(result) => result.unwrap_or_default(),
         None => ReductoResult {
@@ -249,7 +248,7 @@ fn page(index: i64, markdown: String, blocks: Option<Value>) -> Value {
     }
     result
 }
-fn get_complete_url(api_base: Option<&str>, path: &str) -> Result<String, OcrError> {
+fn get_complete_url(api_base: Option<&str>, path: &str) -> Result<String, Error> {
     let base = api_base
         .map(str::trim)
         .filter(|base| !base.is_empty())
@@ -257,18 +256,15 @@ fn get_complete_url(api_base: Option<&str>, path: &str) -> Result<String, OcrErr
     ApiUrl::parse(base)
         .and_then(|url| url.complete_path(&[path]))
         .map(|url| url.into_string())
-        .map_err(|_| {
-            OcrRequestError::RequestField {
-                path: "api_base".into(),
-            }
-            .into()
+        .map_err(|_| Error::RequestField {
+            path: "api_base".into(),
         })
 }
 
 fn validate_environment(
     connection: &OcrConnection,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, OcrError> {
+) -> Result<Vec<(String, String)>, Error> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
         return Ok(connection.extra_headers.clone());
     }
@@ -296,26 +292,25 @@ async fn prepare_document(
     document: OcrDocument,
     connection: &OcrConnection,
     headers: &[(String, String)],
-) -> Result<OcrDocument, OcrError> {
+) -> Result<OcrDocument, Error> {
     if document.source().starts_with(REDUCTO_ID_PREFIX) {
         if document.source()[REDUCTO_ID_PREFIX.len()..]
             .trim()
             .is_empty()
         {
-            return Err(OcrRequestError::RequestField {
+            return Err(Error::RequestField {
                 path: "document file id".into(),
-            }
-            .into());
+            });
         }
         return Ok(document);
     }
-    let inline = InlineDocument::parse(document.source())?.ok_or(OcrRequestError::ReductoSource)?;
+    let inline = InlineDocument::parse(document.source())?.ok_or(Error::ReductoSource)?;
     let mime = inline.mime_type().to_string();
     let bytes = inline.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name("document")
         .mime_str(&mime)
-        .map_err(|_| OcrRequestError::InvalidDataUri)?;
+        .map_err(|_| Error::InvalidDataUri)?;
     let builder = client
         .provider_http()
         .post(get_complete_url(connection.api_base.as_deref(), "upload")?)
@@ -328,7 +323,7 @@ async fn prepare_document(
     );
     let response = crate::http_utils::http_request(builder)
         .await
-        .map_err(crate::error::TransportError::from)?;
+        .map_err(crate::transport::Error::from)?;
     let uploaded = crate::ocr::client::read_json_response::<ReductoUploadResponse>(
         response,
         false,
@@ -342,10 +337,9 @@ async fn prepare_document(
         .map(str::trim)
         .filter(|id| !id.is_empty());
     let Some(file_id) = file_id else {
-        return Err(OcrResponseError::ResponseField {
+        return Err(Error::ResponseField {
             path: "file_id".into(),
-        }
-        .into());
+        });
     };
     Ok(document.with_source(file_id.to_string()))
 }
@@ -364,7 +358,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, OcrError> {
+    ) -> Result<reqwest::Request, Error> {
         let ParsedProviderParams {
             known: params,
             extra_params,
@@ -382,7 +376,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         &self,
         request: &LiteLLMOcrRequest,
         response: ReductoResponse,
-    ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_ocr_response(&request.model, response)
     }
 }
@@ -400,7 +394,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
-    ) -> Result<reqwest::Request, OcrError> {
+    ) -> Result<reqwest::Request, Error> {
         let ParsedProviderParams {
             known: params,
             extra_params,
@@ -418,7 +412,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         &self,
         request: &LiteLLMOcrRequest,
         response: ReductoResponse,
-    ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_ocr_response(&request.model, response)
     }
 }

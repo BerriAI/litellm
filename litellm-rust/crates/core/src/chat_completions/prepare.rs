@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::error::Error;
+use crate::chat_completions::Error;
 use crate::http_utils::has_header;
 use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
 
