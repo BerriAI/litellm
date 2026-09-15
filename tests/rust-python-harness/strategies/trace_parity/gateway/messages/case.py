@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 from typing import Final
 
-from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
+from ...fixtures import anthropic_response_body, anthropic_stream_events, json_response, sse_response
 from ...models import GatewayRouteSpec, RouteFixture, TraceScenario, TraceSuite
 
 
@@ -49,24 +48,7 @@ def _fixture(_engine: Engine, provider: str) -> RouteFixture:
                 "max_tokens": 16,
             },
         },
-        provider_responses=(
-            RecordedHttpResponse.from_bytes(
-                200,
-                (HttpHeader(name="content-type", value="application/json"),),
-                json.dumps(
-                    {
-                        "id": "msg_trace",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-sonnet-5",
-                        "content": [{"type": "text", "text": "hello"}],
-                        "stop_reason": "end_turn",
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 2, "output_tokens": 3},
-                    }
-                ).encode(),
-            ),
-        ),
+        provider_responses=(json_response(anthropic_response_body()),),
     )
 
 
@@ -76,6 +58,13 @@ def _anthropic_fixture(engine: Engine, _base_url: str) -> RouteFixture:
 
 def _azure_fixture(engine: Engine, _base_url: str) -> RouteFixture:
     return _fixture(engine, "azure_ai")
+
+
+def _stream_fixture(engine: Engine, _base_url: str) -> RouteFixture:
+    fixture: Final = _anthropic_fixture(engine, _base_url)
+    return fixture.with_body(stream=True).derive(
+        provider_responses=(sse_response(anthropic_stream_events()),),
+    )
 
 
 ANTHROPIC_MAPPINGS: Final = (
@@ -100,7 +89,22 @@ AZURE_MAPPINGS: Final = (
 TRACE_SUITE: Final = TraceSuite(
     route=GatewayRouteSpec("messages"),
     scenarios=(
-        TraceScenario(name="anthropic", fixture=_anthropic_fixture, mappings=ANTHROPIC_MAPPINGS, modes=("async",)),
-        TraceScenario(name="azure-ai", fixture=_azure_fixture, mappings=AZURE_MAPPINGS, modes=("async",)),
+        TraceScenario(
+            name="async-anthropic", fixture=_anthropic_fixture, mappings=ANTHROPIC_MAPPINGS, asynchronous=True
+        ),
+        TraceScenario(name="async-azure-ai", fixture=_azure_fixture, mappings=AZURE_MAPPINGS, asynchronous=True),
+        TraceScenario(
+            name="async-anthropic-downstream-stream",
+            fixture=_stream_fixture,
+            mappings=(
+                *ANTHROPIC_MAPPINGS,
+                mapping(span="python_upstream_stream", python_frame=r"AnthropicMessagesStreamingResponse\.__anext__$"),
+                mapping(
+                    span="python_downstream_stream", python_frame=r"DataGenerator\.__anext__$|async_data_generator$"
+                ),
+                mapping(span="python_stream_callback", python_frame=r"Logging\.async_success_handler$"),
+            ),
+            asynchronous=True,
+        ),
     ),
 )

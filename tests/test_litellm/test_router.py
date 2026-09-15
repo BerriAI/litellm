@@ -896,6 +896,46 @@ def test_arouter_test_team_model():
     assert result is not None
 
 
+def test_team_model_has_alternatives():
+    def team_deployment(
+        deployment_id: str, team_id: str, public_model_name: str, blocked: bool = False
+    ) -> DeploymentTypedDict:
+        return {
+            "model_name": f"model_name_{team_id}_{deployment_id}",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            "model_info": {
+                "id": deployment_id,
+                "team_id": team_id,
+                "team_public_model_name": public_model_name,
+                "blocked": blocked,
+            },
+        }
+
+    router = litellm.Router(
+        model_list=[
+            team_deployment("team-a-1", "team-a", "shared-model"),
+            team_deployment("team-a-2", "team-a", "shared-model"),
+            team_deployment("team-a-solo", "team-a", "solo-model"),
+            team_deployment("team-b-1", "team-b", "shared-model"),
+            team_deployment("team-c-1", "team-c", "paused-sibling-model"),
+            team_deployment("team-c-paused", "team-c", "paused-sibling-model", blocked=True),
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "plain-1"},
+            },
+        ],
+    )
+
+    assert router.team_model_has_alternatives("team-a-1") is True
+    assert router.team_model_has_alternatives("team-a-2") is True
+    assert router.team_model_has_alternatives("team-a-solo") is False
+    assert router.team_model_has_alternatives("team-b-1") is False
+    assert router.team_model_has_alternatives("team-c-1") is False
+    assert router.team_model_has_alternatives("plain-1") is False
+    assert router.team_model_has_alternatives("missing-deployment") is False
+
+
 def test_arouter_ignore_invalid_deployments():
     """
     Test that router.ignore_invalid_deployments is set to True
@@ -3652,6 +3692,111 @@ async def test_aresponses_streaming_iterator_fallback():
     assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_content_policy_error_event_routes_to_content_policy_fallback():
+    """Regression: a mid-stream content_policy_violation error event never reached
+    content_policy_fallbacks. The iterator raised a bare APIError the wrapper does not
+    catch, and even once wrapped, the MidStreamFallbackError envelope was handed to the
+    fallback dispatch, whose isinstance branch on ContentPolicyViolationError never matched.
+    The stream below is the customer's shape: a raw OpenAI error event with code
+    content_policy_violation, transformed by the real OpenAI config, and the router must
+    call the content_policy_fallbacks target, not the general fallbacks one."""
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k1"}},
+            {
+                "model_name": "content-fallback",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "k2"},
+            },
+            {"model_name": "general-fallback", "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k3"}},
+        ],
+        fallbacks=[{"primary": ["general-fallback"]}],
+        content_policy_fallbacks=[{"primary": ["content-fallback"]}],
+    )
+    error_event = {
+        "type": "error",
+        "sequence_number": 2,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "content_policy_violation",
+            "message": "This content was flagged for possible cybersecurity risk. The response was halted mid-stream.",
+            "param": None,
+        },
+    }
+
+    async def aiter_bytes():
+        yield f"data: {json.dumps(error_event)}\n\n".encode()
+
+    raw_response = MagicMock()
+    raw_response.headers = {}
+    raw_response.aiter_bytes = aiter_bytes
+    logging_obj = MagicMock(spec=LiteLLMLogging)
+    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj.completion_start_time = None
+    source = ResponsesAPIStreamingIterator(
+        response=raw_response,
+        model="gpt-5.4",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    fallback_chunks = [MagicMock(type="response.output_text.delta"), MagicMock(type="response.completed")]
+    fallback_call = AsyncMock(return_value=_AsyncList(fallback_chunks))
+
+    wrapped = await router._aresponses_streaming_iterator(
+        response=source,
+        initial_kwargs={
+            "model": "primary",
+            "stream": True,
+            "input": "Hi",
+            "original_generic_function": fallback_call,
+        },
+    )
+    collected = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+    fallback_call.assert_awaited_once()
+    assert fallback_call.await_args.kwargs["model"] == "gemini/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_unwraps_content_policy_trigger_for_fallback_dispatch():
+    """The fallback dispatch matches on the trigger's own type, so the wrapper must hand it the
+    ContentPolicyViolationError carried inside MidStreamFallbackError, not the envelope."""
+    router = _make_router_with_fallback("openai/gpt-5.4", "openai/gpt-5-mini")
+    content_policy_error = litellm.ContentPolicyViolationError(
+        message="flagged mid-stream", llm_provider="openai", model="openai/gpt-5.4"
+    )
+    src = _make_responses_iterator(
+        chunks=[MagicMock(type="response.created")],
+        error=MidStreamFallbackError(
+            message=str(content_policy_error),
+            model="openai/gpt-5.4",
+            llm_provider="openai",
+            original_exception=content_policy_error,
+            is_pre_first_chunk=True,
+        ),
+        model="openai/gpt-5.4",
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_AsyncList([MagicMock(type="response.completed")])),
+    ) as mock_fallback_utils:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={"model": "openai/gpt-5.4", "stream": True, "input": "Hi"},
+        )
+        [chunk async for chunk in wrapped]
+
+    mock_fallback_utils.assert_awaited_once()
+    assert mock_fallback_utils.await_args.kwargs["e"] is content_policy_error
 
 
 @pytest.mark.asyncio
@@ -7735,6 +7880,52 @@ def test_get_available_deployment_raises_when_addressed_dict_is_blocked():
         router.get_available_deployment(model="dep-0", request_kwargs={})
 
 
+def _cool_down(router: Router, *deployment_ids: str) -> None:
+    for deployment_id in deployment_ids:
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=deployment_id,
+            original_exception=litellm.RateLimitError(message="upstream 429", llm_provider="openai", model="gpt-4o"),
+            exception_status=429,
+            cooldown_time=60,
+        )
+
+
+async def _select_deployment(router: Router, use_async: bool) -> None:
+    if use_async:
+        await router.async_get_available_deployment(model="gpt-4o", request_kwargs={})
+        return
+    router.get_available_deployment(model="gpt-4o", request_kwargs={})
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_get_available_deployment_names_cooldown_when_every_deployment_is_cooled_down(use_async: bool):
+    from litellm.types.router import RouterErrors, RouterRateLimitError
+
+    router: Final = _router_with_two_deployments([False, False])
+    _cool_down(router, "dep-0", "dep-1")
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        await _select_deployment(router, use_async)
+    assert exc_info.value.all_deployments_in_cooldown is True
+    assert exc_info.value.type == "all_deployments_in_cooldown"
+    assert RouterErrors.all_deployments_in_cooldown.value in str(exc_info.value)
+    assert str(exc_info.value).startswith("No deployments available for selected model, Try again in ")
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_get_available_deployment_keeps_generic_error_when_cooldown_is_partial(use_async: bool):
+    from litellm.types.router import RouterErrors, RouterRateLimitError
+
+    router: Final = _router_with_two_deployments([False, True])
+    _cool_down(router, "dep-0")
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        await _select_deployment(router, use_async)
+    assert exc_info.value.all_deployments_in_cooldown is False
+    assert exc_info.value.type == "rate_limit_error"
+    assert RouterErrors.all_deployments_in_cooldown.value not in str(exc_info.value)
+
+
 def _router_with_two_pass_through_deployments(blocked_flags):
     import litellm
 
@@ -7770,6 +7961,24 @@ def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
         router.get_available_deployment_for_pass_through(
             model="pt-0", request_kwargs={}
         )
+
+
+def test_get_available_deployment_for_pass_through_names_cooldown_despite_healthy_non_pass_through():
+    from litellm.types.router import RouterRateLimitError
+
+    router: Final = _router_with_two_pass_through_deployments([False, False])
+    router.add_deployment(
+        Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-plain", api_key="sk-fake-for-tests"),
+            model_info=ModelInfo(id="plain-0"),
+        )
+    )
+    _cool_down(router, "pt-0", "pt-1")
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        router.get_available_deployment_for_pass_through(model="gpt-4o", request_kwargs={})
+    assert exc_info.value.all_deployments_in_cooldown is True
+    assert exc_info.value.type == "all_deployments_in_cooldown"
 
 
 def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
@@ -10642,6 +10851,7 @@ def _cyclic_fallback_router(num_retries=0):
                     "api_key": "sk-fake",
                     "mock_response": "litellm.InternalServerError",
                 },
+                "model_info": {"id": f"{group}-deployment"},
             }
             for group in groups
         ],
@@ -10691,28 +10901,37 @@ async def test_cyclic_fallback_graph_does_not_amplify_one_request():
     assert sum(len(message) for message in capture.messages) < 5_000
 
 
+_FLAT_ATTEMPT_RECORD_KEYS = frozenset(
+    {"model_group", "deployment_id", "exception_type", "exception_string", "attempted_retries"}
+)
+_BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+
+
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
-    """log_retry copies every kwarg into previous_models, which reaches spend logs and
-    logging callbacks. The set of already-attempted groups is router-internal walk state
-    with no diagnostic value there, and it is the one entry that is not a plain scalar.
-    A retry has to be configured for the walk state to reach log_retry at all."""
+async def test_retry_records_are_flat_and_name_the_failed_group_on_fallback_hops():
+    """Each failed attempt leaves a flat record in previous_models, which reaches spend logs and
+    logging callbacks. Nothing downstream reads the failed attempt's kwargs or metadata, and copying
+    them is what carried client credentials and multiplied the payload on every retry. A fallback hop
+    calls log_retry too, so the record has to name the group that failed, not the one taken next."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
     recorder = _FallbackAttemptRecorder()
 
     await _drive_cyclic_fallback(router, capture, recorder)
 
-    breadcrumbs = [breadcrumb for hop in recorder.breadcrumbs_per_target for breadcrumb in hop]
-    assert breadcrumbs, "no retry breadcrumbs were recorded"
-    assert any(
-        "fallback_depth" in breadcrumb for breadcrumb in breadcrumbs
-    ), "no breadcrumb carried router walk state, so this test cannot see the leak"
-    for breadcrumb in breadcrumbs:
-        assert "attempted_targets" not in breadcrumb
-
-
-_BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+    records = [record for hop in recorder.breadcrumbs_per_target for record in hop]
+    assert records, "no retry records were recorded"
+    for record in records:
+        assert set(record) == _FLAT_ATTEMPT_RECORD_KEYS
+        assert record["exception_type"] == "InternalServerError"
+        assert record["deployment_id"] == f"{record['model_group']}-deployment"
+    group_failed_before_hop = {"group-b": "group-a", "group-c": "group-b", "group-d": "group-c"}
+    for failed_target, hop_records in zip(recorder.failed_targets, recorder.breadcrumbs_per_target):
+        groups = [record["model_group"] for record in hop_records]
+        first_own_attempt = groups.index(failed_target)
+        assert groups[first_own_attempt - 1] == group_failed_before_hop[failed_target]
+        assert set(groups[first_own_attempt:]) == {failed_target}
+        assert [record["attempted_retries"] for record in hop_records[first_own_attempt:]][:2] == [0, 1]
 
 
 @pytest.mark.parametrize(
@@ -10738,22 +10957,20 @@ _BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doN
     ],
 )
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_never_carry_a_forwarded_credential(container_key, request_kwargs):
-    """log_retry copies kwargs into previous_models, which reaches spend logs and logging callbacks.
-    Any of these kwargs can carry a client's forwarded Authorization token or a provider key, and a
-    breadcrumb has no diagnostic use for the raw secret. A denylist of key names is always one new
-    credential kwarg behind, so log_retry scrubs credential-named values by pattern instead: the
-    container still reaches the breadcrumb, but the raw secret never does, whatever key holds it."""
+async def test_retry_records_never_carry_a_forwarded_credential(container_key, request_kwargs):
+    """previous_models reaches spend logs and logging callbacks. Any request kwarg can carry a client's
+    forwarded Authorization token or a provider key, so the record must not carry request kwargs at
+    all: neither the credential-bearing container nor the raw secret, whatever key holds it."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
     metadata = {}
 
     await _drive_cyclic_fallback(router, capture, metadata=metadata, **request_kwargs)
 
-    breadcrumbs = metadata["previous_models"]
-    assert breadcrumbs, "no retry breadcrumbs were recorded"
-    dumped = json.dumps(breadcrumbs, default=str)
-    assert container_key in dumped, "the credential-bearing kwarg never reached the breadcrumb, so this test cannot see the leak"
+    records = metadata["previous_models"]
+    assert records, "no retry records were recorded"
+    dumped = json.dumps(records)
+    assert container_key not in dumped
     assert _BREADCRUMB_CREDENTIAL_CANARY not in dumped
 
 
@@ -10773,12 +10990,12 @@ def _always_failing_router(num_retries):
     )
 
 
-async def _fail_one_proxy_shaped_request(router, request_marker):
+async def _fail_one_proxy_shaped_request(router, request_marker, expected_error=litellm.InternalServerError):
     """The proxy hands the router a metadata dict and a proxy_server_request whose body is a
     shallow copy of the request, so body["metadata"] is the very same dict the router later
     stamps previous_models onto."""
     metadata = {"request_marker": request_marker}
-    with pytest.raises(litellm.InternalServerError):
+    with pytest.raises(expected_error):
         await router.acompletion(
             model="broken-group",
             messages=[{"role": "user", "content": "hi"}],
@@ -10804,34 +11021,49 @@ def _nested_breadcrumb_lists(node):
 
 
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_stay_per_request_and_flat_across_failing_requests():
-    """Every failed attempt appends a breadcrumb to metadata["previous_models"], and the proxy's
+async def test_retry_records_stay_per_request_and_flat_across_failing_requests():
+    """Every failed attempt appends a record to metadata["previous_models"], and the proxy's
     request snapshot aliases that same metadata dict. Kept on the Router and copied wholesale,
-    each breadcrumb embedded every earlier one from every earlier request, so the breadcrumb
+    each breadcrumb once embedded every earlier one from every earlier request, so the breadcrumb
     tree, and with it the debug repr of the kwargs, roughly doubled on each failed attempt until
     a single-worker proxy spent minutes in the redaction regex and stopped answering."""
     router = _always_failing_router(num_retries=2)
 
-    breadcrumbs_per_request = [
+    records_per_request = [
         await _fail_one_proxy_shaped_request(router, f"request-{request_number}") for request_number in range(1, 7)
     ]
 
-    for request_number, breadcrumbs in enumerate(breadcrumbs_per_request, start=1):
-        assert len(breadcrumbs) == 3, "one initial attempt plus two retries failed, each leaving one breadcrumb"
-        assert {breadcrumb["metadata"]["request_marker"] for breadcrumb in breadcrumbs} == {f"request-{request_number}"}
-        for breadcrumb in breadcrumbs:
-            assert _nested_breadcrumb_lists(breadcrumb) == []
-    assert len({len(repr(breadcrumbs)) for breadcrumbs in breadcrumbs_per_request}) == 1
+    for records in records_per_request:
+        assert [record["attempted_retries"] for record in records] == [0, 1, 2]
+        for record in records:
+            assert set(record) == _FLAT_ATTEMPT_RECORD_KEYS
+            assert _nested_breadcrumb_lists(record) == []
+    assert len({len(repr(records)) for records in records_per_request}) == 1
 
 
 @pytest.mark.asyncio
-async def test_retry_breadcrumbs_keep_only_the_last_four_attempts():
+async def test_retry_records_keep_only_the_last_four_attempts():
     router = _always_failing_router(num_retries=6)
 
-    breadcrumbs = await _fail_one_proxy_shaped_request(router, "request-1")
+    records = await _fail_one_proxy_shaped_request(router, "request-1")
 
-    assert len(breadcrumbs) == 4
-    assert [breadcrumb["metadata"]["attempted_retries"] for breadcrumb in breadcrumbs] == [3, 4, 5, 6]
+    assert [record["attempted_retries"] for record in records] == [3, 4, 5, 6]
+
+
+@pytest.mark.asyncio
+async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypatch):
+    monkeypatch.setattr(litellm, "num_retries_per_request", 5)
+    router = _always_failing_router(num_retries=6)
+
+    records = await _fail_one_proxy_shaped_request(router, "request-1", expected_error=litellm.APIConnectionError)
+
+    assert [record["attempted_retries"] for record in records] == [3, 4, 5, 6]
+    assert ["Max retries per request hit!" in record["exception_string"] for record in records] == [
+        False,
+        False,
+        True,
+        True,
+    ]
 
 
 @pytest.mark.asyncio
