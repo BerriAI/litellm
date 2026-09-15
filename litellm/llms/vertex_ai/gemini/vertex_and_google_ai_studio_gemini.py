@@ -200,6 +200,73 @@ def _served_model_name(model_version: object) -> str | None:
     return model_version.split("@", 1)[0]
 
 
+_GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
+        "speaker_voice_configs": "speakerVoiceConfigs",
+        "voice_config": "voiceConfig",
+        "prebuilt_voice_config": "prebuiltVoiceConfig",
+        "voice_name": "voiceName",
+        "language_code": "languageCode",
+    }
+)
+
+
+def _normalize_gemini_speech_config_item(value: object) -> object:
+    if isinstance(value, Mapping):
+        normalized: (  # mutable-ok: the iterative walk fills exactly one normalized provider payload
+            dict[str, object] | list[object]
+        ) = {}  # mutable-ok: the iterative walk fills the normalized tree; rebind-ok: each shape branch initializes the shared result
+    elif isinstance(value, list):
+        normalized = []  # mutable-ok: the iterative walk fills the normalized tree; rebind-ok: each shape branch initializes the shared result
+    else:
+        return value
+
+    pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
+        list[tuple[dict[str, object] | list[object], Mapping[object, object] | list[object]]]
+    ] = [(normalized, value)]
+    while pending:
+        target, source = pending.pop()
+        items = source.items() if isinstance(source, Mapping) else enumerate(source)
+        for key, item in items:
+            if isinstance(source, Mapping):
+                if not isinstance(key, str) or not isinstance(target, dict):
+                    continue
+                normalized_key: str | int = _GEMINI_SPEECH_CONFIG_KEY_MAP.get(key, key)
+            else:
+                if not isinstance(target, list):
+                    continue
+                normalized_key = len(target)
+
+            child: object
+            if isinstance(item, Mapping):
+                child = {}  # mutable-ok: nested mappings are filled by the worklist
+            elif isinstance(item, list):
+                child = []  # mutable-ok: nested lists are filled by the worklist
+            else:
+                child = item
+
+            if isinstance(target, dict) and isinstance(normalized_key, str):
+                target[normalized_key] = child
+            elif isinstance(target, list):
+                target.append(child)
+
+            if isinstance(child, (dict, list)) and isinstance(item, (Mapping, list)):
+                pending.append((child, item))
+    return normalized
+
+
+def normalize_gemini_speech_config(
+    value: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    normalized_value: Final = _normalize_gemini_speech_config_item(value)
+    if isinstance(normalized_value, dict):
+        return cast(  # cast-ok: the runtime dict check establishes the normalizer's concrete result shape
+            dict[str, object], normalized_value
+        )
+    return {}  # mutable-ok: provider request serialization requires a concrete empty dict
+
+
 class VertexAIBaseConfig:
     def get_mapped_special_auth_params(self) -> dict:
         """
@@ -1179,12 +1246,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             languageCode: "en-US",
         }
         """
-        from litellm.types.llms.vertex_ai import (
-            PrebuiltVoiceConfig,
-            SpeechConfig,
-            VoiceConfig,
-        )
-
         # Validate audio format - Gemini TTS only supports pcm16
         audio_format: Final = value.get("format")
         if audio_format is not None and audio_format != "pcm16":
@@ -1194,22 +1255,43 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 f"Please set audio format to 'pcm16'."
             )
 
-        # Map OpenAI audio parameter to Gemini speech config
-        speech_config: Final[SpeechConfig] = {}
+        camel_speech_config: Final = value.get("speechConfig")
+        snake_speech_config: Final = value.get("speech_config")
+        speech_config_value: Final = (
+            camel_speech_config if isinstance(camel_speech_config, Mapping) else snake_speech_config
+        )
+        language_code: Final = value.get("language_code", value.get("languageCode"))
+        if isinstance(speech_config_value, Mapping):
+            speech_config: Final = normalize_gemini_speech_config(speech_config_value)
+            if language_code is not None and "languageCode" not in speech_config:
+                return {  # mutable-ok: provider request serialization requires a concrete dict
+                    **speech_config,
+                    "languageCode": language_code,
+                }
+            return speech_config
 
-        if "voice" in value:
-            voice: Final = value["voice"]
-            voice_name: Final = (
-                OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice
-            )
-            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": voice_name}
-            voice_config: Final[VoiceConfig] = {"prebuiltVoiceConfig": prebuilt_voice_config}
-            speech_config["voiceConfig"] = voice_config
+        voice: Final = value.get("voice")
+        speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
+            dict[str, object]  # mutable-ok: provider request serialization requires a concrete dict
+        ] = (
+            {  # mutable-ok: provider request serialization requires a concrete dict
+                "voiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
+                    "prebuiltVoiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
+                        "voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice,
+                    }
+                }
+            }
+            if "voice" in value
+            else {}  # mutable-ok: provider request serialization requires a concrete empty dict
+        )
 
-        if "language_code" in value:
-            speech_config["languageCode"] = value["language_code"]
+        if language_code is not None:
+            return {  # mutable-ok: provider request serialization requires a concrete dict
+                **speech_config_without_language,
+                "languageCode": language_code,
+            }
 
-        return cast(dict, speech_config)
+        return speech_config_without_language
 
     def map_audio_params(
         self,
