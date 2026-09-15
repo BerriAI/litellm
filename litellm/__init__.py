@@ -45,9 +45,11 @@ from typing import (
     TYPE_CHECKING,
     Union,
 )
+from collections.abc import Mapping
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
+from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -154,6 +156,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "pointfive",
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
@@ -439,6 +442,7 @@ s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
+pointfive_params: Optional[Union[PointFiveInitParams, Mapping[str, object]]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -475,6 +479,7 @@ prometheus_metrics_config: Optional[List] = None
 prometheus_exclude_metrics: Optional[List[str]] = None
 prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
+prometheus_emit_input_sequence_length_label: bool = False
 prometheus_deployment_and_latency_caller_identity: Literal[
     "api_key_alias",
     "user_email",
@@ -496,6 +501,7 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
+public_skills_index: bool = False
 public_agent_groups: Optional[List[str]] = None
 agent_search_embedding_model: Optional[str] = None
 mcp_tool_search: Optional[Mapping[str, object]] = None
@@ -532,7 +538,7 @@ context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
-num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
+num_retries_per_request: Optional[int] = None  # cap on Router retries of one model group; resets per fallback hop
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
@@ -546,7 +552,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -1365,6 +1371,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -1466,9 +1473,11 @@ from .vector_stores.vector_store_registry import (
     VectorStoreRegistry,
     VectorStoreIndexRegistry,
 )
+from .types.vector_stores import VectorStoreSearchFailureMode
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+vector_store_search_failure_mode: VectorStoreSearchFailureMode = "annotate"
 
 ### RAG ###
 from . import rag
@@ -2405,3 +2414,5 @@ def __getattr__(name: str) -> Any:
 
 
 # ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
+
+mark_litellm_import_complete()

@@ -4,7 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
@@ -15,12 +15,14 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
     from litellm.router import Router
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
@@ -145,6 +147,7 @@ class UpdateRouterConfig(BaseModel):
     context_window_fallbacks: list[dict] | None = None
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
+    weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
 
@@ -267,6 +270,12 @@ class CredentialLiteLLMParams(BaseModel):
     # callers see it, breaking Azure deployments configured with
     # ``azure_ad_token`` instead of a static ``api_key`` (#30235).
     azure_ad_token: str | None = None
+    tenant_id: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    azure_scope: str | None = None
+    azure_username: str | None = None
+    azure_password: str | None = None
     ## VERTEX AI ##
     vertex_project: str | None = None
     vertex_location: str | None = None
@@ -288,6 +297,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_web_identity_token: str | None = None
     aws_sts_endpoint: str | None = None
     aws_external_id: str | None = None
+    aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
@@ -525,6 +535,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     input_cost_per_second: float | None
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
@@ -611,6 +622,24 @@ class Deployment(BaseModel):
         setattr(self, key, value)
 
 
+@dataclass(frozen=True, slots=True)
+class DeploymentModelListingInfo:
+    """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
+
+    ``cost_map_keys`` are the names those deployments' underlying models are known by in
+    ``litellm.model_cost`` (``base_model`` when set, else ``litellm_params.model``), which
+    is what a request actually reaches; the public model name they are listed under is an
+    arbitrary alias and often absent from the cost map. Keys are deduplicated in config
+    order, so the ordinary group -- several interchangeable deployments of one model --
+    carries exactly one. The token limits are the widest explicitly set in any
+    deployment's ``model_info``, which outrank anything the cost map says.
+    """
+
+    cost_map_keys: tuple[str, ...]
+    max_input_tokens: int | None
+    max_output_tokens: int | None
+
+
 class RouterErrors(enum.Enum):
     """
     Enum for router specific errors with common codes
@@ -618,6 +647,7 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+    all_deployments_in_cooldown = "All deployments for selected model are in cooldown"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
     no_healthy_deployments = "There are no healthy deployments for this model"
@@ -841,6 +871,11 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
+class RouterErrorTypes(str, enum.Enum):
+    rate_limit_error = "rate_limit_error"
+    all_deployments_in_cooldown = "all_deployments_in_cooldown"
+
+
 class RouterRateLimitError(ValueError):
     def __init__(
         self,
@@ -848,18 +883,39 @@ class RouterRateLimitError(ValueError):
         cooldown_time: float,
         enable_pre_call_checks: bool,
         cooldown_list: list,
+        model_ids: Sequence[str] = (),
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
-        _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
+        self.type = (
+            RouterErrorTypes.all_deployments_in_cooldown.value
+            if self.all_deployments_in_cooldown
+            else RouterErrorTypes.rate_limit_error.value
+        )
+        _reason: Final = (
+            f" {RouterErrors.all_deployments_in_cooldown.value}." if self.all_deployments_in_cooldown else ""
+        )
+        _message: Final = (
+            f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds.{_reason} "
+            f"Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        )
         super().__init__(_message)
 
 
 class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `.get_model_list`
+
+
+class RetryAttemptRecord(TypedDict):
+    model_group: ReadOnly[str | None]
+    deployment_id: ReadOnly[str | None]
+    exception_type: ReadOnly[str]
+    exception_string: ReadOnly[str]
+    attempted_retries: ReadOnly[int | None]
 
 
 VALID_LITELLM_ENVIRONMENTS = [

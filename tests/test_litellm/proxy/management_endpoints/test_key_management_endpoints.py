@@ -1,3 +1,5 @@
+from typing import Final
+from types import SimpleNamespace
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +20,7 @@ from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -25,6 +28,7 @@ from litellm.proxy._types import (
     Member,
     ProxyException,
     ResetSpendRequest,
+    RegenerateKeyRequest,
     UpdateKeyRequest,
 )
 from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_cache_key
@@ -5085,6 +5089,104 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
     assert len(deleted_keys) == 2
 
 
+class _JWTMappingRow:
+    def __init__(self, token, jwt_claim_name, jwt_claim_value):
+        self.token = token
+        self.jwt_claim_name = jwt_claim_name
+        self.jwt_claim_value = jwt_claim_value
+
+
+class _CascadingJWTMappingTable:
+    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key is deleted."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_many(self, where, **kwargs):
+        return [row for row in self.rows if row.token == where["token"]]
+
+    def cascade(self, deleted_tokens):
+        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
+
+
+class _RecordingEvict:
+    def __init__(self):
+        self.cache_keys = ()
+
+    async def __call__(self, cache_keys, user_api_key_cache):
+        self.cache_keys = tuple(cache_keys)
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypatch):
+    """Deleting a key must evict its jwt_key_mapping cache entries (LIT-5380).
+
+    The FK cascade removes the mapping rows, so a surviving cache entry would keep
+    resolving the deleted token hash and 401 every JWT call from that identity until
+    virtual_key_mapping_cache_ttl expires, instead of auto-registering again.
+    """
+    jwt_table = _CascadingJWTMappingTable(
+        [_JWTMappingRow("hashed-token-1", "email", "user@example.com")]
+    )
+
+    key1 = LiteLLM_VerificationToken(
+        token="hashed-token-1",
+        user_id="user-123",
+        team_id=None,
+        key_alias="jwt-mapped-key",
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[key1]
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+
+    async def cascading_delete_data(tokens):
+        jwt_table.cascade(tokens)
+        return list(tokens)
+
+    mock_prisma_client.delete_data = AsyncMock(side_effect=cascading_delete_data)
+
+    recording_evict = _RecordingEvict()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.evict_and_broadcast",
+        recording_evict,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: token,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    )
+
+    await delete_verification_tokens(
+        tokens=["hashed-token-1"],
+        user_api_key_cache=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+    )
+
+    assert recording_evict.cache_keys == ("jwt_key_mapping:email:user@example.com",)
+
+
 @pytest.mark.asyncio
 async def test_delete_key_fn_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import KeyRequest
@@ -6315,7 +6417,7 @@ def test_build_key_filter_conditions_key_alias_narrows_team_admin_visibility():
         admin_team_ids=["team-a"],
         member_team_ids=["team-a"],
         include_created_by_keys=False,
-        use_substring_matching=True,
+        use_key_alias_substring_matching=True,
     )
     assert {"key_alias": {"contains": "member-key", "mode": "insensitive"}} in where_substring["AND"], (
         f"substring key_alias not ANDed: {where_substring}"
@@ -6515,6 +6617,9 @@ async def test_generate_key_with_router_settings(monkeypatch):
         return_value=[]
     )
     mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[
+        SimpleNamespace(model_id="weighted-id", model_name="gpt-4", model_info={})
+    ])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -6530,6 +6635,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
         "routing_strategy": "usage-based",
         "num_retries": 3,
         "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
+        "weights": {"gpt-4": {"weighted-id": 1}},
     }
 
     request_data = GenerateKeyRequest(
@@ -6579,20 +6685,36 @@ async def test_generate_key_with_router_settings(monkeypatch):
 
     # Verify router_settings matches input (regardless of serialization state)
     assert actual_settings == router_settings_data
+    mock_prisma_client.insert_data.reset_mock()
+    with pytest.raises(ProxyException, match="Unknown deployment ID"):
+        await generate_key_fn(
+            data=GenerateKeyRequest(router_settings={"weights": {"gpt-4": {"unknown-id": 1}}}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="user-router-1"),
+        )
+    mock_prisma_client.insert_data.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_update_key_with_router_settings(monkeypatch):
+@pytest.mark.parametrize("request_type", [UpdateKeyRequest, RegenerateKeyRequest])
+@pytest.mark.parametrize("target_team", ["new-team", None])
+async def test_update_key_with_router_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[UpdateKeyRequest | RegenerateKeyRequest], target_team: str | None,
+) -> None:
     """
     Test that /key/update correctly handles router_settings by:
     1. Accepting router_settings as a dict parameter
     2. Serializing router_settings to JSON when updating database
     3. Updating router_settings in the key record
     """
-    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
+
+    model = SimpleNamespace(model_id="weighted-id", model_name="gpt-4", model_info={})
+    table = SimpleNamespace(find_many=AsyncMock(return_value=[model]))
+    db = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table))
 
     # Mock existing key
     existing_key = LiteLLM_VerificationToken(
@@ -6610,14 +6732,16 @@ async def test_update_key_with_router_settings(monkeypatch):
     router_settings_data = {
         "routing_strategy": "latency-based",
         "num_retries": 2,
+        "weights": {"gpt-4": {"weighted-id": 1}},
     }
 
-    update_request = UpdateKeyRequest(
+    update_request = request_type(
         key="test-token-router", router_settings=router_settings_data
     )
 
     result = await prepare_key_update_data(
-        data=update_request, existing_key_row=existing_key
+        data=update_request, existing_key_row=existing_key,
+        prisma_client=db, llm_router=None,
     )
 
     # Verify router_settings is serialized to JSON string
@@ -6627,6 +6751,28 @@ async def test_update_key_with_router_settings(monkeypatch):
     # Verify router_settings can be deserialized and matches input
     deserialized_settings = json.loads(result["router_settings"])
     assert deserialized_settings == router_settings_data
+
+    with pytest.raises(HTTPException, match="Unknown deployment ID"):
+        await prepare_key_update_data(
+            request_type(key=existing_key.token, router_settings={"weights": {"gpt-4": {"unknown-id": 1}}}),
+            existing_key,
+            prisma_client=db, llm_router=None,
+        )
+    existing_key.team_id = "old-team"
+    existing_key.router_settings = router_settings_data
+    move = request_type(key=existing_key.token, team_id=target_team)
+    retained = await prepare_key_update_data(move, existing_key, prisma_client=db, llm_router=None)
+    assert retained["team_id"] == target_team
+    assert "router_settings" not in retained
+    model.model_info = {"team_id": "old-team"}
+    with pytest.raises(HTTPException, match="Unknown deployment ID"):
+        await prepare_key_update_data(move, existing_key, prisma_client=db, llm_router=None)
+    cleared = await prepare_key_update_data(
+        request_type(key=existing_key.token, team_id=target_team, router_settings={}), existing_key,
+        prisma_client=db, llm_router=None,
+    )
+    assert cleared["team_id"] == target_team
+    assert json.loads(cleared["router_settings"]) == {}
 
 
 @pytest.mark.asyncio
@@ -9260,7 +9406,7 @@ async def test_build_key_filter_team_id_scoped():
 async def test_build_key_filter_admin_substring_matching():
     """
     Admin callers get substring (contains + insensitive) matching for user_id
-    and key_alias when use_substring_matching=True.
+    and key_alias when both substring flags are set.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _build_key_filter_conditions,
@@ -9280,6 +9426,7 @@ async def test_build_key_filter_admin_substring_matching():
         member_team_ids=None,
         include_created_by_keys=False,
         use_substring_matching=True,
+        use_key_alias_substring_matching=True,
     )
 
     assert where["AND"][0]["user_id"] == {"contains": user_id, "mode": "insensitive"}
@@ -15051,14 +15198,116 @@ async def test_list_keys_admin_substring_opt_in():
 
 @pytest.mark.asyncio
 async def test_list_keys_non_admin_cannot_opt_into_substring():
-    """substring_matching is admin-only: a non-admin requesting it still gets
-    exact matching, scoped to their own user_id."""
+    """user_id substring matching is admin-only: a non-admin requesting it still
+    gets exact matching, scoped to their own user_id."""
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
     kwargs = await _list_keys_capture_helper_kwargs(
         user, user_id=None, substring_matching=True
     )
     assert kwargs["use_substring_matching"] is False
     assert kwargs["user_id"] == "alice"
+
+
+def _prisma_where_matches(row, where):
+    for field, expected in where.items():
+        if field == "AND":
+            if not all(_prisma_where_matches(row, child) for child in expected):
+                return False
+        elif field == "OR":
+            if not any(_prisma_where_matches(row, child) for child in expected):
+                return False
+        elif isinstance(expected, dict):
+            value = getattr(row, field)
+            if "in" in expected and value not in expected["in"]:
+                return False
+            if "not" in expected and value == expected["not"]:
+                return False
+            if "contains" in expected:
+                haystack, needle = value or "", expected["contains"]
+                if expected.get("mode") == "insensitive":
+                    haystack, needle = haystack.lower(), needle.lower()
+                if needle not in haystack:
+                    return False
+        elif getattr(row, field) != expected:
+            return False
+    return True
+
+
+class _InMemoryVerificationTokenTable:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_many(self, where, **kwargs):
+        return [row for row in self.rows if _prisma_where_matches(row, where)]
+
+    async def count(self, where):
+        return len(await self.find_many(where))
+
+
+def _team_key(token, key_alias, user_id):
+    return LiteLLM_VerificationToken(token=token, key_alias=key_alias, user_id=user_id, team_id="team-a")
+
+
+_TEAM_A_KEYS = (
+    _team_key("tok-alice-first", "app_llmhub_first.last", "alice"),
+    _team_key("tok-alice-other", "alice_other_key", "alice"),
+    _team_key("tok-bob-first", "bob_First_key", "bob"),
+    _team_key("tok-svc-first", "service_first_key", None),
+)
+
+
+def _list_team_a_keys_as(user_role, members_with_roles, query):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.key_management_endpoints import router
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken = _InMemoryVerificationTokenTable(_TEAM_A_KEYS)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="alice", teams=["team-a"], organization_memberships=[])
+    )
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[LiteLLM_TeamTable(team_id="team-a", members_with_roles=members_with_roles)]
+    )
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="alice")
+    with patch(  # test-quality-ok: /key/list reads the prisma client from the proxy_server module global, no injection point
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    ):
+        response = TestClient(test_app).get(
+            f"/key/list?team_id=team-a&include_team_keys=true&include_created_by_keys=true&{query}"
+        )
+    assert response.status_code == 200, response.text
+    return sorted(response.json()["keys"])
+
+
+_ALICE_TEAM_ADMIN = [Member(user_id="alice", role="admin"), Member(user_id="bob", role="user")]
+_ALICE_TEAM_MEMBER = [Member(user_id="alice", role="user"), Member(user_id="bob", role="user")]
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.TEAM],
+)
+def test_list_keys_team_admin_key_alias_substring_returns_every_matching_team_key(user_role):
+    keys = _list_team_a_keys_as(user_role, _ALICE_TEAM_ADMIN, "key_alias=first&substring_matching=true")
+    assert keys == ["tok-alice-first", "tok-bob-first", "tok-svc-first"]
+
+
+def test_list_keys_team_member_key_alias_substring_stays_within_own_visibility():
+    keys = _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_MEMBER, "key_alias=first&substring_matching=true"
+    )
+    assert keys == ["tok-alice-first", "tok-svc-first"]
+
+
+def test_list_keys_key_alias_stays_exact_without_substring_matching():
+    assert _list_team_a_keys_as(LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_ADMIN, "key_alias=first") == []
+    assert _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_ADMIN, "key_alias=app_llmhub_first.last"
+    ) == ["tok-alice-first"]
 
 
 @pytest.mark.asyncio
@@ -17975,6 +18224,32 @@ def test_key_request_blank_organization_id_is_unset():
     assert UpdateKeyRequest(key="sk-1", organization_id="org-1").organization_id == "org-1"
 
 
+def test_update_key_request_blank_team_id_is_not_a_team_change():
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        is_different_team,
+    )
+
+    blank = UpdateKeyRequest(key="sk-1", team_id="", key_alias="renamed")
+    assert blank.team_id is None
+    assert "team_id" not in blank.model_dump(exclude_unset=True)
+    assert blank.model_dump(exclude_unset=True) == {"key": "sk-1", "key_alias": "renamed"}
+    assert is_different_team(data=blank, existing_key_row=LiteLLM_VerificationToken(token="hashed")) is False
+    assert (
+        is_different_team(data=blank, existing_key_row=LiteLLM_VerificationToken(token="hashed", team_id="team-1"))
+        is False
+    )
+    assert "team_id" in UpdateKeyRequest(key="sk-1", team_id=None).model_dump(exclude_unset=True)
+    assert UpdateKeyRequest(key="sk-1", team_id="team-1").team_id == "team-1"
+    assert (
+        is_different_team(
+            data=UpdateKeyRequest(key="sk-1", team_id="team-1"),
+            existing_key_row=LiteLLM_VerificationToken(token="hashed"),
+        )
+        is True
+    )
+
+
 def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatch):
     """key_generation_check with team_id="" must take the personal-key path instead
     of failing the team lookup with "Unable to find team object" (LIT-3925)."""
@@ -18005,3 +18280,59 @@ def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatc
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_project_detachment_preserves_omission_and_other_key_fields():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-detach-token", project_id="project-orbit", team_id="team-orbit",
+        organization_id="org-orbit", models=["model-orbit"], max_budget=5, rpm_limit=97,
+    )
+    omitted: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key=existing.token, key_alias="renamed"), existing_key_row=existing,
+    )
+    assert "project_id" not in omitted
+    cleared: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key=existing.token, project_id=None), existing_key_row=existing,
+    )
+    assert cleared == {"project_id": None, "metadata": {}}
+    assert existing.project_id == "project-orbit"
+
+
+@pytest.mark.parametrize("project_id", [None, "project-orbit", "project-other", ""])
+@pytest.mark.asyncio
+async def test_project_detachment_uses_effective_project_for_validation(project_id: str | None):
+    existing: Final = LiteLLM_VerificationToken(token="project-detach-token", project_id="project-orbit")
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+    data: Final = UpdateKeyRequest(key=existing.token, project_id=project_id, models=["model-other"])
+    if project_id is None:
+        await _validate_update_key_data(
+            data, existing, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, MagicMock(), cache,
+        )
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data, existing, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                None, False, MagicMock(), cache,
+            )
+        assert exc.value.status_code == 400
+        expected: Final = "not in project's allowed models" if project_id == "project-orbit" else "reassignment"
+        assert expected in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_creator_cannot_detach_project_without_admin_access():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-detach-token", project_id="project-orbit", user_id="user-orbit", created_by="user-orbit",
+    )
+    database: Final = MagicMock()
+    database.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing)
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id=None), existing,
+            UserAPIKeyAuth(user_id="user-orbit", user_role=LitellmUserRoles.INTERNAL_USER),
+            None, False, database, UserApiKeyCache(),
+        )
+    assert exc.value.status_code == 403
+    assert "Only proxy admins, team admins, or org admins" in str(exc.value.detail)

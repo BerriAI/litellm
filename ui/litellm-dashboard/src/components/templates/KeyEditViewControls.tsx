@@ -1,11 +1,16 @@
 import React from "react";
-import { Control } from "react-hook-form";
+import { Control, UseFormReturn } from "react-hook-form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CircleHelp } from "lucide-react";
 import { FormField } from "@/components/shared/form/FormField";
+import { toast } from "@/lib/toast";
+import AgentSelector from "../agent_management/AgentSelector";
 import NumericalInput from "../shared/numerical_input";
-import { KeyEditFormValues } from "./keyEditFormValues";
+import SkillSelector from "../skills/SkillSelector";
+import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
+import { AgentsAndGroups, KeyEditFormValues } from "./keyEditFormValues";
 
 export const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
   <>
@@ -51,6 +56,72 @@ export const KeyTypeSelect = ({
       ))}
     </SelectContent>
   </Select>
+);
+
+const SKILLS_HINT =
+  "Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here.";
+
+export const KeyAgentAndSkillFields = ({
+  control,
+  accessToken,
+}: {
+  control: Control<KeyEditFormValues>;
+  accessToken: string;
+}) => (
+  <>
+    <FormField control={control} name="agents_and_groups" label="Agents / Access Groups">
+      {({ value, onChange }) => (
+        <AgentSelector
+          onChange={onChange}
+          value={value as AgentsAndGroups | undefined}
+          accessToken={accessToken}
+          placeholder="Select agents or access groups (optional)"
+        />
+      )}
+    </FormField>
+
+    <FormField control={control} name="skills" label={labelWithHint("Skills", SKILLS_HINT)}>
+      {({ value, onChange }) => (
+        <SkillSelector onChange={onChange} value={value as string[] | undefined} accessToken={accessToken} />
+      )}
+    </FormField>
+  </>
+);
+
+type KeyEditForm = Pick<
+  UseFormReturn<KeyEditFormValues, unknown, KeyEditFormValues>,
+  "control" | "getValues" | "setValue"
+>;
+
+export const moveMetadataTagsToTagsField = (form: KeyEditForm): void => {
+  const moved = moveTagsOutOfMetadataJson(form.getValues("metadata"), form.getValues("tags"));
+  if (moved === null) return;
+  form.setValue("metadata", moved.metadata, { shouldDirty: true });
+  form.setValue("tags", moved.tags, { shouldDirty: true });
+  if (moved.movedTags.length > 0) {
+    toast.info(`Moved ${moved.movedTags.join(", ")} from metadata to the Tags field`);
+  }
+};
+
+export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => (
+  <FormField
+    control={form.control}
+    name="metadata"
+    label="Metadata"
+    description="Tags are managed by the Tags field above. A tags array typed here is moved to that field."
+  >
+    {(field) => (
+      <Textarea
+        {...field}
+        value={(field.value as string | undefined) ?? ""}
+        rows={10}
+        onBlur={() => {
+          field.onBlur();
+          moveMetadataTagsToTagsField(form);
+        }}
+      />
+    )}
+  </FormField>
 );
 
 export const KeyBudgetNumberField = ({

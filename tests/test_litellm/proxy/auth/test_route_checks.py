@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 
@@ -2033,6 +2034,82 @@ def test_proxy_admin_viewer_can_access_logs_page_endpoints(route):
         )
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+def test_internal_user_can_access_logs_drawer_detail_route(user_role):
+    """
+    The Logs drawer detail fetch (GET /spend/logs/ui/{request_id}) must pass
+    route_checks for plain internal users, not just admins — the handler
+    itself already self-authorizes row ownership via
+    _assert_user_can_view_request_id.
+    """
+    route = "/spend/logs/ui/abc-request-id"
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=user_role.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=user_role.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=user_role.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {str(e)}")
+
+
+@pytest.mark.parametrize(
+    "route_group_name",
+    [
+        "spend_tracking_routes",
+        "internal_user_routes",
+        "internal_user_view_only_routes",
+        "admin_viewer_routes",
+        "org_admin_allowed_routes",
+    ],
+)
+def test_logs_drawer_detail_route_in_every_route_group(route_group_name):
+    """
+    /spend/logs/ui/{request_id} must be reachable through
+    RouteChecks.check_route_access under each role's own route group, so a
+    partial revert (removing the route from `spend_tracking_routes` while
+    leaving `non_proxy_admin_allowed_routes_check` alone) is also caught.
+    """
+    from litellm.proxy._types import LiteLLMRoutes
+
+    allowed_routes = getattr(LiteLLMRoutes, route_group_name).value
+    assert RouteChecks.check_route_access(
+        route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes
+    )
+
+
+def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
+    """
+    A virtual key scoped to `allowed_routes=["spend_tracking_routes"]` must be
+    able to reach the Logs drawer detail route.
+    """
+    valid_token = UserAPIKeyAuth(
+        user_id="scoped_key_user",
+        allowed_routes=["spend_tracking_routes"],
+    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/spend/logs/ui/req-34099", valid_token=valid_token
+    )
+
+
 @pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
 def test_internal_user_blocked_from_admin_viewer_logs_routes(route):
     """
@@ -3826,3 +3903,80 @@ def test_team_disable_logging_stays_proxy_admin_only():
 def test_neighbouring_team_routes_stay_closed(route):
     """The grant is the callback paths and nothing else on the team namespace."""
     assert "Only proxy admin" in _gate(route, LitellmUserRoles.INTERNAL_USER.value)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/claude-code/marketplace.json",
+        "/claude-code/plugins",
+        "/claude-code/plugins/my-skill",
+    ],
+)
+def test_claude_code_marketplace_routes_open_to_internal_users(route):
+    """Per-skill visibility is enforced inside the handler, so the route gate must let non-admins through."""
+    assert RouteChecks.is_llm_api_route(route) is True
+    assert _gate(route, LitellmUserRoles.INTERNAL_USER.value) == "allowed"
+
+
+@pytest.mark.parametrize("user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
+@pytest.mark.parametrize("allowed_routes", [None, ["llm_api_routes"]])
+def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(
+    user_role: str | None, allowed_routes: list[str] | None
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(api_key="hash-of-caller", user_role=user_role, allowed_routes=allowed_routes)
+    request: Final = Request({"type": "http", "method": "GET", "query_string": b"session_id=sess-1"})
+
+    assert RouteChecks.should_call_route("/auto_router/session", valid_token, request) is True
+    assert RouteChecks.is_llm_api_route("/auto_router/session") is False
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=user_role,
+        route="/auto_router/session",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+    with pytest.raises(Exception, match="Only proxy admin"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=user_role,
+            route="/auto_router/benchmarks",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+@pytest.mark.parametrize(
+    "route,method,allowed_routes",
+    [
+        ("/auto_router/session", method, ["llm_api_routes"])
+        for method in ("POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", None)
+    ]
+    + [
+        (route, "GET", ["llm_api_routes"])
+        for route in (
+            "/auto_router/benchmarks",
+            "/auto_router/test_routing",
+            "/auto_router/validate_complexity_router_config",
+            "/auto_router/session/other",
+            "/auto_router/sessions",
+        )
+    ]
+    + [
+        ("/auto_router/session", "GET", allowed_routes)
+        for allowed_routes in (["/v1/messages"], ["info_routes"], ["openai_routes"])
+    ],
+)
+def test_auto_router_session_read_grant_rejects_other_methods_paths_and_scopes(
+    route: str, method: str | None, allowed_routes: list[str]
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(api_key="hash-of-caller", allowed_routes=allowed_routes)
+    request: Final = Request({"type": "http", "method": method}) if method is not None else None
+
+    with pytest.raises(HTTPException) as error:
+        RouteChecks.should_call_route(route, valid_token, request)
+
+    assert error.value.status_code == 403

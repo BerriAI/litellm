@@ -127,6 +127,7 @@ def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str
     return KeyMetadata(
         key_alias=meta.get("key_alias"),
         team_id=meta.get("team_id"),
+        user_id=meta.get("user_id"),
         user_email=meta.get("user_email"),
     )
 

@@ -27,12 +27,13 @@ from litellm.litellm_core_utils.url_utils import (
     provider_url_destination_candidates,
     validate_url,
 )
+from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
@@ -316,6 +317,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_profile_name",
     "aws_session_name",
     "aws_external_id",
+    "aws_session_tags",
     "vertex_credentials",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
@@ -1734,7 +1736,7 @@ def _append_model_candidates(candidates: list[str], value: Any) -> None:
         candidates.extend(model for model in model_names if model)
 
 
-def _dedupe_model_candidates(candidates: list[str]) -> list[str]:
+def _dedupe_model_candidates(candidates: Collection[str]) -> list[str]:
     deduped: Final[list[str]] = []
     for model in candidates:
         if model not in deduped:
@@ -1843,13 +1845,42 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
         return model_id
 
 
+def get_cache_prediction_deployments(
+    *, current_deployment_id: str, candidate_deployment_id: str, llm_router: Router, team_id: str | None
+) -> tuple[Deployment, Deployment] | None:
+    current: Final = llm_router.get_deployment(current_deployment_id)
+    candidate: Final = llm_router.get_deployment(candidate_deployment_id)
+    if current is None or candidate is None:
+        return None
+    if any(deployment.model_info.team_id not in (None, team_id) for deployment in (current, candidate)):
+        return None
+    return current, candidate
+
+
+def _cache_prediction_model_candidates(
+    request_data: Mapping[str, object], llm_router: Router | None, team_id: str | None
+) -> tuple[str, ...]:
+    current_id: Final = request_data.get("current_deployment_id")
+    candidate_id: Final = request_data.get("candidate_deployment_id")
+    if llm_router is None or not isinstance(current_id, str) or not isinstance(candidate_id, str):
+        return ()
+    deployments: Final = get_cache_prediction_deployments(
+        current_deployment_id=current_id, candidate_deployment_id=candidate_id, llm_router=llm_router, team_id=team_id
+    )
+    return tuple(deployment.model_name for deployment in deployments) if deployments is not None else ()
+
+
 def _extract_model_candidates_from_request(
     request_data: dict,
     route: str,
     request_headers: Mapping[str, object] | None = None,
     request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
+    team_id: str | None = None,
 ) -> list[str]:
+    if route == "/cost/predict-cache":
+        prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
+        return _dedupe_model_candidates(prediction_models)
     candidates: Final[list[str]] = []
     uses_model_routing_sources: Final = _route_uses_model_routing_sources(route=route)
     uses_header_or_query_model_sources: Final = _route_matches_any_marker(
@@ -1943,6 +1974,7 @@ def get_model_from_request(
     request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
     request: Request | None = None,
+    team_id: str | None = None,
 ) -> str | list[str] | None:
     """Resolve the model(s) a request targets, for model-access and budget checks.
 
@@ -1965,6 +1997,7 @@ def get_model_from_request(
         request_headers=request_headers,
         request_query_params=request_query_params,
         llm_router=llm_router,
+        team_id=team_id,
     )
     model = _format_model_candidates(candidates)
 
@@ -2003,7 +2036,18 @@ def get_model_from_request(
         bedrock_model: Final = _model_from_bedrock_route(route)
         return model if bedrock_model is None else bedrock_model
 
+    if route.lower().startswith(("/azure/", "/azure_ai/")):
+        azure_model: Final = _router_model_from_azure_route(route, llm_router)
+        return model if azure_model is None else azure_model
+
     return model
+
+
+def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
+    if llm_router is None:
+        return None
+    endpoint: Final = re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE)
+    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.get_model_names()))
 
 
 def _model_from_bedrock_route(route: str) -> str | None:

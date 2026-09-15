@@ -102,6 +102,20 @@ describe("EditProjectModal submit payload", () => {
     });
   });
 
+  it("should send an explicit clear after blanking a saved budget", async () => {
+    const user = setup();
+    renderModal();
+
+    const budgetInput = screen.getByRole("spinbutton", { name: "Max Budget (USD)" });
+    await user.clear(budgetInput);
+    await user.tab();
+    expect(budgetInput).toHaveValue(null);
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(JSON.parse(JSON.stringify(variables().params))).toMatchObject({ max_budget: null });
+  });
+
   it("includes the advanced fields once Advanced Settings has been opened, even after collapsing it again", async () => {
     const user = setup();
     renderModal();

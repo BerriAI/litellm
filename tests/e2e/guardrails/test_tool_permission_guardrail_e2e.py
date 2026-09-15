@@ -30,6 +30,7 @@ from guardrails_client import (
     ToolPermissionParamsBody,
     ToolPermissionRuleBody,
     poll_until_blocked,
+    poll_until_guardrail_applied,
 )
 from lifecycle import ResourceManager
 from models import ChatResponse, ChatTool, ChatToolFunction
@@ -84,8 +85,8 @@ def _register_tool_permission(client: GuardrailsClient, resources: ResourceManag
     resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
 
-def _applied_guardrails(outcome: StreamingResponse) -> str:
-    return outcome.headers.get("x-litellm-applied-guardrails", "")
+def _applied_guardrails(outcome: StreamingResponse) -> tuple[str, ...]:
+    return tuple(name.strip() for name in outcome.headers.get("x-litellm-applied-guardrails", "").split(","))
 
 
 def _tool_call_names(response: ChatResponse) -> tuple[str, ...]:
@@ -144,14 +145,17 @@ class TestToolPermissionPreCall:
         name = f"e2e-toolperm-allow-{unique_marker()}"
         _register_tool_permission(client, resources, name=name)
 
-        outcome = client.chat_raw(
-            scoped_key,
-            MODEL,
-            TOOL_PROMPT,
-            guardrails=[name],
-            max_tokens=128,
-            tools=[ALLOWED_TOOL],
-            tool_choice="required",
+        outcome = poll_until_guardrail_applied(
+            lambda: client.chat_raw(
+                scoped_key,
+                MODEL,
+                TOOL_PROMPT,
+                guardrails=[name],
+                max_tokens=128,
+                tools=[ALLOWED_TOOL],
+                tool_choice="required",
+            ),
+            name,
         )
 
         assert outcome.ok, f"the permitted tool must be served, got {outcome.status_code}: {outcome.body[:400]}"
