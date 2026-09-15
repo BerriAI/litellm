@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.integrations.langsmith import LangsmithLogger
+from litellm.types.integrations.langsmith import LangsmithQueueObject
 
 
 @pytest.fixture
@@ -536,30 +538,39 @@ class TestLangsmithRootRunIdConsistency:
 @pytest.mark.asyncio
 async def test_events_appended_during_flush_are_not_dropped():
     logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
-    sent_batches: list[list[dict]] = []
-    late_event = {"credentials": logger.default_credentials, "data": {"id": "late"}}
+    try:
+        sent_batches: Final[list[list[dict[str, str]]]] = []
+        late_event: Final = LangsmithQueueObject(
+            credentials=logger.default_credentials, data={"id": "late"}
+        )
 
-    async def fake_post(url, json, headers):
-        if not sent_batches:
-            logger.log_queue.append(late_event)
-        sent_batches.append(json["post"])
-        response = MagicMock()
-        response.status_code = 200
-        response.raise_for_status = MagicMock()
-        return response
+        async def fake_post(
+            url: str, json: dict[str, list[dict[str, str]]], headers: dict[str, str]
+        ) -> MagicMock:
+            if not sent_batches:
+                logger.log_queue.append(late_event)
+            sent_batches.append(json["post"])
+            response = MagicMock()
+            response.status_code = 200
+            response.raise_for_status = MagicMock()
+            return response
 
-    logger.async_httpx_client = MagicMock(post=AsyncMock(side_effect=fake_post))
-    logger.log_queue = [
-        {"credentials": logger.default_credentials, "data": {"id": "a"}},
-        {"credentials": logger.default_credentials, "data": {"id": "b"}},
-    ]
+        logger.async_httpx_client = MagicMock(post=AsyncMock(side_effect=fake_post))
+        logger.log_queue = [
+            LangsmithQueueObject(credentials=logger.default_credentials, data={"id": "a"}),
+            LangsmithQueueObject(credentials=logger.default_credentials, data={"id": "b"}),
+        ]
 
-    await logger.flush_queue()
+        await logger.flush_queue()
 
-    assert [e["id"] for e in sent_batches[0]] == ["a", "b"]
-    assert logger.log_queue == [late_event]
+        assert [e["id"] for e in sent_batches[0]] == ["a", "b"]
+        assert logger.log_queue == [late_event]
 
-    await logger.flush_queue()
+        await logger.flush_queue()
 
-    assert [e["id"] for e in sent_batches[1]] == ["late"]
-    assert logger.log_queue == []
+        assert [e["id"] for e in sent_batches[1]] == ["late"]
+        assert logger.log_queue == []
+    finally:
+        if logger._flush_task is not None:
+            logger._flush_task.cancel()
+            await asyncio.gather(logger._flush_task, return_exceptions=True)
