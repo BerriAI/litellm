@@ -1434,6 +1434,10 @@ class TestStrictIdentity:
             b'{"value":0.123456789012345678901}',
             b'{"value":0.123456789012345678902}',
             b'{"value":1e400}',
+            b'{"value":1}',
+            b'{"value":1e0}',
+            b'{"value":-0}',
+            b'{"value":1e9999999999999999999}',
         ],
     )
     def test_json_values_remain_distinct(self, tmp_path: Path, body: bytes) -> None:
@@ -1462,6 +1466,10 @@ class TestStrictIdentity:
                     b'{"value":0.123456789012345678901}',
                     b'{"value":0.123456789012345678902}',
                     b'{"value":1e400}',
+                    b'{"value":1}',
+                    b'{"value":1e0}',
+                    b'{"value":-0}',
+                    b'{"value":1e9999999999999999999}',
                 )
                 for rejected in (
                     call_edge(edge, "POST", CHAT_PATH, body=value, headers={"content-type": "application/json"})
@@ -1487,7 +1495,6 @@ class TestStrictIdentity:
             (CHAT_PATH, b"opaque", {"content-type": "application/octet-stream"}),
             (CHAT_PATH, b"--boundary", {"content-type": "multipart/form-data; boundary=boundary"}),
             (CHAT_PATH, b'{"x":1,"x":2}', {"content-type": "application/json"}),
-            (CHAT_PATH, b'{"x":1e9999999999999999999}', {"content-type": "application/json"}),
             (CHAT_PATH, b"{}", {"content-type": "application/json", "x-custom-behavior": "synthetic-private-value"}),
         ],
     )
@@ -1531,7 +1538,7 @@ class TestStrictIdentity:
         assert isinstance(recorder, BundleRecorder)
         headers: Final = {
             "content-type": "application/json",
-            "authorization": "Bearer synthetic-token",
+            "authorization": "bEaReR synthetic-token",
             "x-api-key": "synthetic-api-key",
             "cookie": "synthetic-cookie",
         }
@@ -1643,7 +1650,7 @@ assert replay_leftover_error(mode_raw="replay", bundle_dir=Path(sys.argv[1]), te
                         "POST",
                         CHAT_PATH,
                         body=b"{}",
-                        headers={**headers, "authorization": "Bearer synthetic-token"},
+                        headers={**headers, "authorization": "bEaReR synthetic-token"},
                     ).status_code
                     == 200
                 )

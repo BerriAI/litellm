@@ -4,14 +4,20 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal, DecimalException
 from typing import Final, Literal
 from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 type MatchProfile = Literal["legacy", "stateless_v1"]
-type ExactJson = dict[str, ExactJson] | list[ExactJson] | str | bool | Decimal | int | None
+
+
+@dataclass(frozen=True, slots=True)
+class NumberToken:
+    literal: str
+
+
+type ExactJson = dict[str, ExactJson] | list[ExactJson] | str | bool | NumberToken | None
 
 SEMANTIC_HEADERS: Final = frozenset({"content-type", "accept", "anthropic-version", "anthropic-beta", "openai-beta"})
 AUTH_HEADERS: Final = frozenset({"authorization", "x-api-key"})
@@ -93,8 +99,8 @@ def _exact_value(value: ExactJson) -> JsonValue:
             return {"array": [_exact_value(item) for item in value]}
         case bool():
             return {"boolean": value}
-        case int() | Decimal():
-            return {"number": str(value)}
+        case NumberToken(literal=literal):
+            return {"number": literal}
         case str():
             return {"string": value}
         case None:
@@ -140,13 +146,17 @@ def strict_identity(
         parsed: Final = (
             JSON_VALUE.validate_python(
                 json.loads(
-                    body, object_pairs_hook=_unique_object, parse_constant=_invalid_constant, parse_float=Decimal
+                    body,
+                    object_pairs_hook=_unique_object,
+                    parse_constant=_invalid_constant,
+                    parse_float=NumberToken,
+                    parse_int=NumberToken,
                 )
             )
             if body
             else None
         )
-    except (ValueError, UnicodeError, DecimalException):
+    except (ValueError, UnicodeError):
         return IneligibleRequest("invalid JSON or duplicate JSON object keys")
     if body and not isinstance(parsed, dict):
         return IneligibleRequest("stateless inference requires a JSON object")
@@ -160,7 +170,7 @@ def strict_identity(
         query=tuple((key, "<credential>" if key.lower() in CREDENTIAL_QUERY else value) for key, value in query_pairs),
         headers={key: value for key, value in lowered.items() if key in SEMANTIC_HEADERS},
         auth={
-            key: (value.partition(" ")[0] if key == "authorization" else "present")
+            key: (value.partition(" ")[0].lower() if key == "authorization" else "present")
             for key, value in lowered.items()
             if key in AUTH_HEADERS
         },
