@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final, Protocol, TypeAlias, assert_never
+from typing import Final, Protocol, TypeAlias
+
+from typing_extensions import assert_never
 
 _TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
