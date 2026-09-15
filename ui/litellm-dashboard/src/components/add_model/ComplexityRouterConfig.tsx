@@ -143,7 +143,14 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first" | "hybrid" | "capability";
+export type ClassifierType =
+  | "heuristic"
+  | "heuristic_v2"
+  | "llm"
+  | "heuristic_first"
+  | "hybrid"
+  | "capability"
+  | "llm_v2";
 
 /**
  * Whether this router can call classifier_llm_config.model. Mirrors the backend's
@@ -151,7 +158,7 @@ export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_f
  * control and payload key, so a new chaining type cannot strip knobs the operator set.
  */
 export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  (["llm", "heuristic_first", "hybrid", "capability"] as const).some((type) => type === classifierType);
+  (["llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const).some((type) => type === classifierType);
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -176,7 +183,8 @@ export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
-  if (classifierType === "heuristic_v2" || classifierType === "capability") return "never";
+  if (classifierType === "heuristic_v2" || classifierType === "capability" || classifierType === "llm_v2")
+    return "never";
   if (classifierType === "heuristic" || classifierType === "heuristic_first" || classifierType === "hybrid")
     return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";

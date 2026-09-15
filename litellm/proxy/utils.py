@@ -85,7 +85,11 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.exceptions import RejectedRequestError, SensitiveDataRouteException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    RejectedRequestError,
+    SensitiveDataRouteException,
+)
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
@@ -899,6 +903,9 @@ def _call_type_for_route(route: str | None) -> str | None:
         return None
     operations: Final = frozenset(call_type.value.removeprefix("a") for call_type in call_types)
     return call_types[0].value if len(operations) == 1 else None
+
+
+_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 
 
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -2991,6 +2998,7 @@ class ProxyLogging:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
             - ProxyException (guardrail blocks, budget / rate-limit errors)
+            - GuardrailRaisedException (guardrail blocks / guardrail failures)
         """
 
         #########################################################
@@ -3005,9 +3013,7 @@ class ProxyLogging:
         if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
             return False
 
-        return isinstance(original_exception, (HTTPException, ProxyException)) or (
-            error_type == ProxyErrorTypes.auth_error
-        )
+        return isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS) or (error_type == ProxyErrorTypes.auth_error)
 
     async def _handle_logging_proxy_only_error(
         self,
@@ -3563,8 +3569,9 @@ class ProxyLogging:
                     yield chunk
             except (GeneratorExit, asyncio.CancelledError):
                 raise
-            except Exception:
-                ProxyLogging._fire_deferred_stream_logging(request_data)
+            except Exception as e:
+                if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+                    ProxyLogging._fire_deferred_stream_logging(request_data)
                 raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
@@ -3638,8 +3645,9 @@ class ProxyLogging:
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
             raise
-        except Exception:
-            ProxyLogging._fire_deferred_stream_logging(request_data)
+        except Exception as e:
+            if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+                ProxyLogging._fire_deferred_stream_logging(request_data)
             raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
@@ -3734,6 +3742,23 @@ class ProxyLogging:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
+
+    @staticmethod
+    def _discard_deferred_stream_logging_for_failure(request_data: Mapping[str, object], error: Exception) -> bool:
+        """Drop the parked success dispatch for an assembled chat stream that ends in an error
+        ``post_call_failure_hook`` logs as a failure, billing its usage on the failure row instead.
+        Returns False when the parked dispatch should still be flushed by the caller."""
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if not isinstance(logging_obj, Logging):
+            return False
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        assembled: Final = _args[0] if _args else None
+        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS) or not isinstance(assembled, ModelResponse):
+            return False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj._deferred_stream_complete_args = None
+        logging_obj.record_assembled_response_for_failure(assembled)
+        return True
 
     async def _arelease_max_parallel_requests_on_disconnect(
         self,
@@ -4295,7 +4320,8 @@ class PrismaClient:
                             t.spend AS team_spend,
                             t.max_budget AS team_max_budget,
                             t.tpm_limit AS team_tpm_limit,
-                            t.rpm_limit AS team_rpm_limit
+                            t.rpm_limit AS team_rpm_limit,
+                            t.tpd_limit AS team_tpd_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
                         """,
@@ -4734,6 +4760,7 @@ class PrismaClient:
                             t.soft_budget AS team_soft_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
+                            t.tpd_limit AS team_tpd_limit,
                             t.models AS team_models,
                             t.metadata AS team_metadata,
                             t.blocked AS team_blocked,
@@ -4751,6 +4778,7 @@ class PrismaClient:
                             b.max_budget AS litellm_budget_table_max_budget,
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
+                            b.tpd_limit AS litellm_budget_table_tpd_limit,
                             b.model_max_budget as litellm_budget_table_model_max_budget,
                             b.soft_budget as litellm_budget_table_soft_budget,
                             o.metadata as organization_metadata,

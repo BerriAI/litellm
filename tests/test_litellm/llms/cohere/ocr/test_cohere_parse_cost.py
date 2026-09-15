@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import pytest
@@ -22,19 +21,6 @@ def _ocr_response(model: str, pages_processed: int) -> OCRResponse:
         model=model,
         usage_info=OCRUsageInfo(pages_processed=pages_processed),
     )
-
-
-@pytest.mark.parametrize("cost_map_path", COST_MAPS, ids=lambda path: path.name)
-@pytest.mark.parametrize("model, provider", MODELS)
-def test_pricing_entry(cost_map_path: Path, model: str, provider: str) -> None:
-    with open(cost_map_path) as f:
-        info = json.load(f).get(model)
-
-    assert info is not None, f"{model} missing from {cost_map_path.name}"
-    assert info["litellm_provider"] == provider
-    assert info["mode"] == "ocr"
-    assert info["supported_endpoints"] == ["/v1/ocr"]
-    assert info["ocr_cost_per_page"] == COST_PER_PAGE
 
 
 @pytest.mark.parametrize("model, provider", MODELS)

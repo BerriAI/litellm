@@ -63,7 +63,9 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import Deplo
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
+    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
+    ChatCompletionUserMessage,
     ResponsesAPIResponse,
 )
 from litellm.types.utils import (
@@ -79,6 +81,7 @@ from .capability_classifier import (
     capability_classifier_response_format,
     capability_classifier_system_prompt,
     parse_capability_classifier_verdict,
+    unwrap_classifier_json,
 )
 from .classification_rubrics import BUSINESS_TIER_CRITERIA, calibration_examples_section
 from .config import (
@@ -101,6 +104,7 @@ from .config import (
     CustomDimension,
     TierDefinition,
 )
+from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
 
 if TYPE_CHECKING:
@@ -1002,6 +1006,8 @@ class ClassificationOutcome(NamedTuple):
         "reasoning_override",
         "llm_classifier",
         "capability_classifier",
+        "llm_v2_classifier",
+        "llm_v2_fallback",
         "heuristic_first_short_circuit",
         "hybrid_short_circuit",
         "housekeeping",
@@ -1012,16 +1018,41 @@ class ClassificationOutcome(NamedTuple):
     ]
     classifier_cost: float | None = None
     capability_forecast: CapabilityClassifierForecast | None = None
+    llm_v2_forecast: LLMV2Decision | None = None
 
 
 def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
     return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
 
 
-def _with_capability_forecast(
+def _with_llm_v2_forecast(
+    decision: StandardLoggingRoutingDecision, forecast: LLMV2Decision
+) -> StandardLoggingRoutingDecision:
+    """Preserve full numeric precision for both solver forecasts and the applied policy."""
+    enriched: Final[StandardLoggingRoutingDecision] = {
+        **decision,
+        "classifier_efficient_p_solve": forecast.verdict.forecasts.efficient.p_solve,
+        "classifier_capable_p_solve": forecast.verdict.forecasts.capable.p_solve,
+        "classifier_max_quality_gap": forecast.max_quality_gap,
+        "classifier_prompt_version": LLM_V2_PROMPT_VERSION,
+    }
+    if forecast.calibration_version is None:
+        return enriched
+    calibrated: Final[StandardLoggingRoutingDecision] = {
+        **enriched,
+        "classifier_calibrated_efficient_p_solve": forecast.efficient,
+        "classifier_calibrated_capable_p_solve": forecast.capable,
+        "classifier_calibration_version": forecast.calibration_version,
+    }
+    return calibrated
+
+
+def _with_classifier_forecast(
     decision: StandardLoggingRoutingDecision, outcome: ClassificationOutcome
 ) -> StandardLoggingRoutingDecision:
-    """Attach the validated capability verdict and applied threshold to its decision record."""
+    """Attach validated forecasts and their applied policy to the routing decision."""
+    if outcome.llm_v2_forecast is not None:
+        return _with_llm_v2_forecast(decision, outcome.llm_v2_forecast)
     forecast: Final = outcome.capability_forecast
     if forecast is None:
         return decision
@@ -1319,6 +1350,8 @@ class ComplexityRouter(CustomLogger):
                     capability_config.response_format if capability_config is not None else "json_schema"
                 )
                 if self.config.classifier_type == "capability"
+                else llm_v2_response_format(self.config.llm_v2_config.response_format)
+                if self.config.llm_v2_config is not None
                 else type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
             )
             if llm_classifier_configured
@@ -1357,6 +1390,10 @@ class ComplexityRouter(CustomLogger):
                 supplement=capability.empirical_supplement if capability is not None else None,
                 forecast_context=capability.forecast_context if capability is not None else None,
             )
+        v2: Final = self.config.llm_v2_config
+        if v2 is not None:
+            pools: Final = self._tier_pools()
+            return v2.system_prompt(pools[v2.efficient_tier][0], pools[v2.capable_tier][0])
         definitions: Final = self.config.tier_definitions
         if definitions is not None:
             return custom_tier_classification_prompt(
@@ -1776,7 +1813,7 @@ class ComplexityRouter(CustomLogger):
             return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "capability" and self.config.classifier_llm_config is not None:
             return await self._capability_classifier_outcome(prompt, request_kwargs, messages)
-        if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
+        if self.config.classifier_type not in ("llm", "llm_v2") or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
@@ -1972,6 +2009,14 @@ class ComplexityRouter(CustomLogger):
                 signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
             )
         try:
+            if self.config.classifier_type == "llm_v2":
+                v2_outcome: Final = await self._classify_with_llm_v2(prompt, system_prompt, request_kwargs, messages)
+                if breaker is not None and permit is not None:
+                    if v2_outcome.cause == "llm_v2_fallback":
+                        breaker.record_failure(permit, is_timeout=False)
+                    else:
+                        breaker.record_success(permit)
+                return v2_outcome
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
@@ -1989,7 +2034,9 @@ class ComplexityRouter(CustomLogger):
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
-            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
+            return self._classifier_failure_outcome(
+                f"LLM classifier failed ({type(e).__name__})", prompt, system_prompt, scored
+            )
 
     def _classifier_failure_outcome(
         self,
@@ -2004,6 +2051,18 @@ class ComplexityRouter(CustomLogger):
 
         A caller that already scored the prompt passes `scored` so the heuristic arm returns that
         verdict instead of running the same scan again on the request path."""
+        v2: Final = self.config.llm_v2_config
+        if v2 is not None:
+            verbose_router_logger.warning("ComplexityRouter: %s, routing to llm_v2 capable tier", reason)
+            return _with_signal(
+                ClassificationOutcome(
+                    tier=ComplexityTier(v2.capable_tier),
+                    score=None,
+                    signals=("llm-v2:fallback-capable",),
+                    cause="llm_v2_fallback",
+                ),
+                signal,
+            )
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
@@ -2116,6 +2175,20 @@ class ComplexityRouter(CustomLogger):
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
 
+    def _classifier_caller_constraints(
+        self, system_prompt: str | None, request_kwargs: Mapping[str, object] | None
+    ) -> str | None:
+        """Exclude Claude Code's environment and skill catalogs from task forecasts."""
+        return (
+            None
+            if any(
+                is_claude_code_user_agent(user_agent)
+                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                if isinstance(user_agent := metadata.get("user_agent"), str)
+            )
+            else system_prompt
+        )
+
     async def _classify_with_llm(
         self,
         prompt: str,
@@ -2165,15 +2238,7 @@ class ComplexityRouter(CustomLogger):
         )
 
         encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
-        caller_system_prompt: Final = (
-            None
-            if any(
-                is_claude_code_user_agent(user_agent)
-                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
-                if isinstance(user_agent := metadata.get("user_agent"), str)
-            )
-            else system_prompt
-        )
+        caller_system_prompt: Final = self._classifier_caller_constraints(system_prompt, request_kwargs)
         user_payload: Final = self._build_classifier_user_payload(
             prompt="The delegated task in the following agent_message." if encrypted_task is not None else prompt,
             system_prompt=caller_system_prompt,
@@ -2265,6 +2330,62 @@ class ComplexityRouter(CustomLogger):
         )
         return ComplexityTier(selected_tier), classifier_cost, forecast
 
+    async def _classify_with_llm_v2(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        v2: Final = self.config.llm_v2_config
+        if v2 is None or self._classifier_system_prompt is None:
+            raise ValueError("llm_v2_config is not set")
+        request: Final[Mapping[str, object]] = request_kwargs or MappingProxyType({})
+        markers: Final = self._reminder_markers_for_request(request)
+        encrypted: Final = _encrypted_classifier_task(request_kwargs, markers)
+        asks: Final = (
+            ("The delegated task in the following agent_message.",)
+            if encrypted is not None
+            else tuple(reversed(tuple(_iter_human_asks_newest_first(messages or (), markers))))
+        )
+        task_context: Final[LLMV2TaskContext] = {
+            "caller_constraints": self._classifier_caller_constraints(system_prompt, request_kwargs),
+            "task_and_follow_ups": asks or (prompt,),
+        }
+        task: Final = json.dumps(task_context)
+        image_parts: Final = self._classifier_image_parts(messages)
+        text_part: Final[ChatCompletionTextObject] = {"type": "text", "text": task}
+        user_content: Final[str | Sequence[ChatCompletionTextObject | ChatCompletionImageObject]] = (
+            [text_part, *image_parts] if image_parts else task  # mutable-ok: provider adapters require content arrays
+        )
+        system_message: Final[ChatCompletionSystemMessage] = {
+            "role": "system",
+            "content": self._classifier_system_prompt,
+        }
+        user_message: Final[ChatCompletionUserMessage] = {"role": "user", "content": user_content}
+        messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: Router requires an SDK message list
+            system_message,
+            user_message,
+        ]
+        content, classifier_cost = await self._call_classifier_model(
+            messages_for_call, request_kwargs, encrypted_task=encrypted, max_output_tokens=v2.max_output_tokens
+        )
+        try:
+            verdict: Final = LLMV2Verdict.model_validate_json(unwrap_classifier_json(content))
+        except ValidationError:
+            return self._classifier_failure_outcome("Invalid LLM V2 forecast", prompt, system_prompt)._replace(
+                classifier_cost=classifier_cost
+            )
+        decision: Final = v2.classify(verdict)
+        return ClassificationOutcome(
+            tier=ComplexityTier(v2.efficient_tier if decision.use_efficient else v2.capable_tier),
+            score=None,
+            signals=decision.signals,
+            cause="llm_v2_classifier",
+            classifier_cost=classifier_cost,
+            llm_v2_forecast=decision,
+        )
+
     async def _call_classifier_model(
         self,
         messages_for_call: list[AllMessageValues],  # mutable-ok: provider SDK requires a concrete message list
@@ -2310,7 +2431,7 @@ class ComplexityRouter(CustomLogger):
         )
         proxy_server_request: Final = {
             "originating_request_masked": masked_originating_request(request_kwargs),
-            "body": {"model": llm_config.model, **payload},
+            "body": {"model": llm_config.model, **payload},  # mutable-ok: logging SDK expects a JSON request body
         }
         classify: Final = (
             self.litellm_router_instance.aresponses
@@ -2337,9 +2458,7 @@ class ComplexityRouter(CustomLogger):
         content: Final = (
             response.output_text if isinstance(response, ResponsesAPIResponse) else response.choices[0].message.content
         )
-        if not content:
-            raise ValueError("LLM classifier returned empty content")
-        return content, _response_cost_or_none(response)
+        return content or "", _response_cost_or_none(response)
 
     def _native_classifier_payload(
         self,
@@ -4349,7 +4468,7 @@ class ComplexityRouter(CustomLogger):
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
             self.config.classifier_llm_config.model
-            if outcome.cause in ("llm_classifier", "capability_classifier")
+            if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")
             and self.config.classifier_llm_config is not None
             else None
         )
@@ -4392,5 +4511,5 @@ class ComplexityRouter(CustomLogger):
             model=routed_model,
             messages=messages if has_original_messages else None,
             litellm_params=tier_litellm_params,
-            routing_decision=_with_capability_forecast(routing_decision, outcome),
+            routing_decision=_with_classifier_forecast(routing_decision, outcome),
         )

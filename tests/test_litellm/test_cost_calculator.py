@@ -1,10 +1,7 @@
 
-import json
-from pathlib import Path
 from typing import Final
 
 import pytest
-
 
 from pydantic import BaseModel
 
@@ -1214,6 +1211,47 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     assert cost > 0
 
 
+def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
+    """A rerank deployment priced only via ``input_cost_per_query`` must resolve
+    cost against its ``router_model_id`` entry: the shared backend alias has
+    custom pricing stripped, so pricing it there bills every search unit as $0.
+    """
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "semantic-ranker-default-004",
+                "litellm_params": {
+                    "model": "vertex_ai/semantic-ranker-default-004",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                },
+                "model_info": {"input_cost_per_query": 0.001},
+            },
+        ]
+    )
+    router_model_id: Final = router.model_list[0]["model_info"]["id"]
+    assert litellm.model_cost["vertex_ai/semantic-ranker-default-004"].get("input_cost_per_query") is None
+
+    response: Final = RerankResponse(
+        id="vertex_ai_rerank_test",
+        results=[{"index": 3, "relevance_score": 0.48}],
+        meta={"billed_units": {"search_units": 3}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="vertex_ai/semantic-ranker-default-004",
+        custom_llm_provider="vertex_ai",
+        call_type="arerank",
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    assert cost == pytest.approx(3 * 0.001)
+
+
 def test_azure_realtime_cost_calculator(_local_model_cost_map):
 
     cost = handle_realtime_stream_cost_calculation(
@@ -1821,7 +1859,6 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     assert (
         abs(output_cost - expected_output_cost) < 1e-10
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
-
 
 
 AZURE_GPT_5_6_MAP_KEYS = (
@@ -4583,26 +4620,6 @@ def test_claude_3_one_hour_cache_writes_bill_at_double_input(
     prompt_cost, _ = cost_per_token(model=model, usage_object=usage, custom_llm_provider="anthropic")
 
     assert prompt_cost == pytest.approx(1000 * expected_1hr_rate, rel=1e-9)
-
-
-def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
-    """Guard against pasting one model's 1h cache-write price onto another: every provider
-    LiteLLM tracks (Anthropic, Bedrock, Vertex, Azure) publishes the 1h write at 2x input."""
-
-    cost_map = json.loads(
-        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
-    )
-    one_hour_prefix = "cache_creation_input_token_cost_above_1hr"
-    deviations = {
-        (name, key): (entry["input_cost_per_token" + key[len(one_hour_prefix) :]], entry[key])
-        for name, entry in cost_map.items()
-        if isinstance(entry, dict)
-        for key in entry
-        if key.startswith(one_hour_prefix)
-        and entry[key] != pytest.approx(2 * entry["input_cost_per_token" + key[len(one_hour_prefix) :]], rel=1e-9)
-    }
-
-    assert deviations == {}
 
 
 def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) -> None:

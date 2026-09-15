@@ -1206,6 +1206,7 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
+    tpd_limit: int | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
@@ -1891,6 +1892,9 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     )
     tpm_limit: int | None = Field(default=None, description="Max tokens per minute, allowed for this budget id.")
     rpm_limit: int | None = Field(default=None, description="Max requests per minute, allowed for this budget id.")
+    tpd_limit: int | None = Field(
+        default=None, description="Max tokens per day, charged by batch submissions, allowed for this budget id."
+    )
     budget_duration: str | None = Field(
         default=None,
         description="Max duration budget should be set for (e.g. '1hr', '1d', '28d')",
@@ -2067,6 +2071,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     metadata: dict | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
     models: list | None = None
@@ -3022,6 +3027,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_alias: str | None = None
     team_tpm_limit: int | None = None
     team_rpm_limit: int | None = None
+    team_tpd_limit: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_models: list = []
@@ -3041,6 +3047,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_id: str | None = None
     end_user_tpm_limit: int | None = None
     end_user_rpm_limit: int | None = None
+    end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: dict | None = None
 
@@ -3839,6 +3846,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
+    user_agent: ReadOnly[str | None]
     litellm_call_id: str | None
     applied_guardrails: list[str] | None
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None

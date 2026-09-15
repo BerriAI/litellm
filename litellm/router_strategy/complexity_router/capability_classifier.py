@@ -241,10 +241,15 @@ def capability_classifier_system_prompt(
     )
 
 
-def parse_capability_classifier_verdict(content: str) -> CapabilityClassifierVerdict:
-    """Parse raw JSON or the fenced JSON shape tolerated by Switchyard."""
+def unwrap_classifier_json(content: str) -> str:
+    """Remove the optional Markdown fence without repairing or weakening verdict JSON."""
     text: Final = content.strip()
     if not text.startswith("```"):
-        return CapabilityClassifierVerdict.model_validate_json(text)
+        return text
     unfenced: Final = text.removeprefix("```").removeprefix("json").lstrip("\n\r")
-    return CapabilityClassifierVerdict.model_validate_json(unfenced.removesuffix("```").strip())
+    return unfenced.removesuffix("```").strip()
+
+
+def parse_capability_classifier_verdict(content: str) -> CapabilityClassifierVerdict:
+    """Parse raw JSON or the fenced JSON shape tolerated by Switchyard."""
+    return CapabilityClassifierVerdict.model_validate_json(unwrap_classifier_json(content))
