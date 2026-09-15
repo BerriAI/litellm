@@ -10,6 +10,7 @@ Covers ``_wrap_streaming_iterator_with_enrichment``,
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import datetime
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
@@ -18,12 +19,15 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.utils import Usage
 
 
 @pytest.fixture(autouse=True)
@@ -479,37 +483,25 @@ async def test_native_messages_stream_logging_fires_when_guardrail_blocks_after_
     assert logging_obj._deferred_stream_complete_args is None
 
 
-@pytest.mark.asyncio
-async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_success(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
-    """
-    On /chat/completions streams the CSW shape parks
-    ``(assembled ModelResponse, cache_hit)`` as the deferred args. A guardrail
-    that raises ``GuardrailRaisedException`` at end of stream must NOT dispatch
-    that deferred success logging - the request is logged via the failure path
-    instead, with the consumed usage carried over so the failure row bills
-    correctly.
-    """
-    from litellm.exceptions import GuardrailRaisedException
-    from litellm.types.utils import Usage
-
-    events: List[Any] = []
-    request_data: Dict[str, Any] = {"metadata": {}}
+def _armed_chat_stream(
+    test_name: str, request_data: dict[str, object], events: list[str]
+) -> tuple[LiteLLMLoggingObj, AsyncIterator[dict[str, object]]]:
+    """A /chat/completions stream whose CSW shape parks ``(assembled ModelResponse, cache_hit)``
+    at upstream exhaustion, with the deferred dispatch recording into ``events``."""
     logging_obj = LiteLLMLoggingObj(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="acompletion",
         start_time=datetime.now(),
-        litellm_call_id="test_chat_stream_guardrail_block",
-        function_id="test_chat_stream_guardrail_block",
+        litellm_call_id=test_name,
+        function_id=test_name,
     )
     logging_obj.optional_params = {}
     logging_obj.litellm_params = {}
     logging_obj.standard_built_in_tools_params = None
 
-    async def _dispatch_deferred_logging(*args):
+    async def _dispatch_deferred_logging(*args: object) -> None:
         events.append("success_dispatched")
 
     logging_obj._on_deferred_stream_complete = _dispatch_deferred_logging
@@ -521,24 +513,48 @@ async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_suc
         usage=Usage(prompt_tokens=3, completion_tokens=5, total_tokens=8),
     )
 
-    async def _upstream():
+    async def _upstream() -> AsyncIterator[dict[str, object]]:
         yield {"id": "c1", "choices": [{"index": 0, "delta": {"content": "BAN"}}]}
         yield {"id": "c1", "choices": [{"index": 0, "delta": {"content": "ANA"}}]}
         logging_obj._deferred_stream_complete_args = (assembled, False)
 
-    class _BlockingGuardrail(CustomLogger):
-        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+    return logging_obj, _upstream()
+
+
+def _raising_at_end_of_stream(error: Exception) -> CustomLogger:
+    class _EndOfStreamRaiser(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+        ) -> AsyncGenerator[object, None]:
             async for chunk in response:
                 yield chunk
-            raise GuardrailRaisedException(
-                guardrail_name="g", message="blocked", blocked_content=True
-            )
+            raise error
 
-    monkeypatch.setattr(litellm, "callbacks", [_BlockingGuardrail()])
+    return _EndOfStreamRaiser()
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_success(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    A guardrail that raises ``GuardrailRaisedException`` at end of a
+    /chat/completions stream must NOT dispatch the parked success logging:
+    the request is logged via the failure path instead, with the consumed
+    usage carried over so the failure row bills correctly.
+    """
+    events: list[str] = []
+    request_data: dict[str, object] = {"metadata": {}}
+    logging_obj, upstream = _armed_chat_stream("test_chat_stream_guardrail_block", request_data, events)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_raising_at_end_of_stream(GuardrailRaisedException(guardrail_name="g", message="blocked"))],
+    )
 
     with pytest.raises(GuardrailRaisedException):
         async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
-            response=_upstream(),
+            response=upstream,
             user_api_key_dict=make_user_api_key_auth(),
             request_data=request_data,
         ):
@@ -560,6 +576,40 @@ async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_suc
         "combined_usage_total_tokens": 8,
         "response_cost_positive": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes_success_logging(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    ``post_call_failure_hook`` only routes proxy-level errors (HTTPException,
+    ProxyException, GuardrailRaisedException) through failure logging. A
+    callback that dies with any other exception after the stream completed
+    must keep flushing the parked success dispatch, or the request ends with
+    no terminal log at all.
+    """
+    events: list[str] = []
+    request_data: dict[str, object] = {"metadata": {}}
+    logging_obj, upstream = _armed_chat_stream("test_chat_stream_generic_callback_error", request_data, events)
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(RuntimeError("callback crashed"))])
+
+    with pytest.raises(RuntimeError):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=upstream,
+            user_api_key_dict=make_user_api_key_auth(),
+            request_data=request_data,
+        ):
+            pass
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    snapshot = {
+        "events": events,
+        "args_cleared": logging_obj._deferred_stream_complete_args is None,
+        "failure_usage_recorded": "combined_usage_object" in logging_obj.model_call_details,
+    }
+    assert snapshot == {"events": ["success_dispatched"], "args_cleared": True, "failure_usage_recorded": False}
 
 
 # ---------------------------------------------------------------------------

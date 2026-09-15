@@ -4,6 +4,7 @@ and ``_handle_logging_proxy_only_error``."""
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -334,15 +335,16 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
     object's ``async_failure_handler`` so custom loggers see a ``failure``
     status - without this, guardrail blocks produce only
     ``post_call_failure_hook`` and no failure logging event."""
-    from datetime import datetime
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-    recorded: dict[str, Any] = {}
+    recorded: list[object] = []
 
     class _StatusRecorder(CustomLogger):
-        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            recorded["status"] = (kwargs.get("standard_logging_object") or {}).get("status")
+        async def async_log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            standard_logging_object = kwargs.get("standard_logging_object")
+            recorded.append(standard_logging_object.get("status") if isinstance(standard_logging_object, dict) else None)
 
     monkeypatch.setattr(litellm, "_async_failure_callback", [_StatusRecorder()])
     logging_obj = LiteLLMLoggingObj(
@@ -369,4 +371,4 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
     )
     await asyncio.sleep(0)
     await asyncio.sleep(0)
-    assert recorded["status"] == "failure"
+    assert recorded == ["failure"]
