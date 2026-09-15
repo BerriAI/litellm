@@ -1006,6 +1006,31 @@ def test_ssl_exporter_disables_verification_when_litellm_does(monkeypatch, switc
     assert posted[0] == ("https://lf.internal.example/api/public/otel/v1/traces", False)
 
 
+@pytest.mark.parametrize("with_client_certificate", [False, True])
+def test_ssl_exporter_falls_back_to_default_ca_when_the_bundle_path_is_missing(
+    monkeypatch, tmp_path, with_client_certificate
+):
+    """The httpx client ignores a CA path that does not exist; handing it to requests would fail every export."""
+    import litellm
+    from litellm.integrations.langfuse.langfuse_sdk import _build_verified_span_exporter
+
+    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.setenv("SSL_VERIFY", str(tmp_path / "missing-ca.pem"))
+    client_cert = tmp_path / "client.pem"
+    client_cert.write_text("dummy")
+    monkeypatch.setattr(litellm, "ssl_certificate", str(client_cert) if with_client_certificate else None)
+
+    exporter = _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    if not with_client_certificate:
+        assert exporter is None
+        return
+    assert exporter is not None
+    assert exporter._certificate_file is True
+    assert exporter._client_cert == str(client_cert)
+
+
 def test_second_client_on_the_same_key_does_not_build_another_provider():
     """A discarded TracerProvider is pinned forever by its atexit hook."""
     import gc
