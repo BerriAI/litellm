@@ -2200,7 +2200,7 @@ class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
     inputs, the same way the chat completions handler hands over system messages and tool_calls."""
 
     @staticmethod
-    def _tool_use_conversation(system):
+    def _tool_use_conversation(system: str) -> dict[str, Any]:
         return {
             "model": "claude-sonnet-4-5",
             "system": system,
