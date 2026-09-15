@@ -86,6 +86,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.mcp import MCPAuth, MCPSpecVersion
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+from litellm.types.mcp_server.tool_registry import MCPTool as RegisteredTool
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
@@ -2777,6 +2778,11 @@ if MCP_AVAILABLE:
 
         return managed_resource_templates
 
+    def _registered_tool_metadata(name: str, registered: RegisteredTool, server: MCPServer) -> MCPTool:
+        overrides: Final = server.tool_name_to_description
+        description: Final = overrides.get(name, registered.description) if overrides else registered.description
+        return MCPTool(name=name, description=description, inputSchema=registered.input_schema)
+
     def _resolve_display_name_to_original(
         name: str,
         allowed_mcp_servers: list[MCPServer],
@@ -3115,6 +3121,7 @@ if MCP_AVAILABLE:
                 server=mcp_server,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
+                tool=_registered_tool_metadata(original_tool_name, local_tool, mcp_server),
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -3180,7 +3187,8 @@ if MCP_AVAILABLE:
             # not in the registry either, `_handle_local_mcp_tool` below reports
             # 404 and nothing runs, so demanding a server here would turn every
             # unknown tool name into a misleading 503.
-            if global_mcp_tool_registry.get_tool(original_tool_name) is not None:
+            registered_local_tool: Final = global_mcp_tool_registry.get_tool(original_tool_name)
+            if registered_local_tool is not None:
                 # `mcp_server` is None here because the tool name is not in the
                 # tool -> server mapping, but the name still carries a prefix
                 # that the server-level check above compared against the
@@ -3221,6 +3229,7 @@ if MCP_AVAILABLE:
                     server=prefix_server,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
+                    tool=_registered_tool_metadata(original_tool_name, registered_local_tool, prefix_server),
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
