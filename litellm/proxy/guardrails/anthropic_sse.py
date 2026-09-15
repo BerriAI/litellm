@@ -45,6 +45,11 @@ def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
     return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
 
+def sse_stream_text(all_chunks: Sequence[object]) -> str | None:
+    """The raw SSE frames joined as text, for a caller that forwards the stream instead of folding it."""
+    return _joined_sse_stream(all_chunks)
+
+
 def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
     raw: Final = b"".join(
         chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
@@ -251,7 +256,7 @@ class _ContentBlock:
         return {**self.start, **self._accumulated_fields(), **cited}
 
 
-_EMPTY_BLOCKS: Final[Mapping[int, "_ContentBlock"]] = MappingProxyType({})
+_EMPTY_BLOCKS: Final[Mapping[int, _ContentBlock]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)

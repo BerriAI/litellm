@@ -34,6 +34,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_body,
     anthropic_sse_error_frames,
     assemble_anthropic_sse_body,
+    sse_stream_text,
 )
 from litellm.proxy.guardrails.stream_surface import (
     StreamSurface,
@@ -257,6 +258,29 @@ def _response_payload(response: object) -> Mapping[str, object] | None:
         return None
 
 
+def _stream_chunk_payload(item: object) -> Mapping[str, object] | None:
+    """One buffered stream event as JSON, keeping a sequence number the bridge stamps off-model.
+
+    LiteLLM's chat-to-Responses bridge writes ``sequence_number`` straight onto ``__dict__``, which
+    ``model_dump`` drops, so it is read back with ``getattr`` and restored on the payload.
+    """
+    dump: Final = getattr(item, "model_dump", None)
+    if not callable(dump):
+        as_dict: Final = _dict_of(item)
+        return _jsonable_dict(as_dict) if as_dict is not None else None
+    try:
+        dumped: Final[object] = dump(mode="json")
+    except Exception:  # noqa: BLE001  # one unserializable event must not drop the whole stream from the payload
+        return None
+    dumped_dict: Final = _dict_of(dumped)
+    if dumped_dict is None:
+        return None
+    sequence: Final = getattr(item, "sequence_number", None)
+    if isinstance(sequence, int) and "sequence_number" not in dumped_dict:
+        return _jsonable_dict(MappingProxyType({**dumped_dict, "sequence_number": sequence}))
+    return _jsonable_dict(dumped_dict)
+
+
 def _is_unreachable_error(error: Exception) -> bool:
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code in _UNREACHABLE_STATUS_CODES
@@ -291,6 +315,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         streaming_sampling_rate: int = 5,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         unscannable_stream_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        send_stream_chunks: bool = True,
         additional_provider_specific_params: Mapping[str, object] | None = None,
         headers: Mapping[str, str] | None = None,
         extra_headers: Sequence[str] | None = None,
@@ -328,6 +353,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         self.streaming_sampling_rate = streaming_sampling_rate
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
         self.unscannable_stream_fallback: Literal["fail_closed", "fail_open"] = unscannable_stream_fallback
+        self.send_stream_chunks: bool = send_stream_chunks
         self.additional_provider_specific_params: Mapping[str, object] = (
             additional_provider_specific_params or _EMPTY_MAP
         )
@@ -363,6 +389,8 @@ class ThirdlawGuardrail(CustomGuardrail):
         request_data: dict[str, object],  # mutable-ok: proxy-shared request dict, forwarded to base-class helpers
         response_body: Mapping[str, object] | None,
         streamed_deltas: Sequence[str] | None = None,
+        response_chunks: Sequence[Mapping[str, object]] | None = None,
+        response_sse: str | None = None,
     ) -> ThirdlawGuardrailRequest:
         dynamic_params: Final = _JSON_DICT_ADAPTER.validate_python(
             self.get_guardrail_dynamic_request_body_params(request_data)
@@ -375,6 +403,8 @@ class ThirdlawGuardrail(CustomGuardrail):
             request_headers=_outbound_request_headers(request_data, self.raw_value_header_names),
             request_body=_request_body(request_data, prefer_snapshot=wire_event != "pre_call"),
             response_body=response_body,
+            response_chunks=tuple(response_chunks) if response_chunks else None,
+            response_sse=response_sse or None,
             streamed_deltas_not_in_body=tuple(streamed_deltas) if streamed_deltas else None,
             additional_provider_specific_params=combined_params or None,
         )
@@ -424,6 +454,8 @@ class ThirdlawGuardrail(CustomGuardrail):
         request_data: dict[str, object],  # mutable-ok: proxy-shared request dict; trace records land in it
         response_body: Mapping[str, object] | None = None,
         streamed_deltas: Sequence[str] | None = None,
+        response_chunks: Sequence[Mapping[str, object]] | None = None,
+        response_sse: str | None = None,
     ) -> ThirdlawGuardrailResponse | None:
         """POST the full payload to ThirdLaw and return its decision.
 
@@ -438,6 +470,8 @@ class ThirdlawGuardrail(CustomGuardrail):
             request_data=request_data,
             response_body=response_body,
             streamed_deltas=streamed_deltas,
+            response_chunks=response_chunks,
+            response_sse=response_sse,
         )
         try:
             http_response: Final = await self.async_handler.post(
@@ -706,6 +740,28 @@ class ThirdlawGuardrail(CustomGuardrail):
             return ()
         return responses_deltas_absent_from_body(collected, assembled)
 
+    def _stream_payload(
+        self, collected: Sequence[object], surface: StreamSurface
+    ) -> tuple[tuple[Mapping[str, object], ...] | None, str | None]:
+        """The buffered stream as the service receives it beside the assembled body.
+
+        The body is what LiteLLM folded; the stream is what the client received. Posting both lets
+        the service fold on its own side and fall back to whichever side has no gap, with no
+        LiteLLM release in between. Returns ``(chunks, sse_text)``; at most one is set.
+        """
+        if not self.send_stream_chunks:
+            return None, None
+        match surface:
+            case StreamSurface.ANTHROPIC_MESSAGES:
+                return None, sse_stream_text(collected)
+            case StreamSurface.RESPONSES | StreamSurface.CHAT_COMPLETIONS:
+                chunks: Final = tuple(
+                    payload for item in collected if (payload := _stream_chunk_payload(item)) is not None
+                )
+                return (chunks or None), None
+            case StreamSurface.OPAQUE_SSE:
+                return None, None
+
     @staticmethod
     def _assembled_chat_stream_response(collected: Sequence[object]) -> ModelResponse | None:
         from litellm.main import stream_chunk_builder
@@ -798,6 +854,7 @@ class ThirdlawGuardrail(CustomGuardrail):
                 yield item
             return
 
+        stream_chunks, stream_sse = self._stream_payload(collected, surface)
         try:
             decision: Final = await self._run_thirdlaw(
                 event_type=GuardrailEventHooks.post_call,
@@ -805,6 +862,8 @@ class ThirdlawGuardrail(CustomGuardrail):
                 request_data=request_data,
                 response_body=_response_payload(assembled),
                 streamed_deltas=self._streamed_deltas_not_in_body(collected, assembled, surface),
+                response_chunks=stream_chunks,
+                response_sse=stream_sse,
             )
         except Exception as error:  # noqa: BLE001  # after keepalive flush a raise cannot reach the client; send a frame
             flushed_frames: Final = (
@@ -1019,12 +1078,15 @@ class ThirdlawGuardrail(CustomGuardrail):
             async for item in self._handle_unassembleable(collected=collected, surface=surface, buffer=False):
                 yield item
             return
+        stream_chunks, stream_sse = self._stream_payload(collected, surface)
         final_decision: Final = await self._run_thirdlaw(
             event_type=GuardrailEventHooks.post_call,
             wire_event="post_call",
             request_data=request_data,
             response_body=_response_payload(assembled),
             streamed_deltas=self._streamed_deltas_not_in_body(collected, assembled, surface),
+            response_chunks=stream_chunks,
+            response_sse=stream_sse,
         )
         if final_decision is None:
             return

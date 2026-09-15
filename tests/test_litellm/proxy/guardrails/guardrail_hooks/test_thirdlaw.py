@@ -501,9 +501,7 @@ async def test_post_call_modify_response_rewrites_responses_api_output():
                                 "type": "message",
                                 "role": "assistant",
                                 "status": "completed",
-                                "content": [
-                                    {"type": "output_text", "text": "[REDACTED]", "annotations": []}
-                                ],
+                                "content": [{"type": "output_text", "text": "[REDACTED]", "annotations": []}],
                             }
                         ]
                     },
@@ -526,9 +524,7 @@ async def test_post_call_modify_response_carries_hidden_params(response_factory)
     response = response_factory()
     response._hidden_params["additional_headers"] = {"x-request-id": "abc123"}
     g = _make_guardrail(
-        decisions=[
-            _decision_response({"action": "modify_response", "response_body": {"model": "gpt-5.6-redacted"}})
-        ]
+        decisions=[_decision_response({"action": "modify_response", "response_body": {"model": "gpt-5.6-redacted"}})]
     )
     out = await g.async_post_call_success_hook(
         data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
@@ -1265,6 +1261,110 @@ async def test_the_deltas_field_never_appears_on_a_chat_or_messages_stream():
             )
         )
         assert "streamed_deltas_not_in_body" not in _sent_payload(g)
+
+
+async def test_a_responses_stream_is_posted_as_chunks_beside_the_body():
+    """The body is what the proxy folded; the chunks are what the client received. Both go, so the
+    service can fold on its own side, and a sequence number the bridge stamps outside the model
+    survives the trip."""
+    chunks = _responses_stream_chunks()
+    chunks[1].__dict__["sequence_number"] = 4
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    posted = _sent_payload(g)
+    assert [c["type"] for c in posted["response_chunks"]] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert posted["response_chunks"][1]["delta"] == "the secret is sk-leak"
+    assert posted["response_chunks"][1]["sequence_number"] == 4
+    assert "response_sse" not in posted
+    assert posted["response_body"]["object"] == "response"
+
+
+async def test_a_messages_stream_is_posted_as_the_raw_sse_text_beside_the_body():
+    frames = _anthropic_sse_frames()
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(frames), request_data=_request_data()
+        )
+    )
+    posted = _sent_payload(g)
+    assert posted["response_sse"] == b"".join(frames).decode()
+    assert "response_chunks" not in posted
+    assert posted["response_body"]["type"] == "message"
+
+
+async def test_a_chat_stream_is_posted_as_chunks_beside_the_body():
+    chunks = _stream_chunks()
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    posted = _sent_payload(g)
+    assert len(posted["response_chunks"]) == len(chunks)
+    assert posted["response_chunks"][0]["choices"][0]["delta"]["content"] == "the secret "
+    assert "response_sse" not in posted
+    assert posted["response_body"]["choices"][0]["message"]["content"] == "the secret is sk-leak"
+
+
+async def test_the_stream_is_not_posted_when_send_stream_chunks_is_off():
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})], send_stream_chunks=False)
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_responses_stream_chunks()),
+            request_data=_request_data(),
+        )
+    )
+    posted = _sent_payload(g)
+    assert "response_chunks" not in posted
+    assert "response_sse" not in posted
+    assert posted["response_body"]["object"] == "response"
+
+
+async def test_only_the_final_scan_carries_the_stream_not_the_interim_ones():
+    """An interim scan sees a partial stream with no terminal event, which folds to nothing on the
+    service side, so the chunks ride only on the end-of-stream post."""
+    g = _make_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_end_of_stream_only=False,
+        streaming_sampling_rate=1,
+        decisions=[_decision_response({"action": "allow"})] * 6,
+    )
+    chunks = _stream_chunks()
+    await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    posts = [call.kwargs["json"] for call in g.async_handler.post.call_args_list]
+    assert len(posts) == len(chunks) + 1
+    assert all("response_chunks" not in post for post in posts[:-1])
+    assert len(posts[-1]["response_chunks"]) == len(chunks)
+
+
+def test_the_initializer_turns_stream_chunks_off_only_on_an_explicit_false():
+    on = initialize_guardrail(
+        LitellmParams(guardrail="thirdlaw", mode="post_call", api_base=_API_BASE, api_key="k"),
+        {"guardrail_name": "thirdlaw-on"},
+    )
+    off = initialize_guardrail(
+        LitellmParams(
+            guardrail="thirdlaw", mode="post_call", api_base=_API_BASE, api_key="k", send_stream_chunks=False
+        ),
+        {"guardrail_name": "thirdlaw-off"},
+    )
+    assert on.send_stream_chunks is True
+    assert off.send_stream_chunks is False
 
 
 @pytest.mark.parametrize("typo", ["fail_close", "failopen", "FAIL_OPEN", ""])
