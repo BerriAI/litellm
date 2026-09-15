@@ -33,7 +33,10 @@ def _now_ts() -> int:
 
 
 def normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic types
-    return {**raw, "choices": [_normalize_choice(c) for c in raw.get("choices", [])]}  # mutable-ok: sentinel default, never mutated
+    return {
+        **raw,
+        "choices": [_normalize_choice(c) for c in raw.get("choices", [])],
+    }  # mutable-ok: sentinel default, never mutated
 
 
 def _normalize_choice(choice: dict) -> dict:  # mutable-ok: generic dict from raw JSON
