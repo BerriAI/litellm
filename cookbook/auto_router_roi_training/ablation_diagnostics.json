@@ -1,0 +1,2399 @@
+{
+  "scope": "Descriptive held-out ablations using previously fitted coefficients and original fixed routing boundaries; no held-out fitting or selection",
+  "results": [
+    {
+      "key": "v2_sonnet_opus_original_none_0",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.079748,
+          "mean_probability": 0.7604,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.07612000000000001,
+          "mean_probability": 0.8552000000000001,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.135972
+        }
+      },
+      "solved": 23,
+      "cost": 8.61870845,
+      "efficient_tasks": 1,
+      "savings_vs_capable": 0.009278491477484052,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_original_per_model_1",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.27794028029002865,
+          "mean_probability": 0.4704427158195999,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.1021595524175915,
+          "mean_probability": 0.7510042628607855,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22122896815327736
+        }
+      },
+      "solved": 23,
+      "cost": 8.71597085,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019018323737678422,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_original_per_model_10",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2789359079612613,
+          "mean_probability": 0.46943972279160173,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10215955213956023,
+          "mean_probability": 0.7510042636833839,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22186515742232807
+        }
+      },
+      "solved": 23,
+      "cost": 8.71597085,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019018323737678422,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_original_per_model_100",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28332120934015553,
+          "mean_probability": 0.4650475018973117,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10215954294862443,
+          "mean_probability": 0.7510042908761915,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22467652549216838
+        }
+      },
+      "solved": 23,
+      "cost": 8.71597085,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019018323737678422,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_original_task_conditioned_1",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.36308527194686313,
+          "mean_probability": 0.39628343342870315,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.12591444705552035,
+          "mean_probability": 0.6941896559242194,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.24382206765927505
+        }
+      },
+      "solved": 23,
+      "cost": 8.71597085,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019018323737678422,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_original_task_conditioned_10",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2962169385227655,
+          "mean_probability": 0.4523888476514996,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.11243251125742348,
+          "mean_probability": 0.7229117308308468,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.2163712407775607
+        }
+      },
+      "solved": 23,
+      "cost": 8.71597085,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019018323737678422,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_original_task_conditioned_100",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2879036723967363,
+          "mean_probability": 0.4604415584252592,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.1035792913710479,
+          "mean_probability": 0.7467504230527484,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.2250556370374381
+        }
+      },
+      "solved": 23,
+      "cost": 8.71597085,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019018323737678422,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_original_none_0",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.07364000000000001,
+          "mean_probability": 0.7728,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 24,
+      "cost": 7.438772450000001,
+      "efficient_tasks": 25,
+      "savings_vs_capable": 0.1449122677749085,
+      "lost_capable_successes": 1,
+      "gained_efficient_successes": 2
+    },
+    {
+      "key": "cap_sonnet_opus_original_per_model_1",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875570809540929,
+          "mean_probability": 0.4608436242573206,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.71599345,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019044302463169238,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_original_per_model_10",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28755716634579204,
+          "mean_probability": 0.46084353872130845,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.71599345,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019044302463169238,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_original_per_model_100",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28755712405378614,
+          "mean_probability": 0.4608435810847865,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.71599345,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019044302463169238,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_original_task_conditioned_1",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.283923378065796,
+          "mean_probability": 0.4633263645657801,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.6398926,
+      "efficient_tasks": 2,
+      "savings_vs_capable": 0.006843371045400337,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_original_task_conditioned_10",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2876105405621741,
+          "mean_probability": 0.4596932157480619,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.71599345,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019044302463169238,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_original_task_conditioned_100",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875419515812453,
+          "mean_probability": 0.4606315304463149,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.71599345,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019044302463169238,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_research_none_0",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.075772,
+          "mean_probability": 0.7812,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.083056,
+          "mean_probability": 0.8544000000000002,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.12974000000000005
+        }
+      },
+      "solved": 23,
+      "cost": 8.3804996,
+      "efficient_tasks": 3,
+      "savings_vs_capable": 0.03666062565507222,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_research_per_model_1",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28755702357624857,
+          "mean_probability": 0.46084368841979556,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10215956766580786,
+          "mean_probability": 0.7510042466318165,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22740599175241083
+        }
+      },
+      "solved": 23,
+      "cost": 8.71649185,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019617213825369184,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_research_per_model_10",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875570115229681,
+          "mean_probability": 0.46084370049344897,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10215956733306003,
+          "mean_probability": 0.7510042476163024,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.2274059844299993
+        }
+      },
+      "solved": 23,
+      "cost": 8.71649185,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019617213825369184,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_research_per_model_100",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.287557065393447,
+          "mean_probability": 0.46084364653191817,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.1021595622748158,
+          "mean_probability": 0.7510042625818982,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.2274060299440398
+        }
+      },
+      "solved": 23,
+      "cost": 8.71649185,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019617213825369184,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_research_task_conditioned_1",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.3059615497884397,
+          "mean_probability": 0.4439284142823081,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.1108453339392709,
+          "mean_probability": 0.7387745895860501,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.24709080789014723
+        }
+      },
+      "solved": 23,
+      "cost": 8.71649185,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019617213825369184,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_research_task_conditioned_10",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29692233140450003,
+          "mean_probability": 0.45113431655284353,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.1055804190608191,
+          "mean_probability": 0.7430961515361965,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.23297743453461459
+        }
+      },
+      "solved": 23,
+      "cost": 8.71649185,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019617213825369184,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_research_task_conditioned_100",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2893380643292629,
+          "mean_probability": 0.4588383860815747,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10270450787421566,
+          "mean_probability": 0.7494100259237025,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22810834000624067
+        }
+      },
+      "solved": 23,
+      "cost": 8.71649185,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0019617213825369184,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_research_none_0",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.06624400000000001,
+          "mean_probability": 0.8051999999999999,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 24,
+      "cost": 7.43261425,
+      "efficient_tasks": 25,
+      "savings_vs_capable": 0.14562015355955693,
+      "lost_capable_successes": 1,
+      "gained_efficient_successes": 2
+    },
+    {
+      "key": "cap_sonnet_opus_research_per_model_1",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875569829466434,
+          "mean_probability": 0.4608437244101924,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.709835250000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011965444616688359,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_research_per_model_10",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875569423532278,
+          "mean_probability": 0.46084376507222474,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.709835250000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011965444616688359,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_research_per_model_100",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875569358163707,
+          "mean_probability": 0.46084377162013174,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.709835250000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011965444616688359,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_research_task_conditioned_1",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.37508996121022137,
+          "mean_probability": 0.37788648108842726,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.709835250000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011965444616688359,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_research_task_conditioned_10",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.30318514851583234,
+          "mean_probability": 0.44492506046090563,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.709835250000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011965444616688359,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_research_task_conditioned_100",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28925395756469163,
+          "mean_probability": 0.45908749013264605,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.709835250000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011965444616688359,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_trained_card_none_0",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.168676,
+          "mean_probability": 0.6076,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.08659999999999998,
+          "mean_probability": 0.8144,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.17989200000000005
+        }
+      },
+      "solved": 23,
+      "cost": 8.71103165,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013340707766233972,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_trained_card_per_model_1",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875571114859761,
+          "mean_probability": 0.4608435974111398,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.1021595934786992,
+          "mean_probability": 0.7510041548091273,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22740599218430954
+        }
+      },
+      "solved": 23,
+      "cost": 8.71103165,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013340707766233972,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_trained_card_per_model_10",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875571151138243,
+          "mean_probability": 0.4608435937771604,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10215959351502482,
+          "mean_probability": 0.7510041547016525,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22740599451293494
+        }
+      },
+      "solved": 23,
+      "cost": 8.71103165,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013340707766233972,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_trained_card_per_model_100",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28755711158000513,
+          "mean_probability": 0.46084359731695196,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10215959379624227,
+          "mean_probability": 0.7510041538696277,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22740599162613237
+        }
+      },
+      "solved": 23,
+      "cost": 8.71103165,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013340707766233972,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_trained_card_task_conditioned_1",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.31665228081145946,
+          "mean_probability": 0.43411072591813205,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.09095517149287767,
+          "mean_probability": 0.8041056413999473,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.2890826011480608
+        }
+      },
+      "solved": 23,
+      "cost": 8.71103165,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013340707766233972,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_trained_card_task_conditioned_10",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.3042932741747288,
+          "mean_probability": 0.44520031083683287,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10161513251587312,
+          "mean_probability": 0.7539819279976726,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.24017321465535685
+        }
+      },
+      "solved": 23,
+      "cost": 8.71103165,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013340707766233972,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_sonnet_opus_trained_card_task_conditioned_100",
+      "pair": "sonnet_opus",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29072851803787375,
+          "mean_probability": 0.4578249125015566,
+          "mean_success": 0.96
+        },
+        "capable": {
+          "brier": 0.10326274868600573,
+          "mean_probability": 0.7478517316497024,
+          "mean_success": 0.92
+        },
+        "gap": {
+          "mse": 0.22729947565695874
+        }
+      },
+      "solved": 23,
+      "cost": 8.71103165,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013340707766233972,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_trained_card_none_0",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.124676,
+          "mean_probability": 0.6747999999999998,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 24,
+      "cost": 7.705032350000001,
+      "efficient_tasks": 22,
+      "savings_vs_capable": 0.11430566223564653,
+      "lost_capable_successes": 1,
+      "gained_efficient_successes": 2
+    },
+    {
+      "key": "cap_sonnet_opus_trained_card_per_model_1",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875569606247018,
+          "mean_probability": 0.46084374591258964,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.70978845,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011911647963895877,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_trained_card_per_model_10",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2875570001194668,
+          "mean_probability": 0.46084370635106653,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.70978845,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011911647963895877,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_trained_card_per_model_100",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28755696326011687,
+          "mean_probability": 0.4608437432727199,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.70978845,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011911647963895877,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_trained_card_task_conditioned_1",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.3757063567782923,
+          "mean_probability": 0.3806681938876079,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.70978845,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011911647963895877,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_trained_card_task_conditioned_10",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29926571087895887,
+          "mean_probability": 0.4493445442023018,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.70978845,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011911647963895877,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_sonnet_opus_trained_card_task_conditioned_100",
+      "pair": "sonnet_opus",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2887678608024657,
+          "mean_probability": 0.45963984818377995,
+          "mean_success": 0.96
+        }
+      },
+      "solved": 23,
+      "cost": 8.70978845,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0011911647963895877,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_original_none_0",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.11399200000000001,
+          "mean_probability": 0.7480000000000001,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.03844,
+          "mean_probability": 0.8144,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.07523200000000001
+        }
+      },
+      "solved": 25,
+      "cost": 5.8865393500000005,
+      "efficient_tasks": 7,
+      "savings_vs_capable": 0.23518233993843451,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_original_per_model_1",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29280415326290876,
+          "mean_probability": 0.4518075740486838,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08206787123595165,
+          "mean_probability": 0.7135364774862528,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.10650573917319446
+        }
+      },
+      "solved": 25,
+      "cost": 7.713418050000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.002177679161805779,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_original_per_model_10",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2928041632313154,
+          "mean_probability": 0.45180756340305395,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08266238242441645,
+          "mean_probability": 0.7124978475859192,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.10614467277206435
+        }
+      },
+      "solved": 25,
+      "cost": 7.713418050000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.002177679161805779,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_original_per_model_100",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2928041587755105,
+          "mean_probability": 0.45180756816157264,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08487634767677435,
+          "mean_probability": 0.7086660809032587,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.10483330138416896
+        }
+      },
+      "solved": 25,
+      "cost": 7.713418050000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.002177679161805779,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_original_task_conditioned_1",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.3548002775195893,
+          "mean_probability": 0.3908214122713399,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.07432745676793391,
+          "mean_probability": 0.7331384746941513,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.14686729512308752
+        }
+      },
+      "solved": 25,
+      "cost": 7.713418050000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.002177679161805779,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_original_task_conditioned_10",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.3092058232917819,
+          "mean_probability": 0.43386824542874547,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.07860497482303502,
+          "mean_probability": 0.720351528896477,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.11728110929571926
+        }
+      },
+      "solved": 25,
+      "cost": 7.713418050000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.002177679161805779,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_original_task_conditioned_100",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29509588080407867,
+          "mean_probability": 0.44921772442254926,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08591911659001744,
+          "mean_probability": 0.706894247137934,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.10530011684393965
+        }
+      },
+      "solved": 25,
+      "cost": 7.713418050000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.002177679161805779,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_original_none_0",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.095296,
+          "mean_probability": 0.7759999999999999,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 23,
+      "cost": 0.45423660999999993,
+      "efficient_tasks": 25,
+      "savings_vs_capable": 0.9409826112562217,
+      "lost_capable_successes": 2,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_original_per_model_1",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.25978692916010465,
+          "mean_probability": 0.4878249735872592,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.19860084,
+      "efficient_tasks": 3,
+      "savings_vs_capable": 0.06471073701970254,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_original_per_model_10",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.26459478741986797,
+          "mean_probability": 0.48236844476001733,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.548072479999999,
+      "efficient_tasks": 1,
+      "savings_vs_capable": 0.01930509780271894,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_original_per_model_100",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2812914321660473,
+          "mean_probability": 0.4639982675367723,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70707553,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013536175159263308,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_original_task_conditioned_1",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28972178243797075,
+          "mean_probability": 0.4601118755343589,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 24,
+      "cost": 5.6430830300000006,
+      "efficient_tasks": 8,
+      "savings_vs_capable": 0.2668137759857616,
+      "lost_capable_successes": 1,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_original_task_conditioned_10",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2758875769644403,
+          "mean_probability": 0.47150335677677147,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.503500099999999,
+      "efficient_tasks": 1,
+      "savings_vs_capable": 0.025096232686574682,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_original_task_conditioned_100",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "original",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2820900941429093,
+          "mean_probability": 0.46335458127953316,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70707553,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013536175159263308,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_research_none_0",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.114424,
+          "mean_probability": 0.7167999999999999,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.047700000000000006,
+          "mean_probability": 0.79,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.072164
+        }
+      },
+      "solved": 25,
+      "cost": 7.1324348,
+      "efficient_tasks": 3,
+      "savings_vs_capable": 0.0733074613222997,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_research_per_model_1",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.26405453900921133,
+          "mean_probability": 0.4828215141408515,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.0865397854427683,
+          "mean_probability": 0.7058235470967105,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09337909637214345
+        }
+      },
+      "solved": 25,
+      "cost": 7.7137271,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0022178329574038536,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_research_per_model_10",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.26784512929721227,
+          "mean_probability": 0.4785993032872986,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08653978536907665,
+          "mean_probability": 0.7058235472219613,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09468553688217077
+        }
+      },
+      "solved": 25,
+      "cost": 7.7137271,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0022178329574038536,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_research_per_model_100",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2820450714621263,
+          "mean_probability": 0.4631518773294203,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08653978613424879,
+          "mean_probability": 0.7058235459214286,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09979694144591417
+        }
+      },
+      "solved": 25,
+      "cost": 7.7137271,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0022178329574038536,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_research_task_conditioned_1",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.25110147734567884,
+          "mean_probability": 0.5130557551354863,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.16534084147514008,
+          "mean_probability": 0.5948591698590449,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09253588406341894
+        }
+      },
+      "solved": 23,
+      "cost": 3.6107769100000002,
+      "efficient_tasks": 15,
+      "savings_vs_capable": 0.5308642679317976,
+      "lost_capable_successes": 2,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_research_task_conditioned_10",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.27438937075247344,
+          "mean_probability": 0.47320616011023775,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.11565025341690252,
+          "mean_probability": 0.6601758116179052,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.08792931435780871
+        }
+      },
+      "solved": 25,
+      "cost": 7.7137271,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0022178329574038536,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_research_task_conditioned_100",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2839548637673906,
+          "mean_probability": 0.4612566479475081,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.09097174761309613,
+          "mean_probability": 0.6983925888719742,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09846970893099971
+        }
+      },
+      "solved": 25,
+      "cost": 7.7137271,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0022178329574038536,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_research_none_0",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.08042400000000001,
+          "mean_probability": 0.8223999999999999,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 23,
+      "cost": 0.45399943000000004,
+      "efficient_tasks": 25,
+      "savings_vs_capable": 0.9410134272317597,
+      "lost_capable_successes": 2,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_research_per_model_1",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2928040337273977,
+          "mean_probability": 0.4518076822531272,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.706838350000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013228015403883298,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_research_per_model_10",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2928040337214044,
+          "mean_probability": 0.4518076822595278,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.706838350000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013228015403883298,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_research_per_model_100",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29280403370983843,
+          "mean_probability": 0.45180768227187945,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.706838350000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013228015403883298,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_research_task_conditioned_1",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.4308246215137724,
+          "mean_probability": 0.3255628214768662,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.706838350000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013228015403883298,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_research_task_conditioned_10",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.31503252924010744,
+          "mean_probability": 0.42922186517312366,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.706838350000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013228015403883298,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_research_task_conditioned_100",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "research",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29517455314184166,
+          "mean_probability": 0.44934382803078093,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.706838350000001,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013228015403883298,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_trained_card_none_0",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.22795200000000002,
+          "mean_probability": 0.5264000000000001,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.066516,
+          "mean_probability": 0.7467999999999999,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.094084
+        }
+      },
+      "solved": 25,
+      "cost": 7.70803095,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0014777519258621918,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_trained_card_per_model_1",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.26574854498536066,
+          "mean_probability": 0.480752500039812,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08653989674606706,
+          "mean_probability": 0.7058233579189824,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09385573801418495
+        }
+      },
+      "solved": 25,
+      "cost": 7.70803095,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0014777519258621918,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_trained_card_per_model_10",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.27229598868635685,
+          "mean_probability": 0.47355221449889184,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.0865398568799184,
+          "mean_probability": 0.7058234256778516,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09616689107102508
+        }
+      },
+      "solved": 25,
+      "cost": 7.70803095,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0014777519258621918,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_trained_card_per_model_100",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28680638149963433,
+          "mean_probability": 0.45804748847938365,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08653991827232044,
+          "mean_probability": 0.7058233213316926,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.10155499528533848
+        }
+      },
+      "solved": 25,
+      "cost": 7.70803095,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0014777519258621918,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_trained_card_task_conditioned_1",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.1978650333150751,
+          "mean_probability": 0.5987047835778408,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.06335276259701819,
+          "mean_probability": 0.7580793531241258,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.08560298031106717
+        }
+      },
+      "solved": 25,
+      "cost": 7.70803095,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0014777519258621918,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_trained_card_task_conditioned_10",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.250447683016267,
+          "mean_probability": 0.5046505444351115,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08401050700413831,
+          "mean_probability": 0.7107567452841864,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.09157589219865582
+        }
+      },
+      "solved": 25,
+      "cost": 7.70803095,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0014777519258621918,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "v2_luna_sol_trained_card_task_conditioned_100",
+      "pair": "luna_sol",
+      "classifier": "v2",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "max_quality_gap": 0.05
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.28255272326922126,
+          "mean_probability": 0.4632572658097204,
+          "mean_success": 0.92
+        },
+        "capable": {
+          "brier": 0.08651103723383644,
+          "mean_probability": 0.7058809401461426,
+          "mean_success": 1.0
+        },
+        "gap": {
+          "mse": 0.10023060064624457
+        }
+      },
+      "solved": 25,
+      "cost": 7.70803095,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0014777519258621918,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_trained_card_none_0",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "none",
+      "alpha": 0,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.13101200000000002,
+          "mean_probability": 0.682,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 23,
+      "cost": 1.9355552000000003,
+      "efficient_tasks": 22,
+      "savings_vs_capable": 0.7485200198340651,
+      "lost_capable_successes": 2,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_trained_card_per_model_1",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.29280410701784,
+          "mean_probability": 0.4518076068566819,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70728115,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013803330100241595,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_trained_card_per_model_10",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2928041070399462,
+          "mean_probability": 0.45180760683307397,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70728115,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013803330100241595,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_trained_card_per_model_100",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "per_model",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2928041104565612,
+          "mean_probability": 0.4518076031843442,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70728115,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013803330100241595,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_trained_card_task_conditioned_1",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 1,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.37414614819844033,
+          "mean_probability": 0.37326969735166743,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70728115,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013803330100241595,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_trained_card_task_conditioned_10",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 10,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.30360542420143477,
+          "mean_probability": 0.44057025407348505,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70728115,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013803330100241595,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    },
+    {
+      "key": "cap_luna_sol_trained_card_task_conditioned_100",
+      "pair": "luna_sol",
+      "classifier": "cap",
+      "card": "trained_card",
+      "adjustment": "task_conditioned",
+      "alpha": 100,
+      "boundary": {
+        "base_threshold": 0.5,
+        "threshold_step": 0.1
+      },
+      "metrics": {
+        "efficient": {
+          "brier": 0.2939207425617313,
+          "mean_probability": 0.45063199845906105,
+          "mean_success": 0.92
+        }
+      },
+      "solved": 25,
+      "cost": 7.70728115,
+      "efficient_tasks": 0,
+      "savings_vs_capable": -0.0013803330100241595,
+      "lost_capable_successes": 0,
+      "gained_efficient_successes": 0
+    }
+  ]
+}
