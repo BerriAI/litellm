@@ -69,6 +69,31 @@ def test_v2_model_info_in_openapi_schema():
     assert "get" in schema["paths"]["/v2/model/info"]
 
 
+def test_v2_model_info_enrichment_heals_none_valued_cost_keys():
+    """A deployment that has served a request carries its cost keys as explicit None, because
+    Deployment materialises every unset ModelInfo field. Backfilling only absent keys left those
+    None values unhealed, so this route reported no pricing for exactly the models in use."""
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data
+
+    base = {
+        "model_name": "claude-haiku-4-5",
+        "litellm_params": {"model": "anthropic/claude-haiku-4-5-20251001"},
+    }
+
+    absent = _enrich_model_info_with_litellm_data(model={**base, "model_info": {"id": "abc"}})
+    expected = absent["model_info"]["input_cost_per_token"]
+    assert expected is not None
+
+    served = _enrich_model_info_with_litellm_data(
+        model={
+            **base,
+            "model_info": {"id": "abc", "input_cost_per_token": None, "output_cost_per_token": None},
+        }
+    )
+    assert served["model_info"]["input_cost_per_token"] == expected
+    assert served["model_info"]["output_cost_per_token"] is not None
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/model/info, GET /model/info
 # ---------------------------------------------------------------------------
