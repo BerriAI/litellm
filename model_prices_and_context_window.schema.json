@@ -478,6 +478,10 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_720p": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -676,6 +680,9 @@
           }
         },
         "supports_adaptive_thinking": {
+          "type": "boolean"
+        },
+        "supports_anthropic_thinking_payload": {
           "type": "boolean"
         },
         "supports_assistant_prefill": {

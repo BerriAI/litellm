@@ -453,7 +453,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
   return providerPlaceholderMap[resolvedProvider] ?? "gpt-3.5-turbo";
 };
 
-export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
+export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
   let providerKey = provider;
   let custom_llm_provider = provider_map[providerKey];
 

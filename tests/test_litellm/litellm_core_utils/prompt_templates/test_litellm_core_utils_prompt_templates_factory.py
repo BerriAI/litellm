@@ -191,8 +191,16 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
         {"type": "thinking", "thinking": "oss reasoning", "signature": None},
         {"type": "thinking", "thinking": "oss reasoning", "signature": ""},
         {"type": "thinking", "thinking": "oss reasoning"},
+        {"type": "thinking", "thinking": "openai reasoning", "signature": "litellm_encrypted_reasoning:gAAAA"},
+        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"},
     ],
-    ids=["null_signature", "empty_signature", "missing_signature"],
+    ids=[
+        "null_signature",
+        "empty_signature",
+        "missing_signature",
+        "encrypted_reasoning_signature",
+        "encrypted_reasoning_redacted_data",
+    ],
 )
 def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
@@ -219,7 +227,7 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     assistant = next(m for m in result if m["role"] == "assistant")
     content = assistant["content"]
     assert all(
-        block.get("type") != "thinking" for block in content
+        block.get("type") not in ("thinking", "redacted_thinking") for block in content
     ), f"unsignable thinking block must be dropped, got {content!r}"
     assert any(
         block.get("type") == "text" and block.get("text") == "2+2 equals 4."

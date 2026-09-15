@@ -37,11 +37,13 @@ raised it above the deploy default keeps that larger budget for deploy unless
 the deploy override says otherwise.
 """
 
+import importlib.util
 import math
 import os
 import shutil
 import signal
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +66,7 @@ DEFAULT_PRISMA_BOOTSTRAP_TIMEOUT = 600.0
 DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT = 600.0
 
 BOOTSTRAP_ARG = "--version"
+PRISMA_CONSOLE_SCRIPT = "prisma"
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,28 @@ def _kill_process_group(process: "subprocess.Popen[str]") -> None:
         return
 
 
+def prisma_cli_available() -> bool:
+    """Whether some way of running the Prisma CLI exists: the console script on PATH or the importable package."""
+    if shutil.which(PRISMA_CONSOLE_SCRIPT) is not None:
+        return True
+    return importlib.util.find_spec(PRISMA_CONSOLE_SCRIPT) is not None
+
+
+def resolve_prisma_argv(argv: Sequence[str]) -> tuple[str, ...]:
+    """Route a bare ``prisma`` command through ``python -m prisma`` when the console script is not on PATH.
+
+    The console script and ``python -m prisma`` are the same entry point, but
+    only the module form survives an interpreter whose ``bin`` directory is
+    missing from PATH, which is how the proxy gets started under launchers and
+    init systems. Any other executable name is left untouched.
+    """
+    if not argv or argv[0] != PRISMA_CONSOLE_SCRIPT:
+        return tuple(argv)
+    if shutil.which(PRISMA_CONSOLE_SCRIPT) is not None:
+        return tuple(argv)
+    return (sys.executable, "-m", PRISMA_CONSOLE_SCRIPT, *argv[1:])
+
+
 def run_prisma(
     argv: Sequence[str],
     *,
@@ -200,7 +225,7 @@ def run_prisma(
     text unless ``stdout``/``stderr`` say otherwise.
     """
     with subprocess.Popen(
-        argv,
+        resolve_prisma_argv(argv),
         env=env,
         stdout=stdout,
         stderr=stderr,

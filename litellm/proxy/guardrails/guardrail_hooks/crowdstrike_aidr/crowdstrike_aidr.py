@@ -18,6 +18,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_tool_message_for_guardrail,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -261,6 +262,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         fail_on_error: bool | None = True,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> None:
         """
@@ -273,9 +275,13 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             streaming_end_of_stream_only (bool | None): Scan streamed output once at end of stream instead of
                 every streaming_sampling_rate chunks. Defaults to False.
             streaming_sampling_rate (int | None): Scan the accumulated streamed output every Nth chunk. Defaults to 5.
+            async_handler (AsyncHTTPHandler | None): HTTP client to call AI Guard with. Defaults to the shared
+                guardrail-callback client.
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.fail_on_error = True if fail_on_error is None else fail_on_error
         self._set_streaming_params(
             CrowdStrikeAIDRGuardrailConfigModelOptionalParams(

@@ -367,9 +367,37 @@
         "ui_name": "Headers",
         "description": "Headers for OTEL exporter (e.g., x-honeycomb-team=YOUR_API_KEY)",
         "required": false
+      },
+      "otel_exporter_otlp_protocol": {
+        "type": "select",
+        "ui_name": "Export Protocol",
+        "description": "OTLP wire format for trace exports. Use http/json for collectors that cannot decode protobuf",
+        "options": ["http/protobuf", "http/json"],
+        "required": false
       }
     },
     "description": "OpenTelemetry Logging Integration"
+  },
+  {
+    "id": "pointfive",
+    "displayName": "PointFive",
+    "logo": "pointfive.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "POINTFIVE_API_KEY": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "PointFive API key, used to request an upload url for each batch of logs",
+        "required": true
+      },
+      "POINTFIVE_API_URL": {
+        "type": "text",
+        "ui_name": "API URL",
+        "description": "PointFive API endpoint. Leave blank to use https://api.pointfive.co/api/v1/ingestion",
+        "required": false
+      }
+    },
+    "description": "PointFive Logging Integration"
   },
   {
     "id": "s3",
