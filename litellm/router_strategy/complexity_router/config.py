@@ -1593,6 +1593,8 @@ class ComplexityRouterConfig(BaseModel):
             return self
         if v2 is None:
             raise ValueError("llm_v2_config is required when classifier_type is llm_v2")
+        if self.classifier_fallback != "heuristic":
+            raise ValueError("llm_v2 always fails closed to capable_tier; classifier_fallback cannot override it")
         llm: Final = self.classifier_llm_config
         if self.adaptive or self.tier_definitions is not None or self.enable_non_reasoning_tier:
             raise ValueError("llm_v2 requires two built-in tiers and adaptive=false")

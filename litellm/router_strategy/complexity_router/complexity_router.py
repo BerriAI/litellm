@@ -2167,6 +2167,20 @@ class ComplexityRouter(CustomLogger):
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
 
+    def _classifier_caller_constraints(
+        self, system_prompt: str | None, request_kwargs: Mapping[str, object] | None
+    ) -> str | None:
+        """Exclude Claude Code's environment and skill catalogs from task forecasts."""
+        return (
+            None
+            if any(
+                is_claude_code_user_agent(user_agent)
+                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                if isinstance(user_agent := metadata.get("user_agent"), str)
+            )
+            else system_prompt
+        )
+
     async def _classify_with_llm(
         self,
         prompt: str,
@@ -2216,15 +2230,7 @@ class ComplexityRouter(CustomLogger):
         )
 
         encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
-        caller_system_prompt: Final = (
-            None
-            if any(
-                is_claude_code_user_agent(user_agent)
-                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
-                if isinstance(user_agent := metadata.get("user_agent"), str)
-            )
-            else system_prompt
-        )
+        caller_system_prompt: Final = self._classifier_caller_constraints(system_prompt, request_kwargs)
         user_payload: Final = self._build_classifier_user_payload(
             prompt="The delegated task in the following agent_message." if encrypted_task is not None else prompt,
             system_prompt=caller_system_prompt,
@@ -2335,10 +2341,14 @@ class ComplexityRouter(CustomLogger):
             raise ValueError("llm_v2_config is not set")
         request: Final[Mapping[str, object]] = request_kwargs or MappingProxyType({})
         markers: Final = self._reminder_markers_for_request(request)
-        asks: Final = tuple(reversed(tuple(_iter_human_asks_newest_first(messages or (), markers))))
         encrypted: Final = _encrypted_classifier_task(request_kwargs, markers)
+        asks: Final = (
+            ("The delegated task in the following agent_message.",)
+            if encrypted is not None
+            else tuple(reversed(tuple(_iter_human_asks_newest_first(messages or (), markers))))
+        )
         task_context: Final[LLMV2TaskContext] = {
-            "caller_constraints": system_prompt,
+            "caller_constraints": self._classifier_caller_constraints(system_prompt, request_kwargs),
             "task_and_follow_ups": asks or (prompt,),
         }
         task: Final = json.dumps(task_context)

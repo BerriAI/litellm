@@ -142,6 +142,7 @@ def test_verdict_rejects_invalid_probabilities(probability: object) -> None:
         ({"classifier_type": "heuristic"}, "requires classifier_type llm_v2"),
         ({"classifier_llm_config": None}, "classifier_llm_config is required"),
         ({"adaptive": True}, "adaptive=false"),
+        ({"classifier_fallback": "default_model", "default_model": "efficient"}, "fails closed"),
         ({"tiers": {"SIMPLE": ["same"], "REASONING": ["same"]}}, "distinct model"),
         ({"tiers": {"SIMPLE": ["a", "b"], "REASONING": ["c"]}}, "one distinct model"),
         ({"tiers": {"SIMPLE": ["a"], "MEDIUM": ["b"], "REASONING": ["c"]}}, "exactly"),
@@ -219,6 +220,21 @@ async def test_json_object_mode_supplies_schema_in_prompt() -> None:
     assert sent["response_format"] == {"type": "json_object"}
     assert '"forecasts"' in sent["messages"][0]["content"]
     assert '"required"' in sent["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_agent", ("claude-cli/2.1.233", "curl/8.7.1"))
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+async def test_caller_constraints_respect_claude_code_prompt_policy(user_agent: str, metadata_key: str) -> None:
+    router, client = _router(_verdict().model_dump_json())
+    outcome: Final = await router.aclassify(
+        "Fix nested behavior", "Caller system context", request_kwargs={metadata_key: {"user_agent": user_agent}}
+    )
+    assert outcome.cause == "llm_v2_classifier"
+    call: Final = client.acompletion.call_args.kwargs
+    payload: Final = json.loads(call["messages"][1]["content"])
+    assert payload["caller_constraints"] == (None if user_agent.startswith("claude") else "Caller system context")
+    assert payload["task_and_follow_ups"] == ["Fix nested behavior"]
 
 
 @pytest.mark.asyncio
@@ -365,8 +381,8 @@ async def test_encrypted_task_uses_native_responses_and_preserves_logging_contro
             {"type": "encrypted_content", "encrypted_content": "opaque-task"},
         ],
     }
-    outcome: Final = await router.aclassify(
-        "",
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router",
         request_kwargs={
             "input": [task],
             "turn_off_message_logging": True,
@@ -374,13 +390,16 @@ async def test_encrypted_task_uses_native_responses_and_preserves_logging_contro
             "litellm_trace_id": "trace",
         },
     )
-    assert outcome.tier == ComplexityTier.REASONING
-    assert outcome.cause == "llm_v2_classifier"
+    assert result is not None and result.model == "capable"
+    assert result.routing_decision is not None
+    assert result.routing_decision["cause"] == "llm_v2_classifier"
     client.acompletion.assert_not_called()
     client.aresponses.assert_awaited_once()
     call: Final = client.aresponses.call_args.kwargs
     assert call["input"][-1] == task
     assert "opaque-task" not in json.dumps(call["input"][:-1])
+    assert "Task: fix a bug" not in json.dumps(call["input"][:-1])
+    assert "The delegated task in the following agent_message." in json.dumps(call["input"][:-1])
     assert call["max_output_tokens"] == 1024
     assert call["text"]["format"]["schema"]["required"] == ["crux", "demands", "verification", "forecasts"]
     assert call["turn_off_message_logging"] is True
