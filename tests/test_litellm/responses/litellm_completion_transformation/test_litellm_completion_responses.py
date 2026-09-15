@@ -326,26 +326,14 @@ class TestLiteLLMCompletionResponsesConfig:
 
         # Assert
         assert hasattr(responses_api_response, "output")
-        assert len(responses_api_response.output) >= 2
+        # Unsigned plain-text reasoning is attached to the message item rather
+        # than a standalone reasoning item, so only one output item is expected.
+        assert len(responses_api_response.output) >= 1
 
         reasoning_items = [
             item for item in responses_api_response.output if item.type == "reasoning"
         ]
-        assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
-
-        reasoning_item = reasoning_items[0]
-        # Note: ID auto-generation was disabled, so reasoning items may not have IDs
-        # Only assert ID format if an ID is present
-        if hasattr(reasoning_item, "id") and reasoning_item.id:
-            assert reasoning_item.id.startswith(
-                "rs_"
-            ), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
-        assert reasoning_item.status == "completed"
-        assert reasoning_item.role == "assistant"
-        assert len(reasoning_item.content) == 1
-        assert reasoning_item.content[0].type == "output_text"
-        assert "step by step" in reasoning_item.content[0].text
-        assert "42" in reasoning_item.content[0].text
+        assert len(reasoning_items) == 0, "Unsigned reasoning should not create a standalone reasoning item"
 
         message_items = [
             item for item in responses_api_response.output if item.type == "message"
@@ -354,6 +342,10 @@ class TestLiteLLMCompletionResponsesConfig:
 
         message_item = message_items[0]
         assert message_item.content[0].text == "The answer is 42."
+        # The thinking text is preserved on the message item for observability.
+        assert hasattr(message_item, "reasoning_content"), "message item should carry reasoning_content"
+        assert "step by step" in message_item.reasoning_content
+        assert "42" in message_item.reasoning_content
 
     def test_transform_chat_completion_response_without_reasoning_content(self):
         """Test that transformation works normally when no reasoning content is present"""
@@ -433,16 +425,18 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
+        # Unsigned reasoning is attached per message; no standalone reasoning item.
         reasoning_items = [
             item for item in responses_api_response.output if item.type == "reasoning"
         ]
-        assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
-        assert reasoning_items[0].content[0].text == "First reasoning process."
+        assert len(reasoning_items) == 0, "Unsigned reasoning should not create a standalone reasoning item"
 
         message_items = [
             item for item in responses_api_response.output if item.type == "message"
         ]
         assert len(message_items) == 2, "Should have two message items"
+        assert message_items[0].reasoning_content == "First reasoning process."
+        assert message_items[1].reasoning_content == "Second reasoning process."
 
     def test_signature_only_thinking_block_still_emits_reasoning_item(self):
         response = ModelResponse(
@@ -4743,6 +4737,9 @@ class TestBridgedOutputItemIdPrefixes:
     def _reasoning_items(self):
         message = Message(role="assistant", content="apple")
         message.reasoning_content = "thinking about fruit"
+        message.thinking_blocks = [
+            {"type": "thinking", "thinking": "thinking about fruit", "signature": "sig"}
+        ]
         choice = Choices(index=0, finish_reason="stop", message=message)
         return LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
             chat_completion_response=_bridged_chat_completion_response(),
@@ -4870,6 +4867,9 @@ class TestStreamingSnapshotItemIds:
     def _reasoning_chat_completion_response(self):
         message = Message(role="assistant", content="apple")
         message.reasoning_content = "thinking about fruit"
+        message.thinking_blocks = [
+            {"type": "thinking", "thinking": "thinking about fruit", "signature": "sig"}
+        ]
         return _bridged_chat_completion_response(
             choices=[Choices(index=0, finish_reason="stop", message=message)]
         )
