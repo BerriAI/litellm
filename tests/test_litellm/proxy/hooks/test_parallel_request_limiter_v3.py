@@ -6597,3 +6597,45 @@ async def test_key_model_rpm_override_keeps_team_model_tpm_limit(key_limits, ove
     assert exc.value.status_code == 429
     assert "model_per_team" in str(exc.value.detail)
     assert exc.value.headers["rate_limit_type"] == "tokens"
+
+
+@pytest.mark.parametrize(
+    "key_metadata, charges_team_model_pool",
+    [
+        ({}, True),
+        ({"model_rpm_limit": {"test-model": 10}}, True),
+        ({"model_tpm_limit": {"test-model": 5000}}, False),
+        ({"model_tpm_limit": {"other-model": 5000}}, True),
+    ],
+    ids=["no_override", "rpm_only_override", "tpm_override", "tpm_override_on_other_model"],
+)
+def test_success_tpm_accounting_skips_team_model_pool_when_key_owns_model_tpm_limit(
+    key_metadata, charges_team_model_pool
+):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    response = ModelResponse(
+        id="team-pool-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="test-model",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-pool"), "user_api_key_team_id": "t"}},
+        "litellm_params": {
+            "metadata": {
+                "model_group": "test-model",
+                "user_api_key_metadata": key_metadata,
+                "user_api_key_team_metadata": {"model_tpm_limit": {"test-model": 500}},
+            }
+        },
+        "model": "test-model",
+    }
+
+    ops = handler._build_success_event_pipeline_operations(kwargs=kwargs, response_obj=response, rate_limit_type="output")
+
+    charged_keys = {op["key"] for op in ops}
+    assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-pool')}:test-model", "tokens") in charged_keys
+    team_pool_key = handler.create_rate_limit_keys("model_per_team", "t:test-model", "tokens")
+    assert (team_pool_key in charged_keys) is charges_team_model_pool
