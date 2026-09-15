@@ -67,7 +67,22 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
+MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
+
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
+
+
+def _admission_request(scope: Scope) -> Request:
+    """Request whose ``body()`` serves the routing layer's peeked JSON-RPC bytes
+    (``b"{}"`` when nothing was peeked) instead of the ASGI receive channel."""
+    request: Final = Request(scope=scope)
+    peeked_body: Final[bytes] = scope.get(MCP_PEEKED_BODY_SCOPE_KEY, b"{}")
+
+    async def mock_body():
+        return peeked_body
+
+    request.body = mock_body
+    return request
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -440,12 +455,7 @@ class MCPRequestHandler:
             if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
                 mcp_servers = []
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
-        request: Final = Request(scope=scope)
-
-        async def mock_body():
-            return b"{}"
-
-        request.body = mock_body
+        request: Final = _admission_request(scope)
         # Inline import — auth_utils participates in a proxy import cycle.
         from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
             get_request_route,

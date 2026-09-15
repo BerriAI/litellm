@@ -2128,6 +2128,125 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
 
 
 @pytest.mark.asyncio
+async def test_mcp_routing_stashes_peeked_body_for_auth():
+    """The auth-time Request built by ``process_mcp_request`` cannot read the ASGI
+    receive channel; the routing peek must stash the real JSON-RPC body in scope so
+    ``is_mcp_discovery_request`` can see ``method`` and an over-budget key is not
+    429'd on zero-spend ``initialize`` / ``tools/list``."""
+    try:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_PEEKED_BODY_SCOPE_KEY,
+            _admission_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    jsonrpc_body: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    receive = AsyncMock(side_effect=[{"type": "http.request", "body": jsonrpc_body, "more_body": False}])
+    send = AsyncMock()
+    stateless_called = []
+
+    async def stateless_handle(s, r, se):
+        stateless_called.append(1)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(session_manager_stateless, "handle_request", side_effect=stateless_handle),
+        patch.object(session_manager_stateless, "_server_instances", {}),
+        patch.object(session_manager_stateful, "_server_instances", {}),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert stateless_called, "tools/list without a session should route to the stateless manager"
+    assert scope[MCP_PEEKED_BODY_SCOPE_KEY] == jsonrpc_body
+    request_data: Final = await _read_request_body(_admission_request(scope))
+    assert request_data.get("method") == "tools/list"
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_batch_body_is_not_stashed_for_auth():
+    """A JSON-RPC batch (array) body must not be exposed to auth: it can carry a
+    spend-bearing ``tools/call`` alongside discovery methods, so it fails closed
+    and stays budget-enforced."""
+    try:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_PEEKED_BODY_SCOPE_KEY,
+            _admission_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    batch_body: Final = b'[{"jsonrpc":"2.0","id":1,"method":"tools/list"},{"jsonrpc":"2.0","id":2,"method":"tools/call"}]'
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    receive = AsyncMock(side_effect=[{"type": "http.request", "body": batch_body, "more_body": False}])
+    send = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(session_manager_stateless, "handle_request", new=AsyncMock()),
+        patch.object(session_manager_stateless, "_server_instances", {}),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert MCP_PEEKED_BODY_SCOPE_KEY not in scope
+    assert await _read_request_body(_admission_request(scope)) == {}
+
+
+@pytest.mark.asyncio
 async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
     """
     A no-session-id POST with a very large chunked body should not force
