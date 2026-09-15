@@ -958,6 +958,13 @@ class ProxyExtrasDBManager:
             if migration_match:
                 migration_name = migration_match.group(1)
                 ledger_logs = ProxyExtrasDBManager._failed_migration_logs(migration_name)
+                if ledger_logs and ProxyExtrasDBManager._is_idempotent_error(ledger_logs):
+                    logger.info(
+                        "Migration %s failed idempotently per its ledger logs, marking applied and retrying",
+                        migration_name,
+                    )
+                    ProxyExtrasDBManager._mark_migration_applied(migration_name)
+                    return budget.after_recovery(f"resolved:{migration_name}")
                 if ledger_logs is not None and (
                     ledger_logs == "" or _MIGRATION_DEADLOCK_MARKER in ledger_logs
                 ):
@@ -968,6 +975,12 @@ class ProxyExtrasDBManager:
                     )
                     ProxyExtrasDBManager._roll_back_migration_best_effort(migration_name)
                     return budget.spend()
+                if ledger_logs:
+                    raise RuntimeError(
+                        "Database migration failed and cannot be auto-recovered. "
+                        f"Manual intervention required.\n\nPrisma error:\n{stderr}\n\n"
+                        f"Failed migration {migration_name} logs from _prisma_migrations:\n{ledger_logs}"
+                    ) from error
             raise RuntimeError(
                 "Database migration failed and cannot be auto-recovered. "
                 f"Manual intervention required.\n\nPrisma error:\n{stderr}"
