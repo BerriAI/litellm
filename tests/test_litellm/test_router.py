@@ -12206,6 +12206,83 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
 
 
 
+@pytest.mark.parametrize(
+    "model,provider,expected",
+    [
+        ("anthropic/claude-opus-5", None, True),
+        ("claude-opus-4-8", None, True),
+        ("anthropic/claude-opus-4-7", None, False),
+        ("anthropic/claude-opus-4-6", None, False),
+        ("anthropic/claude-sonnet-5", None, False),
+        ("anthropic/off-map-opus", None, False),
+        ("vertex_ai/claude-opus-5", None, False),
+        ("bedrock/claude-opus-5", None, False),
+        ("claude-opus-5", "vertex_ai", False),
+        ("claude-opus-5", "bedrock", False),
+    ],
+)
+@pytest.mark.parametrize("operator_flag", [True, False])
+def test_model_group_info_fast_mode_uses_exact_provider_catalog(
+    local_model_cost_map: None, model: str, provider: str | None, expected: bool, operator_flag: bool
+) -> None:
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": model, "custom_llm_provider": provider, "api_key": "fake-key"},
+        "model_info": {"supports_fast_mode": operator_flag},
+    }])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is expected
+
+
+@pytest.mark.parametrize("flag", [None, False, "true", 1])
+def test_model_group_info_fast_mode_fails_closed_without_explicit_boolean(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, flag: object
+) -> None:
+    entry: Final = {key: value for key, value in litellm.model_cost["claude-opus-5"].items()
+                   if key != "supports_fast_mode"}
+    if flag is not None:
+        entry["supports_fast_mode"] = flag
+    monkeypatch.setitem(litellm.model_cost, "claude-opus-5", entry)
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "fake-key"},
+        "model_info": {"supports_fast_mode": True},
+    }])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is False
+
+
+@pytest.mark.parametrize("other_model,expected", [
+    ("anthropic/claude-opus-4-8", True),
+    ("anthropic/claude-opus-4-7", False),
+    ("anthropic/off-map-opus", False),
+    ("vertex_ai/claude-opus-5", False),
+    ("bedrock/claude-opus-5", False),
+])
+@pytest.mark.parametrize("reverse", [True, False])
+def test_model_group_info_fast_mode_requires_every_deployment(
+    local_model_cost_map: None, other_model: str, expected: bool, reverse: bool
+) -> None:
+    models: Final = (other_model, "anthropic/claude-opus-5") if reverse else (
+        "anthropic/claude-opus-5", other_model
+    )
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": model, "api_key": "fake-key"},
+    } for model in models])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is expected
+
+
 def test_model_group_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
     """``/model_group/info`` folds each deployment's registry flags into the group; a deployment whose
     registry entry declares parallel function calling must flip the group to True instead of False."""

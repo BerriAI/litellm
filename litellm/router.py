@@ -102,6 +102,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -10818,6 +10819,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                     }
                 )
@@ -10896,6 +10898,9 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
+            model_group_info.supports_fast_mode = model_group_info.supports_fast_mode and (
+                AnthropicModelInfo.supports_fast_mode(litellm_model, llm_provider)
+            )
             deployment_reasoning_efforts = (
                 resolve_supported_reasoning_efforts(  # rebind-ok: recalculated per deployment
                     model_info, deployment_is_mapped=deployment_is_mapped
