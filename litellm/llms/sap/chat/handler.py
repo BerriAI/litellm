@@ -32,6 +32,38 @@ def _now_ts() -> int:
     return int(time.time())
 
 
+def normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic types
+    return {**raw, "choices": [_normalize_choice(c) for c in raw.get("choices", [])]}  # mutable-ok: sentinel default, never mutated
+
+
+def _normalize_choice(choice: dict) -> dict:  # mutable-ok: generic dict from raw JSON
+    for key in ("message", "delta"):
+        carrier = choice.get(key)
+        if not isinstance(carrier, dict):
+            continue
+        rc = carrier.get("reasoning_content")
+        if not isinstance(rc, list):
+            continue
+        thinking_blocks = [  # mutable-ok: local accumulator built once and assigned
+            {  # mutable-ok: each block dict constructed fresh per item
+                "type": "thinking",
+                "thinking": item.get("content") or "",
+                "signature": item.get("signature"),
+            }
+            for item in rc
+            if isinstance(item, dict)
+        ]
+        return {
+            **choice,
+            key: {
+                **carrier,
+                "thinking_blocks": thinking_blocks,
+                "reasoning_content": ("\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None),
+            },
+        }
+    return choice
+
+
 def _is_terminal_chunk(chunk: OpenAIChatCompletionChunk) -> bool:
     """OpenAI-shaped chunk is terminal if any choice has a non-None finish_reason."""
     try:
@@ -55,22 +87,21 @@ class _StreamParser:
         if not orc:
             return None
 
-        return OpenAIChatCompletionChunk.model_validate(
-            {
-                "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
-                "object": orc.get("object") or "chat.completion.chunk",
-                "created": orc.get("created") or evt.get("created") or _now_ts(),
-                "model": orc.get("model") or "unknown",
-                "choices": [
-                    {
-                        "index": c.get("index", 0),
-                        "delta": c.get("delta") or {},
-                        "finish_reason": c.get("finish_reason"),
-                    }
-                    for c in (orc.get("choices") or [])
-                ],
-            }
-        )
+        chunk: Final[dict] = {  # mutable-ok: local dict built once and passed to model_validate
+            "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
+            "object": orc.get("object") or "chat.completion.chunk",
+            "created": orc.get("created") or evt.get("created") or _now_ts(),
+            "model": orc.get("model") or "unknown",
+            "choices": [
+                {
+                    "index": c.get("index", 0),
+                    "delta": c.get("delta") or {},
+                    "finish_reason": c.get("finish_reason"),
+                }
+                for c in (orc.get("choices") or [])
+            ],
+        }
+        return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(chunk))
 
     @staticmethod
     def to_openai_chunk(event_obj: dict) -> OpenAIChatCompletionChunk | None:
@@ -90,10 +121,9 @@ class _StreamParser:
         # FINAL RESULT IS *NOT* TERMINAL: treat it as the next chunk
         if "final_result" in event_obj:
             fr: Final = event_obj["final_result"] or {}
-            # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(fr)
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(fr))
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -101,7 +131,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(event_obj)
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(event_obj))
 
         # Unknown / heartbeat / metrics
         return None
