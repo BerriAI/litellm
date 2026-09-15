@@ -13,8 +13,10 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str];
 
-    fn map_ocr_params(&self, model: &str, params: &OpaqueParams) -> OpaqueParams {
-        params.retain_supported(self.get_supported_ocr_params(model))
+    fn map_ocr_params(&self, _model: &str, params: &OpaqueParams) -> OpaqueParams {
+        params
+            .provider_params()
+            .without(&["extra_body", "model", "document"])
     }
 
     fn prepare_request(

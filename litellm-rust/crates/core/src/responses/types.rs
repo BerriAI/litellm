@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResponsesWsEventType {
@@ -58,7 +58,7 @@ pub struct ResponsesWsEvent {
     #[serde(rename = "type")]
     pub event_type: ResponsesWsEventType,
     #[serde(flatten)]
-    pub data: Map<String, Value>,
+    pub data: crate::params::OpaqueParams,
 }
 
 impl ResponsesWsEvent {

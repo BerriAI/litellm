@@ -40,7 +40,9 @@ async def test_public_cohere_request_and_normalization(
     request: Final = recording_server.requests[0]
     assert request.path == ("/providers/cohere/v2/parse" if model.startswith("azure_ai/") else "/v2/parse")
     assert request.headers["authorization"] == "Bearer test-key"
-    assert request.body == {"model": model.split("/", 1)[1], "document": IMAGE, "output_format": "markdown"}
+    assert request.body == {
+        "model": model.split("/", 1)[1], "document": IMAGE, "output_format": "markdown", "unrecognized": True
+    }
     assert [page.index for page in response.pages] == [4, 1]
     assert response.pages[0].markdown == "receipt"
     assert response.pages[0].images[0].bbox == BOX

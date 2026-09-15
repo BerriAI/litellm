@@ -44,7 +44,7 @@ pub struct ContentBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControl>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::params::OpaqueParams,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -56,7 +56,7 @@ pub struct CacheControl {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::params::OpaqueParams,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ pub struct AnthropicMessage {
     pub role: String,
     pub content: MessageContent,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::params::OpaqueParams,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,7 +110,7 @@ pub struct AnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::params::OpaqueParams,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -130,5 +130,5 @@ pub struct AnthropicMessagesResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<Value>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::params::OpaqueParams,
 }

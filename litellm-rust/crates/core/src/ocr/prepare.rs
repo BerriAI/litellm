@@ -1,59 +1,20 @@
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value};
+use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
 use super::OcrClient;
 use super::error::{OcrError, OcrRequestError};
 use super::hooks::OcrDuringCallRequest;
 use super::types::{LiteLLMOcrRequest, OcrDocument};
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ParsedProviderParams<T> {
-    #[serde(flatten)]
-    pub known: T,
-    #[serde(default, flatten)]
-    pub extra_params: Map<String, Value>,
-}
+pub(crate) use crate::params::{ParsedProviderParams, merge_extra_params};
 
 pub(crate) fn _prepare_ocr_request<T: DeserializeOwned>(
     request: &LiteLLMOcrRequest,
 ) -> Result<ParsedProviderParams<T>, OcrRequestError> {
     super::wire::decode_request_value(
-        Value::Object(request.optional_params.clone().into()),
+        Value::Object(request.optional_params.provider_params().into()),
         "optional_params",
     )
-}
-
-pub(crate) fn merge_extra_params<B: Serialize>(
-    body: &B,
-    extra_params: Map<String, Value>,
-) -> Result<Value, OcrRequestError> {
-    let Value::Object(fields) =
-        serde_json::to_value(body).map_err(|_| OcrRequestError::RequestField {
-            path: "body".into(),
-        })?
-    else {
-        return Err(OcrRequestError::RequestField {
-            path: "body".into(),
-        });
-    };
-    let extra_body = extra_params
-        .get("extra_body")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<Map<String, Value>>();
-    Ok(Value::Object(
-        fields
-            .into_iter()
-            .chain(
-                extra_params
-                    .into_iter()
-                    .filter(|(name, _)| name != "extra_body"),
-            )
-            .chain(extra_body)
-            .collect(),
-    ))
 }
 
 pub(crate) async fn transform_request_body<B>(
@@ -63,13 +24,19 @@ pub(crate) async fn transform_request_body<B>(
     headers: &[(String, String)],
     retains_document: bool,
     body: B,
-    validate: impl FnOnce(&B) -> Result<(), OcrRequestError>,
+    validate: impl Fn(&B) -> Result<(), OcrRequestError>,
 ) -> Result<reqwest::Request, OcrError>
 where
     B: Serialize + DeserializeOwned,
 {
+    let extras = request
+        .optional_params
+        .without(request.config.get_supported_ocr_params(&request.model));
+    let composed = merge_extra_params(&body, extras)?;
+    let composed = OcrWireBody::<B>::decode(composed, "body")?;
+    validate(&composed.body)?;
     let (body, headers) = if request.hooks.intercepts_requests() {
-        let body = serde_json::to_value(body).map_err(|_| OcrRequestError::RequestField {
+        let body = serde_json::to_value(composed).map_err(|_| OcrRequestError::RequestField {
             path: "body".into(),
         })?;
         let retained_fields = request
@@ -78,6 +45,13 @@ where
             .filter(|name| body.get(*name).is_some())
             .cloned()
             .chain(retains_document.then(|| "document".to_string()))
+            .filter(|name| {
+                request
+                    .optional_params
+                    .get("extra_body")
+                    .and_then(Value::as_object)
+                    .is_none_or(|overrides| !overrides.contains_key(name))
+            })
             .collect();
         let changed = request
             .hooks
@@ -90,17 +64,11 @@ where
                 retained_fields,
             })
             .await?;
-        let body = OcrWireBody::<B>::decode(changed.body)?;
+        let body = OcrWireBody::<B>::decode(changed.body, "guardrail.body")?;
         validate(&body.body)?;
         (body, changed.headers)
     } else {
-        (
-            OcrWireBody {
-                body,
-                extra: Map::new(),
-            },
-            headers.to_vec(),
-        )
+        (composed, headers.to_vec())
     };
     build_http_request(client, request, url, &headers, &body)
 }
@@ -155,19 +123,19 @@ struct OcrWireBody<B> {
     #[serde(flatten)]
     body: B,
     #[serde(flatten)]
-    extra: Map<String, Value>,
+    extra: crate::params::OpaqueParams,
 }
 
 impl<B: Serialize + DeserializeOwned> OcrWireBody<B> {
-    fn decode(value: Value) -> Result<Self, OcrRequestError> {
-        let body: B = super::wire::decode_request_value(value.clone(), "guardrail.body")?;
+    fn decode(value: Value, prefix: &str) -> Result<Self, OcrRequestError> {
+        let body: B = super::wire::decode_request_value(value.clone(), prefix)?;
         let Value::Object(fields) = value else {
             return Err(OcrRequestError::RequestField {
-                path: "guardrail.body".into(),
+                path: prefix.into(),
             });
         };
         let known = serde_json::to_value(&body).map_err(|_| OcrRequestError::RequestField {
-            path: "guardrail.body".into(),
+            path: prefix.into(),
         })?;
         let extra = fields
             .into_iter()
@@ -182,6 +150,7 @@ pub(crate) fn credential_env(name: &str) -> Option<String> {
 }
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize;
     use serde_json::json;
 
     use super::*;

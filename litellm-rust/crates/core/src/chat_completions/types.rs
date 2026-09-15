@@ -73,7 +73,7 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::params::OpaqueParams,
 }
 
 /// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python

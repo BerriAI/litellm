@@ -110,7 +110,7 @@ async fn configs_build_complete_requests_and_share_mistral_normalization() {
         "include_image_base64": true,
         "vertex_project": "project-1",
         "vertex_location": "us-central1",
-        "unknown": "ignored"
+        "unknown": "preserved"
     });
     let direct = wire_request(
         "mistral/mistral-ocr-maas",
@@ -143,7 +143,8 @@ async fn configs_build_complete_requests_and_share_mistral_normalization() {
                 "model": "mistral-ocr-maas",
                 "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
                 "pages": [0, 2],
-                "include_image_base64": true
+                "include_image_base64": true,
+                "unknown": "preserved"
             })
         );
     }

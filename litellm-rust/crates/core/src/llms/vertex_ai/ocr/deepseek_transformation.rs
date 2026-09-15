@@ -37,6 +37,8 @@ mod types {
     pub(crate) struct DeepSeekOcrMessage {
         pub role: UserRole,
         pub content: Vec<crate::ocr::types::OcrDocument>,
+        #[serde(default, flatten)]
+        pub extra: crate::params::OpaqueParams,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,6 +127,7 @@ mod mapping {
             messages: vec![DeepSeekOcrMessage {
                 role: UserRole::User,
                 content: vec![content],
+                extra: Default::default(),
             }],
             params: params.clone(),
         })

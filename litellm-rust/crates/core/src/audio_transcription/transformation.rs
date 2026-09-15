@@ -18,7 +18,7 @@ pub trait AudioTranscriptionProviderConfig: Sync {
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_transcription_params(&self, params: &OpaqueParams) -> OpaqueParams {
-        params.retain_supported(self.supported_transcription_params())
+        params.provider_params()
     }
 
     fn transform_transcription_request(

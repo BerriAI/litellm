@@ -127,10 +127,10 @@ mod mapping_tests {
     }
 
     #[rstest]
-    fn map_ocr_params_drops_unknown_params() {
+    fn map_ocr_params_preserves_unknown_params() {
         let mapped = mapped_params(json!({"extract_header":true,"unsupported_param":"value"}));
         assert_eq!(mapped["extract_header"], true);
-        assert!(mapped.get("unsupported_param").is_none());
+        assert_eq!(mapped["unsupported_param"], "value");
     }
 
     #[rstest]

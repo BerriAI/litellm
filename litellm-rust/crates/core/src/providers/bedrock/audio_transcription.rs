@@ -70,17 +70,20 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             inference_config.insert("temperature".to_string(), temperature.clone());
         }
         Ok(AudioTranscriptionRequestData {
-            body: json!({
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"audio": {"format": format, "source": {"bytes": data}}},
-                        {"text": instruction}
-                    ]
-                }],
-                "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": inference_config,
-            }),
+            body: crate::params::merge_extra_params(
+                &json!({
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"audio": {"format": format, "source": {"bytes": data}}},
+                            {"text": instruction}
+                        ]
+                    }],
+                    "system": [{"text": "You are a transcription assistant."}],
+                    "inferenceConfig": inference_config,
+                }),
+                optional_params.without(SUPPORTED_PARAMS),
+            )?,
         })
     }
 
@@ -178,7 +181,8 @@ mod tests {
                     ]
                 }],
                 "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
+                "inferenceConfig": {"maxTokens": 4096, "temperature": 0},
+                "timestamp_granularities": ["word"]
             })
         );
     }

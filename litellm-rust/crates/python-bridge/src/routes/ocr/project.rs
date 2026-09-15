@@ -128,9 +128,9 @@ pub(super) fn project_request(
     let optional_params = project_optional_fields(kwargs, &names)?;
     let input_sources = request_input_sources(
         kwargs,
-        names
-            .iter()
-            .copied()
+        optional_params
+            .keys()
+            .map(String::as_str)
             .chain(["api_key", "api_base", "extra_headers"]),
     )?;
     let azure_ad_token_provider = kwargs
