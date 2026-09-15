@@ -79,9 +79,14 @@ class TestBudgetBlocksPerLevel:
         )
 
     @pytest.mark.covers("quota_management.budget.internal_user.blocks_over_limit")
-    def test_user_budget_enforced_across_all_their_keys(
+    def test_user_budget_enforced_across_their_personal_keys(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:
+        """A user's max_budget follows the person across their personal keys, so a
+        second untouched key is not a fresh allowance. It stops at the team
+        boundary: the same user's team-scoped key is governed by the team and
+        team-member budgets, both uncapped here, so it is the control that must
+        keep serving while the personal keys are refused."""
         user_id = client.create_user(max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_user(user_id))
         first_key = client.generate_key(user_id=user_id)
@@ -95,12 +100,17 @@ class TestBudgetBlocksPerLevel:
         resources.defer(lambda: client.delete_key(team_key))
 
         _assert_blocked_429(client, first_key)
-        for label, key in (("second personal key", second_key), ("team-member key", team_key)):
-            result = _chat(client, key)
-            assert is_budget_block(result) and result.status_code == 429, (
-                f"the {label} of a user over budget must get the same 429 budget_exceeded, "
-                f"got {result.status_code}: {result.body[:200]}"
-            )
+        second = _chat(client, second_key)
+        assert is_budget_block(second) and second.status_code == 429, (
+            f"the second personal key of a user over budget must get the same 429 budget_exceeded, "
+            f"got {second.status_code}: {second.body[:200]}"
+        )
+        team_result = _chat(client, team_key)
+        assert not is_budget_block(team_result), (
+            f"the team-scoped key of a user over their personal budget must keep serving; "
+            f"got {team_result.status_code}: {team_result.body[:200]}"
+        )
+        require_successful_call(team_result)
 
     @pytest.mark.covers("quota_management.budget.end_user.blocks_over_limit")
     def test_end_user_budget_blocks_attributed_calls(

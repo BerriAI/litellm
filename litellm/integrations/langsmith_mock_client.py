@@ -8,13 +8,15 @@ Usage:
     Set LANGSMITH_MOCK=true in environment variables or config to enable mock mode.
 """
 
+from typing import Final
+
 from litellm.integrations.mock_client_factory import (
     MockClientConfig,
     create_mock_client_factory,
 )
 
 # Create mock client using factory
-_config = MockClientConfig(
+_config: Final = MockClientConfig(
     name="LANGSMITH",
     env_var="LANGSMITH_MOCK",
     default_latency_ms=100,

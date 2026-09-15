@@ -6,9 +6,9 @@ import * as React from "react";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type { Organization } from "@/components/networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,9 +22,9 @@ import { fetchClient } from "@/lib/http/api";
 import { buildOrgPatch, orgToForm, type OrgPatchBody } from "./mapper";
 import { orgSettingsSchema } from "./schema";
 
-const NO_RESET = "never";
+export const NO_RESET = "never";
 
-const BUDGET_DURATION_OPTIONS = [
+export const BUDGET_DURATION_OPTIONS = [
   { value: NO_RESET, label: "No reset" },
   { value: "24h", label: "daily" },
   { value: "7d", label: "weekly" },
@@ -63,14 +63,12 @@ export const OrgSettingsForm = ({
   const mutation = useMutation({
     mutationFn: (body: OrgPatchBody) => patchOrganization(organizationId, body),
     onSuccess: () => {
-      NotificationsManager.success("Organization settings updated successfully");
+      toast.success("Organization settings updated successfully");
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
       onSaved();
     },
     onError: (error: unknown) =>
-      NotificationsManager.fromBackend(
-        error instanceof Error ? error.message : "Failed to update organization settings",
-      ),
+      toast.fromError(error instanceof Error ? error.message : "Failed to update organization settings"),
   });
 
   const onSubmit = form.handleSubmit((values) => {
@@ -78,7 +76,7 @@ export const OrgSettingsForm = ({
   });
 
   return (
-    <form onSubmit={onSubmit}>
+    <form onSubmit={onSubmit} noValidate>
       <FieldGroup>
         <FormField control={form.control} name="organization_alias" label="Organization Name">
           {({ ref, ...field }) => <Input {...field} ref={ref} />}
@@ -96,12 +94,13 @@ export const OrgSettingsForm = ({
         </FormField>
 
         <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={0.01} min={0} />}
+          {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step="any" min={0} />}
         </FormField>
 
         <FormField control={form.control} name="budget_duration" label="Reset Budget">
           {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
             <Select
+              items={BUDGET_DURATION_OPTIONS}
               value={value === "" ? NO_RESET : value}
               onValueChange={(selected) => onChange(selected === NO_RESET ? "" : selected)}
             >
@@ -154,7 +153,7 @@ export const OrgSettingsForm = ({
         </FormField>
       </FieldGroup>
 
-      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6 mt-6">
+      <div className="sticky z-chrome bg-card p-4 border-t border-border -bottom-6 -inset-x-6 mt-6">
         <div className="flex justify-end items-center gap-2">
           <Button type="button" variant="outline" onClick={onCancel} disabled={mutation.isPending}>
             Cancel

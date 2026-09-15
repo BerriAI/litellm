@@ -7,24 +7,15 @@ Upload -> (OCR) -> Chunk -> Embed -> Vector Store
 
 from __future__ import annotations
 
-__all__ = ["ingest", "aingest", "query", "aquery"]
+__all__ = ["aingest", "aquery", "ingest", "query"]
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine, Iterator, Mapping
 from contextlib import contextmanager
 from functools import partial
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Coroutine,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-)
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -39,6 +30,7 @@ from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 from litellm.rag.ingestion.vertex_ai_ingestion import VertexAIRAGIngestion
 from litellm.rag.rag_query import RAGQuery
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.rag import (
     RAGIngestOptions,
     RAGIngestResponse,
@@ -51,7 +43,7 @@ if TYPE_CHECKING:
 
 
 # Registry of provider-specific ingestion classes
-INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
+INGESTION_REGISTRY: Final[dict[str, type[BaseRAGIngestion]]] = {
     "openai": OpenAIRAGIngestion,
     "bedrock": BedrockRAGIngestion,
     "gemini": GeminiRAGIngestion,
@@ -59,8 +51,27 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
     "vertex_ai": VertexAIRAGIngestion,
 }
 
+# Only these retrieval_config keys are forwarded to vector_stores.asearch as
+# provider-specific params. The explicit allowlist keeps caller-controlled
+# connection overrides (api_base, api_key, ...) away from the search call,
+# where they could redirect store credentials to an attacker-chosen host.
+_FORWARDABLE_RETRIEVAL_CONFIG_KEYS: Final = frozenset(
+    {
+        "aws_region_name",
+        "vector_bucket_name",
+        "embedding_model",
+        "litellm_embedding_model",
+        "litellm_embedding_config",
+        "litellm_credential_name",
+    }
+)
 
-def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
+_SEARCH_ARGS_SET_BY_PIPELINE: Final = frozenset(
+    {"vector_store_id", "query", "max_num_results", "custom_llm_provider", "router"}
+)
+
+
+def get_ingestion_class(provider: str) -> type[BaseRAGIngestion]:
     """
     Get the ingestion class for a given provider.
 
@@ -73,19 +84,19 @@ def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
     Raises:
         ValueError: If provider is not supported
     """
-    ingestion_class = INGESTION_REGISTRY.get(provider)
+    ingestion_class: Final = INGESTION_REGISTRY.get(provider)
     if ingestion_class is None:
-        supported = ", ".join(INGESTION_REGISTRY.keys())
+        supported: Final = ", ".join(INGESTION_REGISTRY.keys())
         raise ValueError(f"Provider '{provider}' is not supported for RAG ingestion. Supported providers: {supported}")
     return ingestion_class
 
 
 async def _execute_ingest_pipeline(
     ingest_options: RAGIngestOptions,
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    router: Optional["Router"] = None,
+    file_data: tuple[str, bytes, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    router: Router | None = None,
 ) -> RAGIngestResponse:
     """
     Execute the RAG ingest pipeline using provider-specific implementation.
@@ -101,14 +112,14 @@ async def _execute_ingest_pipeline(
         RAGIngestResponse with status and IDs
     """
     # Get provider from vector store config
-    vector_store_config = ingest_options.get("vector_store") or {}
-    provider = vector_store_config.get("custom_llm_provider", "openai")
+    vector_store_config: Final = ingest_options.get("vector_store") or {}
+    provider: Final = vector_store_config.get("custom_llm_provider", "openai")
 
     # Get provider-specific ingestion class
-    ingestion_class = get_ingestion_class(provider)
+    ingestion_class: Final = get_ingestion_class(provider)
 
     # Create ingestion instance
-    ingestion = ingestion_class(
+    ingestion: Final = ingestion_class(
         ingest_options=ingest_options,
         router=router,
     )
@@ -126,12 +137,12 @@ async def _execute_ingest_pipeline(
 
 @client
 async def aingest(
-    ingest_options: Dict[str, Any],
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file: Optional[Dict[str, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ingest_options: dict[str, Any],
+    file_data: tuple[str, bytes, str] | None = None,
+    file: dict[str, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> RAGIngestResponse:
     """
@@ -157,12 +168,12 @@ async def aingest(
         )
         ```
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aingest"] = True
 
-        func = partial(
+        func: Final = partial(
             ingest,
             ingest_options=ingest_options,
             file_data=file_data,
@@ -173,9 +184,9 @@ async def aingest(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -204,7 +215,7 @@ def _suppressed_sub_call_billing() -> Iterator[None]:
     streamed cost is computed from assembled chunks after this pipeline
     returns, so there is no response object to fold into here).
     """
-    previous = is_internal_call.get()
+    previous: Final = is_internal_call.get()
     is_internal_call.set(True)
     try:
         yield
@@ -214,10 +225,11 @@ def _suppressed_sub_call_billing() -> Iterator[None]:
 
 async def _execute_query_pipeline(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[AllMessageValues],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
+    vector_store_params: Mapping[str, object] | None = None,
     **kwargs,
 ) -> ModelResponse:
     """
@@ -225,24 +237,39 @@ async def _execute_query_pipeline(
     """
     # Extract router from kwargs - use it for completion if available
     # to properly resolve virtual model names
-    router: Optional["Router"] = kwargs.pop("router", None)
+    router: Final[Router | None] = kwargs.pop("router", None)
 
     # 1. Extract query from last user message
-    query_text = RAGQuery.extract_query_from_messages(messages)
+    query_text: Final = RAGQuery.extract_query_from_messages(messages)
     if not query_text:
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
+    # Forward allowlisted provider retrieval_config extras (region, embedding
+    # model, bucket, credential refs) to the search call; the managed store's
+    # params win on conflict.
+    provider_search_params: Final = MappingProxyType(
+        {k: v for k, v in retrieval_config.items() if k in _FORWARDABLE_RETRIEVAL_CONFIG_KEYS}
+    )
+    store_search_params: Final = MappingProxyType(
+        {
+            k: v
+            for k, v in (vector_store_params.items() if vector_store_params else ())
+            if k not in _SEARCH_ARGS_SET_BY_PIPELINE
+        }
+    )
+    forwarded_search_params: Final = MappingProxyType({**provider_search_params, **kwargs, **store_search_params})
     with _suppressed_sub_call_billing():
-        search_response = await litellm.vector_stores.asearch(
+        search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),
             custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
-            **kwargs,
+            router=router,
+            **forwarded_search_params,
         )
 
-    search_provider = retrieval_config.get("custom_llm_provider", "openai")
+    search_provider: Final = retrieval_config.get("custom_llm_provider", "openai")
     try:
         search_cost = sum(
             vector_store_search_cost(
@@ -260,7 +287,7 @@ async def _execute_query_pipeline(
 
     # 3. Optional rerank
     if rerank and rerank.get("enabled"):
-        documents = RAGQuery.extract_documents_from_search(search_response)
+        documents: Final = RAGQuery.extract_documents_from_search(search_response)
         if documents:
             with _suppressed_sub_call_billing():
                 rerank_response = await litellm.arerank(
@@ -269,15 +296,15 @@ async def _execute_query_pipeline(
                     documents=documents,
                     top_n=rerank.get("top_n", 5),
                 )
-            rerank_hidden_params = getattr(rerank_response, "_hidden_params", None)
+            rerank_hidden_params: Final = getattr(rerank_response, "_hidden_params", None)
             if isinstance(rerank_hidden_params, dict):
-                rerank_response_cost: float | None = rerank_hidden_params.get("response_cost")
+                rerank_response_cost: Final[float | None] = rerank_hidden_params.get("response_cost")
                 rerank_cost = rerank_response_cost or 0.0
             context_chunks = RAGQuery.get_top_chunks_from_rerank(search_response, rerank_response)
 
     # 4. Build context message and call completion
-    context_message = RAGQuery.build_context_message(context_chunks)
-    modified_messages = messages[:-1] + [context_message] + [messages[-1]]
+    context_message: Final = RAGQuery.build_context_message(context_chunks)
+    modified_messages: Final = messages[:-1] + [context_message] + [messages[-1]]
 
     # Use router if available to properly resolve virtual model names
     with _suppressed_sub_call_billing():
@@ -297,7 +324,7 @@ async def _execute_query_pipeline(
             )
 
     # 5. Attach search results to response
-    sub_call_cost = search_cost + rerank_cost
+    sub_call_cost: Final = search_cost + rerank_cost
     if not stream and isinstance(response, ModelResponse):
         response = RAGQuery.add_search_results_to_response(
             response=response,
@@ -305,49 +332,51 @@ async def _execute_query_pipeline(
             rerank_results=rerank_response,
         )
         if sub_call_cost > 0:
-            hidden_params = getattr(response, "_hidden_params", None)
+            hidden_params: Final = getattr(response, "_hidden_params", None)
             if isinstance(hidden_params, dict):
-                completion_response_cost: float | None = hidden_params.get("response_cost")
+                completion_response_cost: Final[float | None] = hidden_params.get("response_cost")
                 if completion_response_cost is not None:
                     hidden_params["response_cost"] = completion_response_cost + sub_call_cost
     elif sub_call_cost > 0:
-        logging_obj: object = kwargs.get("litellm_logging_obj")
+        logging_obj: Final[object] = kwargs.get("litellm_logging_obj")
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.model_call_details["additional_response_cost"] = sub_call_cost
 
-    return response  # type: ignore[return-value]
+    return response
 
 
 @client
 async def aquery(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[AllMessageValues],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
+    vector_store_params: Mapping[str, object] | None = None,
     **kwargs,
 ) -> ModelResponse:
     """
     Async: Query a RAG pipeline.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aquery"] = True
 
-        func = partial(
+        func: Final = partial(
             query,
             model=model,
             messages=messages,
             retrieval_config=retrieval_config,
             rerank=rerank,
             stream=stream,
+            vector_store_params=vector_store_params,
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -368,18 +397,19 @@ async def aquery(
 @client
 def query(
     model: str,
-    messages: List[Any],
-    retrieval_config: Dict[str, Any],
-    rerank: Optional[Dict[str, Any]] = None,
+    messages: list[AllMessageValues],
+    retrieval_config: dict[str, Any],
+    rerank: dict[str, Any] | None = None,
     stream: bool = False,
+    vector_store_params: Mapping[str, object] | None = None,
     **kwargs,
-) -> Union[ModelResponse, Coroutine[Any, Any, ModelResponse]]:
+) -> ModelResponse | Coroutine[None, None, ModelResponse]:
     """
     Query a RAG pipeline.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        _is_async = kwargs.pop("aquery", False) is True
+        _is_async: Final = kwargs.pop("aquery", False) is True
 
         if _is_async:
             return _execute_query_pipeline(
@@ -388,6 +418,7 @@ def query(
                 retrieval_config=retrieval_config,
                 rerank=rerank,
                 stream=stream,
+                vector_store_params=vector_store_params,
                 **kwargs,
             )
         else:
@@ -398,6 +429,7 @@ def query(
                     retrieval_config=retrieval_config,
                     rerank=rerank,
                     stream=stream,
+                    vector_store_params=vector_store_params,
                     **kwargs,
                 )
             )
@@ -413,14 +445,14 @@ def query(
 
 @client
 def ingest(
-    ingest_options: Dict[str, Any],
-    file_data: Optional[Tuple[str, bytes, str]] = None,
-    file: Optional[Dict[str, str]] = None,
-    file_url: Optional[str] = None,
-    file_id: Optional[str] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ingest_options: dict[str, Any],
+    file_data: tuple[str, bytes, str] | None = None,
+    file: dict[str, str] | None = None,
+    file_url: str | None = None,
+    file_id: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> Union[RAGIngestResponse, Coroutine[Any, Any, RAGIngestResponse]]:
+) -> RAGIngestResponse | Coroutine[None, None, RAGIngestResponse]:
     """
     Ingest a document into a vector store.
 
@@ -446,22 +478,22 @@ def ingest(
     """
     import base64
 
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        _is_async = kwargs.pop("aingest", False) is True
-        router: Optional["Router"] = kwargs.get("router")
+        _is_async: Final = kwargs.pop("aingest", False) is True
+        router: Final[Router | None] = kwargs.get("router")
 
         # Convert file dict to file_data tuple if provided
         if file is not None and file_data is None:
-            filename = file.get("filename", "document")
-            content_b64 = file.get("content", "")
-            content_type = file.get("content_type", "application/octet-stream")
-            content_bytes = base64.b64decode(content_b64)
+            filename: Final = file.get("filename", "document")
+            content_b64: Final = file.get("content", "")
+            content_type: Final = file.get("content_type", "application/octet-stream")
+            content_bytes: Final = base64.b64decode(content_b64)
             file_data = (filename, content_bytes, content_type)
 
         if _is_async:
             return _execute_ingest_pipeline(
-                ingest_options=ingest_options,  # type: ignore
+                ingest_options=ingest_options,
                 file_data=file_data,
                 file_url=file_url,
                 file_id=file_id,
@@ -470,7 +502,7 @@ def ingest(
         else:
             return asyncio.get_event_loop().run_until_complete(
                 _execute_ingest_pipeline(
-                    ingest_options=ingest_options,  # type: ignore
+                    ingest_options=ingest_options,
                     file_data=file_data,
                     file_url=file_url,
                     file_id=file_id,

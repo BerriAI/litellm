@@ -8,7 +8,7 @@ import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
-import { LOG_FILTER_LABELS } from "./log_filter_logic";
+import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
 
@@ -28,9 +28,9 @@ interface RequestLogsTableProps {
   onRefresh: () => void;
   onRowClick: (log: LogEntry) => void;
   onKeyHashClick: (keyHash: string) => void;
-  onSessionClick: (sessionId: string) => void;
+  onSessionClick: (log: LogEntry) => void;
   teams: Team[];
-  accessToken: string;
+  logsWindow: LogsWindow;
   toolbarChildren?: ReactNode;
 }
 
@@ -68,7 +68,7 @@ export function RequestLogsTable({
   onKeyHashClick,
   onSessionClick,
   teams,
-  accessToken,
+  logsWindow,
   toolbarChildren,
 }: RequestLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -85,6 +85,7 @@ export function RequestLogsTable({
       data={data}
       columns={columns}
       getRowId={(row) => row.request_id}
+      fillHeight
       sortingMode="server"
       sorting={sorting}
       onSortingChange={onSortingChange}
@@ -106,7 +107,7 @@ export function RequestLogsTable({
             table={table}
             searchValue={searchValue}
             onSearchChange={onSearchChange}
-            searchPlaceholder="Search by Request ID"
+            searchPlaceholder="Search logs by ID…"
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
@@ -122,7 +123,7 @@ export function RequestLogsTable({
             title="Filters"
             description="Narrow down request logs"
           >
-            {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} accessToken={accessToken} />}
+            {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} logsWindow={logsWindow} />}
           </DataTableFilterDrawer>
         </>
       )}

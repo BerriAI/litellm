@@ -7,15 +7,19 @@ login endpoints (e.g., /login and /v2/login).
 
 import os
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Optional, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import jwt
 from fastapi import HTTPException
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -24,6 +28,8 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+from litellm.proxy.auth.password_policy import is_breach_check_enabled, is_password_breached
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -41,6 +47,56 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
+if TYPE_CHECKING:
+    from prisma import types as prisma_types
+
+BREACH_RECHECK_INTERVAL: Final = timedelta(hours=24)
+PASSWORD_RESET_ALLOWED_ROUTES: Final = ("/user/password/change",)
+
+
+def _breach_recheck_due(last_breach_check_at: datetime | None) -> bool:
+    if last_breach_check_at is None:
+        return True
+    last_checked_utc: Final = (
+        last_breach_check_at
+        if last_breach_check_at.tzinfo is not None
+        else last_breach_check_at.replace(tzinfo=timezone.utc)
+    )
+    return datetime.now(timezone.utc) - last_checked_utc >= BREACH_RECHECK_INTERVAL
+
+
+async def screen_login_password_for_breach(
+    user_id: str,
+    password: str,
+    last_breach_check_at: datetime | None,
+    general_settings: Mapping[str, object],
+    prisma_client: PrismaClient,
+    client: AsyncHTTPHandler | None = None,
+) -> bool:
+    """Screens a successfully verified login password against HIBP, stamps
+    ``password_reset_required`` when breached, and returns whether a breach was
+    found so the login it runs in can restrict the session it is about to mint.
+    Fails open (HIBP or DB trouble never fails the login) and rechecks a given
+    user at most once per ``BREACH_RECHECK_INTERVAL``."""
+    if not is_breach_check_enabled(general_settings):
+        return False
+    if not _breach_recheck_due(last_breach_check_at):
+        return False
+    breached: Final = await is_password_breached(password, general_settings, client)
+    checked_at: Final = datetime.now(timezone.utc)
+    breached_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {
+        "last_breach_check_at": checked_at,
+        "password_reset_required": True,
+    }
+    recheck_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {"last_breach_check_at": checked_at}
+    update_data: Final = breached_update if breached else recheck_update
+    find_user: Final[prisma_types.LiteLLM_UserTableWhereInput] = {"user_id": user_id}
+    try:
+        await UserRepository(prisma_client).table.update(where=find_user, data=update_data)
+    except Exception as e:  # noqa: BLE001  # a failed stamp must never surface into the login
+        verbose_proxy_logger.warning("Login-time breach screening could not update user %s: %s", user_id, e)
+    return breached
+
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
     """Rehash legacy password (SHA256) to scrypt on successful login."""
@@ -55,7 +111,7 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
         )
 
 
-def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
+def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
     """
     Get UI username and password from environment variables or master key.
 
@@ -68,7 +124,7 @@ def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
     Raises:
         ProxyException: If neither UI_PASSWORD nor master_key is available
     """
-    ui_username = os.getenv("UI_USERNAME", "admin")
+    ui_username: Final = os.getenv("UI_USERNAME", "admin")
     ui_password = os.getenv("UI_PASSWORD", None)
     if ui_password is None:
         ui_password = str(master_key) if master_key is not None else None
@@ -82,35 +138,62 @@ def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
     return ui_username, ui_password
 
 
+def _matches_env_credentials(username: str, password: str, master_key: str | None) -> bool:
+    ui_username, ui_password = get_ui_credentials(master_key)
+    return secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
+        password.encode("utf-8"), ui_password.encode("utf-8")
+    )
+
+
+def is_env_credential_login_enabled(general_settings: Mapping[str, object]) -> bool:
+    """Whether a login with UI_USERNAME/UI_PASSWORD (or the master-key fallback) can succeed.
+
+    Two settings can turn it off: `disable_env_credential_login` unconditionally, and
+    `disable_password_login_when_sso_enabled` as a side effect, since its gate rejects
+    every username/password login before the env comparison runs. Feeds both the
+    `authenticate_user` gate and the Admin UI warning banner, so the banner never nags
+    about a login path that is already unreachable.
+    """
+    if general_settings.get("disable_env_credential_login") is True:
+        return False
+    if general_settings.get("disable_password_login_when_sso_enabled") is True and is_sso_provider_fully_configured():
+        return False
+    return True
+
+
 class LoginResult:
     """Result object containing authentication data from login."""
 
     user_id: str
     key: str
-    user_email: Optional[str]
+    user_email: str | None
     user_role: str
     login_method: Literal["sso", "username_password"]
+    password_reset_required: bool
 
     def __init__(
         self,
         user_id: str,
         key: str,
-        user_email: Optional[str],
+        user_email: str | None,
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
+        password_reset_required: bool = False,
     ):
         self.user_id = user_id
         self.key = key
         self.user_email = user_email
         self.user_role = user_role
         self.login_method = login_method
+        self.password_reset_required = password_reset_required
 
 
 async def authenticate_user(
     username: str,
     password: str,
-    master_key: Optional[str],
-    prisma_client: Optional[PrismaClient],
+    master_key: str | None,
+    prisma_client: PrismaClient | None,
+    general_settings: Mapping[str, object] = MappingProxyType({}),
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -124,13 +207,41 @@ async def authenticate_user(
         password: Password from the login form
         master_key: Master key for the proxy (required)
         prisma_client: Prisma database client (optional)
+        general_settings: Proxy general_settings, checked for
+            `disable_password_login_when_sso_enabled` and
+            `disable_env_credential_login`
 
     Returns:
         LoginResult: Object containing authentication data
 
     Raises:
-        ProxyException: If authentication fails or required configuration is missing
+        ProxyException: If authentication fails or required configuration is missing,
+            or if username/password login is disabled while SSO is configured
+
+    Recovery: an admin locked out of the UI by
+    `disable_password_login_when_sso_enabled` can still administer the proxy over
+    the API with the master key (Authorization: Bearer <master_key>), which never
+    goes through this function. To restore UI username/password login, unset the
+    setting in config.yaml (or the DB-persisted general_settings) and restart the
+    proxy; this is a deliberate, auditable config change rather than a hidden
+    bypass.
+
+    The gate below requires the SSO provider to be FULLY configured (every
+    companion secret/endpoint an actual sign-in needs), not merely that a
+    client id is present, so an incomplete SSO setup can never disable the
+    only working login path.
     """
+    if general_settings.get("disable_password_login_when_sso_enabled") is True and is_sso_provider_fully_configured():
+        raise ProxyException(
+            message=(
+                "Username/password login is disabled because SSO is configured "
+                "and 'disable_password_login_when_sso_enabled' is set. Sign in via SSO."
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param="disable_password_login_when_sso_enabled",
+            code=403,
+        )
+
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
@@ -139,22 +250,21 @@ async def authenticate_user(
             code=500,
         )
 
-    ui_username, ui_password = get_ui_credentials(master_key)
-
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
-    _user_row: Optional[LiteLLM_UserTable] = None
-    user_role: Optional[
+    _user_row: LiteLLM_UserTable | None = None
+    user_role: (
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ]
-    ] = None
+        | None
+    ) = None
 
     if prisma_client is not None:
         _user_row = cast(
-            Optional[LiteLLM_UserTable],
+            LiteLLM_UserTable | None,
             await UserRepository(prisma_client).table.find_first(
                 where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
@@ -165,8 +275,8 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
-        password.encode("utf-8"), ui_password.encode("utf-8")
+    if general_settings.get("disable_env_credential_login") is not True and _matches_env_credentials(
+        username, password, master_key
     ):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
@@ -206,7 +316,7 @@ async def authenticate_user(
                     "spend": 0,
                     "user_id": key_user_id,
                     "team_id": "litellm-dashboard",
-                },  # type: ignore
+                },
             )
         else:
             raise ProxyException(
@@ -216,12 +326,12 @@ async def authenticate_user(
                 code=500,
             )
 
-        key = response["token"]  # type: ignore
+        key = response["token"]
 
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
-            user_info: Optional[LiteLLM_UserTable] = None
+            user_info: LiteLLM_UserTable | None = None
             if _user_row is not None:
                 user_info = _user_row
             elif user_id is not None:  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
@@ -255,8 +365,8 @@ async def authenticate_user(
         """
         user_id = getattr(_user_row, "user_id", "unknown")
         user_role = getattr(_user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
-        user_email = getattr(_user_row, "user_email", "unknown")
-        _password = getattr(_user_row, "password", "unknown")
+        user_email: Final = getattr(_user_row, "user_email", "unknown")
+        _password: Final = getattr(_user_row, "password", "unknown")
 
         if _password is None:
             raise ProxyException(
@@ -268,20 +378,25 @@ async def authenticate_user(
 
         if verify_password(password, _password):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
+            breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
+                user_id=_user_row.user_id,
+                password=password,
+                last_breach_check_at=getattr(_user_row, "last_breach_check_at", None),
+                general_settings=general_settings,
+                prisma_client=prisma_client,
+            )
+            password_reset_required: Final = breached_now or getattr(_user_row, "password_reset_required", None) is True
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
-                    **{  # type: ignore
-                        "user_role": user_role,
-                        "duration": LITELLM_UI_SESSION_DURATION,
-                        "key_max_budget": litellm.max_ui_session_budget,
-                        "models": [],
-                        "aliases": {},
-                        "config": {},
-                        "spend": 0,
-                        "user_id": user_id,
-                        "team_id": "litellm-dashboard",
-                    },
+                    user_role=user_role,
+                    duration=LITELLM_UI_SESSION_DURATION,
+                    key_max_budget=litellm.max_ui_session_budget,
+                    spend=0,
+                    user_id=user_id,
+                    team_id="litellm-dashboard",
+                    allowed_routes=list(PASSWORD_RESET_ALLOWED_ROUTES) if password_reset_required else None,
+                    metadata={"password_reset_required": True} if password_reset_required else {},
                 )
             else:
                 raise ProxyException(
@@ -291,7 +406,7 @@ async def authenticate_user(
                     code=500,
                 )
 
-            key = response["token"]  # type: ignore
+            key = response["token"]
 
             return LoginResult(
                 user_id=user_id,
@@ -299,6 +414,7 @@ async def authenticate_user(
                 user_email=user_email,
                 user_role=cast(str, user_role),
                 login_method="username_password",
+                password_reset_required=password_reset_required,
             )
         else:
             raise ProxyException(
@@ -308,8 +424,13 @@ async def authenticate_user(
                 code=401,
             )
     else:
+        env_credentials_hint: Final = (
+            "\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file"
+            if is_env_credential_login_enabled(general_settings)
+            else ""
+        )
         raise ProxyException(
-            message="Invalid credentials used to access UI.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            message=f"Invalid credentials used to access UI.{env_credentials_hint}",
             type=ProxyErrorTypes.auth_error,
             param="invalid_credentials",
             code=401,
@@ -322,7 +443,7 @@ def _ui_session_exp_timestamp() -> int:
     duration; stamping the JWT itself gives the cookie the bounded lifetime the dashboard's
     client-side expiry check and the server-side session-cookie readers both assume, instead
     of a token that stays signature-valid until the master key rotates."""
-    ttl_seconds = duration_in_seconds(LITELLM_UI_SESSION_DURATION)
+    ttl_seconds: Final = duration_in_seconds(LITELLM_UI_SESSION_DURATION)
     return int((datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).timestamp())
 
 
@@ -335,7 +456,7 @@ def encode_ui_session_jwt(returned_ui_token_object: ReturnedUITokenObject, maste
     master key rotates, and the session-cookie readers that require a bounded lifetime
     (the MCP interactive sign-in) reject it.
     """
-    claims = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
+    claims: Final = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
     return jwt.encode(claims, master_key, algorithm="HS256")
 
 
@@ -355,7 +476,7 @@ def create_ui_token_object(
     Returns:
         ReturnedUITokenObject: Token object ready for JWT encoding
     """
-    disabled_non_admin_personal_key_creation = get_disabled_non_admin_personal_key_creation()
+    disabled_non_admin_personal_key_creation: Final = get_disabled_non_admin_personal_key_creation()
 
     return ReturnedUITokenObject(
         user_id=login_result.user_id,
@@ -367,4 +488,5 @@ def create_ui_token_object(
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        password_reset_required=login_result.password_reset_required,
     )

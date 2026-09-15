@@ -5,7 +5,7 @@ This module provides routing logic to determine which OCR configuration to use
 based on the model name.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from litellm._logging import verbose_logger
 
@@ -20,8 +20,13 @@ def is_azure_document_intelligence_model(model: str) -> bool:
     model name (`azure_ai/doc-intelligence/<model>`) selects Document Intelligence
     over Mistral OCR. This is the single source of truth for that routing decision.
     """
-    lowered = model.lower()
+    lowered: Final = model.lower()
     return "doc-intelligence" in lowered or "documentintelligence" in lowered
+
+
+def is_azure_cohere_parse_model(model: str) -> bool:
+    lowered: Final = model.lower()
+    return "cohere" in lowered and "parse" in lowered
 
 
 def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
@@ -46,6 +51,7 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
         >>> get_azure_ai_ocr_config("azure_ai/pixtral-12b-2409")
         <AzureAIOCRConfig object>
     """
+    from litellm.llms.azure_ai.ocr.cohere_parse_transformation import AzureAICohereParseConfig
     from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
         AzureDocumentIntelligenceOCRConfig,
     )
@@ -53,9 +59,13 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
 
     # Check for Azure Document Intelligence models
     if is_azure_document_intelligence_model(model):
-        verbose_logger.debug(f"Routing {model} to Azure Document Intelligence OCR config")
+        verbose_logger.debug("Routing %s to Azure Document Intelligence OCR config", model)
         return AzureDocumentIntelligenceOCRConfig()
 
+    if is_azure_cohere_parse_model(model):
+        verbose_logger.debug("Routing %s to Azure AI Cohere Parse config", model)
+        return AzureAICohereParseConfig()
+
     # Default to Mistral-based OCR for other azure_ai models
-    verbose_logger.debug(f"Routing {model} to Azure AI (Mistral) OCR config")
+    verbose_logger.debug("Routing %s to Azure AI (Mistral) OCR config", model)
     return AzureAIOCRConfig()

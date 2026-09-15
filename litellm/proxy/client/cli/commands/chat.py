@@ -1,6 +1,7 @@
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import click
 import requests
@@ -8,16 +9,43 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from ... import Client
 from ...chat import ChatClient
+from ._cli_context import cli_context_values
 
 
-def _get_available_models(ctx: click.Context) -> List[Dict[str, Any]]:
+class _MessagesView(TypedDict):
+    messages: ReadOnly[list[dict[str, str]]]
+
+
+class _StreamDelta(TypedDict):
+    content: ReadOnly[NotRequired[str]]
+
+
+class _StreamChoice(TypedDict):
+    delta: ReadOnly[NotRequired[_StreamDelta]]
+
+
+class _StreamChunkView(TypedDict):
+    choices: ReadOnly[Sequence[_StreamChoice]]
+
+
+class _StreamErrorBody(TypedDict):
+    error: ReadOnly[NotRequired[Mapping[str, object]]]
+
+
+class _ErrorBodyView(TypedDict):
+    body: ReadOnly[_StreamErrorBody]
+
+
+def _get_available_models(ctx: click.Context) -> Sequence[Mapping[str, object]]:
     """Get list of available models from the proxy server"""
     try:
-        client = Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
-        models_list = client.models.list()
+        context: Final = cli_context_values(ctx)
+        client: Final = Client(base_url=context["base_url"], api_key=context["api_key"])
+        models_list: Final = client.models.list()
         # Ensure we return a list of dictionaries
         if isinstance(models_list, list):
             # Filter to ensure all items are dictionaries
@@ -28,21 +56,21 @@ def _get_available_models(ctx: click.Context) -> List[Dict[str, Any]]:
         return []
 
 
-def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> Optional[str]:
+def _select_model(console: Console, available_models: Sequence[Mapping[str, object]]) -> str | None:
     """Interactive model selection"""
     if not available_models:
         console.print("[yellow]No models available or could not fetch models list.[/yellow]")
-        model_name = Prompt.ask("Please enter a model name")
+        model_name: Final = Prompt.ask("Please enter a model name")
         return model_name if model_name.strip() else None
 
     # Display available models in a table
-    table = Table(title="Available Models")
+    table: Final = Table(title="Available Models")
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Model ID", style="green")
     table.add_column("Owned By", style="yellow")
-    MAX_MODELS_TO_DISPLAY = 200
+    MAX_MODELS_TO_DISPLAY: Final = 200
 
-    models_to_display: List[Dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
+    models_to_display: Final = available_models[:MAX_MODELS_TO_DISPLAY]
     for i, model in enumerate(models_to_display):  # Limit to first 200 models
         table.add_row(str(i + 1), str(model.get("id", "")), str(model.get("owned_by", "")))
 
@@ -62,7 +90,7 @@ def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> O
             try:
                 index = int(choice) - 1
                 if 0 <= index < len(available_models):
-                    return available_models[index]["id"]
+                    return str(available_models[index]["id"])
                 else:
                     console.print(
                         f"[red]Invalid index. Please enter a number between 1 and {len(available_models)}[/red]"
@@ -104,10 +132,10 @@ def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> O
 @click.pass_context
 def chat(
     ctx: click.Context,
-    model: Optional[str],
+    model: str | None,
     temperature: float,
-    max_tokens: Optional[int] = None,
-    system: Optional[str] = None,
+    max_tokens: int | None = None,
+    system: str | None = None,
 ):
     """Interactive chat with streaming responses
 
@@ -122,20 +150,21 @@ def chat(
         # Chat with custom settings
         lite chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
     """
-    console = Console()
+    console: Final = Console()
 
     # If no model specified, show model selection
     if not model:
-        available_models = _get_available_models(ctx)
+        available_models: Final = _get_available_models(ctx)
         model = _select_model(console, available_models)
         if not model:
             console.print("[red]No model selected. Exiting.[/red]")
             return
 
-    client = ChatClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    client: Final = ChatClient(context["base_url"], context["api_key"])
 
     # Initialize conversation history
-    messages: List[Dict[str, Any]] = []
+    messages: list[dict[str, str]] = []
 
     # Add system message if provided
     if system:
@@ -218,7 +247,7 @@ def chat(
 
 def _show_help(console: Console):
     """Show help for interactive chat commands"""
-    help_text = """
+    help_text: Final = """
 [bold]Interactive Chat Commands:[/bold]
 
 [cyan]/help[/cyan]     - Show this help message
@@ -238,7 +267,7 @@ def _show_help(console: Console):
     console.print(Panel(help_text, title="Help"))
 
 
-def _show_history(console: Console, messages: List[Dict[str, Any]]):
+def _show_history(console: Console, messages: list[dict[str, str]]):
     """Show conversation history"""
     if not messages:
         console.print("[yellow]No conversation history.[/yellow]")
@@ -260,9 +289,9 @@ def _show_history(console: Console, messages: List[Dict[str, Any]]):
             )
 
 
-def _save_conversation(console: Console, messages: List[Dict[str, Any]], command: str):
+def _save_conversation(console: Console, messages: list[dict[str, str]], command: str):
     """Save conversation to a file"""
-    parts = command.split()
+    parts: Final = command.split()
     if len(parts) < 2:
         console.print("[red]Usage: /save <filename>[/red]")
         return
@@ -279,9 +308,9 @@ def _save_conversation(console: Console, messages: List[Dict[str, Any]], command
         console.print(f"[red]Error saving conversation: {e}[/red]")
 
 
-def _load_conversation(console: Console, command: str, system: Optional[str]) -> List[Dict[str, Any]]:
+def _load_conversation(console: Console, command: str, system: str | None) -> list[dict[str, str]]:
     """Load conversation from a file"""
-    parts = command.split()
+    parts: Final = command.split()
     if len(parts) < 2:
         console.print("[red]Usage: /load <filename>[/red]")
         return []
@@ -292,9 +321,9 @@ def _load_conversation(console: Console, command: str, system: Optional[str]) ->
 
     try:
         with open(filename, "r") as f:
-            messages = json.load(f)
+            loaded: Final[_MessagesView] = {"messages": json.load(f)}
         console.print(f"[green]Conversation loaded from {filename}[/green]")
-        return messages
+        return loaded["messages"]
     except FileNotFoundError:
         console.print(f"[red]File not found: {filename}[/red]")
     except Exception as e:
@@ -309,10 +338,10 @@ def _load_conversation(console: Console, command: str, system: Optional[str]) ->
 def _handle_special_commands(
     console: Console,
     user_input: str,
-    messages: List[Dict[str, Any]],
-    system: Optional[str],
+    messages: list[dict[str, str]],
+    system: str | None,
     ctx: click.Context,
-) -> tuple[bool, List[Dict[str, Any]], Optional[str]]:
+) -> tuple[bool, list[dict[str, str]], str | None]:
     """Handle special chat commands. Returns (should_exit, updated_messages, updated_model)"""
     if user_input.lower() in ["/quit", "/exit", "/q"]:
         console.print("[yellow]Chat session ended.[/yellow]")
@@ -321,11 +350,9 @@ def _handle_special_commands(
         _show_help(console)
         return False, messages, None
     elif user_input.lower() == "/clear":
-        new_messages = []
-        if system:
-            new_messages.append({"role": "system", "content": system})
+        cleared_messages: Final[list[dict[str, str]]] = [{"role": "system", "content": system}] if system else []
         console.print("[green]Conversation history cleared.[/green]")
-        return False, new_messages, None
+        return False, cleared_messages, None
     elif user_input.lower() == "/history":
         _show_history(console, messages)
         return False, messages, None
@@ -336,8 +363,8 @@ def _handle_special_commands(
         new_messages = _load_conversation(console, user_input, system)
         return False, new_messages, None
     elif user_input.lower() == "/model":
-        available_models = _get_available_models(ctx)
-        new_model = _select_model(console, available_models)
+        available_models: Final = _get_available_models(ctx)
+        new_model: Final = _select_model(console, available_models)
         if new_model:
             console.print(f"[green]Switched to model: {new_model}[/green]")
             return False, messages, new_model
@@ -353,10 +380,10 @@ def _stream_response(
     console: Console,
     client: ChatClient,
     model: str,
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, str]],
     temperature: float,
-    max_tokens: Optional[int],
-) -> Optional[str]:
+    max_tokens: int | None,
+) -> str | None:
     """Stream the model response and return the complete content"""
     try:
         assistant_content = ""
@@ -366,8 +393,9 @@ def _stream_response(
             temperature=temperature,
             max_tokens=max_tokens,
         ):
-            if "choices" in chunk and len(chunk["choices"]) > 0:
-                delta = chunk["choices"][0].get("delta", {})
+            streamed: _StreamChunkView = {"choices": chunk.get("choices", ())}
+            if len(streamed["choices"]) > 0:
+                delta = streamed["choices"][0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
                     assistant_content += content
@@ -380,11 +408,11 @@ def _stream_response(
     except requests.exceptions.HTTPError as e:
         console.print(f"\n[red]Error: HTTP {e.response.status_code}[/red]")
         try:
-            error_body = e.response.json()
-            console.print(f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]")
+            error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
+            console.print(f"[red]{error_body['body'].get('error', {}).get('message', 'Unknown error')}[/red]")
         except json.JSONDecodeError:
             console.print(f"[red]{e.response.text}[/red]")
         return None
     except Exception as e:
-        console.print(f"\n[red]Error: {str(e)}[/red]")
+        console.print(f"\n[red]Error: {e}[/red]")
         return None

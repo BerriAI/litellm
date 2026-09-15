@@ -1,22 +1,25 @@
 "use client";
 
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
-import { Popover, Typography } from "antd";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
+import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
+  ENTITY_CELL_TITLE_CLASSES,
   IdCell,
   IdentityCell,
   ModelsCell,
   SpendBudgetCell,
   StatusBadge,
+  UserPopoverCell,
   type StatusTone,
 } from "@/components/shared/table_cells";
+import { orgDetailHref, teamDetailHref } from "@/utils/entityLinks";
 
-import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 
@@ -29,6 +32,14 @@ interface KeyStatus {
 const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
   { id: "spend", label: "Spend" },
   { id: "max_budget", label: "Budget" },
+];
+
+export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
+  "key_alias",
+  "token",
+  "created_at",
+  "updated_at",
+  ...SPEND_BUDGET_SORT_FIELDS.map((field) => field.id),
 ];
 
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
@@ -53,66 +64,13 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   };
 };
 
-const UserPopoverCell = ({
-  userAlias,
-  userEmail,
-  userId,
-  width,
-}: {
-  userAlias: string | null;
-  userEmail: string | null;
-  userId: string | null;
-  width: number;
-}) => {
-  const displayValue = userAlias || userEmail || userId;
-  const isDefaultAdmin = userId === "default_user_id";
-
-  const popoverContent = (
-    <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
-      {[
-        { label: "User Alias", value: userAlias },
-        { label: "User Email", value: userEmail },
-        { label: "User ID", value: userId },
-      ].map(({ label, value }) => (
-        <div key={label} className="flex flex-col min-w-0">
-          <span className="text-gray-400">{label}</span>
-          {value ? (
-            <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
-              {value}
-            </Typography.Text>
-          ) : (
-            <span className="font-mono">-</span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
-  if (isDefaultAdmin && !userAlias && !userEmail) {
-    return (
-      <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-        <span className="cursor-default">
-          <DefaultProxyAdminTag userId={userId} />
-        </span>
-      </Popover>
-    );
-  }
-
-  return (
-    <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-      <span className="font-mono text-xs truncate block cursor-default" style={{ maxWidth: width, overflow: "hidden" }}>
-        {displayValue || "-"}
-      </span>
-    </Popover>
-  );
-};
-
 const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
-    <Popover content={tooltip} trigger="hover">
-      <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
-    </Popover>
+    <HoverCard>
+      <HoverCardTrigger render={<Info className="size-3 text-muted-foreground cursor-help" />} />
+      <HoverCardContent className="w-auto">{tooltip}</HoverCardContent>
+    </HoverCard>
   </span>
 );
 
@@ -184,12 +142,12 @@ export const getKeyTableColumns = ({
       const teamId = info.getValue() as string | null;
       if (!teamId) return "-";
       const team = allTeams.find((t) => t.team_id === teamId);
-      const displayValue = team?.team_alias || teamId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={team?.team_alias || teamId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={teamDetailHref(teamId)}
+        />
       );
     },
   },
@@ -204,12 +162,12 @@ export const getKeyTableColumns = ({
       const orgId = info.getValue() as string | null;
       if (!orgId) return "-";
       const org = organizations.find((o) => o.organization_id === orgId);
-      const displayValue = org?.organization_alias || orgId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={org?.organization_alias || orgId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={orgDetailHref(orgId)}
+        />
       );
     },
   },
@@ -304,13 +262,14 @@ export const getKeyTableColumns = ({
     size: 180,
     enableSorting: true,
     cell: ({ row }) => {
-      const teamId = row.original.team_id;
-      const team = allTeams.find((t) => t.team_id === teamId);
+      const team = allTeams.find((t) => t.team_id === row.original.team_id);
+      const orgId = row.original.organization_id || row.original.org_id || team?.organization_id;
+      const organization = organizations.find((o) => o.organization_id === orgId);
       return (
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          teamMaxBudget={team?.max_budget ?? null}
+          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
         />
       );
     },
