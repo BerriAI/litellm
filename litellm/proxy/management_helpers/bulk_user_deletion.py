@@ -218,7 +218,9 @@ async def _remove_members_from_team(
     requested_rows: Final = await _user_tx_db(tx).find_many(
         where=_any_filter(_in_filter("user_id", requested_ids), _in_filter("user_email", requested_emails))
     )
-    email_of: Final = MappingProxyType({u.user_id: u.user_email for u in requested_rows if u.user_email is not None})
+    email_of: Final = MappingProxyType(
+        {u.user_id: u.user_email for u in requested_rows if u.user_email is not None and team_id in u.teams}
+    )
     requests: Final = tuple(_with_row_email(r, email_of) for r in members)
     removed_members: Final = tuple(m for m in roster if any(_addresses_member(m, r) for r in requests))
     kept_members: Final = tuple(m for m in roster if not any(_addresses_member(m, r) for r in requests))
