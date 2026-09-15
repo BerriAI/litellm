@@ -114,17 +114,25 @@ def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
     return kwargs.get("stream", False) is True or converted_stream_requested(kwargs)
 
 
-def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) -> bool:
+def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> bool:
     """
-    When stream=True, do not run success callbacks at cache-hit time.
+    When the cache hit is replayed as a stream, do not run success callbacks at cache-hit time.
 
     Cached chat/text completion replay uses CustomStreamWrapper; cached Responses
     replay uses CachedResponsesAPIStreamingIterator; cached Anthropic Messages
     replay uses CachedAnthropicMessagesStreamIterator. All invoke logging success
     handlers when the stream finishes; firing them here too would double-count
-    spend and callback records.
+    spend and callback records. A plain (non-stream) replay logs here, since nothing
+    else will.
     """
-    return _stream_replay_requested(kwargs)
+    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        CachedAnthropicMessagesStreamIterator,
+    )
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return isinstance(
+        cached_result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator, CachedAnthropicMessagesStreamIterator)
+    )
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
@@ -274,7 +282,7 @@ class LLMCachingHandler:
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
-                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
+                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
                         # LOG SUCCESS
                         self._async_log_cache_hit_on_callbacks(
                             logging_obj=logging_obj,
@@ -390,7 +398,7 @@ class LLMCachingHandler:
                         is_async=False,
                     )
 
-                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
+                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
                         logging_obj.handle_sync_success_callbacks_for_async_calls(
                             result=cached_result,
                             start_time=start_time,

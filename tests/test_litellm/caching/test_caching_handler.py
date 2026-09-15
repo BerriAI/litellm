@@ -693,3 +693,50 @@ async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monke
     assert handler.preset_cache_key is not None
     assert logging_obj.litellm_params["preset_cache_key"] == handler.preset_cache_key
     assert hit.cached_result._hidden_params["cache_key"] == handler.preset_cache_key
+
+
+@pytest.mark.asyncio
+async def test_converted_stream_cache_hit_replayed_as_plain_object_logs_at_hit_time(monkeypatch):
+    """A converted-stream Anthropic Messages request that hits a non-stream cache entry gets a plain dict back,
+    so the success callbacks must fire now; nothing else will fire them."""
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    async def aanthropic_messages(**kwargs):
+        return None
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {
+        "model": "claude-sonnet-5",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 16,
+        "caching": True,
+        "stream": False,
+        "_websearch_interception_converted_stream": True,
+    }
+    cached_message = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+    }
+    await litellm.cache.async_add_cache(cached_message, **kwargs)
+    handler = LLMCachingHandler(original_function=aanthropic_messages, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.aanthropic_messages.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    hit = await handler._async_get_cache(
+        model="claude-sonnet-5",
+        original_function=aanthropic_messages,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.aanthropic_messages.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit is not None and hit.cached_result == cached_message
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+    assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["cache_hit"] is True
