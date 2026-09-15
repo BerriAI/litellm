@@ -1451,6 +1451,11 @@ class TestRouterComplexityDeploymentMethods:
         assert router.upsert_deployment(Deployment(**self._router_row("v2-b", "id-b", "heuristic"))) is not None
         assert "id-b" not in router.dropped_deployments
 
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-b", "id-b", "heuristic_v2"))) is None
+        assert "id-b" in router.dropped_deployments
+        assert router.delete_deployment(id="id-b") is not None
+        assert "id-b" not in router.dropped_deployments
+
     def test_heuristic_v2_ceiling_raises_without_ignore_invalid_deployments(self) -> None:
         with pytest.raises(ValueError, match="At most 1 auto-router"):
             Router(
