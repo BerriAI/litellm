@@ -17465,6 +17465,16 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "tab": "prompt_caching",
         "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
     },
+    "openai_system_messages_first": {
+        "type": "Boolean",
+        "tab": "prompt_caching",
+        "description": (
+            "Moves system and developer messages to the front of the messages array on OpenAI and "
+            "Azure OpenAI chat completions requests, keeping their relative order. OpenAI's prompt cache "
+            "matches on the exact prefix, so a system message that arrives mid-conversation otherwise "
+            "breaks the cached prefix on every turn."
+        ),
+    },
     "budget_rollover": {  # mutable-ok: registry literal, frozen with its siblings below
         "type": "Boolean",
         "description": (
