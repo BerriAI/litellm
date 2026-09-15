@@ -189,6 +189,19 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported = self.get_supported_openai_params(model)
+        for param, value in non_default_params.items():
+            if param in supported:
+                optional_params[param] = value
+        return optional_params
+
     def get_supported_openai_params(self, model):
         params: Final = [
             "frequency_penalty",
@@ -214,6 +227,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
             "response_format",
             "timeout",
+            "user",
+            "reasoning_effort",
+            "thinking",
         ]
         # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
