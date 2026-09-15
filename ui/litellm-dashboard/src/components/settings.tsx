@@ -178,7 +178,7 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
 }) => {
   const { control } = useFormContext<CallbackFormValues>();
   const inputId = React.useId();
-  const selectedConfig = callbackConfigs.find((config) => config.id === selectedCallback) ?? null;
+  const selectedConfig = findCallbackConfig(callbackConfigs, selectedCallback) ?? null;
 
   return (
     <Controller
@@ -251,10 +251,10 @@ interface CallbackConfigWithParams {
   dynamic_params?: Record<string, DynamicParamConfig>;
 }
 
-const findCallbackConfig = (
-  callbackConfigs: readonly CallbackConfigWithParams[],
+const findCallbackConfig = <T extends { id: string }>(
+  callbackConfigs: readonly T[],
   callbackName: string | null,
-): CallbackConfigWithParams | undefined => {
+): T | undefined => {
   if (!callbackName) {
     return undefined;
   }

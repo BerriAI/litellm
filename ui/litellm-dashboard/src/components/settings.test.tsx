@@ -393,6 +393,7 @@ describe("Settings", () => {
 
     const promptsOnlySwitch = await screen.findByRole("switch", { name: "Log Prompts Only" });
     expect(promptsOnlySwitch).not.toBeChecked();
+    expect(within(screen.getByRole("dialog")).getByRole("combobox", { name: "Callback" })).toHaveValue("S3");
 
     await user.click(promptsOnlySwitch);
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
