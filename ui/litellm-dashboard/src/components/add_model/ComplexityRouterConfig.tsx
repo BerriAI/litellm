@@ -151,10 +151,7 @@ export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "llm_v2" | "
  * control and payload key, so a new chaining type cannot strip knobs the operator set.
  */
 export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  classifierType === "llm" ||
-  classifierType === "llm_v2" ||
-  classifierType === "heuristic_first" ||
-  classifierType === "hybrid";
+  ["llm", "llm_v2", "heuristic_first", "hybrid"].includes(classifierType);
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
