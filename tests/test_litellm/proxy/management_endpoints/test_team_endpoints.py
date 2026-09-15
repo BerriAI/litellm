@@ -8914,6 +8914,11 @@ async def test_delete_team_survives_a_failing_cache_backend(
 @pytest.mark.asyncio
 async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        team_membership_auth_cache_key,
+        team_membership_reservation_cache_key,
+    )
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         LiteLLM_VerificationToken,
     )
@@ -9011,6 +9016,16 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
         lambda **kwargs: True,
     )
 
+    cache: Final = UserApiKeyCache()
+    revoked_cache_keys: Final = (
+        "team_id:team-1", "team_alias:test-team", "user-123", "hashed-token-1", "hashed-token-2",
+        team_membership_auth_cache_key(user_id="user-123", team_id="team-1"),
+        team_membership_reservation_cache_key(user_id="user-123", team_id="team-1"),
+    )
+    for cache_key in (*revoked_cache_keys, "unrelated-key"):
+        cache.set_cache(key=cache_key, value={"retained": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
     data = TeamMemberDeleteRequest(team_id="team-1", user_id="user-123")
 
     result = await team_member_delete(
@@ -9027,6 +9042,9 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     assert all(record["team_id"] == "team-1" for record in records)
     assert all(record["user_id"] == "user-123" for record in records)
     mock_delete_keys.assert_called_once()
+    assert result.members_with_roles == []
+    assert all(cache.get_cache(key=cache_key) is None for cache_key in revoked_cache_keys)
+    assert cache.get_cache(key="unrelated-key") == {"retained": True}
 
 
 @pytest.mark.asyncio

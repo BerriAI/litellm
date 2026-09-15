@@ -2489,7 +2489,7 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
