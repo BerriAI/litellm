@@ -531,12 +531,13 @@ if __name__ == "__main__":
 
 @pytest.mark.parametrize("voice_key", ["name", "voiceName", "voice_name", "voice"])
 @pytest.mark.parametrize("wrapper", [None, "speechConfig", "speech_config"])
-def test_speech_bridge_preserves_single_speaker_voice_mapping(voice_key: str, wrapper: str | None):
+@pytest.mark.parametrize("model", ["gemini-2.5-flash-tts", "gemini-2.5-pro-tts", GEMINI_3_1_FLASH_TTS_MODEL])
+def test_speech_bridge_preserves_single_speaker_voice_mapping(voice_key: str, wrapper: str | None, model: str):
     handler = SpeechToCompletionBridgeTransformationHandler()
     config = {voice_key: "Umbriel", "language_code": "en-US"}
     voice = {wrapper: config} if wrapper else config
     result = handler.transform_request(
-        model=f"vertex_ai/{GEMINI_3_1_FLASH_TTS_MODEL}",
+        model=model,
         input="Hello",
         voice=voice,
         optional_params={},

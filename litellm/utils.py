@@ -728,7 +728,11 @@ def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> b
             else model
         )
         bundled_model_cost: Final = _get_bundled_model_cost_map()
-        bundled_model_info: Final = bundled_model_cost.get(provider_model) or bundled_model_cost.get(model)
+        bundled_model_info: Final = (
+            bundled_model_cost.get(provider_model)
+            or bundled_model_cost.get(model)
+            or (bundled_model_cost.get(f"vertex_ai/{model}") if custom_llm_provider is None else None)
+        )
         return (
             bundled_model_info is not None
             and bundled_model_info.get("mode") == "audio_speech"
