@@ -23,6 +23,15 @@ class ThirdlawGuardrailRequestMetadata(BaseModel):
     user_api_key_team_alias: str | None = None
     user_api_key_end_user_id: str | None = None
     user_api_key_org_id: str | None = None
+    user_api_key_project_id: str | None = None
+    user_api_key_project_alias: str | None = None
+    user_api_key_org_alias: str | None = None
+    agent_id: str | None = None
+    litellm_session_id: str | None = None
+    tags: tuple[str, ...] | None = None
+    user_api_key_auth_metadata: Mapping[str, object] | None = None
+    project_metadata: Mapping[str, object] | None = None
+    organization_metadata: Mapping[str, object] | None = None
 
 
 class ThirdlawGuardrailRequest(BaseModel):

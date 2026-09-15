@@ -29,7 +29,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_ManagementEndpoint_MetadataFields,
+    LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_body,
     anthropic_sse_error_frames,
@@ -42,6 +46,9 @@ from litellm.proxy.guardrails.stream_surface import (
     final_responses_api_response,
     is_terminal_error_stream,
     responses_deltas_absent_from_body,
+)
+from litellm.proxy.litellm_pre_call_utils import (
+    _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # shared list
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
@@ -79,6 +86,7 @@ _BODY_STRIP_KEYS: Final = frozenset(
         "litellm_call_id",
         "litellm_logging_obj",
         "litellm_metadata",
+        "litellm_session_id",
         "litellm_trace_id",
         "metadata",
         "provider_specific_header",
@@ -103,6 +111,29 @@ _USER_METADATA_FIELDS: Final = (
     "user_api_key_team_alias",
     "user_api_key_end_user_id",
     "user_api_key_org_id",
+    "user_api_key_project_id",
+    "user_api_key_project_alias",
+    "user_api_key_org_alias",
+    # Unprefixed unlike its siblings above: litellm writes this key bare, not as
+    # "user_api_key_agent_id" (see add_user_api_key_auth_to_request_metadata).
+    "agent_id",
+)
+
+# Admin-facing control keys litellm reserves inside a key/team/project/org's own custom
+# `metadata` dict -- never admin-typed custom data. Combines the management-endpoint
+# reserved fields (rate/budget overrides, guardrails, tags, etc.) with litellm's own
+# client-forgery denylist (guardrail-bypass and internal routing/logging signals): the
+# same reasoning that makes these untrustworthy coming from a caller makes them
+# unsuitable to forward to a third-party guardrail. ``model_config`` is added
+# separately -- it can carry ``litellm_credentials`` selector names for provider
+# routing, which is proxy operational config, not admin-authored metadata.
+_RESERVED_METADATA_KEYS: Final = frozenset(
+    (
+        *LiteLLM_ManagementEndpoint_MetadataFields,
+        *LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+        *_UNTRUSTED_METADATA_CONTROL_FIELDS,
+        "model_config",
+    )
 )
 
 _WireEvent: TypeAlias = Literal["pre_call", "during_call", "post_call"]
@@ -116,6 +147,11 @@ _RESPONSE_WRITE_BACK_DENY_KEYS: Final = frozenset({"id"})
 
 _JSON_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
+# tags metadata rides in as an untyped list; validating through a TypeAdapter (its
+# `validate_python` parameter is `Any`, so it accepts an untyped value without complaint)
+# resolves it to a concrete element type before use.
+_JSON_LIST_ADAPTER: Final = TypeAdapter(list[object])
+
 _EMPTY_MAP: Final[Mapping[str, object]] = MappingProxyType({})
 
 _EMPTY_STR_MAP: Final[Mapping[str, str]] = MappingProxyType({})
@@ -123,6 +159,31 @@ _EMPTY_STR_MAP: Final[Mapping[str, str]] = MappingProxyType({})
 
 def _dict_of(value: object) -> Mapping[str, object] | None:
     return _JSON_DICT_ADAPTER.validate_python(value) if isinstance(value, dict) else None
+
+
+def _custom_metadata(value: object) -> Mapping[str, object] | None:
+    """A key+team (pre-merged by litellm core), project, or org's custom metadata, minus reserved keys."""
+    as_dict: Final = _dict_of(value)
+    if as_dict is None:
+        return None
+    filtered: Final = {k: v for k, v in as_dict.items() if k not in _RESERVED_METADATA_KEYS}
+    return MappingProxyType(filtered) if filtered else None
+
+
+def _embedded_user_api_key_auth(merged: Mapping[str, object]) -> UserAPIKeyAuth | None:
+    auth: Final = merged.get("user_api_key_auth")
+    return auth if isinstance(auth, UserAPIKeyAuth) else None
+
+
+# UserAPIKeyAuth declares these two as a bare `dict | None`, so reading them is itself a
+# partially-unknown member access; each accessor isolates that one read behind an explicit
+# `object` return type so the rest of this module never touches the untyped field directly.
+def _project_metadata_of(auth: UserAPIKeyAuth) -> object:
+    return auth.project_metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
+
+
+def _organization_metadata_of(auth: UserAPIKeyAuth) -> object:
+    return auth.organization_metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped
 
 
 def _jsonable_dict(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -153,12 +214,29 @@ def _request_metadata(request_data: Mapping[str, object]) -> ThirdlawGuardrailRe
     )
     call_id: Final = request_data.get("litellm_call_id")
     trace_id: Final = request_data.get("litellm_trace_id")
+    # litellm_session_id (call-level, header/Anthropic-metadata-derived) and metadata.session_id
+    # (settable directly by a caller per litellm's own "missing_session_id" documentation) are
+    # two independent, equally valid sources; litellm core itself treats either as sufficient.
+    session_id: Final = request_data.get("litellm_session_id") or merged.get("session_id")
     model: Final = request_data.get("model")
+    tags_value: Final = merged.get("tags")
+    tags_list: Final = _JSON_LIST_ADAPTER.validate_python(tags_value) if isinstance(tags_value, list) else None
+    tags: Final = tuple(tag for tag in tags_list if isinstance(tag, str)) if tags_list is not None else None
+    auth_obj: Final = _embedded_user_api_key_auth(merged)
+    project_metadata: Final = _dict_of(_project_metadata_of(auth_obj)) if auth_obj is not None else None
+    organization_metadata: Final = _dict_of(_organization_metadata_of(auth_obj)) if auth_obj is not None else None
     return ThirdlawGuardrailRequestMetadata(
         litellm_version=litellm_version,
         litellm_call_id=call_id if isinstance(call_id, str) else None,
         litellm_trace_id=trace_id if isinstance(trace_id, str) else None,
+        litellm_session_id=session_id if isinstance(session_id, str) else None,
         model=model if isinstance(model, str) else None,
+        tags=tags or None,
+        # Already includes the team's own custom metadata (litellm core layers it on top when
+        # building this dict), so team_metadata is intentionally not forwarded separately here.
+        user_api_key_auth_metadata=_custom_metadata(merged.get("user_api_key_auth_metadata")),
+        project_metadata=_custom_metadata(project_metadata),
+        organization_metadata=_custom_metadata(organization_metadata),
         **user_fields,
         **hash_fallback,
     )
