@@ -1,39 +1,39 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import quote
 
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
 from starlette.responses import JSONResponse, Response
-from starlette.types import ASGIApp
 
+from litellm import NotFoundError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.memory.continuation import MemoryContinuations
 from litellm.proxy.memory.store import MemoryStore
-from litellm.proxy.memory.transport import gateway_round
+from litellm.proxy.memory.transport import RoundExecutor, gateway_round
 
 _OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 async def memory_response_operation(
-    data: Mapping[str, object], request: Request, auth: UserAPIKeyAuth, route: str
+    data: Mapping[str, object], request: Request, auth: UserAPIKeyAuth, route: str, execute: RoundExecutor
 ) -> Response | None:
     response_id: Final = data.get("response_id")
     if not isinstance(response_id, str) or not response_id.startswith("resp_litellm_memory_"):
         return None
     from litellm.proxy.memory.gateway import gateway_memory_store
-    from litellm.proxy.proxy_server import app
 
     store: Final = await gateway_memory_store(auth)
     if store is None:
         raise HTTPException(status_code=404, detail="Memory response not found or expired")
-    return await serve_memory_response(response_id, request, route, store, app)
+    return await serve_memory_response(response_id, request, route, store, execute, auth)
 
 
 async def serve_memory_response(
-    response_id: str, request: Request, route: str, store: MemoryStore, app: ASGIApp
+    response_id: str, request: Request, route: str, store: MemoryStore, execute: RoundExecutor, auth: UserAPIKeyAuth
 ) -> Response:
-    continuations: Final = MemoryContinuations(store, "aresponses")
+    continuations: Final = MemoryContinuations(store)
     patch: Final = await continuations.load_response(response_id)
     if patch is None or patch.response is None or not patch.upstream_ids:
         raise HTTPException(status_code=404, detail="Memory response not found or expired")
@@ -56,24 +56,29 @@ async def serve_memory_response(
                 "raw_path": raw_path,
             }
         )
-        async with gateway_round(
-            app,
-            inner,
-            {  # mutable-ok: Native ASGI or JSON payload.
-            },
-        ) as call:
-            start: Final = await call.started
-            if start.status >= 400:
-                if start.status == 404:
-                    return {  # mutable-ok: Native ASGI or JSON payload.
-                    }
-                raise HTTPException(status_code=start.status, detail="The upstream response operation failed")
-            content: Final = await call.read()
-            return _OBJECT.validate_json(content)
+        try:
+            async with gateway_round(
+                execute,
+                inner,
+                MappingProxyType({"response_id": identifier}),
+                auth.model_copy(update=MappingProxyType({"budget_reservation": None})),
+            ) as call:
+                start: Final = await call.started
+                if start.status >= 400:
+                    if start.status == 404:
+                        return {  # mutable-ok: Native ASGI or JSON payload.
+                        }
+                    raise HTTPException(status_code=start.status, detail="The upstream response operation failed")
+                content: Final = await call.read()
+                return _OBJECT.validate_json(content)
+        except (HTTPException, NotFoundError) as exc:
+            if exc.status_code != 404:
+                raise
+            return MappingProxyType({})
 
     for identifier in patch.upstream_ids:
         await dispatch(identifier)
-    await continuations.delete_response(response_id, patch)
+    await continuations.delete_response(response_id)
     return JSONResponse(
         {  # mutable-ok: Native provider JSON containers.
             "id": response_id,

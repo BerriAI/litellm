@@ -21,7 +21,6 @@ from litellm.proxy.memory.policy import MemoryIdentity, resolve_memory_access
 from litellm.proxy.memory.store import MemoryStore
 from litellm.types.memory_v2 import (
     MemoryCapture,
-    MemoryCatalogRequest,
     MemoryRecallRequest,
     MemorySearch,
     MemorySettings,
@@ -269,8 +268,7 @@ async def test_revocation_blocks_existing_store_and_private_continuation(databas
     database.db.litellm_teamtable.find_many.return_value = [team(permissions=("/memory/v2/entries",))]
     original = await management.memory_store(auth())
     patch = MemoryContinuation(
-        replaces=1,
-        replacement=({"role": "assistant", "content": "Team secret"},),
+        response={"output": [{"role": "assistant", "content": "Team secret"}]},
         permission_revision=original.access.permission_revision,
     )
     database.db.litellm_teamtable.find_many.return_value = [team()]
@@ -278,8 +276,11 @@ async def test_revocation_blocks_existing_store_and_private_continuation(databas
         await original.read("team-record")
     assert exc.value.status_code == 403
     fresh = await management.memory_store(auth())
+    database.db.litellm_memorycontinuation.find_first = AsyncMock(
+        return_value=SimpleNamespace(payload=patch.model_dump())
+    )
     with pytest.raises(HTTPException, match="Memory permissions changed"):
-        MemoryContinuations(fresh, "acompletion").validate_patch(patch.model_dump())
+        await MemoryContinuations(fresh).load_response("resp_litellm_memory_private")
     database.db.litellm_memorytable.find_first.assert_not_awaited()
 
 
@@ -380,7 +381,7 @@ async def test_search_finds_an_old_record_beyond_the_first_thousand(database: Ma
 
 
 @pytest.mark.asyncio
-async def test_catalog_and_search_recheck_permissions_after_fetch(database: MagicMock) -> None:
+async def test_browse_and_search_recheck_permissions_after_fetch(database: MagicMock) -> None:
     configure(database)
     table = database.db.litellm_memorytable
     store = await management.memory_store(auth())
@@ -390,7 +391,7 @@ async def test_catalog_and_search_recheck_permissions_after_fetch(database: Magi
         return [row()]
 
     table.find_many.side_effect = revoke
-    for operation in (lambda: store.catalog(MemoryCatalogRequest()), lambda: store.search(MemorySearch())):
+    for operation in (lambda: store.recall(MemoryRecallRequest(query="")), lambda: store.search(MemorySearch())):
         configure(database)
         with pytest.raises(HTTPException) as exc:
             await operation()

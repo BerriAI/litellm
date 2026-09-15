@@ -14,7 +14,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -2356,7 +2356,62 @@ class ProxyBaseLLMRequestProcessing:
         else:
             from litellm.proxy.memory.gateway import process_gateway_memory
 
-            memory_response: Final = await process_gateway_memory(self.data, request, user_api_key_dict, route_type)
+            async def memory_model_call(
+                inner_request: Request, body: dict[str, object], auth: UserAPIKeyAuth
+            ) -> Response:
+                from litellm.proxy.auth.user_api_key_auth import (
+                    _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # Reuse the authenticated admission and budget checks.
+                )
+
+                processor: Final = ProxyBaseLLMRequestProcessing(data=body)
+                headers: Final = Response()
+                try:
+                    await _run_centralized_common_checks(auth, inner_request, body, inner_request.url.path)
+                    result: Final = await processor._process_llm_request(
+                        request=inner_request,
+                        fastapi_response=headers,
+                        user_api_key_dict=auth,
+                        route_type=route_type,
+                        proxy_logging_obj=proxy_logging_obj,
+                        general_settings=general_settings,
+                        proxy_config=proxy_config,
+                        select_data_generator=select_data_generator,
+                        llm_router=llm_router,
+                        model=model,
+                        user_model=user_model,
+                        user_temperature=user_temperature,
+                        user_request_timeout=user_request_timeout,
+                        user_max_tokens=user_max_tokens,
+                        user_api_base=user_api_base,
+                        version=version,
+                        is_streaming_request=body.get("stream") is True,
+                        contents=contents,
+                    )
+                    if isinstance(result, Response):
+                        return result
+                    return JSONResponse(
+                        TypeAdapter(dict[str, object]).validate_python(
+                            result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+                        ),
+                        headers=headers.headers,
+                    )
+                except asyncio.CancelledError:
+                    from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation_on_cancel
+
+                    await release_budget_reservation_on_cancel(auth.budget_reservation)
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(auth)
+                    raise
+                except Exception as exc:
+                    replacement: Final = await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=auth, original_exception=exc, request_data=processor.data
+                    )
+                    if replacement is not None:
+                        raise replacement
+                    raise
+
+            memory_response: Final = await process_gateway_memory(
+                self.data, request, user_api_key_dict, route_type, memory_model_call
+            )
             if memory_response is not None:
                 return memory_response
             self.data, logging_obj = await self._pre_call_with_fallbacks(

@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -34,7 +35,7 @@ def assistant_message(response: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def public_tool_response(
-    response: Mapping[str, object], route: ServerToolRoute, server_names: frozenset[str]
+    response: Mapping[str, object], route: ServerToolRoute, server_names: frozenset[str], hide_text: bool = False
 ) -> Mapping[str, object]:
     if route != "acompletion":
         field: Final = "output" if route == "aresponses" else "content"
@@ -43,7 +44,8 @@ def public_tool_response(
             field: [  # mutable-ok: Native provider JSON containers.
                 item
                 for item in object_items(response.get(field))
-                if item.get("type") not in ("tool_use", "function_call") or item.get("name") not in server_names
+                if not (item.get("type") in ("tool_use", "function_call") and item.get("name") in server_names)
+                and not (hide_text and item.get("type") in ("text", "message"))
             ],
         }
     choices: Final = object_items(response.get("choices"))
@@ -65,6 +67,7 @@ def public_tool_response(
                 ),
                 "message": {  # mutable-ok: Native provider JSON containers.
                     **message,
+                    "content": None if hide_text else message.get("content"),
                     "tool_calls": list(  # mutable-ok: Native provider JSON containers.
                         calls
                     )
@@ -100,51 +103,7 @@ def combined_tool_response(responses: tuple[Mapping[str, object], ...], route: S
         raise ValueError("No model response was received")
     last: Final = responses[-1]
     usage: Final = combined_usage(tuple(object_value(response.get("usage")) for response in responses))
-    if route != "acompletion":
-        field: Final = "output" if route == "aresponses" else "content"
-        return {  # mutable-ok: Native provider JSON containers.
-            **last,
-            "id": responses[0].get("id"),
-            "usage": usage,
-            field: [  # mutable-ok: Native provider JSON containers.
-                item for response in responses for item in object_items(response.get(field))
-            ],
-        }
-    messages: Final = tuple(assistant_message(response) for response in responses)
-    choices: Final = object_items(last.get("choices"))
-    text_fields: Final = ("content", "reasoning_content", "refusal")
-    arrays: Final = ("thinking_blocks", "annotations", "tool_calls")
-    message: Final = {  # mutable-ok: Native provider JSON containers.
-        **messages[-1],
-        **{  # mutable-ok: Native provider JSON containers.
-            field: "".join(value for message in messages if isinstance(value := message.get(field), str))
-            for field in text_fields
-            if any(isinstance(message.get(field), str) for message in messages)
-        },
-        **{  # mutable-ok: Native provider JSON containers.
-            field: [  # mutable-ok: Native provider JSON containers.
-                item for message in messages for item in object_items(message.get(field))
-            ]
-            for field in arrays
-            if any(message.get(field) for message in messages)
-        },
-    }
-    return {  # mutable-ok: Native provider JSON containers.
-        **last,
-        "id": responses[0].get("id"),
-        "usage": usage,
-        "choices": [  # mutable-ok: Native provider JSON containers.
-            {  # mutable-ok: Native provider JSON containers.
-                **(
-                    choices[0]
-                    if choices
-                    else {  # mutable-ok: Native provider JSON containers.
-                    }
-                ),
-                "message": message,
-            }
-        ],
-    }
+    return MappingProxyType({**last, "usage": usage})
 
 
 def response_messages(response: Mapping[str, object], route: ServerToolRoute) -> tuple[Mapping[str, object], ...]:
@@ -204,6 +163,12 @@ def executable_server_calls(
         else bool(choices) and choices[0].get("finish_reason") == "tool_calls"
     )
     if not completed:
+        if (
+            response.get("status") == "incomplete"
+            or response.get("stop_reason") == "max_tokens"
+            or (choices and choices[0].get("finish_reason") == "length")
+        ):
+            return ()
         raise ValueError("The model did not complete its memory tool calls")
 
     def normalize(item: Mapping[str, object], definition: Mapping[str, object]) -> NormalizedToolCall:

@@ -87,6 +87,7 @@ class ServerToolStream:
         self.response_id: str | None = None
         self.complete_response: Mapping[str, object] | None = None
         self.suppress_output = False
+        self.hide_text = False
 
     def begin_round(self) -> None:
         self.frames.clear()
@@ -161,7 +162,9 @@ class ServerToolStream:
         index: Final = data.get("index")
         if kind == "content_block_start" and isinstance(index, int):
             block: Final = object_value(data.get("content_block"))
-            hidden: Final = block.get("type") == "tool_use" and block.get("name") in self.server_names
+            hidden: Final = (block.get("type") == "tool_use" and block.get("name") in self.server_names) or (
+                self.hide_text and block.get("type") == "text"
+            )
             self.indices = MappingProxyType({**self.indices, index: None if hidden else self.content_count})
             if not hidden:
                 self.content_count += 1
@@ -195,7 +198,9 @@ class ServerToolStream:
         index: Final = data.get("output_index")
         if kind == "response.output_item.added" and isinstance(index, int):
             item: Final = object_value(data.get("item"))
-            hidden: Final = item.get("type") == "function_call" and item.get("name") in self.server_names
+            hidden: Final = (item.get("type") == "function_call" and item.get("name") in self.server_names) or (
+                self.hide_text and item.get("type") == "message"
+            )
             self.indices = MappingProxyType({**self.indices, index: None if hidden else self.content_count})
             if not hidden:
                 self.content_count += 1
@@ -250,7 +255,9 @@ class ServerToolStream:
         if choice.get("finish_reason") is not None:
             self.terminal = True
         visible: Final = {  # mutable-ok: Native provider JSON containers.
-            key: value for key, value in delta.items() if key != "tool_calls"
+            key: value
+            for key, value in delta.items()
+            if key != "tool_calls" and not (self.hide_text and key == "content")
         }
         if not visible or self.responses and len(visible) == 1 and visible.get("role") == "assistant":
             return ()
@@ -339,7 +346,7 @@ class ServerToolStream:
 
     def accept_response(self, response: Mapping[str, object]) -> None:
         public: Final = {  # mutable-ok: Native provider response JSON.
-            **public_tool_response(response, self.route, self.server_names),
+            **public_tool_response(response, self.route, self.server_names, self.hide_text),
             **self.client_response_fields,
         }
         hidden: Final[Mapping[str, object]] = (
@@ -353,7 +360,6 @@ class ServerToolStream:
                 **public,
                 "content": [  # mutable-ok: Native provider JSON containers.
                 ],
-                "stop_reason": "end_turn",
             }
             if self.route == "anthropic_messages"
             else {  # mutable-ok: Native provider JSON containers.
@@ -361,7 +367,7 @@ class ServerToolStream:
                 "choices": [  # mutable-ok: Native provider JSON containers.
                     {  # mutable-ok: Native provider JSON containers.
                         "index": 0,
-                        "finish_reason": "stop",
+                        "finish_reason": object_items(public.get("choices"))[0].get("finish_reason"),
                         "message": {  # mutable-ok: Native provider JSON containers.
                             "role": "assistant",
                             "content": None,
@@ -378,6 +384,7 @@ class ServerToolStream:
         return {  # mutable-ok: Native provider JSON containers.
             **combined_tool_response(self.responses, self.route),
             "id": self.response_id,
+            **self.client_response_fields,
         }
 
     def finish(self) -> tuple[bytes, ...]:

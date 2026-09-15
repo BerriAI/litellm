@@ -13,7 +13,7 @@ from litellm.proxy.memory.policy import MemoryAccess, memory_digest, memory_prim
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import MemoryRepository
 from litellm.repositories.unit_of_work import prisma_transaction
-from litellm.types.memory_v2 import MemoryCapture, MemoryCatalogRequest, MemoryEntry, MemoryRecallRequest, MemorySearch
+from litellm.types.memory_v2 import MemoryCapture, MemoryEntry, MemoryRecallRequest, MemorySearch
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_MemoryTable
@@ -117,19 +117,6 @@ class MemoryStore:
         )
         return tuple(self.entry(row) for row in rows)
 
-    async def catalog(self, request: MemoryCatalogRequest) -> tuple[tuple[MemoryEntry, ...], int, str]:
-        access: Final = await self.authorize()
-        where: Final = access.visible_rows()
-        total: Final = await self.table.count(where=where)
-        entries: Final = await self._page(where, limit=request.limit, offset=request.offset)
-        latest: Final = await self._page(where, limit=1) if request.offset else entries[:1]
-        await self.authorize()
-        return (
-            entries,
-            total,
-            memory_digest(str(total), *(entry.memory_id + entry.updated_at.isoformat() for entry in latest)),
-        )
-
     async def _ranked(
         self,
         query: str,
@@ -166,6 +153,11 @@ class MemoryStore:
 
     async def recall(self, request: MemoryRecallRequest) -> tuple[tuple[RankedMemory, ...], int]:
         access: Final = await self.authorize()
+        if not request.query.strip() and request.scope is None:
+            page: Final = await self._page(access.visible_rows(), limit=request.limit)
+            count: Final = await self.table.count(where=access.visible_rows())
+            await self.authorize()
+            return tuple((entry, 100.0, ()) for entry in page), count
         ranked: Final = await self._ranked(request.query, access.visible_rows(), request.limit, scope=request.scope)
         await self.authorize()
         return ranked

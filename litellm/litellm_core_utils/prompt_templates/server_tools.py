@@ -296,3 +296,9 @@ def continue_server_tools(
             ],
         ],
     }
+
+
+def transcript_items(data: Mapping[str, object], route: ServerToolRoute) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        _OBJECT.validate_python(item) for item in _items(data.get("input" if route == "aresponses" else "messages"))
+    )

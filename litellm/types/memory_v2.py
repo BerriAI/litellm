@@ -93,27 +93,18 @@ class MemoryObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     title: str = Field(min_length=3, max_length=180)
-    when_to_use: str = Field(min_length=5, max_length=700)
+    when_to_use: str = Field(default="", max_length=700)
     content: str = Field(min_length=10, max_length=6000)
-    kind: MemoryKind
-    scope: str = Field(min_length=1, max_length=200)
-    certainty: MemoryCertainty
-    evidence: str = Field(min_length=5, max_length=2000)
-    source: str = Field(min_length=3, max_length=1000)
+    kind: MemoryKind = "context"
+    scope: str = Field(default="", max_length=200)
+    certainty: MemoryCertainty = "observed"
+    evidence: str = Field(min_length=5, max_length=2000, description="Exact quote from the incoming conversation")
 
 
 class MemoryObservationCapture(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    observations: tuple[MemoryObservation, ...] = Field(max_length=8)
-    checkpoint: str | None = Field(default=None, max_length=200)
-
-
-class MemoryCatalogRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=50, ge=1, le=100)
+    observations: tuple[MemoryObservation, ...] = Field(min_length=1, max_length=8)
 
 
 class MemoryRecallRequest(BaseModel):

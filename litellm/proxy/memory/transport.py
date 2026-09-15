@@ -1,32 +1,42 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from io import BytesIO
-from typing import Final
+from typing import Final, TypeAlias
 from uuid import uuid4
 
 import anyio
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-from starlette.types import ASGIApp, Message, Scope
+from starlette.responses import Response, StreamingResponse
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import wait_for_request_parallel_release
 
-_IN_GATEWAY_ROUND: Final[ContextVar[bool]] = ContextVar("litellm_gateway_memory_round", default=False)
-_HEADERS: Final = TypeAdapter(tuple[tuple[bytes, bytes], ...])
-_BYTES: Final = TypeAdapter(bytes)
+_GATEWAY_ROUND: Final[ContextVar[int | None]] = ContextVar("litellm_gateway_memory_round", default=None)
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _ROUND_HEADERS: Final = frozenset(("idempotency-key", "x-request-id", "x-litellm-call-id"))
+RoundExecutor: TypeAlias = Callable[
+    [Request, dict[str, object], UserAPIKeyAuth], Awaitable[Response]
+]  # mutable-ok: The processor mutates its fresh request copy.
+
+
+def in_gateway_round() -> bool:
+    return _GATEWAY_ROUND.get() is not None
+
+
+def is_memory_continuation_round() -> bool:
+    return (_GATEWAY_ROUND.get() or 0) > 0
 
 
 def _round_body(body: Mapping[str, object]) -> bytes:
     return json.dumps(
-        {  # mutable-ok: Native provider JSON containers.
+        {  # mutable-ok: Starlette and the gateway processor consume native request containers.
             **body,
-            **{  # mutable-ok: Native provider JSON containers.
-                field: {  # mutable-ok: Native provider JSON containers.
+            **{  # mutable-ok: Starlette and the gateway processor consume native request containers.
+                field: {  # mutable-ok: Starlette and the gateway processor consume native request containers.
                     key: value
                     for key, value in _OBJECT.validate_python(body[field]).items()
                     if key.lower() not in _ROUND_HEADERS
@@ -41,97 +51,72 @@ def _round_body(body: Mapping[str, object]) -> bytes:
 
 class RoundStart(BaseModel):
     model_config = ConfigDict(frozen=True)
-
     status: int
     headers: tuple[tuple[bytes, bytes], ...] = ()
 
 
-def in_gateway_round() -> bool:
-    return _IN_GATEWAY_ROUND.get()
-
-
 class GatewayRound:
-    def __init__(self, app: ASGIApp, request: Request, body: Mapping[str, object]) -> None:
-        self.app = app
+    def __init__(
+        self, execute: RoundExecutor, request: Request, body: Mapping[str, object], auth: UserAPIKeyAuth, index: int
+    ) -> None:
+        self.execute = execute
         self.request = request
         self.body = _round_body(body)
+        self.auth = auth
+        self.index = index
         self.writer, self.reader = anyio.create_memory_object_stream[bytes](8)
         self.started: asyncio.Future[RoundStart] = asyncio.get_running_loop().create_future()
-        self.disconnected = asyncio.Event()
-        self.body_received = False
         self.task: asyncio.Task[None] | None = None
 
-    async def receive(self) -> Message:
-        if not self.body_received:
-            self.body_received = True
-            return {  # mutable-ok: Native ASGI or JSON payload.
-                "type": "http.request",
-                "body": self.body,
-                "more_body": False,
-            }
-        await self.disconnected.wait()
-        return {  # mutable-ok: Native ASGI or JSON payload.
-            "type": "http.disconnect"
-        }
-
-    async def send(self, message: Message) -> None:
-        if message["type"] == "http.response.start":
-            if not self.started.done():
-                self.started.set_result(RoundStart.model_validate(message))
-            return
-        if message["type"] == "http.response.body":
-            await self.writer.send(_BYTES.validate_python(message.get("body", b"")))
-
     async def run(self) -> None:
-        token: Final = _IN_GATEWAY_ROUND.set(True)
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import reset_request_stash
+
+        token: Final = _GATEWAY_ROUND.set(self.index)
+        reset_request_stash()
         headers: Final = tuple(
             (name, value)
-            for name, value in _HEADERS.validate_python(self.request.scope["headers"])
-            if name.lower()
-            not in (
-                b"content-length",
-                b"content-type",
-                b"accept-encoding",
-                b"idempotency-key",
-                b"x-request-id",
-                b"x-litellm-call-id",
-            )
+            for name, value in self.request.headers.raw
+            if name.decode("latin-1").lower() not in _ROUND_HEADERS
+            and name.lower() not in (b"content-length", b"content-type")
         )
-        scope: Final[Scope] = {
-            **{  # mutable-ok: Native ASGI or JSON payload.
-                key: self.request.scope[key]
-                for key in (
-                    "type",
-                    "asgi",
-                    "http_version",
-                    "method",
-                    "scheme",
-                    "path",
-                    "raw_path",
-                    "query_string",
-                    "root_path",
-                    "server",
-                    "client",
-                )
-                if key in self.request.scope
+        inner: Final = Request(
+            {  # mutable-ok: Starlette and the gateway processor consume native request containers.
+                **{
+                    key: value for key, value in self.request.scope.items() if key != "parsed_body"
+                },  # mutable-ok: Starlette and the gateway processor consume native request containers.
+                "state": {},  # mutable-ok: Starlette and the gateway processor consume native request containers.
+                "headers": [  # mutable-ok: Starlette and the gateway processor consume native request containers.
+                    *headers,
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(self.body)).encode()),
+                ],
             },
-            "headers": [  # mutable-ok: Native ASGI or JSON payload.
-                *headers,
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(self.body)).encode()),
-            ],
-            "state": {},
-        }
+            receive=self.request.receive,
+        )
+        inner._body = self.body
         try:
             async with self.writer:
-                await self.app(scope, self.receive, self.send)
+                response: Final = await self.execute(inner, _OBJECT.validate_json(self.body), self.auth)
+                self.started.set_result(RoundStart(status=response.status_code, headers=tuple(response.raw_headers)))
+                if isinstance(response, StreamingResponse):
+                    try:
+                        async for chunk in response.body_iterator:
+                            await self.writer.send(chunk.encode() if isinstance(chunk, str) else bytes(chunk))
+                    finally:
+                        close: Final = getattr(response.body_iterator, "aclose", None)
+                        if close is not None:
+                            await close()
+                else:
+                    await self.writer.send(bytes(response.body))
+                if response.background is not None:
+                    await response.background()
                 await wait_for_request_parallel_release()
         except BaseException as exc:
             if not self.started.done():
                 self.started.set_exception(exc)
             raise
         finally:
-            _IN_GATEWAY_ROUND.reset(token)
+            _GATEWAY_ROUND.reset(token)
 
     async def chunks(self) -> AsyncGenerator[bytes, None]:
         async with self.reader:
@@ -150,20 +135,19 @@ class GatewayRound:
             return buffer.getvalue()
 
     async def close(self) -> None:
-        self.disconnected.set()
         if self.task is not None:
             if not self.task.done():
                 self.task.cancel()
             with suppress(asyncio.CancelledError):
-                await asyncio.gather(self.task)
+                await self.task
         await self.reader.aclose()
 
 
 @asynccontextmanager
 async def gateway_round(
-    app: ASGIApp, request: Request, body: Mapping[str, object]
+    execute: RoundExecutor, request: Request, body: Mapping[str, object], auth: UserAPIKeyAuth, index: int = 0
 ) -> AsyncGenerator[GatewayRound, None]:
-    call: Final = GatewayRound(app, request, body)
+    call: Final = GatewayRound(execute, request, body, auth, index)
     call.task = asyncio.create_task(call.run())
     try:
         await call.started
