@@ -223,6 +223,27 @@ async def test_json_object_mode_supplies_schema_in_prompt() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("json_schema", "json_object"))
+@pytest.mark.parametrize("fence", ("```json", "```"))
+async def test_fenced_forecast_routes_by_validated_probabilities(mode: str, fence: str) -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    config: Final = _config(llm_v2_config={**base.model_dump(), "response_format": mode})
+    content: Final = f"  {fence}\n{_verdict().model_dump_json()}\n```  "
+    router, client = _router(content, config)
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router", messages=[{"role": "user", "content": "Fix nested behavior"}], request_kwargs={}
+    )
+    assert result is not None and result.model == "efficient"
+    assert result.routing_decision is not None
+    assert result.routing_decision["cause"] == "llm_v2_classifier"
+    assert result.routing_decision["classifier_efficient_p_solve"] == 0.9
+    assert result.routing_decision["classifier_capable_p_solve"] == 0.92
+    assert result.routing_decision["classifier_cost"] == 0.001
+    client.acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("user_agent", ("claude-cli/2.1.233", "curl/8.7.1"))
 @pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
 async def test_caller_constraints_respect_claude_code_prompt_policy(user_agent: str, metadata_key: str) -> None:
@@ -280,7 +301,9 @@ async def test_routing_metadata_preserves_exact_forecasts_and_redaction(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("content", ["", "not json", '{"tier":"SIMPLE"}', '{"forecasts":{}}'])
+@pytest.mark.parametrize(
+    "content", ["", "not json", '{"tier":"SIMPLE"}', '{"forecasts":{}}', '```json\n{"forecasts":{}}\n```']
+)
 async def test_invalid_output_falls_back_to_capable_and_preserves_paid_call_cost(content: str) -> None:
     router, client = _router(content)
     result: Final = await router.async_pre_routing_hook(

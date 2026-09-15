@@ -81,6 +81,7 @@ from .capability_classifier import (
     capability_classifier_response_format,
     capability_classifier_system_prompt,
     parse_capability_classifier_verdict,
+    unwrap_classifier_json,
 )
 from .classification_rubrics import BUSINESS_TIER_CRITERIA, calibration_examples_section
 from .config import (
@@ -2370,7 +2371,7 @@ class ComplexityRouter(CustomLogger):
             messages_for_call, request_kwargs, encrypted_task=encrypted, max_output_tokens=v2.max_output_tokens
         )
         try:
-            verdict: Final = LLMV2Verdict.model_validate_json(content)
+            verdict: Final = LLMV2Verdict.model_validate_json(unwrap_classifier_json(content))
         except ValidationError:
             return self._classifier_failure_outcome("Invalid LLM V2 forecast", prompt, system_prompt)._replace(
                 classifier_cost=classifier_cost
