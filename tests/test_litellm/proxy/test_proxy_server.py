@@ -8002,7 +8002,7 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
     2 * db_spend.
 
     The per-counter asyncio.Lock is per-process, so it does NOT coordinate
-    across pods. We simulate two pods by patching _get_lock to return a
+    across pods. We simulate two pods by patching _counter_lock to return a
     fresh lock per call (each "pod" has its own lock registry in real life).
     """
     from litellm.caching.dual_cache import DualCache
@@ -8061,13 +8061,13 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
     pod_b = DualCache()
     pod_b.redis_cache = fake_redis
 
-    # Each "pod" has its own per-process lock registry. Patch _get_lock to
+    # Each "pod" has its own per-process lock registry. Patch _counter_lock to
     # always return a fresh lock so the two coalesced calls do not serialize
     # via one in-process lock (which is what would happen across pods).
-    async def fresh_lock(_counter_key):
+    def fresh_lock(_counter_key):
         return asyncio.Lock()
 
-    with patch.object(SpendCounterReseed, "_get_lock", side_effect=fresh_lock):
+    with patch.object(SpendCounterReseed, "_counter_lock", side_effect=fresh_lock):
         results = await asyncio.gather(
             SpendCounterReseed.coalesced(
                 prisma_client=fake_prisma,
@@ -8944,7 +8944,9 @@ async def test_reseed_locks_dict_is_bounded():
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     orig_locks = SpendCounterReseed._locks.copy()
+    orig_idle_locks = SpendCounterReseed._idle_locks.copy()
     SpendCounterReseed._locks.clear()
+    SpendCounterReseed._idle_locks.clear()
     orig_max = constants.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
     constants.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = 5
     # The class reads the constant via module-level import, so patch the
@@ -8955,7 +8957,8 @@ async def test_reseed_locks_dict_is_bounded():
     scr.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = 5
     try:
         for i in range(7):
-            await SpendCounterReseed._get_lock(f"spend:key:test-key-{i}")
+            async with SpendCounterReseed._counter_lock(f"spend:key:test-key-{i}"):
+                pass
         assert len(SpendCounterReseed._locks) == 5, f"got {len(SpendCounterReseed._locks)}"
         # Oldest two evicted
         assert "spend:key:test-key-0" not in SpendCounterReseed._locks
@@ -8967,6 +8970,8 @@ async def test_reseed_locks_dict_is_bounded():
         scr.SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = orig_module_max
         SpendCounterReseed._locks.clear()
         SpendCounterReseed._locks.update(orig_locks)
+        SpendCounterReseed._idle_locks.clear()
+        SpendCounterReseed._idle_locks.update(orig_idle_locks)
 
 
 @pytest.mark.asyncio
