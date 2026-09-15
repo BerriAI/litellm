@@ -242,7 +242,7 @@ def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_titl
 def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     section_titles: Final = {
         "e2e_parity": "End-to-end parity outcomes",
-        "trace_parity": "trace comparisons",
+        "trace_parity": "traces",
         "unit_tests_mapping": "Python/Rust unit-test mappings",
         "unit_tests_parity": "Python backend parity outcomes",
         "unit_tests_rust": "Native Rust unit-test outcomes",
@@ -357,6 +357,25 @@ def test_strategy_command_forwards_repeated_filters_and_runner_arguments(
     assert captured == [
         (("unit_tests_parity",), ("ocr", "messages"), ("-x",)),
     ]
+
+
+def test_trace_command_forwards_engine_and_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli: Final = importlib.import_module("tests.rust-python-harness.cli")
+    captured: list[tuple[str, ...]] = []
+
+    def capture_run(
+        strategies: Sequence[Strategy],
+        cases: Sequence[HarnessCase],
+        runner_args: Sequence[str] = (),
+    ) -> int:
+        del strategies, cases
+        captured.append(tuple(runner_args))
+        return 0
+
+    monkeypatch.setattr(cli, "run_command", capture_run)
+
+    assert main(["run", "trace_parity", "--scenario", "async-mistral", "--engine", "python"]) == 0
+    assert captured == [("async-mistral", "--engine=python")]
 
 
 def test_omitted_surface_selects_every_strategy_surface(monkeypatch: pytest.MonkeyPatch) -> None:

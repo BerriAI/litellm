@@ -1571,6 +1571,9 @@ class ProxyBaseLLMRequestProcessing:
     ) -> dict:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
+        resolved_call_id: Final = (
+            call_id or hidden_params.get("litellm_call_id") or (request_data or {}).get("litellm_call_id")
+        )
         timing_values: Final = _timing_values(
             hidden_params=hidden_params,
             logging_obj=litellm_logging_obj,
@@ -1598,7 +1601,7 @@ class ProxyBaseLLMRequestProcessing:
         classifier_cost: Final = _classifier_cost_from_request_data(request_data)
 
         headers: Final = {
-            "x-litellm-call-id": call_id,
+            "x-litellm-call-id": resolved_call_id,
             "x-litellm-model-id": model_id,
             "x-litellm-model-name": model_name,
             "x-litellm-cache-key": cache_key,
@@ -3452,15 +3455,13 @@ class ProxyBaseLLMRequestProcessing:
             # a failed request reports no timing, matching /v1/chat/completions
             read_timing_from_logging_obj=False,
         )
-        # Extract headers from exception - check both e.headers and e.response.headers
         headers = getattr(e, "headers", None) or {}
         if not headers:
-            # Try to get headers from e.response.headers (httpx.Response)
             _response: Final = attribute_of(e, "response")
-            if _response is not None:
-                _response_headers: Final = getattr(_response, "headers", None)
-                if _response_headers:
-                    headers = get_response_headers(dict(_response_headers))
+            _response_headers: Final = getattr(_response, "headers", None) if _response is not None else None
+            _provider_headers: Final = _response_headers or getattr(e, "litellm_response_headers", None)
+            if _provider_headers:
+                headers = get_response_headers(dict(_provider_headers))
         headers.update(custom_headers)
 
         # Call response headers hook for failure
