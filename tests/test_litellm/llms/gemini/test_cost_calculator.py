@@ -1,6 +1,7 @@
 import pytest
 
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.llms.gemini.cost_calculator import (
     cost_per_google_maps_grounding_request,
     cost_per_web_search_request,
@@ -16,6 +17,7 @@ from litellm.types.utils import (
     ImageResponse,
     ImageUsage,
     ImageUsageInputTokensDetails,
+    ModelResponse,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -478,26 +480,50 @@ def test_flash_alias_cache_read_is_ten_percent_of_input(
 
 
 @pytest.mark.parametrize(
-    "alias,target",
+    "alias,target,expected_cost",
     [
-        ("gemini/gemini-flash-latest", "gemini/gemini-3.8-flash"),
-        ("gemini/gemini-flash-lite-latest", "gemini/gemini-3.5-flash-lite"),
+        (
+            "gemini/gemini-flash-latest",
+            "gemini/gemini-3.8-flash",
+            600 * 7.5e-7 + 400 * 7.5e-8 + 500 * 3.75e-6,
+        ),
+        (
+            "gemini/gemini-flash-lite-latest",
+            "gemini/gemini-3.5-flash-lite",
+            600 * 3e-7 + 400 * 3e-8 + 500 * 2.5e-6,
+        ),
+        (
+            "gemini/gemini-pro-latest",
+            "gemini/gemini-3.1-pro-preview",
+            600 * 2e-6 + 400 * 2e-7 + 500 * 1.2e-5,
+        ),
     ],
 )
-def test_flash_latest_aliases_price_as_their_current_target(monkeypatch, alias, target):
+def test_latest_aliases_cost_the_same_as_their_current_target(
+    monkeypatch, alias, target, expected_cost
+):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    alias_entry = litellm.model_cost[alias]
-    target_entry = litellm.model_cost[target]
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400),
+    )
 
-    for cost_key in (
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "cache_read_input_token_cost",
-        "max_output_tokens",
-    ):
-        assert alias_entry[cost_key] == target_entry[cost_key]
+    def cost_of(model: str) -> float:
+        return completion_cost(
+            completion_response=ModelResponse(model=model, usage=usage),
+            model=model,
+            custom_llm_provider="gemini",
+        )
+
+    alias_cost = cost_of(alias)
+    target_cost = cost_of(target)
+    assert alias_cost == pytest.approx(target_cost)
+    assert alias_cost == pytest.approx(expected_cost)
+    assert alias_cost > 0
 
 
 @pytest.mark.parametrize(

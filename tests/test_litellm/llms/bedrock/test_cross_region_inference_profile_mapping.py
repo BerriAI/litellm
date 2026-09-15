@@ -241,10 +241,38 @@ def test_bedrock_gpt_5_6_offers_tools_and_reasoning_effort_but_not_thinking(prof
         ("us.amazon.nova-premier-v1:0", 6.25e-7),
     ],
 )
-def test_bedrock_nova_cache_read_prices(model, expected_cache_read, local_model_cost_map):
+def test_bedrock_nova_cache_read_prices(
+    model, expected_cache_read, local_model_cost_map
+):
     model_info = litellm.model_cost[model]
-
-    assert model_info["cache_read_input_token_cost"] == expected_cache_read
-    assert model_info["cache_read_input_token_cost"] == pytest.approx(
-        0.25 * model_info["input_cost_per_token"]
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=100,
+        total_tokens=1_100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400),
     )
+    response = _bedrock_response(model, usage)
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+    expected_cost = (
+        600 * model_info["input_cost_per_token"]
+        + 400 * expected_cache_read
+        + 100 * model_info["output_cost_per_token"]
+    )
+    assert cost == pytest.approx(expected_cost)
+
+    uncached_usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=100,
+        total_tokens=1_100,
+    )
+    uncached_cost = completion_cost(
+        completion_response=_bedrock_response(model, uncached_usage),
+        model=model,
+        custom_llm_provider="bedrock",
+    )
+    assert cost < uncached_cost
