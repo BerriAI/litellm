@@ -10,6 +10,47 @@ from typing import Final
 import pytest
 
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.configuration import (
+    CapabilityContext,
+    CapabilityDefinition,
+    DeliveryMode,
+    ExecutionDecision,
+    RolloutPolicy,
+    RustImplementationState,
+)
+
+OPT_IN: Final = CapabilityDefinition(
+    rust=RustImplementationState.EXPERIMENTAL, python_available=True, rollout=RolloutPolicy.RUST_OPT_IN
+)
+OPT_OUT: Final = CapabilityDefinition(
+    rust=RustImplementationState.READY, python_available=True, rollout=RolloutPolicy.RUST_OPT_OUT
+)
+FIXED: Final = (
+    (
+        CapabilityDefinition(
+            rust=RustImplementationState.UNIMPLEMENTED, python_available=False, rollout=RolloutPolicy.UNSUPPORTED
+        ),
+        ExecutionDecision.UNSUPPORTED,
+    ),
+    (
+        CapabilityDefinition(
+            rust=RustImplementationState.UNIMPLEMENTED, python_available=True, rollout=RolloutPolicy.PYTHON_ONLY
+        ),
+        ExecutionDecision.PYTHON,
+    ),
+    (
+        CapabilityDefinition(
+            rust=RustImplementationState.EXPERIMENTAL, python_available=True, rollout=RolloutPolicy.PYTHON_ONLY
+        ),
+        ExecutionDecision.PYTHON,
+    ),
+    (
+        CapabilityDefinition(
+            rust=RustImplementationState.EXPERIMENTAL, python_available=False, rollout=RolloutPolicy.RUST_REQUIRED
+        ),
+        ExecutionDecision.RUST_REQUIRED,
+    ),
+)
 
 
 @pytest.fixture(autouse=True)
@@ -23,34 +64,100 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
 
 
 @pytest.mark.parametrize(
-    ("process", "environment", "release_default", "expected"),
+    ("process", "environment", "capability", "expected"),
     (
-        (False, True, True, False),
-        (True, False, False, True),
-        (None, False, True, False),
-        (None, True, False, True),
-        (None, None, False, False),
-        (None, None, True, True),
+        (False, True, OPT_OUT, ExecutionDecision.PYTHON),
+        (True, False, OPT_IN, ExecutionDecision.RUST_WITH_FALLBACK),
+        (None, False, OPT_OUT, ExecutionDecision.PYTHON),
+        (None, True, OPT_IN, ExecutionDecision.RUST_WITH_FALLBACK),
+        (None, None, OPT_IN, ExecutionDecision.PYTHON),
+        (None, None, OPT_OUT, ExecutionDecision.RUST_WITH_FALLBACK),
     ),
 )
-def test_resolution_precedence(
+def test_optional_rust_resolution_precedence(
     process: bool | None,
     environment: bool | None,
-    release_default: bool,
-    expected: bool,
+    capability: CapabilityDefinition,
+    expected: ExecutionDecision,
 ) -> None:
     assert (
-        configuration.resolve_rust_enabled(
+        configuration.resolve_capability(
+            capability,
             process_override=process,
             environment_override=environment,
-            release_default=release_default,
         )
         is expected
     )
 
 
+@pytest.mark.parametrize(("capability", "expected"), FIXED)
+@pytest.mark.parametrize("process", (None, False, True))
+@pytest.mark.parametrize("environment", (None, False, True))
+def test_fixed_policies_ignore_overrides(
+    capability: CapabilityDefinition,
+    expected: ExecutionDecision,
+    process: bool | None,
+    environment: bool | None,
+) -> None:
+    assert (
+        configuration.resolve_capability(capability, process_override=process, environment_override=environment)
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("rust", "python_available", "rollout"),
+    (
+        (RustImplementationState.READY, True, RolloutPolicy.RUST_REQUIRED),
+        (RustImplementationState.EXPERIMENTAL, False, RolloutPolicy.RUST_OPT_IN),
+        (RustImplementationState.READY, False, RolloutPolicy.RUST_OPT_OUT),
+        (RustImplementationState.UNIMPLEMENTED, True, RolloutPolicy.RUST_OPT_IN),
+        (RustImplementationState.UNIMPLEMENTED, True, RolloutPolicy.RUST_OPT_OUT),
+        (RustImplementationState.UNIMPLEMENTED, False, RolloutPolicy.PYTHON_ONLY),
+        (RustImplementationState.UNIMPLEMENTED, False, RolloutPolicy.RUST_REQUIRED),
+        (RustImplementationState.UNIMPLEMENTED, True, RolloutPolicy.UNSUPPORTED),
+        (RustImplementationState.READY, False, RolloutPolicy.UNSUPPORTED),
+        (RustImplementationState.EXPERIMENTAL, False, RolloutPolicy.PYTHON_ONLY),
+    ),
+)
+def test_invalid_capability_definitions_rejected(
+    rust: RustImplementationState, python_available: bool, rollout: RolloutPolicy
+) -> None:
+    with pytest.raises(ValueError, match="capability"):
+        CapabilityDefinition(rust=rust, python_available=python_available, rollout=rollout)
+
+
+def test_capability_resolver_receives_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    seen: Final[list[CapabilityContext]] = []
+
+    def resolver(context: CapabilityContext) -> CapabilityDefinition:
+        seen.append(context)
+        if context.provider == "bedrock" and context.delivery is DeliveryMode.COMPLETED:
+            return CapabilityDefinition(
+                rust=RustImplementationState.EXPERIMENTAL,
+                python_available=False,
+                rollout=RolloutPolicy.RUST_REQUIRED,
+            )
+        return OPT_IN
+
+    bedrock: Final = CapabilityContext(provider="bedrock", model="whisper", delivery=DeliveryMode.COMPLETED)
+    streaming: Final = CapabilityContext(provider="bedrock", model="whisper", delivery=DeliveryMode.STREAMING)
+    assert configuration.capability_decision(resolver, context=bedrock) is ExecutionDecision.RUST_REQUIRED
+    assert configuration.capability_decision(resolver, context=streaming) is ExecutionDecision.PYTHON
+    assert seen == [bedrock, streaming]
+
+
+def test_capability_decision_uses_process_and_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    context: Final = CapabilityContext()
+    assert configuration.capability_decision(OPT_IN, context=context) is ExecutionDecision.PYTHON
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    assert configuration.capability_decision(OPT_IN, context=context) is ExecutionDecision.RUST_WITH_FALLBACK
+    configuration.rust(False)
+    assert configuration.capability_decision(OPT_IN, context=context) is ExecutionDecision.PYTHON
+
+
 def test_release_default_remains_disabled() -> None:
-    assert configuration.DEFAULT_RUST_ENABLED is False
     assert configuration.rust_enabled() is False
     assert configuration.rust_ocr_enabled() is True
 
@@ -63,7 +170,8 @@ def test_ocr_configuration(monkeypatch: pytest.MonkeyPatch, process: bool | None
     if process is not None:
         configuration.rust(process)
 
-    assert configuration.rust_ocr_enabled() is (environment not in {"0", "off"} and process is not False)
+    expected: Final = process if process is not None else environment not in {"0", "off"}
+    assert configuration.rust_ocr_enabled() is expected
 
 
 def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:
