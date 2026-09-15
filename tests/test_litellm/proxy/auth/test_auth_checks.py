@@ -5855,6 +5855,71 @@ async def test_organization_budget_check_carries_org_state_on_the_token():
     assert token.org_budget_snapshot == OrgBudgetSnapshot(spend=12.5, max_budget=100.0)
 
 
+@pytest.mark.parametrize(
+    "max_budget, spend, expect_blocked",
+    [
+        (0.0, 0.0, True),  # explicit zero budget blocks even a fresh org with no spend
+        (0.0, 7.4e-06, True),  # any spend at all against a zero budget blocks
+        (None, 999.0, False),  # unlimited (None) never blocks, regardless of spend
+        (5.0, 4.99, False),  # a positive budget under its cap still passes
+    ],
+)
+@pytest.mark.asyncio
+async def test_organization_zero_max_budget_is_enforced(max_budget, spend, expect_blocked):
+    """An explicit organization max_budget of 0 must mean zero allowance, matching
+    key/team/user semantics, not unlimited.
+
+    Regression for LIT-7797: `_organization_max_budget_check` returned early
+    whenever `org_max_budget <= 0`, so an org configured with max_budget=0 could
+    spend without limit.
+    """
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.auth.auth_checks import _organization_max_budget_check
+
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="o1",
+        organization_alias="zero-budget-org",
+        budget_id="b1",
+        created_by="admin",
+        updated_by="admin",
+        spend=spend,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=max_budget) if max_budget is not None else None,
+    )
+    token = UserAPIKeyAuth(token="k1", org_id="o1")
+    user_api_key_cache = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(
+        key="org_id:o1:with_budget", value=org_table, model_type=LiteLLM_OrganizationTable
+    )
+
+    async def _spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return spend
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(  # test-quality-ok: _organization_max_budget_check imports get_current_spend locally
+        "litellm.proxy.proxy_server.get_current_spend", _spend
+    ):
+        if expect_blocked:
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _organization_max_budget_check(
+                    valid_token=token,
+                    team_object=None,
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            assert exc_info.value.max_budget == max_budget
+        else:
+            await _organization_max_budget_check(
+                valid_token=token,
+                team_object=None,
+                prisma_client=MagicMock(),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+
 @pytest.mark.parametrize("route", ["/health", "/health/services", "/health/test_connection"])
 @pytest.mark.asyncio
 async def test_spend_capable_non_llm_routes_still_enforce_budget(route):

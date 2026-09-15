@@ -641,7 +641,7 @@ class CapabilityCalibrationConfig(BaseModel):
 class CapabilityClassifierConfig(BaseModel):
     """Switchyard-compatible probability threshold policy for two model tiers."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
     card: CapabilityCardConfig | None = None
     selective_policy: SelectivePolicy | None = None
     empirical_supplement: str | None = Field(default=None, min_length=1, max_length=4000)

@@ -2202,13 +2202,18 @@ def _is_streaming_request(
 
 def _select_tokenizer(model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None = None):
     if custom_tokenizer is not None:
-        _tokenizer: Final = create_pretrained_tokenizer(
+        return _select_custom_tokenizer_helper(
             identifier=custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
         )
-        return _tokenizer
     return _select_tokenizer_helper(model=model)
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _select_custom_tokenizer_helper(identifier: str, revision: str, auth_token: str | None) -> SelectTokenizerResponse:
+    verbose_logger.debug("Loading custom HuggingFace tokenizer %s (revision %s)", identifier, revision)
+    return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)

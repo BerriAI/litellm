@@ -2573,6 +2573,17 @@ class TestCapabilityClassifierConfig:
         with pytest.raises(ValidationError, match="requires classifier_type 'capability'"):
             ComplexityRouterConfig(**config)
 
+    def test_rejects_misspelled_optional_policy_instead_of_using_defaults(self) -> None:
+        with pytest.raises(ValidationError, match="threshold_steps"):
+            CapabilityClassifierConfig.model_validate(
+                {
+                    "efficient_tier": "SIMPLE",
+                    "capable_tier": "REASONING",
+                    "base_threshold": 0.5,
+                    "threshold_steps": 0.2,
+                }
+            )
+
     def test_threshold_defaults_match_switchyard(self):
         config = CapabilityClassifierConfig(efficient_tier=" SIMPLE ", capable_tier=" REASONING ", base_threshold=0.5)
         assert config.efficient_tier == "SIMPLE"
@@ -2690,6 +2701,62 @@ class TestCapabilityClassifier:
         assert "Only explicitly supplied training counts" in sent
         assert "Route to the Efficient model" not in sent
         mock_router_instance.acompletion.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_encrypted_task_is_not_replaced_by_plaintext_envelope(self, mock_router_instance: MagicMock) -> None:
+        mock_router_instance.aresponses = AsyncMock(
+            return_value=_native_classifier_response(_capability_reply(p_solve=0.8))
+        )
+        router: Final = self._router(mock_router_instance)
+        task: Final = _encrypted_agent_task()
+        request: Final = {"input": [task]}
+        original: Final = deepcopy(request)
+        result: Final = await router.async_pre_routing_hook(model="capability-router", request_kwargs=request)
+        assert result is not None and result.model == "efficient-model"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "capability_classifier"
+        mock_router_instance.aresponses.assert_awaited_once()
+        call: Final = mock_router_instance.aresponses.call_args.kwargs
+        assert call["input"][-1] == task
+        plaintext: Final = json.dumps(call["input"][:-1])
+        assert "The delegated task in the following agent_message." in plaintext
+        assert "Message Type: NEW_TASK" not in plaintext
+        assert "opaque-provider-task" not in plaintext
+        assert request == original
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_markers", (False, True))
+    async def test_task_forecast_uses_request_scoped_codex_markers(
+        self, mock_router_instance: MagicMock, custom_markers: bool
+    ) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response(_capability_reply(p_solve=0.8)))
+        mock_router_instance.acompletion = completion
+        router: Final = self._router(
+            mock_router_instance,
+            escalation_keywords=[],
+            **({"reminder_markers": [{"open": "<custom>", "close": "</custom>"}]} if custom_markers else {}),
+        )
+        envelope: Final = "\n".join(_CODEX_ENVELOPES)
+        opening: Final = f"{envelope}\nFix nested behavior"
+        messages: Final = [
+            {"role": "user", "content": opening},
+            {"role": "user", "content": "Preserve empty inputs"},
+            {"role": "user", "content": envelope},
+        ]
+        original: Final = deepcopy(messages)
+        for user_agent in ("codex-tui", "curl/8.7.1", "codex_cli_rs/0.62.0"):
+            result: Final = await router.async_pre_routing_hook(
+                model="capability-router", messages=messages, request_kwargs={"metadata": {"user_agent": user_agent}}
+            )
+            assert result is not None and result.model == "efficient-model"
+            sent: Final = completion.call_args.kwargs["messages"]
+            if user_agent.startswith("codex") and not custom_markers:
+                assert [message["content"] for message in sent[1:]] == ["Fix nested behavior", "Preserve empty inputs"]
+            else:
+                assert [message["content"] for message in sent[1:]] == [opening, envelope]
+            assert result.messages == original
+        assert completion.await_count == 3
+        assert messages == original
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("p_solve,expected_model", ((0.95, "capable-model"), (0.98, "efficient-model")))
@@ -6216,10 +6283,16 @@ class TestTierModelAffinity:
         returned: Final = await self._route(router, metadata, "model-b")
 
         assert (first.model, repeated.model, reasoning.model, returned.model) == (
-            "model-a", "model-a", "model-b", "model-a"
+            "model-a",
+            "model-a",
+            "model-b",
+            "model-a",
         )
         assert tuple(result.routing_decision["tier"] for result in (first, repeated, reasoning, returned)) == (
-            "SIMPLE", "SIMPLE", "REASONING", "SIMPLE"
+            "SIMPLE",
+            "SIMPLE",
+            "REASONING",
+            "SIMPLE",
         )
         assert returned.litellm_params == {"temperature": 0.1}
         assert reasoning.litellm_params == {"temperature": 0.9}
@@ -6257,9 +6330,7 @@ class TestTierModelAffinity:
         deployment_affinity: bool,
         plugins: bool,
     ) -> None:
-        router: Final = self._router(
-            mock_router_instance, deployment_affinity=deployment_affinity, plugins=plugins
-        )
+        router: Final = self._router(mock_router_instance, deployment_affinity=deployment_affinity, plugins=plugins)
         assert (await self._route(router, metadata, "model-a")).model == "model-a"
         assert (await self._route(router, metadata, "model-b")).model == "model-b"
 
@@ -6332,9 +6403,7 @@ class TestTierModelAffinity:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": [IMG_PART] if gate == "image" else "done"},
         ]
@@ -6379,9 +6448,7 @@ class TestTierModelAffinity:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
-                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": "done"},
         ]
@@ -6411,8 +6478,7 @@ class TestTierModelAffinity:
                     "SIMPLE": "base",
                     **{
                         tier: [
-                            {"model_name": model, "litellm_params": {"temperature": temperature}}
-                            for model in models
+                            {"model_name": model, "litellm_params": {"temperature": temperature}} for model in models
                         ]
                         for tier, models, temperature in (
                             ("MEDIUM", ("shared", "middle"), 0.4),
@@ -6486,7 +6552,11 @@ class TestTierModelAffinity:
             model_name="affinity-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config=_custom_tier_config(
-                tiers={"SIMPLE": ["model-a", "model-b"], "SECURITY_REVIEW": ["model-a", "model-b"], "COMPLEX": "model-a"},
+                tiers={
+                    "SIMPLE": ["model-a", "model-b"],
+                    "SECURITY_REVIEW": ["model-a", "model-b"],
+                    "COMPLEX": "model-a",
+                },
                 deployment_affinity=True,
                 classification_mode=classification_mode,
                 keyword_tier_rules=[

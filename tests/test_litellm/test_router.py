@@ -15975,6 +15975,60 @@ async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warni
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
 
 
+@pytest.mark.asyncio
+async def test_model_name_colliding_with_a_deployment_id_still_load_balances_the_group():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "k", "weight": 0, "mock_response": "A"},
+                "model_info": {"id": "gpt-5-nano"},
+            },
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k", "weight": 1, "mock_response": "B"},
+                "model_info": {"id": "gpt-5-mini-dep"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    by_group = await router.acompletion(model="gpt-5-nano", messages=[{"role": "user", "content": "hi"}])
+    by_id = await router.acompletion(model="gpt-5-mini-dep", messages=[{"role": "user", "content": "hi"}])
+
+    assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
+    assert by_group.choices[0].message.content == "B"
+    assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+
+
+def test_sync_completion_runs_pre_call_checks_for_a_model_name_colliding_with_a_deployment_id():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "k", "weight": 0, "mock_response": "A"},
+                "model_info": {"id": "gpt-5-nano"},
+            },
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k", "weight": 1, "mock_response": "B"},
+                "model_info": {"id": "gpt-5-mini-dep"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    with patch.object(router, "routing_strategy_pre_call_checks") as pre_call_checks:
+        by_group = router.completion(model="gpt-5-nano", messages=[{"role": "user", "content": "hi"}])
+        assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
+        assert pre_call_checks.call_args.kwargs["deployment"]["model_info"]["id"] == "gpt-5-mini-dep"
+
+        by_id = router.completion(model="gpt-5-mini-dep", messages=[{"role": "user", "content": "hi"}])
+        assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
+
+
 class TestMemberAutoRouterInference:
     @pytest.fixture(autouse=True)
     def runtime(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -2217,8 +2217,18 @@ class ComplexityRouter(CustomLogger):
         if capability is None or classifier_system_prompt is None:
             raise ValueError("capability classifier is not configured")
 
-        asks_newest_first: Final = tuple(_iter_human_asks_newest_first(messages or (), self._reminder_markers))
-        opening_task: Final = asks_newest_first[-1] if asks_newest_first else prompt
+        markers: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, markers)
+        asks_newest_first: Final = (
+            () if encrypted_task is not None else tuple(_iter_human_asks_newest_first(messages or (), markers))
+        )
+        opening_task: Final = (
+            "The delegated task in the following agent_message."
+            if encrypted_task is not None
+            else asks_newest_first[-1]
+            if asks_newest_first
+            else prompt
+        )
         latest_follow_up: Final = asks_newest_first[0] if len(asks_newest_first) > 1 else None
         task_messages: list[AllMessageValues] = [  # mutable-ok: the latest message gains optional image parts below
             {"role": "user", "content": opening_task},  # mutable-ok: SDK messages are dict-shaped
@@ -2246,9 +2256,7 @@ class ComplexityRouter(CustomLogger):
             messages_for_call,
             request_kwargs,
             max_output_tokens=capability.max_output_tokens,
-            encrypted_task=_encrypted_classifier_task(
-                request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
-            ),
+            encrypted_task=encrypted_task,
         )
         verdict: Final = parse_capability_classifier_verdict(content)
         forecast: Final = capability.classify(verdict)
