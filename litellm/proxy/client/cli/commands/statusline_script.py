@@ -28,6 +28,7 @@ import os
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -301,6 +302,14 @@ def _bar(fraction: float, color: str, width: int, use_color: bool) -> str:
     return f"{color}{BAR_FULL * filled}{DIM}{BAR_EMPTY * (width - filled)}{RESET}"
 
 
+def _display_width(label: str) -> int:
+    return sum(
+        2 if unicodedata.east_asian_width(character) in ("W", "F") else 1
+        for character in label
+        if unicodedata.category(character) not in ("Mn", "Me")
+    )
+
+
 def render(model: str, session: Session | None, config_dir: Path, use_color: bool, bar_width: int = BAR_WIDTH) -> str:
     def paint(code: str, text: str) -> str:
         return f"{code}{text}{RESET}" if use_color else text
@@ -315,13 +324,14 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
     pct: Final = (session.baseline_spend - session.spend) / session.baseline_spend * 100
     delta: Final = paint(LITELLM_COLOR, f"{'-' if pct >= 0 else '+'}{abs(round(pct))}% vs {reference}")
     peak: Final = max(session.spend, session.baseline_spend)
-    label_width: Final = max(len(session.router_name), len(reference))
+    label_width: Final = max(_display_width(session.router_name), _display_width(reference))
     rows: Final = (
         (session.router_name, session.spend, LITELLM_COLOR),
         (reference, session.baseline_spend, BASELINE_COLOR),
     )
     lines: Final = (
-        f"{paint(DIM, label.ljust(label_width))} {_bar(amount / peak, color, bar_width, use_color)} "
+        f"{paint(DIM, label + ' ' * (label_width - _display_width(label)))} "
+        f"{_bar(amount / peak, color, bar_width, use_color)} "
         f"{paint(DIM, f'${amount:.2f}')}"
         for label, amount, color in rows
     )

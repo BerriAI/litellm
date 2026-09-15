@@ -265,6 +265,39 @@ class TestRender:
             "Claude Opus 5            ██████████ $0.38",
         ]
 
+    @pytest.mark.parametrize(
+        ("router_name", "baseline_name", "router_padding", "baseline_padding"),
+        (
+            ("路由-router", "Claude Opus 5", 3, 1),
+            ("智能模型路由器", "Claude Opus 5", 1, 2),
+            ("ＡＢＣ-router", "Claude Opus 5", 1, 1),
+            ("cafe\u0301-router", "Claude Opus 5", 3, 1),
+            ("a\u20dd-router", "Claude Opus 5", 6, 1),
+            ("カ\u3099-router", "Claude Opus 5", 5, 1),
+            ("auto", "基準モデル", 7, 1),
+            ("auto", "cafe\u0301", 1, 1),
+        ),
+    )
+    @pytest.mark.parametrize("use_color", (False, True))
+    def test_unicode_labels_align_cost_bars_by_terminal_columns(
+        self,
+        config_dir: Path,
+        router_name: str,
+        baseline_name: str,
+        router_padding: int,
+        baseline_padding: int,
+        use_color: bool,
+    ) -> None:
+        (config_dir / "cache" / "gateway-models.json").write_text(
+            json.dumps({"models": [{"id": "claude-opus-5", "display_name": baseline_name}]})
+        )
+        session: Final = RECORDED._replace(router_name=router_name)
+        text: Final = ANSI.sub("", render("claude-sonnet-5", session, config_dir, use_color, bar_width=10))
+        assert text.splitlines()[1:] == [
+            f"{router_name}{' ' * router_padding}████░░░░░░ $0.14",
+            f"{baseline_name}{' ' * baseline_padding}██████████ $0.38",
+        ]
+
     def test_control_characters_in_any_externally_sourced_label_never_reach_the_terminal(self, tmp_path, config_dir):
         # The transcript, the proxy payload and Claude Code's model cache all feed labels straight into a
         # terminal, and none is under this script's control. Only the control bytes are dropped (ESC, BEL,
