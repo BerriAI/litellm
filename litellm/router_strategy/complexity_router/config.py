@@ -616,7 +616,7 @@ class CapabilityCalibrationConfig(BaseModel):
 class CapabilityClassifierConfig(BaseModel):
     """Switchyard-compatible probability threshold policy for two model tiers."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     efficient_tier: str = Field(
         description="Tier used when the efficient model's forecasted solve probability meets the adjusted threshold",
