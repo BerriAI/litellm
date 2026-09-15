@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
@@ -3385,6 +3386,21 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retent
     await pc._reschedule_spend_log_cleanup_job()
     assert fake_scheduler.add_job.call_count == 1
     assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_first_run_is_soon_after_startup(monkeypatch):
+    fake_scheduler = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_health_check_retention_period": "90d"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    before = datetime.now(timezone.utc)
+    await ProxyConfig()._reschedule_spend_log_cleanup_job()
+    delay = (fake_scheduler.add_job.call_args.kwargs["next_run_time"] - before).total_seconds()
+    assert 0 < delay < 3600
 
 
 @pytest.mark.asyncio

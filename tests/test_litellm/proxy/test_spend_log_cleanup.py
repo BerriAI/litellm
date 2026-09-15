@@ -15,11 +15,14 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP,
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
     TableCleanupResult,
+    first_cleanup_run_time,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
@@ -171,6 +174,15 @@ def test_spend_log_cleanup_cron_scheduler_integration():
     interval_call_args = mock_scheduler.add_job.call_args
     assert interval_call_args[0][1] == "interval"
     assert interval_call_args[1]["seconds"] == 86400  # 1 day in seconds
+
+
+def test_first_cleanup_run_time_lands_well_before_the_default_daily_interval():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    delays = {(first_cleanup_run_time(now) - now).total_seconds() for _ in range(200)}
+    assert min(delays) >= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS
+    assert max(delays) <= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
+    assert max(delays) < 3600
+    assert len(delays) > 1
 
 
 @pytest.mark.asyncio

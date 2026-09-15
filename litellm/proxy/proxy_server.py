@@ -404,7 +404,6 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     parse_stagger_settings,
-    stagger_trigger,
 )
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
@@ -6999,6 +6998,7 @@ class ProxyConfig:
         if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
+                first_cleanup_run_time,
             )
 
             spend_log_cleanup: Final = SpendLogCleanup()
@@ -7029,17 +7029,10 @@ class ProxyConfig:
                 retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
                 try:
                     interval_seconds: Final = duration_in_seconds(retention_interval)
-                    # this runs against a started scheduler, which the startup stagger sweep
-                    # cannot reach, so the offset is applied here or the job reconverges across
-                    # replicas the first time an admin edits the retention settings
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
-                        stagger_trigger(
-                            job_id="spend_log_cleanup_job",
-                            trigger=IntervalTrigger(seconds=interval_seconds),
-                            period_seconds=interval_seconds,
-                            settings=parse_stagger_settings(general_settings),
-                        ),
+                        IntervalTrigger(seconds=interval_seconds),
+                        next_run_time=first_cleanup_run_time(datetime.now(timezone.utc)),
                         args=[prisma_client],
                         id="spend_log_cleanup_job",
                         replace_existing=True,
@@ -10047,7 +10040,8 @@ class ProxyStartupEvent:
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
                         "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
+                        seconds=interval_seconds,
+                        next_run_time=first_cleanup_run_time(datetime.now(timezone.utc)),
                         args=[prisma_client],
                         id="spend_log_cleanup_job",
                         replace_existing=True,
