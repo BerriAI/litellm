@@ -83,6 +83,18 @@ def test_forwarded_client_betas_survive_alongside_the_added_one():
     assert PER_TURN_CONTROL in _betas(headers)
 
 
+def test_case_variant_client_beta_header_is_merged():
+    """A client or config can spell the header ``Anthropic-Beta``; the proxy forwards it as
+    is, so the merge must read it whatever the casing and write one canonical header instead
+    of a lowercase one that clobbers it."""
+    headers = _validate(
+        _claude_code_turn({"effort": "low"}), headers={"Anthropic-Beta": "interleaved-thinking-2025-05-14"}
+    )
+
+    assert [key for key in headers if key.lower() == "anthropic-beta"] == ["anthropic-beta"]
+    assert _betas(headers) == {"interleaved-thinking-2025-05-14", PER_TURN_CONTROL}
+
+
 def test_added_per_turn_control_beta_survives_the_anthropic_allowlist():
     """The proxy filters ``anthropic-beta`` against the bundled allowlist right after
     the headers are built. A name missing from it is dropped silently, which would turn
