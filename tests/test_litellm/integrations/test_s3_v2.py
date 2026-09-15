@@ -5,6 +5,7 @@ import re
 import sys
 import textwrap
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -2315,26 +2316,28 @@ def test_build_object_url_uses_partition_dns_suffix(region_name: str, expected_u
     assert _s3_logger_for_region(region_name)._build_object_url("2025-01-01/key.json") == expected_url
 
 
-def _prompts_only_logger(**kwargs) -> S3Logger:
+def _prompts_only_logger(s3_log_prompts_only: bool | None = None) -> S3Logger:
     return S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
-        **kwargs,
+        s3_log_prompts_only=s3_log_prompts_only,
     )
 
 
-def _chat_payload() -> dict:
-    return {
-        "id": "chatcmpl-prompts-only",
-        "messages": [{"role": "user", "content": "Reply with exactly the word PINEAPPLE."}],
-        "response": {"choices": [{"message": {"role": "assistant", "content": "PINEAPPLE"}}]},
-        "metadata": {"user_api_key_team_alias": None},
-    }
+def _chat_payload() -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id="chatcmpl-prompts-only",
+        messages=[{"role": "user", "content": "Reply with exactly the word PINEAPPLE."}],
+        response={"choices": [{"message": {"role": "assistant", "content": "PINEAPPLE"}}]},
+        metadata={"user_api_key_team_alias": None},
+    )
 
 
-async def _queued_body_via_async_upload(logger: S3Logger, log_event) -> dict:
+async def _queued_body_via_async_upload(
+    logger: S3Logger, log_event: Callable[..., Awaitable[None]]
+) -> dict[str, object]:
     payload = _chat_payload()
     original = copy.deepcopy(payload)
     await log_event(
@@ -2357,13 +2360,18 @@ async def _queued_body_via_async_upload(logger: S3Logger, log_event) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event_name", ["async_log_success_event", "async_log_failure_event"])
-async def test_prompts_only_drops_response_but_keeps_messages_in_uploaded_object(monkeypatch, event_name):
+async def test_prompts_only_drops_response_but_keeps_messages_in_uploaded_object(
+    monkeypatch: pytest.MonkeyPatch, event_name: str
+):
     import litellm
 
     monkeypatch.setattr(litellm, "s3_callback_params", {"s3_log_prompts_only": True})
     logger = _prompts_only_logger()
 
-    body = await _queued_body_via_async_upload(logger, getattr(logger, event_name))
+    log_event: Callable[..., Awaitable[None]] = (
+        logger.async_log_success_event if event_name == "async_log_success_event" else logger.async_log_failure_event
+    )
+    body = await _queued_body_via_async_upload(logger, log_event)
 
     assert body["messages"] == _chat_payload()["messages"]
     assert body["response"] is None
@@ -2371,7 +2379,7 @@ async def test_prompts_only_drops_response_but_keeps_messages_in_uploaded_object
 
 
 @pytest.mark.asyncio
-async def test_prompts_only_default_off_keeps_response_in_uploaded_object(monkeypatch):
+async def test_prompts_only_default_off_keeps_response_in_uploaded_object(monkeypatch: pytest.MonkeyPatch):
     import litellm
 
     monkeypatch.setattr(litellm, "s3_callback_params", {})
@@ -2385,7 +2393,7 @@ async def test_prompts_only_default_off_keeps_response_in_uploaded_object(monkey
 
 
 @pytest.mark.asyncio
-async def test_prompts_only_explicit_false_in_params_beats_env_var(monkeypatch):
+async def test_prompts_only_explicit_false_in_params_beats_env_var(monkeypatch: pytest.MonkeyPatch):
     import litellm
 
     monkeypatch.setattr(litellm, "s3_callback_params", {"s3_log_prompts_only": False})
@@ -2398,7 +2406,7 @@ async def test_prompts_only_explicit_false_in_params_beats_env_var(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prompts_only_env_var_applies_when_param_unset(monkeypatch):
+async def test_prompts_only_env_var_applies_when_param_unset(monkeypatch: pytest.MonkeyPatch):
     import litellm
 
     monkeypatch.setattr(litellm, "s3_callback_params", {})
@@ -2412,7 +2420,7 @@ async def test_prompts_only_env_var_applies_when_param_unset(monkeypatch):
 
 
 @respx.mock
-def test_prompts_only_constructor_kwarg_applies_to_sync_upload(monkeypatch):
+def test_prompts_only_constructor_kwarg_applies_to_sync_upload(monkeypatch: pytest.MonkeyPatch):
     import litellm
 
     monkeypatch.setattr(litellm, "s3_callback_params", {})
@@ -2436,7 +2444,7 @@ def test_prompts_only_constructor_kwarg_applies_to_sync_upload(monkeypatch):
 
 
 @pytest.mark.parametrize("callback_name", ["s3", "s3_v2"])
-def test_prompts_only_toggle_is_exposed_to_admin_ui_for_both_s3_callbacks(callback_name):
+def test_prompts_only_toggle_is_exposed_to_admin_ui_for_both_s3_callbacks(callback_name: str):
     from litellm.integrations.custom_logger import CustomLogger
 
     assert "S3_LOG_PROMPTS_ONLY" in CustomLogger.get_callback_env_vars(callback_name)
