@@ -1855,6 +1855,7 @@ def client(original_function):
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
 
+            kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -2814,6 +2815,14 @@ def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_cache_breakpoint",
+    )
+
+
+def supports_thinking_cache_preservation(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_thinking_cache_preservation",
     )
 
 
@@ -5759,6 +5768,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_prompt_cache_breakpoint=None,
+                supports_thinking_cache_preservation=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
             )
@@ -6031,6 +6041,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
+                supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),

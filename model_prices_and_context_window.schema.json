@@ -794,6 +794,9 @@
         "supports_system_messages": {
           "type": "boolean"
         },
+        "supports_thinking_cache_preservation": {
+          "type": "boolean"
+        },
         "supports_tool_choice": {
           "type": "boolean"
         },
