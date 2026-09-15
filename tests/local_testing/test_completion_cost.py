@@ -863,6 +863,39 @@ def test_completion_cost_tts(model):
     assert cost > 0
 
 
+@pytest.mark.parametrize("model", ["tts-1", "azure/tts-1"])
+def test_completion_cost_tts_bills_whitespace_characters(model):
+    """
+    Non-Vertex TTS providers (OpenAI, Azure, ElevenLabs, Groq, Minimax, AWS Polly)
+    bill on the raw character count, including whitespace. Only Vertex AI's
+    character-counting convention excludes whitespace. Regression test for a bug
+    where every TTS provider incorrectly had whitespace stripped before billing,
+    undercounting cost for inputs containing spaces.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prompt_with_whitespace = "a b c d e"  # 9 chars, 4 of them whitespace
+    prompt_without_whitespace = "abcde"  # 5 chars, matches non-whitespace count above
+
+    cost_with_whitespace = completion_cost(
+        model=model,
+        prompt=prompt_with_whitespace,
+        call_type="speech",
+    )
+    cost_without_whitespace = completion_cost(
+        model=model,
+        prompt=prompt_without_whitespace,
+        call_type="speech",
+    )
+
+    input_cost_per_character = litellm.model_cost[model]["input_cost_per_character"]
+
+    assert cost_with_whitespace == pytest.approx(len(prompt_with_whitespace) * input_cost_per_character)
+    # billing must scale with the raw string length, not the whitespace-stripped length
+    assert cost_with_whitespace > cost_without_whitespace
+
+
 def test_completion_cost_anthropic():
     """
     model_name: claude-3-haiku-20240307
