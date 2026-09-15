@@ -395,6 +395,8 @@ def test_placement_is_scoped_to_complexity_router_deployments(model, present_fie
 
 
 _HV2_CONFIG: Mapping[str, object] = {"classifier_type": "heuristic_v2"}
+_CAPABILITY_CONFIG: Mapping[str, object] = {"classifier_type": "capability"}
+_FUSE_CONFIG: Mapping[str, object] = {"classifier_type": "llm_v2"}
 _CUSTOM_TIER_CONFIG: Mapping[str, object] = {
     "classifier_type": "llm",
     "tier_definitions": [{"name": "routine", "description": "easy"}, {"name": "hard", "description": "hard"}],
@@ -457,6 +459,10 @@ def test_is_complexity_router_model(model: str | None, expected: bool) -> None:
 @pytest.mark.parametrize(
     "litellm_params,expected_key",
     [
+        ({"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY_CONFIG}, "capability"),
+        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _FUSE_CONFIG}, "llm_v2"),
+        ({"model": "openai/solver", "complexity_router_config": _CAPABILITY_CONFIG}, None),
+        ({"model": "auto_router/quality_router", "complexity_router_config": _FUSE_CONFIG}, None),
         ({"model": "auto_router/complexity_router", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
         ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
         ({"model": "auto_router/complexity_router", "complexity_router_config": _CUSTOM_TIER_CONFIG}, "tier_or_classifier_prompt"),
@@ -493,6 +499,8 @@ def test_count_capability_routers_counts_only_its_own_capability(capability) -> 
 
     by_key = {
         "heuristic_v2": (_HV2_CONFIG, _HV2_CONFIG),
+        "capability": (_CAPABILITY_CONFIG, _CAPABILITY_CONFIG),
+        "llm_v2": (_FUSE_CONFIG, _FUSE_CONFIG),
         "tier_or_classifier_prompt": (_CUSTOM_TIER_CONFIG, _CUSTOM_PROMPT_CONFIG),
     }
     mine_first, mine_second = by_key[capability.key]
@@ -545,6 +553,8 @@ def test_every_gated_capability_has_a_distinct_predicate_and_sql_spelling() -> N
     "config",
     [
         _HV2_CONFIG,
+        _CAPABILITY_CONFIG,
+        _FUSE_CONFIG,
         _CUSTOM_TIER_CONFIG,
         _CUSTOM_PROMPT_CONFIG,
         {"classifier_type": "heuristic"},
