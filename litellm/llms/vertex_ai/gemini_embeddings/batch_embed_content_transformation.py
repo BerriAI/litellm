@@ -337,11 +337,12 @@ def _is_image_element(
     return False
 
 
-def _count_input_images(
+def _is_image_only_input(
     input: GeminiEmbeddingInput,
     resolved_files: Mapping[str, Mapping[str, str]],
-) -> int:
-    return sum(1 for element in _flatten_input(input) if _is_image_element(element, resolved_files))
+) -> bool:
+    elements: Final = _flatten_input(input)
+    return bool(elements) and all(_is_image_element(element, resolved_files) for element in elements)
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
@@ -376,7 +377,7 @@ def _usage_from_embed_content_response(
             total_tokens=total_tokens,
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 text_tokens=0,
-                image_tokens=prompt_tokens if _count_input_images(input, resolved_files) else 0,
+                image_tokens=prompt_tokens if _is_image_only_input(input, resolved_files) else 0,
             ),
         )
 
