@@ -430,6 +430,7 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManage
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
+    first_cleanup_run_time,
 )
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
@@ -6996,11 +6997,6 @@ class ProxyConfig:
         autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
         health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
         if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
-            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-                SpendLogCleanup,
-                first_cleanup_run_time,
-            )
-
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
 
