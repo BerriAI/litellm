@@ -138,7 +138,7 @@ def master_key_lockout_action(
     return None
 
 
-def master_key_lockout_exception(action: LockoutAction) -> ProxyException:
+def master_key_lockout_exception() -> ProxyException:
     return ProxyException(
         message=MASTER_KEY_LOCKOUT_MESSAGE,
         type=ProxyErrorTypes.auth_error,
