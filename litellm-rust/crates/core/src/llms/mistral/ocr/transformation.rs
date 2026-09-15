@@ -311,11 +311,11 @@ use crate::Error;
 use crate::constants::MISTRAL_OCR_API_BASE;
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 use crate::ocr::OcrClient;
-use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
+use crate::ocr::error::OcrError;
 use crate::ocr::prepare::{
     _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
 };
-use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection};
+use crate::ocr::types::{LiteLLMOcrRequest, OcrConnection};
 use crate::url_utils::ApiUrl;
 
 const MISTRAL_API_KEY_ENV: &str = "MISTRAL_API_KEY";
