@@ -510,6 +510,13 @@ def test_interactions_create_routes_are_tracked_for_vertex_and_gemini():
     assert handler.is_vertex_route(vertex_create) is True
     assert handler.is_vertex_route(f"{vertex_create}/abc123") is False
     assert handler.is_vertex_route("https://upstream.example.com/api/interactions") is False
+    assert handler.is_vertex_route("https://upstream.example.com/locations/eu/interactions") is False
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/interactions"
+        )
+        is True
+    )
 
     assert handler.is_gemini_route(gemini_create, custom_llm_provider="gemini") is True
     assert handler.is_gemini_route(f"{gemini_create}/abc123", custom_llm_provider="gemini") is False

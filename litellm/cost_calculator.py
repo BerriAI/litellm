@@ -1460,7 +1460,6 @@ def completion_cost(
                     duration_seconds: float | None = None
                     video_resolution: str | None = None
                     provider_reported_cost: float | None = None
-                    video_count: int = 1
                     if completion_response is not None and usage_obj:
                         # Handle both dict and Pydantic Usage object
                         if isinstance(usage_obj, dict):
@@ -1475,8 +1474,7 @@ def completion_cost(
                             _vc = getattr(usage_obj, "video_count", None)
                         if _vr is not None:
                             video_resolution = str(_vr).strip().lower()
-                        if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1:
-                            video_count = _vc
+                        video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
 
                         if _video_model_info is None and provider_reported_cost is not None:
                             return float(provider_reported_cost)

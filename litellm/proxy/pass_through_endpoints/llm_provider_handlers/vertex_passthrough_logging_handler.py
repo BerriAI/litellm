@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -53,6 +54,9 @@ else:
 
 EndpointType = Any
 
+_VERTEX_INTERACTIONS_PATH: Final = re.compile(r"/projects/[^/]+/locations/[^/]+/interactions/?$")
+_INTERACTIONS_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+
 
 def _interactions_model(
     response_body: Mapping[str, object],
@@ -73,17 +77,21 @@ class VertexPassthroughLoggingHandler:
         return urlparse(url_route).path.rstrip("/").endswith("/interactions")
 
     @staticmethod
+    def is_vertex_interactions_route(url_route: str) -> bool:
+        return _VERTEX_INTERACTIONS_PATH.search(urlparse(url_route).path) is not None
+
+    @staticmethod
     def interactions_passthrough_handler(
         httpx_response: httpx.Response,
         request_body: Mapping[str, object] | None,
         logging_obj: LiteLLMLoggingObj,
-        kwargs: dict,
+        kwargs: dict[str, object],
         start_time: datetime,
         end_time: datetime,
         custom_llm_provider: Literal["vertex_ai", "gemini"],
         vertex_location: str | None,
     ) -> PassThroughEndpointLoggingTypedDict:
-        response_body: Final[Mapping[str, object]] = httpx_response.json()
+        response_body: Final = _INTERACTIONS_RESPONSE_BODY.validate_python(httpx_response.json())
         usage_object: Final = response_body.get("usage")
         model: Final = _interactions_model(response_body, request_body)
         if model is None or not InteractionsUsageObjectTransformation.is_interactions_usage_object(usage_object):
@@ -95,6 +103,7 @@ class VertexPassthroughLoggingHandler:
                 cast(Mapping[str, Any], usage_object)
             ),
         )
+        logging_obj.custom_llm_provider = custom_llm_provider
         logging_kwargs: Final = (
             VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,
@@ -107,9 +116,10 @@ class VertexPassthroughLoggingHandler:
                 vertex_location=vertex_location,
             )
         )
-        logging_kwargs["custom_llm_provider"] = custom_llm_provider
-        logging_obj.custom_llm_provider = custom_llm_provider
-        return {"result": litellm_model_response, "kwargs": logging_kwargs}
+        return {
+            "result": litellm_model_response,
+            "kwargs": {**logging_kwargs, "custom_llm_provider": custom_llm_provider},
+        }
 
     @staticmethod
     def vertex_passthrough_handler(

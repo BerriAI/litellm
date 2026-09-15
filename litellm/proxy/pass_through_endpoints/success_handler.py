@@ -363,9 +363,7 @@ class PassThroughEndpointLogging:
             return True
         if any(resource in url_route for resource in self.TRACKED_VERTEX_RESOURCE_ROUTES):
             return True
-        return "/locations/" in urlparse(url_route).path and VertexPassthroughLoggingHandler.is_interactions_route(
-            url_route
-        )
+        return VertexPassthroughLoggingHandler.is_vertex_interactions_route(url_route)
 
     def is_anthropic_route(self, url_route: str):
         for route in self.TRACKED_ANTHROPIC_ROUTES:

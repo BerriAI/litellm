@@ -71,7 +71,6 @@ def _parse_veo_operation(raw_response: httpx.Response) -> _VeoOperation:
 
 
 def veo_video_count_from_parameters(parameters: Mapping[str, object]) -> int | None:
-    """Number of videos Veo generates for one request (``parameters.sampleCount``)."""
     sample_count: Final = parameters.get("sampleCount")
     if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < 1:
         return None
