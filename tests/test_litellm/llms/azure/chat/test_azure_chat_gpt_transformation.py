@@ -307,3 +307,37 @@ class TestAzureToolSchemaCombinatorFlattening:
         )
         assert "tools" not in request
         assert request["temperature"] == 0.2
+
+
+def test_transform_request_strips_litellm_format_from_managed_file_id():
+    import base64
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_messages_with_model_file_ids,
+    )
+
+    managed_file_id: Final = base64.b64encode(
+        b"litellm_proxy:application/pdf;unified_id,abc123;llm_output_file_id,assistant-xyz;target_model_names,azure-gpt"
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file"},
+                {"type": "file", "file": {"file_id": managed_file_id}},
+            ],
+        }
+    ]
+    updated_messages = update_messages_with_model_file_ids(messages, None, {})
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-5.4",
+        messages=updated_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    file_part = request["messages"][0]["content"][1]["file"]
+    assert "format" not in file_part
+    assert file_part["file_id"] == "assistant-xyz"
