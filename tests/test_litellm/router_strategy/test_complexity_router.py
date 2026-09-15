@@ -10,7 +10,7 @@ import logging
 import math
 import sys
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from typing import Dict, Final, List, Literal
@@ -32,6 +32,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     OUTPUT_TOKEN_CEILING_PARAMS,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
@@ -77,6 +78,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
+    PreRoutingHookResponse,
     RouterErrors,
     TaggedPreRoutingStrategy,
 )
@@ -6137,6 +6139,387 @@ class TestRoutingDecisionCauseLogging:
         assert "cause=semantic_keyword_match" not in router_log_capture.text
 
 
+class TestTierModelAffinity:
+    @staticmethod
+    async def _route(
+        router: ComplexityRouter,
+        metadata: Mapping[str, object],
+        proposed_model: str,
+        prompt: str = "compact",
+        messages: list[dict[str, object]] | None = None,
+    ) -> PreRoutingHookResponse:
+        def choose(candidates: Sequence[str]) -> str:
+            return proposed_model if proposed_model in candidates else candidates[0]
+
+        request_metadata: Final = dict(metadata)
+        with patch(  # test-quality-ok: [TQ008] alternate proposals make affinity reuse deterministic
+            "litellm.router_strategy.complexity_router.complexity_router.random.choice",
+            side_effect=choose,
+        ):
+            result: Final = await router.async_pre_routing_hook(
+                model="affinity-router",
+                request_kwargs={"metadata": request_metadata},
+                messages=messages if messages is not None else [{"role": "user", "content": prompt}],
+            )
+        assert result is not None
+        if router.config.adaptive:
+            assert request_metadata["adaptive_router_chosen_model"] == result.model
+        return result
+
+    @staticmethod
+    def _router(
+        mock_router_instance: MagicMock,
+        adaptive: bool = False,
+        deployment_affinity: bool = True,
+        plugins: bool = False,
+    ) -> ComplexityRouter:
+        mock_router_instance.cache = DualCache()
+        mock_router_instance.model_list = []
+        mock_router_instance.model_name_to_deployment_indices = {}
+        return ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {
+                    tier: [
+                        {"model_name": model, "litellm_params": {"temperature": temperature}}
+                        for model in ("model-a", "model-b")
+                    ]
+                    for tier, temperature in (("SIMPLE", 0.1), ("REASONING", 0.9))
+                },
+                "adaptive": adaptive,
+                "deployment_affinity": deployment_affinity,
+                "session_affinity": False,
+                **({"plugins": [_DummyPlugin()]} if plugins else {}),
+            },
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("adaptive", [False, True])
+    async def test_reuses_model_per_tier_without_pinning_classification(
+        self, mock_router_instance: MagicMock, adaptive: bool
+    ) -> None:
+        router: Final = self._router(mock_router_instance, adaptive=adaptive)
+        metadata: Final = {"session_id": "same-session"}
+        first: Final = await self._route(router, metadata, "model-a")
+        if adaptive:
+            from litellm.router_strategy.adaptive_router.bandit import BanditCell
+            from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+
+            bandit: Final = router._ensure_adaptive_router()
+            assert bandit is not None
+            bandit._cells[(classify_prompt("compact"), "model-a")] = BanditCell(alpha=5.0, beta=5.0)
+        repeated: Final = await self._route(router, metadata, "model-b")
+        reasoning: Final = await self._route(
+            router, metadata, "model-b", "Let's think step by step and reason through this problem carefully."
+        )
+        returned: Final = await self._route(router, metadata, "model-b")
+
+        assert (first.model, repeated.model, reasoning.model, returned.model) == (
+            "model-a", "model-a", "model-b", "model-a"
+        )
+        assert tuple(result.routing_decision["tier"] for result in (first, repeated, reasoning, returned)) == (
+            "SIMPLE", "SIMPLE", "REASONING", "SIMPLE"
+        )
+        assert returned.litellm_params == {"temperature": 0.1}
+        assert reasoning.litellm_params == {"temperature": 0.9}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("identity_key", ["user_api_key_hash", "user_api_key_user_id"])
+    async def test_isolates_sessions_and_authenticated_callers(
+        self, mock_router_instance: MagicMock, identity_key: str
+    ) -> None:
+        router: Final = self._router(mock_router_instance)
+        first_caller: Final = {"session_id": "shared", identity_key: "caller-a"}
+        other_caller: Final = {"session_id": "shared", identity_key: "caller-b"}
+        other_session: Final = {"session_id": "separate", identity_key: "caller-a"}
+
+        assert (await self._route(router, first_caller, "model-a")).model == "model-a"
+        assert (await self._route(router, other_caller, "model-b")).model == "model-b"
+        assert (await self._route(router, other_session, "model-b")).model == "model-b"
+        assert (await self._route(router, first_caller, "model-b")).model == "model-a"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata,deployment_affinity,plugins",
+        [
+            ({}, True, False),
+            ({"session_id": "generated", SESSION_ID_GENERATED_METADATA_KEY: True}, True, False),
+            ({"session_id": "provided"}, False, False),
+            ({"session_id": "provided"}, True, True),
+        ],
+        ids=["absent-session", "generated-session", "disabled", "plugin-policy"],
+    )
+    async def test_does_not_pin_without_eligible_session(
+        self,
+        mock_router_instance: MagicMock,
+        metadata: Mapping[str, object],
+        deployment_affinity: bool,
+        plugins: bool,
+    ) -> None:
+        router: Final = self._router(
+            mock_router_instance, deployment_affinity=deployment_affinity, plugins=plugins
+        )
+        assert (await self._route(router, metadata, "model-a")).model == "model-a"
+        assert (await self._route(router, metadata, "model-b")).model == "model-b"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("adaptive", [False, True])
+    async def test_replaces_pin_outside_the_context_candidate_domain(self, adaptive: bool) -> None:
+        router: Final = ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=_windowed_router(_SMALL, _BIG),
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["small-model", "big-model"]},
+                "adaptive": adaptive,
+                "deployment_affinity": True,
+                "session_affinity": False,
+            },
+        )
+        metadata: Final = {"session_id": "growing-context"}
+        assert (await self._route(router, metadata, "small-model")).model == "small-model"
+        oversized: Final = await router.async_pre_routing_hook(
+            model="affinity-router",
+            request_kwargs={"metadata": dict(metadata)},
+            messages=_OVERSIZED_TURNS,
+        )
+        assert oversized is not None
+        assert oversized.model == "big-model"
+        assert oversized.routing_decision["tier"] == "SIMPLE"
+        assert (await self._route(router, metadata, "small-model")).model == "big-model"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("session_affinity", [False, True], ids=["user-turn", "session-affinity"])
+    @pytest.mark.parametrize("gate", ["image", "health"])
+    async def test_temporary_replay_gate_keeps_the_held_tiers_model_preference(
+        self, mock_router_instance: MagicMock, session_affinity: bool, gate: Literal["image", "health"]
+    ) -> None:
+        async def get_healthy_deployments(
+            model: str,
+            request_kwargs: Mapping[str, object],
+            messages: Sequence[Mapping[str, object]] | None = None,
+            input: object = None,
+            parent_otel_span: object = None,
+            health_check_probe: bool = False,
+        ) -> list[dict[str, object]]:
+            unavailable: Final = (
+                gate == "health"
+                and model == "model-a"
+                and messages is not None
+                and bool(messages)
+                and messages[-1].get("role") == "tool"
+            )
+            return [] if unavailable else [{"model_name": model, "model_info": {"id": f"deployment-{model}"}}]
+
+        cache: Final = DualCache()
+        mock_router_instance.cache = cache
+        mock_router_instance.async_get_healthy_deployments = get_healthy_deployments
+        router: Final = TestModalityRouting._router(
+            mock_router_instance,
+            {
+                "tiers": {"SIMPLE": ["model-a", "model-b"]},
+                "deployment_affinity": True,
+                "session_affinity": session_affinity,
+                "classification_mode": "every_request" if session_affinity else "user_turn",
+                "modality_routing": True,
+                "modality_pin_override": True,
+            },
+            {"model-a": False, "model-b": True},
+        )
+        metadata: Final = {"session_id": "replay-session"}
+        continuation: Final[list[dict[str, object]]] = [
+            {"role": "user", "content": "compact"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": [IMG_PART] if gate == "image" else "done"},
+        ]
+        assert (await self._route(router, metadata, "model-a")).model == "model-a"
+
+        replayed: Final = await self._route(router, metadata, "model-b", messages=continuation)
+        assert replayed.model == "model-b"
+        assert replayed.routing_decision["tier"] == "SIMPLE"
+        assert replayed.routing_decision["cause"] == (
+            "health_failover"
+            if gate == "health"
+            else ("modality_pin_override" if session_affinity else "user_turn_continuation")
+        )
+        cache_key: Final = router._get_session_affinity_cache_key("replay-session", {"metadata": metadata})
+        assert await cache.async_get_cache(cache_key) == {"model": "model-a", "tier": "SIMPLE"}
+
+        next_ask: Final = await self._route(router, metadata, "model-b")
+        assert next_ask.model == "model-a"
+        assert next_ask.routing_decision["tier"] == "SIMPLE"
+        assert next_ask.routing_decision["cause"] == (
+            "session_affinity_pin" if session_affinity else "heuristic_scorer"
+        )
+
+    @pytest.mark.asyncio
+    async def test_user_turn_replay_refreshes_the_model_used_within_its_tier(
+        self, mock_router_instance: MagicMock
+    ) -> None:
+        clock: Final = MagicMock(return_value=100.0)
+        mock_router_instance.cache = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+        router: Final = ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["model-a", "model-b"]},
+                "classification_mode": "user_turn",
+                "session_affinity_ttl_seconds": 10,
+            },
+        )
+        metadata: Final = {"session_id": "same-session"}
+        continuation: Final[list[dict[str, object]]] = [
+            {"role": "user", "content": "compact"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+        ]
+        assert (await self._route(router, metadata, "model-a")).model == "model-a"
+        clock.return_value = 105.0
+        replayed: Final = await self._route(router, metadata, "model-b", messages=continuation)
+        assert replayed.model == "model-a"
+        assert replayed.routing_decision["cause"] == "user_turn_continuation"
+
+        clock.return_value = 111.0
+        next_ask: Final = await self._route(router, metadata, "model-b")
+        assert next_ask.model == "model-a"
+        assert next_ask.routing_decision["tier"] == "SIMPLE"
+        assert next_ask.routing_decision["cause"] == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_session_escalation_keeps_the_selected_tier_when_models_overlap(
+        self, mock_router_instance: MagicMock
+    ) -> None:
+        cache: Final = DualCache()
+        mock_router_instance.cache = cache
+        router: Final = ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "base",
+                    **{
+                        tier: [
+                            {"model_name": model, "litellm_params": {"temperature": temperature}}
+                            for model in models
+                        ]
+                        for tier, models, temperature in (
+                            ("MEDIUM", ("shared", "middle"), 0.4),
+                            ("COMPLEX", ("shared", "higher"), 0.8),
+                        )
+                    },
+                },
+                "session_affinity": True,
+                "keyword_tier_rules": [{"keywords": ["visit_complex"], "tier": "COMPLEX"}],
+            },
+        )
+        metadata: Final = {"session_id": "same-session"}
+        assert (await self._route(router, metadata, "higher", "visit_complex")).model == "higher"
+        cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})
+        await cache.async_set_cache(cache_key, {"model": "base", "tier": "SIMPLE"}, ttl=600)
+
+        result: Final = await self._route(router, metadata, "shared", "LITELLM ESCALATE")
+        assert result.model == "shared"
+        assert result.routing_decision["tier"] == "MEDIUM"
+        assert result.routing_decision["cause"] == "session_affinity_escalation"
+        assert result.litellm_params == {"temperature": 0.4}
+        assert await cache.async_get_cache(cache_key) == {"model": "shared", "tier": "MEDIUM"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stale_tier",
+        ["NON_REASONING", "REMOVED_TIER", 7, []],
+        ids=["inactive-tier", "unknown-tier", "integer-tier", "list-tier"],
+    )
+    @pytest.mark.parametrize(
+        "prompt,expected_model,expected_tier",
+        [("compact", "model-a", "SIMPLE"), ("LITELLM ESCALATE", "model-b", "MEDIUM")],
+        ids=["ordinary-replay", "escalation"],
+    )
+    async def test_reclassifies_session_pin_outside_the_active_tier_ladder(
+        self,
+        mock_router_instance: MagicMock,
+        stale_tier: object,
+        prompt: str,
+        expected_model: str,
+        expected_tier: str,
+    ) -> None:
+        cache: Final = DualCache()
+        mock_router_instance.cache = cache
+        router: Final = ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "model-a", "MEDIUM": "model-b"},
+                "session_affinity": True,
+            },
+        )
+        metadata: Final = {"session_id": "same-session"}
+        cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})
+        await cache.async_set_cache(cache_key, {"model": "model-a", "tier": stale_tier}, ttl=600)
+
+        result: Final = await self._route(router, metadata, expected_model, prompt)
+
+        assert result.model == expected_model
+        assert result.routing_decision["tier"] == expected_tier
+        assert result.routing_decision["cause"] == "heuristic_scorer"
+        assert await cache.async_get_cache(cache_key) == {"model": expected_model, "tier": expected_tier}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("classification_mode", ["every_request", "user_turn"])
+    async def test_custom_tier_keeps_its_own_model(
+        self, mock_router_instance: MagicMock, classification_mode: Literal["every_request", "user_turn"]
+    ) -> None:
+        mock_router_instance.cache = DualCache()
+        router: Final = ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_custom_tier_config(
+                tiers={"SIMPLE": ["model-a", "model-b"], "SECURITY_REVIEW": ["model-a", "model-b"], "COMPLEX": "model-a"},
+                deployment_affinity=True,
+                classification_mode=classification_mode,
+                keyword_tier_rules=[
+                    {"keywords": ["compact"], "tier": "SIMPLE"},
+                    {"keywords": ["audit"], "tier": "SECURITY_REVIEW"},
+                ],
+            ),
+        )
+        metadata: Final = {"session_id": "custom-session"}
+        assert (await self._route(router, metadata, "model-a")).model == "model-a"
+        assert (await self._route(router, metadata, "model-b", "audit")).model == "model-b"
+        assert (await self._route(router, metadata, "model-b")).model == "model-a"
+        retained: Final = await self._route(router, metadata, "model-a", "audit")
+        assert retained.model == "model-b"
+        assert retained.routing_decision["tier"] == "SECURITY_REVIEW"
+        if classification_mode == "user_turn":
+            continuation: Final[list[dict[str, object]]] = [
+                {"role": "user", "content": "audit"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+            ]
+            replayed: Final = await self._route(router, metadata, "model-a", messages=continuation)
+            assert replayed.model == "model-b"
+            assert replayed.routing_decision["tier"] == "SECURITY_REVIEW"
+            assert replayed.routing_decision["cause"] == "user_turn_continuation"
+
+
 class TestSessionAffinity:
     """Test the session_affinity sticky-routing behavior (off by default)."""
 
@@ -6201,11 +6584,8 @@ class TestSessionAffinity:
         tier_pinned,
         deployment_pinned,
     ):
-        """deployment_affinity pins the deployment inside each routed group without pinning which
-        group the session routes to, so with session_affinity off the tier must still reclassify
-        on every turn while the marker the Router stamps is still emitted. Turn 1 classifies
-        REASONING and turn 2 SIMPLE, so a reclassified turn 2 moves model while a tier-pinned one
-        does not. plugins suppress both pins, since a stale pin would bypass the plugin pipeline."""
+        """Deployment affinity retains a model per tier while classification continues.
+        Session affinity keeps the first tier too; plugins suppress both affinity policies."""
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
             model_name="test-router",
@@ -6255,8 +6635,7 @@ class TestSessionAffinity:
 
     @pytest.mark.asyncio
     async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
-        """Regression: session_affinity defaults to False, so a shared session_id must NOT
-        pin the first turn's model; every turn is classified on its own merits."""
+        """With session_affinity off, a shared session can move from REASONING to SIMPLE."""
         assert "session_affinity" not in basic_config
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
@@ -6411,7 +6790,7 @@ class TestSessionAffinity:
 
     @pytest.mark.asyncio
     async def test_respects_ttl_seconds(self, mock_router_instance, basic_config):
-        cache = AsyncMock()
+        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
         cache.async_get_cache = AsyncMock(return_value=None)
         mock_router_instance.cache = cache
         router = ComplexityRouter(
@@ -6435,7 +6814,7 @@ class TestSessionAffinity:
     async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
         """Regression: a pinned turn must refresh the TTL, not just the first write --
         otherwise a session outliving session_affinity_ttl_seconds silently loses its pin."""
-        cache = AsyncMock()
+        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
         cache.async_get_cache = AsyncMock(return_value="o1-preview")
         mock_router_instance.cache = cache
         router = ComplexityRouter(
@@ -7675,7 +8054,8 @@ class TestEscalationKeywords:
             complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}},
         )
         for pinned in ("o1-a", "o1-b", "o1-c"):
-            assert router._escalated_pin(pinned) == pinned
+            escalated: Final = router._escalated_pin(pinned)
+            assert (escalated.model, escalated.tier) == (pinned, "REASONING")
 
     @pytest.mark.asyncio
     async def test_session_escalation_at_ceiling_keeps_multi_model_pin(self, mock_router_instance):
@@ -12589,7 +12969,7 @@ async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mo
 
 @pytest.mark.asyncio
 async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
-    cache = AsyncMock()
+    cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
     cache.async_get_cache = AsyncMock(return_value=["shared", "SIMPLE"])
     mock_router_instance.cache = cache
     router = ComplexityRouter(
@@ -13568,7 +13948,7 @@ class TestModalityRouting:
                 {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
             ]
         elif path.startswith(("pin_kept", "pin_replacement", "pin_override")):
-            cache = AsyncMock()
+            cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
             cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
             mock_router_instance.cache = cache
             config["session_affinity"] = True
@@ -13758,7 +14138,7 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_serves_the_image_turn_without_repinning(self, mock_router_instance):
         """The override is for one request: the session keeps the model it was pinned to."""
-        cache = AsyncMock()
+        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
         cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
         mock_router_instance.cache = cache
         router = self._router(
@@ -13791,7 +14171,7 @@ class TestModalityRouting:
     @pytest.mark.asyncio
     async def test_pin_override_with_no_capable_model_rejects_and_keeps_the_pin(self, mock_router_instance):
         """The clear 400 replaces the provider's, and a rejected turn must not cost the session its pin."""
-        cache = AsyncMock()
+        cache: Final = AsyncMock(in_memory_cache=DualCache().in_memory_cache, redis_cache=None)
         cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
         mock_router_instance.cache = cache
         router = self._router(
@@ -14898,17 +15278,36 @@ class TestTierHealthFailover:
             cooling=("id-a1",),
             raises_for={"exhausted-b": raised},
         )
-        key = router._get_session_affinity_cache_key("sess-exhausted", {})
-        await router.litellm_router_instance.cache.async_set_cache(
-            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
-        )
-        results = [
-            await router.async_pre_routing_hook(
-                model="m", request_kwargs={"metadata": {"session_id": "sess-exhausted"}}, messages=self.SIMPLE_MESSAGE
+        sessions: Final = tuple(f"sess-exhausted-{sample}" for sample in range(20))
+        await asyncio.gather(
+            *(
+                router.litellm_router_instance.cache.async_set_cache(
+                    key=router._get_session_affinity_cache_key(session_id, {}),
+                    value={"model": "dead-a", "tier": "SIMPLE"},
+                    ttl=600,
+                )
+                for session_id in sessions
             )
-            for _ in range(20)
+        )
+        results: Final = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": session_id}}, messages=self.SIMPLE_MESSAGE
+            )
+            for session_id in sessions
         ]
         assert {r.model for r in results} == expected
+
+        def choose_other(candidates: Sequence[str]) -> str:
+            return next((model for model in candidates if model != results[0].model), candidates[0])
+
+        with patch(  # test-quality-ok: [TQ008] an alternate healthy proposal proves retained affinity across failover
+            "litellm.router_strategy.complexity_router.complexity_router.random.choice",
+            side_effect=choose_other,
+        ):
+            retained: Final = await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": sessions[0]}}, messages=self.SIMPLE_MESSAGE
+            )
+        assert retained.model == results[0].model
 
     @pytest.mark.asyncio
     async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):
