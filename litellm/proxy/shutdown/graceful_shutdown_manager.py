@@ -20,7 +20,8 @@ granularity of ``InFlightRequestsMiddleware``.
 import asyncio
 import os
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.in_flight_requests_middleware import (
@@ -28,9 +29,9 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 
 # Keep below terminationGracePeriodSeconds so the process exits before SIGKILL.
-DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT = 30.0
-_DRAIN_POLL_INTERVAL = 0.1
-_DRAIN_LOG_INTERVAL = 5.0
+DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Final = 30.0
+_DRAIN_POLL_INTERVAL: Final = 0.1
+_DRAIN_LOG_INTERVAL: Final = 5.0
 
 
 class GracefulShutdownManager:
@@ -40,7 +41,7 @@ class GracefulShutdownManager:
     """
 
     _is_shutting_down: bool = False
-    _shutdown_started_at: Optional[float] = None
+    _shutdown_started_at: float | None = None
     _drain_performed: bool = False
 
     @classmethod
@@ -55,7 +56,7 @@ class GracefulShutdownManager:
         call so deployments can tune it without code changes. Falls back to the
         default on an unset or malformed value.
         """
-        raw = os.getenv("GRACEFUL_SHUTDOWN_TIMEOUT")
+        raw: Final = os.getenv("GRACEFUL_SHUTDOWN_TIMEOUT")
         if raw is None:
             return DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
         try:
@@ -86,9 +87,9 @@ class GracefulShutdownManager:
     @classmethod
     async def wait_for_drain(
         cls,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         exclude_self: bool = False,
-        count_fn: Optional[Callable[[], int]] = None,
+        count_fn: Callable[[], int] | None = None,
         poll_interval: float = _DRAIN_POLL_INTERVAL,
         log_interval: float = _DRAIN_LOG_INTERVAL,
     ) -> int:
@@ -124,10 +125,10 @@ class GracefulShutdownManager:
 
         # The /health/drain HTTP request flows through InFlightRequestsMiddleware
         # and so counts itself; treat <=1 as "drained" in that case.
-        target = 1 if exclude_self else 0
+        target: Final = 1 if exclude_self else 0
 
-        start = time.monotonic()
-        initial = count_fn()
+        start: Final = time.monotonic()
+        initial: Final = count_fn()
         last_log = start
 
         if timeout <= 0:

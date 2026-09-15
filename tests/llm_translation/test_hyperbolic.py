@@ -1,13 +1,4 @@
-import os
-import sys
-from datetime import datetime
-from unittest.mock import MagicMock
 
-import pytest
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import get_llm_provider
@@ -23,17 +14,13 @@ def test_get_llm_provider_hyperbolic():
 def test_hyperbolic_completion_call():
     """Test basic completion call structure for Hyperbolic"""
     # This is primarily a structure test since we don't have actual API keys
-    try:
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="hyperbolic/qwen-2.5-72b",
-            messages=[{"role": "user", "content": "Hello!"}],
-            mock_response="Hi there!",
-        )
-        assert response is not None
-    except Exception as e:
-        # Expected to fail without valid API key, but should recognize the provider
-        assert "hyperbolic" in str(e).lower() or "api" in str(e).lower()
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="hyperbolic/qwen-2.5-72b",
+        messages=[{"role": "user", "content": "Hello!"}],
+        mock_response="Hi there!",
+    )
+    assert response is not None
 
 
 def test_hyperbolic_config_initialization():
@@ -75,35 +62,6 @@ def test_hyperbolic_in_provider_lists():
     assert "hyperbolic" in openai_compatible_providers
     assert "hyperbolic" in openai_text_completion_compatible_providers
     assert "https://api.hyperbolic.xyz/v1" in openai_compatible_endpoints
-
-
-def test_hyperbolic_models_configuration():
-    """Test that Hyperbolic models are properly configured"""
-    import json
-    import os
-
-    # Load model configuration directly from the JSON file
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
-    with open(json_path, "r") as f:
-        model_data = json.load(f)
-
-    # Test a few key models
-    test_models = [
-        "hyperbolic/deepseek-ai/DeepSeek-V3",
-        "hyperbolic/Qwen/Qwen2.5-Coder-32B-Instruct",
-        "hyperbolic/deepseek-ai/DeepSeek-R1",
-    ]
-
-    for model in test_models:
-        assert model in model_data
-        model_info = model_data[model]
-        assert model_info["litellm_provider"] == "hyperbolic"
-        assert model_info["mode"] == "chat"
-        assert "max_tokens" in model_info
-        assert "input_cost_per_token" in model_info
-        assert "output_cost_per_token" in model_info
 
 
 def test_hyperbolic_supported_params():

@@ -10,13 +10,9 @@
 
 import importlib
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
@@ -180,7 +176,6 @@ def setup_and_teardown():
     Module-scoped setup. Reloads litellm only in single-process mode
     (skipped under xdist to avoid cross-worker interference).
     """
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
 

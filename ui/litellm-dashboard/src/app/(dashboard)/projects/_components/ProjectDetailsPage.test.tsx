@@ -66,10 +66,12 @@ describe("ProjectDetail", () => {
   });
 
   describe("when loading", () => {
-    it("should show a loading spinner", () => {
+    it("should show a busy indicator and neither the project nor the not-found state", () => {
       mockUseProjectDetails.mockReturnValue({ data: undefined, isLoading: true });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
-      expect(screen.getByRole("img", { hidden: true })).toBeInTheDocument();
+      expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
+      expect(screen.queryByText("Project not found")).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading")).not.toBeInTheDocument();
     });
   });
 
@@ -126,7 +128,7 @@ describe("ProjectDetail", () => {
     it("should call onBack when the back button is clicked", async () => {
       const user = userEvent.setup();
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
-      await user.click(screen.getByRole("button", { name: "" }));
+      await user.click(screen.getAllByRole("button")[0]);
       expect(onBack).toHaveBeenCalledOnce();
     });
 
@@ -240,13 +242,11 @@ describe("ProjectDetail", () => {
     it("should show team information when team data is available", () => {
       mockUseTeam.mockReturnValue({
         data: {
-          team_info: {
-            team_id: "team-1",
-            team_alias: "Engineering",
-            models: ["gpt-4"],
-            spend: 50,
-            members_with_roles: [],
-          },
+          team_id: "team-1",
+          team_alias: "Engineering",
+          models: ["gpt-4"],
+          spend: 50,
+          members_with_roles: [],
         },
         isLoading: false,
       });

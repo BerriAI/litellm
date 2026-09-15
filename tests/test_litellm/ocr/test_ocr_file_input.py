@@ -12,14 +12,32 @@ Tests that:
 import base64
 import os
 import tempfile
+from collections.abc import Generator
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import orjson
 import pytest
+from starlette.datastructures import FormData
 
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
+from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
+
+
+@pytest.fixture(autouse=True, params=["native", "disabled", "unavailable"])
+def document_runtime(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    from litellm.rust_bridge import bindings, configuration
+
+    configuration.reset_rust_configuration()
+    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    if request.param == "disabled":
+        monkeypatch.setenv("LITELLM_RUST", "0")
+        monkeypatch.setattr(bindings, "get_native_bridge", Mock(side_effect=AssertionError("Rust is disabled")))
+    elif request.param == "unavailable":
+        monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
+    yield
+    configuration.reset_rust_configuration()
 
 
 class TestGetMimeType:
@@ -470,7 +488,7 @@ class TestProxySecurityGuard:
 
         mock_request = MagicMock()
         mock_request.headers = {"content-type": "multipart/form-data; boundary=---"}
-        mock_request.form = AsyncMock(return_value=mock_form)
+        mock_request.form = AsyncMock(return_value=FormData(mock_form))
 
         result = await self._parse_multipart(mock_request)
 
@@ -479,3 +497,37 @@ class TestProxySecurityGuard:
             "data:application/pdf;base64,"
         )
         assert result["model"] == "mistral/mistral-ocr-latest"
+
+
+@pytest.mark.asyncio
+async def test_proxy_upload_stops_reading_at_size_limit() -> None:
+    from starlette.datastructures import UploadFile
+
+    from litellm.ocr.input import get_max_file_bytes
+    from litellm.proxy.ocr_endpoints.endpoints import _parse_multipart_form
+
+    limit: Final = get_max_file_bytes()
+    with tempfile.TemporaryFile() as stream:
+        stream.truncate(limit * 2)
+        upload: Final = UploadFile(file=stream, filename="large.pdf")
+        request: Final = MagicMock(form=AsyncMock(return_value=FormData({"file": upload})))
+        with pytest.raises(ValueError, match="exceeds the size limit"):
+            await _parse_multipart_form(request)
+        assert stream.tell() == limit + 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_upload_filename_is_only_metadata(tmp_path: Path) -> None:
+    from starlette.datastructures import UploadFile
+
+    from litellm.proxy.ocr_endpoints.endpoints import _parse_multipart_form
+
+    secret: Final = tmp_path / "secret.pdf"
+    secret.write_bytes(b"server secret")
+    upload: Final = UploadFile(file=BytesIO(b"uploaded bytes"), filename=str(secret))
+    request: Final = MagicMock(form=AsyncMock(return_value=FormData({"file": upload})))
+    result: Final = await _parse_multipart_form(request)
+    assert result["document"] == {
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,dXBsb2FkZWQgYnl0ZXM=",
+    }

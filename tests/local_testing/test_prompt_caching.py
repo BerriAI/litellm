@@ -1,10 +1,7 @@
 """Asserts that prompt caching information is correctly returned for Anthropic, OpenAI, and Deepseek"""
 
 import io
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 import pytest
