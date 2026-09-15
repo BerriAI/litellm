@@ -1124,6 +1124,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         num_retries: int | None = None,
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
+        emitted_disqualifying_content: bool = False,
     ):
         original_status: Final = getattr(original_exception, "status_code", None)
         self.status_code = int(original_status) if original_status is not None else 503
@@ -1136,6 +1137,7 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.num_retries = num_retries
         self.generated_content = generated_content
         self.is_pre_first_chunk = is_pre_first_chunk
+        self.emitted_disqualifying_content = emitted_disqualifying_content
 
         # Create a response if one wasn't provided
         if response is None:

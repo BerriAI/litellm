@@ -4927,3 +4927,56 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+class TestContinuationDisqualifiers:
+    """The mid-stream continuation eligibility hinges on classifying which deltas
+    carry output a text-only prefill cannot represent."""
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "tool_calls",
+            "function_call",
+            "reasoning_content",
+            "thinking_blocks",
+            "reasoning_items",
+            "audio",
+            "images",
+            "annotations",
+        ],
+    )
+    def test_disqualifying_fields_flagged(self, field):
+        # reasoning_content included: it reaches the caller as visible reasoning a
+        # text-only prefill cannot carry, so a reasoning fallback would re-derive it
+        assert CustomStreamWrapper._delta_disqualifies_continuation({field: [{"x": 1}]}) is True
+
+    @pytest.mark.parametrize("delta", [{"content": "hi"}, {}, {"role": "assistant"}])
+    def test_plain_text_not_flagged(self, delta):
+        assert CustomStreamWrapper._delta_disqualifies_continuation(delta) is False
+
+    def test_non_mapping_delta_is_safe(self):
+        assert CustomStreamWrapper._delta_disqualifies_continuation(object()) is False
+
+    def test_accumulate_grows_text_and_leaves_flag_clear_for_plain_text(self):
+        wrapper = object.__new__(CustomStreamWrapper)
+        wrapper.response_uptil_now = ""
+        wrapper._emitted_disqualifying_content = False
+
+        wrapper._accumulate_streamed_delta({"content": "Hel"})
+        wrapper._accumulate_streamed_delta({"content": "lo"})
+
+        assert wrapper.response_uptil_now == "Hello"
+        assert wrapper._emitted_disqualifying_content is False
+
+    def test_accumulate_latches_flag_on_disqualifying_delta(self):
+        wrapper = object.__new__(CustomStreamWrapper)
+        wrapper.response_uptil_now = ""
+        wrapper._emitted_disqualifying_content = False
+
+        wrapper._accumulate_streamed_delta({"content": "Hi"})
+        wrapper._accumulate_streamed_delta({"tool_calls": [{"index": 0}]})
+        wrapper._accumulate_streamed_delta({"content": "there"})
+
+        assert wrapper.response_uptil_now == "Hithere"
+        assert wrapper._emitted_disqualifying_content is True

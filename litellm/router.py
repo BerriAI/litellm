@@ -33,7 +33,7 @@ from collections.abc import (
 )
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
@@ -420,6 +420,9 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+# The only response_format that leaves a stream continuation-eligible: the rest
+# ask for structured output that cannot resume from an arbitrary cut point.
+_UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
@@ -749,6 +752,7 @@ class Router:
         health_check_ignore_transient_errors: bool = False,
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
+        enable_mid_stream_fallback_continuation: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     ) -> None:
@@ -787,6 +791,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
             fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         Returns:
             Router: An instance of the litellm.Router class.
@@ -969,6 +974,7 @@ class Router:
         self.disable_cooldowns = disable_cooldowns
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
+        self.enable_mid_stream_fallback_continuation = enable_mid_stream_fallback_continuation
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         self.background_health_check_model_groups: frozenset[str] | None = (
             frozenset(background_health_check_model_groups)
@@ -1162,6 +1168,16 @@ class Router:
 
         default_pre_call_checks: Final[OptionalPreCallChecks] = []
         self.add_optional_pre_call_checks(default_pre_call_checks)
+
+        if self.enable_mid_stream_fallback_continuation:
+            from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+                ContinuationPrefillDeploymentCheck,
+            )
+
+            # Registered on the process-global callback list, never tracked per
+            # router, so discarding one router cannot drop the filter another
+            # still needs. It is inert unless a request carries the marker.
+            litellm.logging_callback_manager.add_litellm_callback(ContinuationPrefillDeploymentCheck())
 
     def discard(self):
         """
@@ -2799,12 +2815,18 @@ class Router:
                 with anyio.CancelScope(shield=True):
                     await close_model_response()
                     await held_slot.aclose()
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
-                ):
-                    if e.original_exception is not None:
-                        raise e.original_exception from e
-                    raise
+                committed: Final = bool(
+                    not e.is_pre_first_chunk
+                    and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
+                )
+                continue_after_content: Final = committed and self._mid_stream_continuation_eligible(
+                    e=e, request_kwargs=initial_kwargs
+                )
+                # Content already reached the caller and we cannot safely
+                # continue it (feature off, or tool/thinking/constrained output):
+                # surface the real error rather than restart into the same stream.
+                if committed and not continue_after_content:
+                    self._raise_original_mid_stream_error(e)
 
                 from litellm.main import stream_chunk_builder
 
@@ -2824,7 +2846,27 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    initial_kwargs["messages"] = messages
+                    if continue_after_content:
+                        from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+                            MID_STREAM_CONTINUATION_KWARG,
+                            MID_STREAM_CONTINUATION_MARKER,
+                        )
+
+                        emitted_tokens: Final = int(
+                            getattr(complete_response_object_usage, "completion_tokens", 0) or 0
+                        )
+                        reduced_ceilings: Final = self._continuation_output_ceilings(initial_kwargs, emitted_tokens)
+                        if reduced_ceilings is None:
+                            # The caller's output allowance is already spent; surface the
+                            # error rather than grant a fresh allowance on this fallback hop.
+                            self._raise_original_mid_stream_error(e)
+                        initial_kwargs.update(reduced_ceilings)
+                        initial_kwargs["messages"] = self._build_completion_continuation_input(
+                            messages, e.generated_content
+                        )
+                        initial_kwargs[MID_STREAM_CONTINUATION_KWARG] = MID_STREAM_CONTINUATION_MARKER
+                    else:
+                        initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
                         e=e,
@@ -3013,6 +3055,75 @@ class Router:
             output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
             total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
         )
+
+    @staticmethod
+    def _raise_original_mid_stream_error(e: "MidStreamFallbackError") -> NoReturn:
+        """Decline a continuation by surfacing the real provider error the stream
+        wrapper carried, rather than leaking the internal MidStreamFallbackError."""
+        if e.original_exception is not None:
+            raise e.original_exception from e
+        raise e
+
+    def _mid_stream_continuation_eligible(
+        self,
+        e: "MidStreamFallbackError",
+        request_kwargs: Mapping[str, object],
+    ) -> bool:
+        """Whether a stream that broke after plain assistant text may be
+        continued via prefill. The fallback target's prefill support is checked
+        separately at deployment selection."""
+        if not self.enable_mid_stream_fallback_continuation:
+            return False
+        if not e.generated_content or e.emitted_disqualifying_content:
+            return False
+        # Structured output cannot be resumed from an arbitrary cut point;
+        # `{"type": "text"}` is the unconstrained default and stays eligible.
+        response_format: Final = request_kwargs.get("response_format")
+        if response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT:
+            return False
+        tool_choice: Final = request_kwargs.get("tool_choice")
+        if tool_choice == "required" or isinstance(tool_choice, Mapping):
+            return False
+        if request_kwargs.get("merge_reasoning_content_in_choices") is True:
+            return False
+        return True
+
+    @staticmethod
+    def _continuation_output_ceilings(
+        request_kwargs: Mapping[str, object],
+        emitted_tokens: int,
+    ) -> Mapping[str, int] | None:
+        """The max_tokens / max_completion_tokens a continuation should carry, each
+        reduced by the tokens already emitted so the whole answer stays within the
+        caller's original allowance instead of getting a fresh one on every fallback
+        hop. Reductions compound across hops because the trimmed ceiling is what the
+        next hop sees. Returns None when the allowance is already exhausted, so the
+        stream must not be continued."""
+        ceilings: Final = MappingProxyType(
+            {
+                key: value - emitted_tokens
+                for key in ("max_tokens", "max_completion_tokens")
+                if isinstance(value := request_kwargs.get(key), int)
+            }
+        )
+        if ceilings and min(ceilings.values()) <= 0:
+            return None
+        return ceilings
+
+    @staticmethod
+    def _build_completion_continuation_input(
+        messages: Sequence[Mapping[str, str]],
+        generated_content: str,
+    ) -> Sequence[Mapping[str, object]]:
+        """Append the partial output as an assistant prefill for a prefill-capable
+        fallback to continue. A nested break folds the new partial into an
+        existing trailing prefill rather than appending a second assistant turn."""
+        last: Final = messages[-1] if messages else None
+        if last is not None and last.get("role") == "assistant" and last.get("prefix"):
+            merged: Final = {**last, "content": str(last.get("content") or "") + generated_content}
+            return [*messages[:-1], merged]
+        prefill: Final = {"role": "assistant", "content": generated_content, "prefix": True}
+        return [*messages, prefill]
 
     @staticmethod
     def _build_responses_continuation_input(
@@ -3568,8 +3679,13 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
+            from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+                MID_STREAM_CONTINUATION_KWARG,
+            )
+
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
+            input_kwargs.pop(MID_STREAM_CONTINUATION_KWARG, None)
 
             _response: Final = litellm.acompletion(**input_kwargs)
 
@@ -11965,6 +12081,7 @@ class Router:
             "retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "enable_mid_stream_fallback_continuation",
             "enable_tag_filtering",
             "tag_routing_prefix",
         ]
