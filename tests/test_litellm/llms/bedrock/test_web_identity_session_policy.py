@@ -32,6 +32,8 @@ action.
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -49,9 +51,9 @@ _CLAUDE_PLATFORM_ACTIONS = {
 }
 
 
-def _captured_policy() -> dict:
-    """Run _auth_with_web_identity_token under mocks + return the parsed
-    Policy dict that was actually sent to STS."""
+def _captured_policy_document() -> str:
+    """Run _auth_with_web_identity_token under mocks + return the Policy
+    JSON document that was actually sent to STS."""
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     base = BaseAWSLLM()
@@ -84,8 +86,15 @@ def _captured_policy() -> dict:
 
     mock_sts.assume_role_with_web_identity.assert_called_once()
     kwargs = mock_sts.assume_role_with_web_identity.call_args.kwargs
-    policy_str = kwargs["Policy"]
-    return json.loads(policy_str)
+    return kwargs["Policy"]
+
+
+def _captured_policy() -> dict:
+    return json.loads(_captured_policy_document())
+
+
+def _granted_actions(policy: dict) -> frozenset[str]:
+    return frozenset(action for stmt in policy["Statement"] for action in stmt["Action"])
 
 
 def _statement_by_sid(policy: dict, sid: str) -> dict:
@@ -308,3 +317,41 @@ class TestPolicyTransportConditions:
             "ClaudePlatformLiteLLM must require aws:SecureTransport=true "
             "to keep parity with the bedrock statement"
         )
+
+
+_STS_SESSION_POLICY_PLAINTEXT_LIMIT: Final = 2048
+
+_BEDROCK_ROUTE_ACTIONS: Final = MappingProxyType(
+    {
+        "model/{model_id}/invoke": "bedrock:InvokeModel",
+        "model/{model_id}/invoke-with-response-stream": "bedrock:InvokeModelWithResponseStream",
+        "model/{model_id}/converse": "bedrock:InvokeModel",
+        "model/{model_id}/converse-stream": "bedrock:InvokeModelWithResponseStream",
+        "model/{model_id}/count-tokens": "bedrock:CountTokens",
+        "guardrail/{guardrail_id}/version/{version}/apply": "bedrock:ApplyGuardrail",
+        "rerank": "bedrock:Rerank",
+        "knowledgebases/{knowledge_base_id}/retrieve": "bedrock:Retrieve",
+        "knowledgebases": "bedrock:ListKnowledgeBases",
+        "agents/{agent_id}/agentAliases/{alias_id}/sessions/{session_id}/text": "bedrock:InvokeAgent",
+        "runtimes/{agent_runtime_arn}/invocations": "bedrock-agentcore:InvokeAgentRuntime",
+        "mcp": "bedrock-agentcore:InvokeGateway",
+    }
+)
+
+
+class TestSessionPolicyGrantsEveryBedrockRoute:
+    """LIT-7348: ``/rerank`` authorizes against ``bedrock:Rerank``, which the
+    ceiling never granted, so rerank 403d on web identity auth while static
+    credentials and IRSA worked. Each route the bedrock package signs with the
+    web identity session maps to the IAM action it authorizes against, and the
+    ceiling must grant every one of them."""
+
+    @pytest.mark.parametrize(("route", "action"), sorted(_BEDROCK_ROUTE_ACTIONS.items()))
+    def test_route_action_is_granted_by_the_ceiling(self, route: str, action: str):
+        assert action in _granted_actions(_captured_policy()), (
+            f"/{route} authorizes against {action}, which the session policy does not grant, "
+            "so it 403s on web identity auth"
+        )
+
+    def test_policy_document_fits_the_sts_plaintext_limit(self):
+        assert len(_captured_policy_document()) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
