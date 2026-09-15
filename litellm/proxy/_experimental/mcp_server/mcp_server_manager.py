@@ -4575,10 +4575,11 @@ class MCPServerManager:
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
         """Key the listed-tool cache by every request input that can change the upstream catalog.
 
-        Forwarded headers, header-driven stdio env, a relayed caller bearer, and the
-        server-specific auth header all reach upstream, so two callers differing in any of
-        them may be shown different tools. Shared servers with none of those stay on the
-        shared (``None``) slot. OpenAPI servers list from the process-wide registry.
+        Forwarded headers, header-driven stdio env, the caller bearer (forwarded as-is or
+        exchanged as the OBO subject), and the server-specific auth header all reach
+        upstream, so two callers differing in any of them may be shown different tools. Shared
+        servers with none of those stay on the shared (``None``) slot. OpenAPI servers list from
+        the process-wide registry.
         """
         if server.spec_path or caller is None:
             return None
@@ -4589,12 +4590,12 @@ class MCPServerManager:
         forwarded: Final = self._forwarded_header_values(server, caller.raw_headers)
         header_env: Final = self._build_stdio_env(server, caller.raw_headers)
         stdio_env: Final = None if header_env == self._build_stdio_env(server) else header_env
-        relayed_bearer: Final = (
+        caller_bearer: Final = (
             self._extract_subject_token(caller.oauth2_headers, caller.raw_headers, auth)
-            if server.is_client_forwarded_token
+            if server.is_client_forwarded_token or server.auth_type == MCPAuth.oauth2_token_exchange
             else None
         )
-        inputs: Final = (identity, caller.mcp_auth_header, forwarded, stdio_env, relayed_bearer)
+        inputs: Final = (identity, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer)
         if not any(inputs):
             return None
         material: Final = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
