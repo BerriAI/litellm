@@ -11066,6 +11066,66 @@ async def test_num_retries_per_request_stops_retries_at_caps_above_four(monkeypa
     ]
 
 
+def _failing_group_with_healthy_fallback_router(num_retries: int) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "broken-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "healthy-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake", "mock_response": "ok"},
+            },
+        ],
+        fallbacks=[{"broken-group": ["healthy-group"]}],
+        num_retries=num_retries,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cap, planted_count, hop_refused",
+    [(2, None, True), (4, None, False), (2, -100, True)],
+    ids=["cap-spent-before-the-hop", "cap-not-reached-by-the-hop", "planted-negative-count-does-not-lift-the-cap"],
+)
+async def test_num_retries_per_request_counts_retries_across_fallback_hops(
+    monkeypatch: pytest.MonkeyPatch, cap: int, planted_count: int | None, hop_refused: bool
+) -> None:
+    """num_retries_per_request caps the retries of one request, fallback hops included. Each hop starts a
+    fresh per-hop attempted_retries at zero, so a cap read from that counter let every hop retry from zero
+    and a request could spend far more retries than the cap allows. A caller who plants a negative count
+    in the request metadata must not push the cap further away either."""
+    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
+    router = _failing_group_with_healthy_fallback_router(num_retries=1)
+    recorder = _FallbackAttemptRecorder()
+    litellm.callbacks.append(recorder)
+    try:
+        metadata = {} if planted_count is None else {"request_retry_count": planted_count}
+        request = router.acompletion(
+            model="broken-group", messages=[{"role": "user", "content": "hi"}], metadata=metadata
+        )
+        if not hop_refused:
+            assert (await request).choices[0].message.content == "ok"
+            return
+        with pytest.raises(litellm.InternalServerError):
+            await request
+    finally:
+        litellm.callbacks.remove(recorder)
+
+    assert recorder.failed_targets == ["healthy-group"]
+    hop_refusals = [
+        record["attempted_retries"]
+        for record in recorder.breadcrumbs_per_target[0]
+        if record["model_group"] == "healthy-group" and "Max retries per request hit!" in record["exception_string"]
+    ]
+    assert hop_refusals == [0, 1]
+
+
 @pytest.mark.asyncio
 async def test_fallback_traceback_stays_available_at_debug_level():
     """Dropping the stack from the ERROR line is only safe because the fallback path still
