@@ -6395,17 +6395,7 @@ class BaseLLMHTTPHandler:
                     cast_to=httpx.Response,
                     body=request_data,
                 )
-                response_headers: Final = {  # mutable-ok: httpx requires a concrete response-header mapping
-                    key: value  # mutable-ok: transport headers are materialized after filtering
-                    for key, value in raw_response.headers.items()  # mutable-ok: transport headers are materialized
-                    if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
-                }
-                return httpx.Response(
-                    status_code=raw_response.status_code,
-                    headers=response_headers,
-                    content=raw_response.content,
-                    request=httpx.Request("POST", f"{normalized_api_base}/realtime/client_secrets"),
-                )
+                return self._decoded_realtime_sdk_response(raw_response)
             finally:
                 if owns_client:
                     await openai_client.close()
@@ -6490,11 +6480,12 @@ class BaseLLMHTTPHandler:
                         key: str(value) for key, value in (extra_headers or {}).items()
                     },
                 )
-                return await configured_client.post(
+                raw_response: Final = await configured_client.post(
                     "/realtime/translations/client_secrets",
                     cast_to=httpx.Response,
                     body=request_data,
                 )
+                return self._decoded_realtime_sdk_response(raw_response)
             finally:
                 if owns_client:
                     await openai_client.close()
@@ -6632,11 +6623,12 @@ class BaseLLMHTTPHandler:
                         },
                     },
                 )
-                return await configured_client.post(
+                translation_response: Final = await configured_client.post(
                     "/realtime/translations/calls",
                     cast_to=httpx.Response,
                     content=sdp_text.encode("utf-8"),
                 )
+                return self._decoded_realtime_sdk_response(translation_response)
             realtime_session_data: Final = cast(  # cast-ok: endpoint validation produced an OpenAI realtime session
                 RealtimeSessionCreateRequestParam,
                 session_data,
@@ -6650,15 +6642,24 @@ class BaseLLMHTTPHandler:
                 extra_headers=sdk_extra_headers,
                 timeout=timeout,
             )
-            return httpx.Response(
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-                content=raw_response.content,
-                request=httpx.Request("POST", f"{normalized_api_base}/realtime/calls"),
-            )
+            return self._decoded_realtime_sdk_response(raw_response.http_response)
         finally:
             if owns_client:
                 await openai_client.close()
+
+    @staticmethod
+    def _decoded_realtime_sdk_response(response: httpx.Response) -> httpx.Response:
+        headers: Final = {  # mutable-ok: httpx accepts a concrete response header mapping
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+        }
+        return httpx.Response(
+            status_code=response.status_code,
+            headers=headers,
+            content=response.content,
+            request=response.request,
+        )
 
     @staticmethod
     def _get_realtime_async_http_client(client: object | None) -> AsyncHTTPHandler:

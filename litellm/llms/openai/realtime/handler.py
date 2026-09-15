@@ -173,15 +173,14 @@ class OpenAIRealtime(OpenAIChatCompletion):
     ) -> AbstractAsyncContextManager[object]:
         import websockets
 
-        if realtime_mode == "translation" or client is None:
+        if realtime_mode == "translation" or not isinstance(client, AsyncOpenAI):
             return websockets.connect(
                 url,
                 additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
+                **({"open_timeout": timeout} if timeout is not None else {}),
             )
-        if not isinstance(client, AsyncOpenAI):
-            raise TypeError("client must be an AsyncOpenAI instance")
         openai_client: Final = client
         model_query: Final = query_params.get("model")
         extra_query: Final = {  # mutable-ok: OpenAI SDK accepts a mutable query-parameter mapping
@@ -194,6 +193,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
             extra_headers=headers,
             websocket_connection_options={  # mutable-ok: OpenAI SDK forwards a mutable options mapping
                 "max_size": REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                **({"ssl": ssl_config} if url.startswith("wss://") else {}),
+                **({"open_timeout": timeout} if timeout is not None else {}),
             },
             max_retries=0,
         )

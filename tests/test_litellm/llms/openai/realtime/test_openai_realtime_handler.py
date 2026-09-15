@@ -295,7 +295,7 @@ async def test_async_realtime_uses_max_size_parameter():
         called_kwargs = sdk_client.realtime.connect.call_args.kwargs
         connection_options = called_kwargs["websocket_connection_options"]
         assert connection_options["max_size"] is REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-        assert "ssl" not in connection_options
+        assert connection_options["ssl"] is not None
 
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
@@ -404,3 +404,22 @@ async def test_translation_websocket_uses_direct_transport():
     connect.assert_called_once()
     assert connect.call_args.args[0] == expected_url
     assert streaming.call_args.kwargs["translation_session"] is True
+
+
+@pytest.mark.parametrize("sdk_client", [True, False])
+def test_connection_manager_preserves_transport_settings(sdk_client: bool):
+    import ssl
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = make_realtime_sdk_client() if sdk_client else MagicMock(spec=AsyncHTTPHandler)
+    ssl_config = ssl.create_default_context()
+    with patch("websockets.connect") as connect:
+        OpenAIRealtime()._create_connection_manager(
+            api_base="https://example.com", api_key="test", model="gpt-realtime-2.1",
+            query_params={"model": "gpt-realtime-2.1"}, headers={}, timeout=7.0,
+            realtime_mode="realtime", ssl_config=ssl_config, client=client, url="wss://example.com/v1/realtime",
+        )
+    options = client.realtime.connect.call_args.kwargs["websocket_connection_options"] if sdk_client else connect.call_args.kwargs
+    assert options["ssl"] is ssl_config
+    assert options["open_timeout"] == 7.0

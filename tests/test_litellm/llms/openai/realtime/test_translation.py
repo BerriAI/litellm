@@ -209,7 +209,7 @@ async def test_translation_client_secret_uses_openai_sdk_custom_post():
     async def send_response(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/realtime/translations/client_secrets"
         assert json.loads(request.content)["session"]["audio"]["output"]["language"] == "es"
-        return httpx.Response(200, json={"value": "ek_translation"})
+        return httpx.Response(200, content=gzip.compress(b'{"value":"ek_translation"}'), headers={"content-encoding": "gzip"})
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
     openai_client = AsyncOpenAI(api_key="sk-test", base_url="https://example.com/v1", http_client=http_client)
@@ -233,6 +233,8 @@ async def test_translation_client_secret_uses_openai_sdk_custom_post():
 
     assert response.status_code == 200
     assert response.json() == {"value": "ek_translation"}
+    assert "content-encoding" not in response.headers
+    assert int(response.headers["content-length"]) == len(response.content)
 
 
 @pytest.mark.asyncio
@@ -242,7 +244,7 @@ async def test_translation_calls_use_openai_sdk_custom_post():
         body = await request.aread()
         assert request.headers["content-type"] == "application/sdp"
         assert body == b"v=0\r\n"
-        return httpx.Response(201, content=b"v=0\r\n")
+        return httpx.Response(201, content=gzip.compress(b"v=0\r\n"), headers={"content-encoding": "gzip"})
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(send_response))
     openai_client = AsyncOpenAI(api_key="ek_test", base_url="https://example.com/v1", http_client=http_client)
@@ -263,3 +265,5 @@ async def test_translation_calls_use_openai_sdk_custom_post():
 
     assert response.status_code == 201
     assert response.text == "v=0\r\n"
+    assert "content-encoding" not in response.headers
+    assert int(response.headers["content-length"]) == len(response.content)
