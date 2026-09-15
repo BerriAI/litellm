@@ -1,6 +1,7 @@
 import asyncio
 import copy
 from typing import List, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -15,7 +16,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     _get_min_token_count_for_deployments,
 )
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
 MODEL_GROUP_ALIAS = "my-claude-group"
@@ -58,6 +59,222 @@ def _messages(word_count: int) -> List[AllMessageValues]:
             }
         ],
     )
+
+
+def test_prepend_system_prompt_without_system_preserves_messages():
+    messages = _messages(word_count=10)
+
+    assert PromptCachingCache.prepend_system_prompt(messages, None) is messages
+
+
+def test_tool_affinity_ignores_tools_after_cache_breakpoint():
+    messages = _messages(word_count=10)
+    cached_tools = cast(
+        list[ChatCompletionToolParam],
+        [
+            {"type": "function", "function": {"name": "stable", "parameters": {}}, "cache_control": {"type": "ephemeral"}},
+            {"type": "function", "function": {"name": "first-trailing", "parameters": {}}},
+        ],
+    )
+    changed_trailing_tools = [*cached_tools[:-1], {"type": "function", "function": {"name": "second-trailing", "parameters": {}}}]
+
+    assert PromptCachingCache.extract_cacheable_tools(cached_tools) == cached_tools[:1]
+    assert PromptCachingCache.get_prompt_caching_cache_key(messages, cached_tools) == PromptCachingCache.get_prompt_caching_cache_key(
+        messages, changed_trailing_tools
+    )
+
+
+def test_tool_affinity_key_differs_for_uncached_tools_with_no_breakpoint():
+    """No tool carries a cache breakpoint, but the tools still precede whatever the messages-side
+    breakpoint caches on the provider, so distinct tool lists must not collide on the same key."""
+    messages = _messages(word_count=10)
+    tools_a = cast(list[ChatCompletionToolParam], [{"type": "function", "function": {"name": "alpha", "parameters": {}}}])
+    tools_b = cast(list[ChatCompletionToolParam], [{"type": "function", "function": {"name": "beta", "parameters": {}}}])
+
+    assert PromptCachingCache.extract_cacheable_tools(tools_a) == tools_a
+    assert PromptCachingCache.get_prompt_caching_cache_key(messages, tools_a) != PromptCachingCache.get_prompt_caching_cache_key(
+        messages, tools_b
+    )
+
+
+def test_prepend_system_prompt_does_not_duplicate_an_already_logged_system_message():
+    """Standard logging's append_system_prompt_messages already prepends a string system prompt
+    onto `messages` before async_log_success_event runs, so prepend_system_prompt must not add it
+    a second time or the write-path affinity key would never match the read-path key."""
+    system = "You are a helpful assistant"
+    messages = cast(List[AllMessageValues], [{"role": "system", "content": system}, {"role": "user", "content": "hi"}])
+
+    assert PromptCachingCache.prepend_system_prompt(messages, system) == messages
+
+
+@pytest.mark.asyncio
+async def test_string_system_parameter_does_not_double_up_the_affinity_key():
+    """Regression: kwargs["system"] as a string is already baked into `messages` by standard
+    logging before async_log_success_event runs. Re-prepending it there produced a different
+    (duplicated) affinity key than async_filter_deployments computes from the raw request
+    messages, so a pin written on success was never read back."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+    system = "cached system prompt"
+    standard_logging_object = {
+        "call_type": "acompletion",
+        "model": "anthropic/claude-opus-4-6",
+        "messages": [{"role": "system", "content": system}, *messages],
+        "model_id": "dep-2",
+    }
+
+    await check.async_log_success_event(
+        kwargs={"standard_logging_object": standard_logging_object, "system": system},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"system": system},
+    )
+
+    assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_system_parameter_is_part_of_prompt_cache_affinity():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+    system = [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    cached_messages = PromptCachingCache.prepend_system_prompt(messages, system)
+
+    await PromptCachingCache(cache=cache).async_add_model_id("dep-2", cached_messages, None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"system": system},
+    )
+
+    assert filtered == [deployments[1]]
+
+
+@pytest.mark.parametrize(
+    ("ttl", "expected_affinity_ttl"),
+    ((None, 300), ("5m", 300), ("1h", 3600)),
+)
+def test_prompt_caching_affinity_ttl_matches_cache_control(ttl: str | None, expected_affinity_ttl: int):
+    cache_control: dict[str, str] = {"type": "ephemeral", **({"ttl": ttl} if ttl is not None else {})}
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "system", "content": [{"type": "text", "text": "cached", "cache_control": cache_control}]}],
+    )
+
+    assert PromptCachingCache.get_prompt_caching_ttl(messages) == expected_affinity_ttl
+
+
+def test_message_level_cache_control_on_string_content_sets_affinity_ttl():
+    """cache_control can sit as a sibling of a string `content` field rather than inside a
+    content-block list, e.g. {"role": "system", "content": "...", "cache_control": {...}}.
+    get_prompt_caching_ttl must still pick it up."""
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "system", "content": "cached", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+    )
+
+    assert PromptCachingCache.get_prompt_caching_ttl(messages) == 3600
+
+
+def test_mixed_cache_ttls_use_the_shortest_affinity_ttl():
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "user", "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
+            },
+        ],
+    )
+
+    assert PromptCachingCache.get_prompt_caching_ttl(messages) == 300
+
+
+def test_add_model_id_uses_one_hour_affinity_ttl():
+    cache = DualCache()
+    set_cache = Mock()
+    cache.set_cache = set_cache
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "system", "content": [{"type": "text", "text": "cached", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]}],
+    )
+
+    PromptCachingCache(cache=cache).add_model_id("dep-1", messages, None)
+
+    assert set_cache.call_args.kwargs["ttl"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_async_add_model_id_uses_one_hour_affinity_ttl():
+    cache = DualCache()
+    async_set_cache = AsyncMock()
+    cache.async_set_cache = async_set_cache
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "cached",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            }
+        ],
+    )
+
+    await PromptCachingCache(cache=cache).async_add_model_id("dep-1", messages, None)
+
+    assert async_set_cache.call_args.kwargs["ttl"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_async_add_model_id_uses_one_hour_tool_affinity_ttl():
+    cache = DualCache()
+    async_set_cache = AsyncMock()
+    cache.async_set_cache = async_set_cache
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "cached", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            }
+        ],
+    )
+    tools = cast(
+        list[ChatCompletionToolParam],
+        [
+            {
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {}},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+    )
+
+    await PromptCachingCache(cache=cache).async_add_model_id("dep-1", messages, tools)
+
+    assert async_set_cache.call_args.kwargs["ttl"] == 3600
 
 
 def test_get_min_token_count_for_deployments_takes_min_across_mixed_group():

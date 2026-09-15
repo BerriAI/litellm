@@ -74,7 +74,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
             ## AUTO PROMPT CACHING - the breakpoints this request will carry are injected inside
             ## `litellm.acompletion`, after a deployment has been picked, so the affinity key has to
             ## be derived from the messages as they will be sent, not as they arrive here.
-            affinity_messages: Final = AnthropicCacheControlHook.messages_with_default_injections(
+            injected_messages: Final = AnthropicCacheControlHook.messages_with_default_injections(
                 messages=cast(list[AllMessageValues], messages),
                 models=(
                     deployment["litellm_params"]["model"]
@@ -93,10 +93,20 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 ),
                 request_kwargs=request_kwargs,
             )
+            affinity_messages: Final = PromptCachingCache.prepend_system_prompt(
+                injected_messages,
+                request_kwargs.get("system") if request_kwargs is not None else None,
+            )
 
             model_id_dict: Final = await prompt_cache.async_get_model_id(
                 messages=affinity_messages,
-                tools=None,
+                tools=(
+                    cast(  # cast-ok: request kwargs are untyped
+                        list[AllToolParamValues] | None, request_kwargs.get("tools")
+                    )  # cast-ok: request kwargs are untyped
+                    if request_kwargs is not None
+                    else None
+                ),
             )
             if model_id_dict is not None:
                 model_id: Final = model_id_dict["model_id"]
@@ -139,18 +149,25 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             return
 
+        logged_messages: Final = PromptCachingCache.prepend_system_prompt(
+            cast(list[AllMessageValues], messages),  # cast-ok: standard logging payload is partially typed
+            kwargs.get("system"),
+        )
+
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
-            messages=cast(list[AllMessageValues], messages),
+            messages=logged_messages,
         ):
             cache: Final = PromptCachingCache(
                 cache=self.cache,
             )
             await cache.async_add_model_id(
                 model_id=model_id,
-                messages=messages,
-                tools=None,  # [TODO]: add tools once standard_logging_object supports it
+                messages=logged_messages,
+                tools=cast(  # cast-ok: callback kwargs are untyped
+                    list[AllToolParamValues] | None, kwargs.get("tools")
+                ),
             )
 
         return
