@@ -76,4 +76,24 @@ describe("embeddings_api", () => {
       input: "Sample text",
     });
   });
+
+  it("sends custom headers on the fetch request, letting them override the tags header", async () => {
+    await makeOpenAIEmbeddingsRequest(
+      "Sample text",
+      mockUpdateEmbeddingsUI,
+      "text-embedding-3-small",
+      "abcdef",
+      ["team-a"],
+      undefined,
+      { "x-litellm-tags": "team-b", "x-request-source": "playground" },
+    );
+
+    expect(mockFetch.mock.calls[0][1]).toMatchObject({
+      headers: {
+        Authorization: "Bearer abcdef",
+        "x-litellm-tags": "team-b",
+        "x-request-source": "playground",
+      },
+    });
+  });
 });
