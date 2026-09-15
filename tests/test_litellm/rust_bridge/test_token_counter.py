@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from typing import Final
 
 import pytest
@@ -20,7 +20,6 @@ BODY: Final = json.dumps({"model": MODEL, "messages": [{"role": "user", "content
 ANTHROPIC: Final = bridge.RustTokenizer(kind="anthropic", encoding="", disabled=False, legacy_accounting=False)
 CL100K: Final = bridge.RustTokenizer(kind=None, encoding="cl100k_base", disabled=False, legacy_accounting=False)
 O200K: Final = bridge.RustTokenizer(kind=None, encoding="o200k_base", disabled=False, legacy_accounting=False)
-TOKENIZERS: Final = (ANTHROPIC, CL100K, O200K)
 
 _FakeDeclined = native.RustBridgeDeclined
 _FakeUnavailable = native.RustBridgeUnavailable
@@ -34,8 +33,8 @@ class _FakeNative:
 
 
 class _RecordingCounter:
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error: Final = error
+    def __init__(self, errors: Mapping[str, Exception] | None = None) -> None:
+        self.errors: Final = errors or {}
         self.calls: Final[list[tuple[bytes, bridge.RustTokenizer, str]]] = []
 
     async def __call__(
@@ -50,10 +49,10 @@ class _RecordingCounter:
         tokenizer: Final = bridge.RustTokenizer(kind, encoding, disabled, legacy_accounting)
         resource_name: Final = kind or encoding
         self.calls.append((body, tokenizer, resource_name))
-        if self.error is not None:
-            raise self.error
+        if error := self.errors.get(resource_name):
+            raise error
         resource_loader(resource_name)
-        return {"model": MODEL, "input_tokens": 42}
+        return {"model": MODEL, "input_tokens": {"anthropic": 42, "cl100k_base": 17}[resource_name]}
 
 
 @pytest.fixture(autouse=True)
@@ -67,61 +66,118 @@ def reset_bridge(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     configuration.reset_rust_configuration()
 
 
+def _fallback(result: Mapping[str, int], calls: list[None]) -> Callable[[], Awaitable[Mapping[str, int]]]:
+    async def call() -> Mapping[str, int]:
+        calls.append(None)
+        return result
+
+    return call
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", TOKENIZERS)
-async def test_direct_bridge_bypasses_disabled_public_rollout(tokenizer: bridge.RustTokenizer) -> None:
+async def test_direct_bridge_bypasses_disabled_public_rollout() -> None:
     counter: Final = _RecordingCounter()
     bridge.TOKEN_COUNTER.override(counter)
+    fallback_calls: list[None] = []
     litellm.rust(False)
-    assert await bridge.count_input_tokens(BODY, tokenizer) == bridge.InputTokenCount(model=MODEL, input_tokens=42)
-    assert counter.calls == [(BODY, tokenizer, tokenizer.kind or tokenizer.encoding)]
+
+    result: Final = await bridge.count_input_tokens(
+        body=BODY,
+        tokenizers={MODEL: ANTHROPIC},
+        python_fallback=_fallback({MODEL: 9}, fallback_calls),
+    )
+
+    assert result == {MODEL: 42}
+    assert fallback_calls == []
+    assert counter.calls == [(BODY, ANTHROPIC, "anthropic")]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", TOKENIZERS)
-async def test_one_native_count_entrypoint_receives_configuration_and_body(tokenizer: bridge.RustTokenizer) -> None:
+async def test_native_count_deduplicates_tokenizers() -> None:
     counter: Final = _RecordingCounter()
     bridge.TOKEN_COUNTER.override(counter)
-    result: Final = await bridge.count_input_tokens(BODY, tokenizer)
-    assert result == bridge.InputTokenCount(model=MODEL, input_tokens=42)
-    assert counter.calls == [(BODY, tokenizer, tokenizer.kind or tokenizer.encoding)]
+    fallback_calls: list[None] = []
+
+    result: Final = await bridge.count_input_tokens(
+        body=BODY,
+        tokenizers={MODEL: ANTHROPIC, "other-claude": ANTHROPIC, CL100K_MODEL: CL100K},
+        python_fallback=_fallback({}, fallback_calls),
+    )
+
+    assert result == {MODEL: 42, "other-claude": 42, CL100K_MODEL: 17}
+    assert fallback_calls == []
+    assert counter.calls == [
+        (BODY, ANTHROPIC, "anthropic"),
+        (BODY, CL100K, "cl100k_base"),
+    ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", (_FakeDeclined("unsupported"), _FakeUnavailable("resource")))
-async def test_decline_and_resource_unavailability_fall_back(error: Exception) -> None:
-    bridge.TOKEN_COUNTER.override(_RecordingCounter(error))
-    assert await bridge.count_input_tokens(BODY, ANTHROPIC) is None
+async def test_any_decline_or_unavailability_discards_partial_native_counts(error: Exception) -> None:
+    counter: Final = _RecordingCounter({"cl100k_base": error})
+    bridge.TOKEN_COUNTER.override(counter)
+    fallback_calls: list[None] = []
+
+    result: Final = await bridge.count_input_tokens(
+        body=BODY,
+        tokenizers={MODEL: ANTHROPIC, CL100K_MODEL: CL100K},
+        python_fallback=_fallback({MODEL: 9, CL100K_MODEL: 8}, fallback_calls),
+    )
+
+    assert result == {MODEL: 9, CL100K_MODEL: 8}
+    assert fallback_calls == [None]
+    assert [call[2] for call in counter.calls] == ["anthropic", "cl100k_base"]
 
 
 @pytest.mark.asyncio
-async def test_unexpected_counting_failure_propagates() -> None:
-    bridge.TOKEN_COUNTER.override(_RecordingCounter(RuntimeError("encode failed")))
+@pytest.mark.parametrize("body", (None, BODY))
+async def test_missing_body_or_binding_runs_complete_python_fallback(body: bytes | None) -> None:
+    bridge.TOKEN_COUNTER.override(None)
+    fallback_calls: list[None] = []
+
+    result: Final = await bridge.count_input_tokens(
+        body=body,
+        tokenizers={MODEL: ANTHROPIC},
+        python_fallback=_fallback({MODEL: 9}, fallback_calls),
+    )
+
+    assert result == {MODEL: 9}
+    assert fallback_calls == [None]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_counting_failure_propagates_without_python_replay() -> None:
+    counter: Final = _RecordingCounter({"anthropic": RuntimeError("encode failed")})
+    bridge.TOKEN_COUNTER.override(counter)
+    fallback_calls: list[None] = []
+
     with pytest.raises(RuntimeError, match="encode failed"):
-        await bridge.count_input_tokens(BODY, ANTHROPIC)
+        await bridge.count_input_tokens(
+            body=BODY,
+            tokenizers={MODEL: ANTHROPIC},
+            python_fallback=_fallback({MODEL: 9}, fallback_calls),
+        )
+
+    assert fallback_calls == []
 
 
 @pytest.mark.parametrize(
     ("model", "expected"),
     (
         (MODEL, ANTHROPIC),
-        ("gpt-4", CL100K),
-        ("gpt-4o", O200K),
+        (CL100K_MODEL, CL100K),
+        (O200K_MODEL, O200K),
         ("replicate/meta/llama-2-70b-chat", bridge.RustTokenizer("llama2", "", False, False)),
     ),
 )
-def test_tokenizer_configuration_matches_python_selection(
-    model: str, expected: bridge.RustTokenizer
-) -> None:
-    bridge.TOKEN_COUNTER.override(_RecordingCounter())
+def test_tokenizer_configuration_matches_python_selection(model: str, expected: bridge.RustTokenizer) -> None:
     assert bridge.rust_tokenizer(model) == expected
 
 
 def test_unsupported_configuration_is_left_for_native_admission(monkeypatch: pytest.MonkeyPatch) -> None:
-    bridge.TOKEN_COUNTER.override(_RecordingCounter())
     monkeypatch.setattr(litellm, "disable_token_counter", True)
-    tokenizer: Final = bridge.rust_tokenizer(MODEL)
-    assert tokenizer == bridge.RustTokenizer("anthropic", "", True, False)
+    assert bridge.rust_tokenizer(MODEL) == bridge.RustTokenizer("anthropic", "", True, False)
 
 
 PARITY_REQUESTS: Final[tuple[dict[str, object], ...]] = (
@@ -149,17 +205,31 @@ async def test_native_count_matches_python_budget_counter(
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     bridge.TOKEN_COUNTER.reset()
     body: Final = json.dumps(request_body).replace(MODEL, model)
-    rust_count: Final = await bridge.count_input_tokens(body.encode(), tokenizer)
     python_count: Final = _count_input_tokens(request_body=json.loads(body), model=model)
-    assert rust_count is not None
-    assert rust_count.input_tokens == python_count
+
+    result: Final = await bridge.count_input_tokens(
+        body=body.encode(),
+        tokenizers={model: tokenizer},
+        python_fallback=_fallback({}, []),
+    )
+
+    assert result == {model: python_count}
 
 
 @pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
-async def test_native_declines_unsupported_request_without_loading_resources(
+async def test_native_declines_unsupported_request_and_runs_complete_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     bridge.TOKEN_COUNTER.reset()
-    assert await bridge.count_input_tokens(b'{"input":1.5}', ANTHROPIC) is None
+    fallback_calls: list[None] = []
+
+    result: Final = await bridge.count_input_tokens(
+        body=b'{"input":1.5}',
+        tokenizers={MODEL: ANTHROPIC},
+        python_fallback=_fallback({MODEL: 7}, fallback_calls),
+    )
+
+    assert result == {MODEL: 7}
+    assert fallback_calls == [None]

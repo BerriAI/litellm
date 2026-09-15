@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -90,7 +91,7 @@ def _component(
     return NativeComponent(name=name, capability=capability, exports=exports)
 
 
-COMPONENTS: Final = MappingProxyType(
+COMPONENTS: Final[Mapping[ComponentName, NativeComponent]] = MappingProxyType(
     {
         ComponentName.OCR: _component(
             ComponentName.OCR,

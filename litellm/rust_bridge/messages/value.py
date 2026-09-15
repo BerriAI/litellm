@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import (
     Final,
+    TypeVar,
     cast,  # noqa: TID251  # native callable signatures are checked by bridge contract tests
 )
 
@@ -28,6 +29,7 @@ def _as_amessages(value: object) -> RustAmessages | None:
 
 _MESSAGES: Final = COMPONENT.bind("messages", validate=_as_messages)
 _AMESSAGES: Final = COMPONENT.bind("amessages", validate=_as_amessages)
+ResultT = TypeVar("ResultT")
 
 
 def set_rust_messages(
@@ -57,7 +59,10 @@ def messages(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     has_agentic_hook: bool = False,
-) -> dict[str, object] | None:
+    on_request: Callable[[], None] = lambda: None,
+    python_fallback: Callable[[], ResultT],
+    adapt: Callable[[dict[str, object]], ResultT],
+) -> ResultT:
     execution: Final = COMPONENT.resolve(
         CapabilityContext(
             provider=custom_llm_provider or "",
@@ -77,6 +82,7 @@ def messages(
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
+                on_request=on_request,
             )
         )
         if rust_messages is not None
@@ -85,8 +91,8 @@ def messages(
     return invoke(
         execution=execution,
         native_call=native_call,
-        python_fallback=lambda: None,
-        adapt=lambda value: value,
+        python_fallback=python_fallback,
+        adapt=adapt,
         context=BridgeErrorContext(
             route=COMPONENT.name.value,
             provider=custom_llm_provider or "",
@@ -105,7 +111,10 @@ async def amessages(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     has_agentic_hook: bool = False,
-) -> dict[str, object] | None:
+    on_request: Callable[[], None] = lambda: None,
+    python_fallback: Callable[[], Awaitable[ResultT]],
+    adapt: Callable[[dict[str, object]], Awaitable[ResultT]],
+) -> ResultT:
     execution: Final = COMPONENT.resolve(
         CapabilityContext(
             provider=custom_llm_provider or "",
@@ -125,20 +134,18 @@ async def amessages(
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
+                on_request=on_request,
             )
         )
         if rust_amessages is not None
         else None
     )
 
-    async def python_fallback() -> None:
-        return None
-
     return await ainvoke(
         execution=execution,
         native_call=native_call,
         python_fallback=python_fallback,
-        adapt=lambda value: value,
+        adapt=adapt,
         context=BridgeErrorContext(
             route=COMPONENT.name.value,
             provider=custom_llm_provider or "",

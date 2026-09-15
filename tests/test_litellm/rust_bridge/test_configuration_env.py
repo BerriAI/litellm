@@ -21,7 +21,8 @@ from litellm.rust_bridge.configuration import (
 )
 from litellm.rust_bridge.errors import RustRouteUnsupportedError
 from litellm.rust_bridge.route import NativeComponent
-from litellm.rust_bridge.token_counter import COMPONENT, definition
+from litellm.rust_bridge.token_counter import definition
+from litellm.rust_bridge.token_counter import COMPONENT
 
 
 @pytest.mark.parametrize(("value", "expected"), (("1", True), ("0", False), (" 1 ", True), (" 0 ", False)))

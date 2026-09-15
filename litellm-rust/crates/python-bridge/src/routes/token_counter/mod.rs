@@ -34,8 +34,9 @@ fn count_input_tokens<'py>(
     legacy_accounting: bool,
     resource_loader: Py<PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let tokenizer = litellm_token_counter::admit_tokenizer(kind, encoding, disabled, legacy_accounting)
-        .map_err(admission_error_to_pyerr)?;
+    let tokenizer =
+        litellm_token_counter::admit_tokenizer(kind, encoding, disabled, legacy_accounting)
+            .map_err(admission_error_to_pyerr)?;
     CoreTokenCounter::admit_request(body).map_err(admission_error_to_pyerr)?;
     let cached = cached_counter(py, tokenizer, resource_loader)?;
     let body = body.to_vec();
@@ -72,7 +73,8 @@ fn cached_counter(
         .call1(py, (tokenizer,))
         .and_then(|value| value.extract(py))
         .map_err(|error| RustBridgeUnavailable::new_err(error.to_string()))?;
-    let counter = release_gil(py, move || load_counter(tokenizer, &resource)).map_err(token_count_error_to_pyerr)?;
+    let counter = release_gil(py, move || load_counter(tokenizer, &resource))
+        .map_err(token_count_error_to_pyerr)?;
     let cached = Arc::new(CachedCounter {
         counter: Arc::new(counter),
         encode_slots: Arc::new(Semaphore::new(encode_parallelism())),
@@ -109,7 +111,9 @@ fn admission_error_to_pyerr(error: Error) -> PyErr {
 fn token_count_error_to_pyerr(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
-        Error::Load(_) | Error::Ranks(_) | Error::UnicodeClasses => RustBridgeUnavailable::new_err(message),
+        Error::Load(_) | Error::Ranks(_) | Error::UnicodeClasses => {
+            RustBridgeUnavailable::new_err(message)
+        }
         Error::UnsupportedTokenizer
         | Error::RequestParse(_)
         | Error::MissingInput

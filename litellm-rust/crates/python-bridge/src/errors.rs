@@ -112,7 +112,11 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             for (error, status, message) in [
-                (Error::Connect("connection refused".into()), 0, "connection refused"),
+                (
+                    Error::Connect("connection refused".into()),
+                    0,
+                    "connection refused",
+                ),
                 (
                     Error::Http {
                         status: 429,

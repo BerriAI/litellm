@@ -8,7 +8,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge import _native
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -79,15 +79,15 @@ def test_native_ocr_with_compiled_rust_extension(
     host: Final = str(address[0])
     port: Final = int(address[1])
 
-    response: Final = rust_ocr_bridge.ocr(
-        model="mistral-ocr-latest",
-        document={"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+    response: Final = _native.ocr(
+        "mistral-ocr-latest",
+        {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
         api_key="test-key",
         api_base=f"http://{host}:{port}",
         custom_llm_provider="mistral",
         extra_headers=None,
         optional_params={},
-        timeout=None,
+        timeout_seconds=None,
     )
 
     assert response is not None

@@ -449,6 +449,83 @@ class AnthropicChatCompletion(BaseLLM):
                 timeout=timeout,
             )
 
+        def completion_dispatch() -> "ModelResponse | CustomStreamWrapper":
+            request_headers, data = finish_request(
+                config.transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=transform_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
+            )
+            if stream is True:
+                data["stream"] = stream
+                completion_stream, response_headers = make_sync_call(
+                    client=client,
+                    api_base=api_base,
+                    headers=request_headers,
+                    data=json.dumps(data),
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                    timeout=timeout,
+                    json_mode=json_mode,
+                    speed=optional_params.get("speed") if optional_params else None,
+                    tool_name_reverse_map=(
+                        litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
+                        if isinstance(litellm_params, dict)
+                        else None
+                    ),
+                )
+                return CustomStreamWrapper(
+                    completion_stream=completion_stream,
+                    model=model,
+                    custom_llm_provider="anthropic",
+                    logging_obj=logging_obj,
+                    _response_headers=process_anthropic_headers(response_headers),
+                )
+
+            sync_client: Final = (
+                client if isinstance(client, HTTPHandler) else _get_httpx_client(params={"timeout": timeout})
+            )
+            try:
+                response: Final = sync_client.post(
+                    api_base,
+                    headers=request_headers,
+                    data=json.dumps(data),
+                    timeout=timeout,
+                    logging_obj=logging_obj,
+                )
+            except Exception as e:
+                status_code: Final = getattr(e, "status_code", 500)
+                error_headers = getattr(e, "headers", None)
+                error_text = getattr(e, "text", str(e))
+                error_response: Final[object] = getattr(e, "response", None)
+                if error_headers is None and error_response:
+                    error_headers = getattr(error_response, "headers", None)
+                if error_response and hasattr(error_response, "text"):
+                    error_text = getattr(error_response, "text", error_text)
+                raise AnthropicError(
+                    message=error_text,
+                    status_code=status_code,
+                    headers=error_headers,
+                )
+
+            return config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                json_mode=json_mode,
+            )
+
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **AnthropicConfig.get_config(model=model),
             **optional_params,
@@ -462,9 +539,10 @@ class AnthropicChatCompletion(BaseLLM):
             "api_base": api_base,
             "headers": headers,
         }
-        log_rust_pre_call: Final = lambda: logging_obj.pre_call(
-            input=messages, api_key=api_key, additional_args=rust_logging_args
-        )
+
+        def log_rust_pre_call() -> None:
+            logging_obj.pre_call(input=messages, api_key=api_key, additional_args=rust_logging_args)
+
         log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
             logging_obj=logging_obj,
             messages=messages,
@@ -488,7 +566,7 @@ class AnthropicChatCompletion(BaseLLM):
                 on_response=log_rust_post_call,
                 python_fallback=acompletion_dispatch,
             )
-        rust_response: Final = rust_chat_completions_bridge.chat_completions(
+        return rust_chat_completions_bridge.chat_completions(
             model=model,
             messages=messages,
             optional_params=rust_optional_params,
@@ -502,94 +580,7 @@ class AnthropicChatCompletion(BaseLLM):
             litellm_params=litellm_params,
             on_request=log_rust_pre_call,
             on_response=log_rust_post_call,
-            python_fallback=lambda: None,
-        )
-        if rust_response is not None:
-            return rust_response
-
-        if acompletion is True:
-            return acompletion_dispatch()
-        else:
-            headers, data = finish_request(
-                config.transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=transform_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                )
-            )
-            ## COMPLETION CALL
-            if (
-                stream is True
-            ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
-                data["stream"] = stream
-                completion_stream, headers = make_sync_call(
-                    client=client,
-                    api_base=api_base,
-                    headers=headers,
-                    data=json.dumps(data),
-                    model=model,
-                    messages=messages,
-                    logging_obj=logging_obj,
-                    timeout=timeout,
-                    json_mode=json_mode,
-                    speed=optional_params.get("speed") if optional_params else None,
-                    tool_name_reverse_map=(
-                        litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
-                        if isinstance(litellm_params, dict)
-                        else None
-                    ),
-                )
-                return CustomStreamWrapper(
-                    completion_stream=completion_stream,
-                    model=model,
-                    custom_llm_provider="anthropic",
-                    logging_obj=logging_obj,
-                    _response_headers=process_anthropic_headers(headers),
-                )
-
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(params={"timeout": timeout})
-                else:
-                    client = client
-
-                try:
-                    response: Final = client.post(
-                        api_base,
-                        headers=headers,
-                        data=json.dumps(data),
-                        timeout=timeout,
-                        logging_obj=logging_obj,
-                    )
-                except Exception as e:
-                    status_code: Final = getattr(e, "status_code", 500)
-                    error_headers = getattr(e, "headers", None)
-                    error_text = getattr(e, "text", str(e))
-                    error_response: Final[object] = getattr(e, "response", None)
-                    if error_headers is None and error_response:
-                        error_headers = getattr(error_response, "headers", None)
-                    if error_response and hasattr(error_response, "text"):
-                        error_text = getattr(error_response, "text", error_text)
-                    raise AnthropicError(
-                        message=error_text,
-                        status_code=status_code,
-                        headers=error_headers,
-                    )
-
-        return config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-            json_mode=json_mode,
+            python_fallback=completion_dispatch,
         )
 
     def embedding(self):

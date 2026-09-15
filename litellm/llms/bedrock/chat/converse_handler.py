@@ -411,49 +411,139 @@ class BedrockConverseLLM(BaseAWSLLM):
             "api_base": proxy_endpoint_url,
             "headers": headers,
         }
-        log_rust_pre_call: Final = lambda: logging_obj.pre_call(
-            input=messages, api_key="", additional_args=rust_logging_args
-        )
+
+        def log_rust_pre_call() -> None:
+            logging_obj.pre_call(input=messages, api_key="", additional_args=rust_logging_args)
+
         log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
             logging_obj=logging_obj,
             messages=messages,
             api_key="",
             additional_args=rust_logging_args,
         )
-        if acompletion:
-            return rust_chat_completions_bridge.achat_completions(
+
+        def completion_dispatch() -> ModelResponse | CustomStreamWrapper:
+            request_data: Final = litellm.AmazonConverseConfig()._transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=extra_headers,
+            )
+            data: Final = json.dumps(request_data)
+            prepped: Final = self.get_request_headers(
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=proxy_endpoint_url,
+                data=data,
+                headers=headers,
+                api_key=api_key,
+            )
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": proxy_endpoint_url,
+                    "headers": prepped.headers,
+                },
+            )
+            client_timeout: Final = httpx.Timeout(timeout) if isinstance(timeout, (float, int)) else timeout
+            sync_client: Final = (
+                client
+                if isinstance(client, HTTPHandler)
+                else _get_httpx_client({} if client_timeout is None else {"timeout": client_timeout})
+            )
+            if stream is True:
+                completion_stream, response_headers = make_sync_call(
+                    client=sync_client,
+                    api_base=proxy_endpoint_url,
+                    headers=prepped.headers,
+                    data=data,
                     model=model,
                     messages=messages,
-                    optional_params=rust_optional_params,
-                    model_response=model_response,
-                    api_key=api_key,
-                    api_base=proxy_endpoint_url,
+                    logging_obj=logging_obj,
+                    json_mode=json_mode,
+                    fake_stream=fake_stream,
+                    stream_chunk_size=stream_chunk_size,
+                )
+                return CustomStreamWrapper(
+                    completion_stream=completion_stream,
+                    model=model,
                     custom_llm_provider="bedrock",
-                    extra_headers=headers,
-                    timeout=timeout,
+                    logging_obj=logging_obj,
+                    _response_headers=response_headers,
+                )
+
+            try:
+                response: Final = sync_client.post(
+                    url=proxy_endpoint_url,
+                    headers=prepped.headers,
+                    data=data,
+                    logging_obj=logging_obj,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                error_code: Final = err.response.status_code
+                raise BedrockError(
+                    status_code=error_code,
+                    message=error_response_text(err.response),
+                    headers=err.response.headers,
+                    response=err.response,
+                )
+            except httpx.TimeoutException:
+                raise BedrockError(status_code=408, message="Timeout error occurred.")
+
+            transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
+                model=model,
+                response=response,
+                model_response=model_response,
+                stream=stream if isinstance(stream, bool) else False,
+                logging_obj=logging_obj,
+                api_key="",
+                data=data,
+                messages=messages,
+                optional_params=optional_params,
+                encoding=encoding,
+            )
+            transformed_response.set_provider_response_headers(response.headers)
+            return transformed_response
+
+        if acompletion:
+            return rust_chat_completions_bridge.achat_completions(
+                model=model,
+                messages=messages,
+                optional_params=rust_optional_params,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=proxy_endpoint_url,
+                custom_llm_provider="bedrock",
+                extra_headers=headers,
+                timeout=timeout,
+                stream=stream,
+                litellm_params=litellm_params,
+                on_request=log_rust_pre_call,
+                on_response=log_rust_post_call,
+                python_fallback=lambda: self.async_completion(
+                    model=model,
+                    messages=messages,
+                    api_base=proxy_endpoint_url,
+                    model_response=model_response,
+                    encoding=encoding,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
                     stream=stream,
                     litellm_params=litellm_params,
-                    on_request=log_rust_pre_call,
-                    on_response=log_rust_post_call,
-                    python_fallback=lambda: self.async_completion(
-                        model=model,
-                        messages=messages,
-                        api_base=proxy_endpoint_url,
-                        model_response=model_response,
-                        encoding=encoding,
-                        logging_obj=logging_obj,
-                        optional_params=optional_params,
-                        stream=stream,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        headers=headers,
-                        timeout=timeout,
-                        client=client,
-                        credentials=credentials,
-                        api_key=api_key,
-                    ),
-                )
-        rust_response: Final = rust_chat_completions_bridge.chat_completions(
+                    logger_fn=logger_fn,
+                    headers=headers,
+                    timeout=timeout,
+                    client=client,
+                    credentials=credentials,
+                    api_key=api_key,
+                ),
+            )
+        return rust_chat_completions_bridge.chat_completions(
             model=model,
             messages=messages,
             optional_params=rust_optional_params,
@@ -467,151 +557,5 @@ class BedrockConverseLLM(BaseAWSLLM):
             litellm_params=litellm_params,
             on_request=log_rust_pre_call,
             on_response=log_rust_post_call,
-            python_fallback=lambda: None,
+            python_fallback=completion_dispatch,
         )
-        if rust_response is not None:
-            return rust_response
-
-        ### ROUTING (ASYNC, STREAMING, SYNC)
-        if acompletion:
-            if isinstance(client, HTTPHandler):
-                client = None
-            if stream is True:
-                return self.async_streaming(
-                    model=model,
-                    messages=messages,
-                    api_base=proxy_endpoint_url,
-                    model_response=model_response,
-                    encoding=encoding,
-                    logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    stream=True,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    timeout=timeout,
-                    client=client,
-                    json_mode=json_mode,
-                    fake_stream=fake_stream,
-                    credentials=credentials,
-                    api_key=api_key,
-                    stream_chunk_size=stream_chunk_size,
-                )
-            ### ASYNC COMPLETION
-            return self.async_completion(
-                model=model,
-                messages=messages,
-                api_base=proxy_endpoint_url,
-                model_response=model_response,
-                encoding=encoding,
-                logging_obj=logging_obj,
-                optional_params=optional_params,
-                stream=stream,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                headers=headers,
-                timeout=timeout,
-                client=client,
-                credentials=credentials,
-                api_key=api_key,
-            )
-
-        ## TRANSFORMATION ##
-
-        _data: Final = litellm.AmazonConverseConfig()._transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=extra_headers,
-        )
-        data: Final = json.dumps(_data)
-
-        prepped: Final = self.get_request_headers(
-            credentials=credentials,
-            aws_region_name=aws_region_name,
-            extra_headers=extra_headers,
-            endpoint_url=proxy_endpoint_url,
-            data=data,
-            headers=headers,
-            api_key=api_key,
-        )
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": proxy_endpoint_url,
-                "headers": prepped.headers,
-            },
-        )
-        if client is None or isinstance(client, AsyncHTTPHandler):
-            _params: Final = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = _get_httpx_client(_params)
-        else:
-            client = client
-
-        if stream is not None and stream is True:
-            completion_stream, response_headers = make_sync_call(
-                client=(client if client is not None and isinstance(client, HTTPHandler) else None),
-                api_base=proxy_endpoint_url,
-                headers=prepped.headers,
-                data=data,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                json_mode=json_mode,
-                fake_stream=fake_stream,
-                stream_chunk_size=stream_chunk_size,
-            )
-            streaming_response: Final = CustomStreamWrapper(
-                completion_stream=completion_stream,
-                model=model,
-                custom_llm_provider="bedrock",
-                logging_obj=logging_obj,
-                _response_headers=response_headers,
-            )
-
-            return streaming_response
-
-        ### COMPLETION
-
-        try:
-            response: Final = client.post(
-                url=proxy_endpoint_url,
-                headers=prepped.headers,
-                data=data,
-                logging_obj=logging_obj,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise BedrockError(
-                status_code=error_code,
-                message=error_response_text(err.response),
-                headers=err.response.headers,
-                response=err.response,
-            )
-        except httpx.TimeoutException:
-            raise BedrockError(status_code=408, message="Timeout error occurred.")
-
-        sync_transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
-            model=model,
-            response=response,
-            model_response=model_response,
-            stream=stream if isinstance(stream, bool) else False,
-            logging_obj=logging_obj,
-            api_key="",
-            data=data,
-            messages=messages,
-            optional_params=optional_params,
-            encoding=encoding,
-        )
-        sync_transformed_response.set_provider_response_headers(response.headers)
-        return sync_transformed_response

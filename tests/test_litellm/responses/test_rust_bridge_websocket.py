@@ -14,7 +14,13 @@ class _FakeNativeConnection:
     async def send_text(self, text: str) -> None:
         self.sent.append(text)
 
+    async def send(self, text: str) -> None:
+        self.sent.append(text)
+
     async def recv_text(self) -> str:
+        return "response.completed"
+
+    async def recv(self) -> str:
         return "response.completed"
 
     async def close(self) -> None:
@@ -39,6 +45,10 @@ class _FakeNativeBridge:
         return _FakeNativeConnection()
 
 
+async def _no_connection() -> _FakeNativeConnection:
+    raise AssertionError("Python fallback must not connect")
+
+
 @pytest.fixture(autouse=True)
 def reset_responses_websocket():
     responses_websocket.set_rust_responses_websocket(connection=None)
@@ -57,20 +67,22 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bridge_unavailable_executes_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     configuration.rust(True)
     monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: None)
+    fallback = _FakeNativeConnection()
 
-    assert (
-        await responses_websocket.connect(
-            url="wss://example.test/responses",
-            custom_llm_provider="openai",
-            model="test",
-            headers={},
-            timeout=None,
-        )
-        is None
-    )
+    async def python_fallback() -> _FakeNativeConnection:
+        return fallback
+
+    assert await responses_websocket.connect(
+        url="wss://example.test/responses",
+        custom_llm_provider="openai",
+        model="test",
+        headers={},
+        timeout=None,
+        python_fallback=python_fallback,
+    ) is fallback
 
 
 @pytest.mark.asyncio
@@ -86,6 +98,7 @@ async def test_enabled_bridge_connects_and_adapts_socket(
         model="test",
         headers={"Authorization": "Bearer key"},
         timeout=1.0,
+        python_fallback=_no_connection,
     )
 
     assert connection is not None
@@ -103,16 +116,19 @@ async def test_disabled_websocket_does_not_connect() -> None:
 
     responses_websocket.set_rust_responses_websocket(connection=UnexpectedConnection)
     configuration.rust(False)
-    assert (
-        await responses_websocket.connect(
-            url="ws://127.0.0.1:1",
-            headers={},
-            timeout=0.1,
-            custom_llm_provider="openai",
-            model="test",
-        )
-        is None
-    )
+    fallback = _FakeNativeConnection()
+
+    async def python_fallback() -> _FakeNativeConnection:
+        return fallback
+
+    assert await responses_websocket.connect(
+        url="ws://127.0.0.1:1",
+        headers={},
+        timeout=0.1,
+        custom_llm_provider="openai",
+        model="test",
+        python_fallback=python_fallback,
+    ) is fallback
 
 
 @pytest.mark.asyncio
@@ -122,16 +138,19 @@ async def test_native_websocket_decline_falls_back_but_connection_failure_does_n
     native = pytest.importorskip("litellm.rust_bridge._native")
     responses_websocket.set_rust_responses_websocket(connection=native.ResponsesWebSocketConnection)
     configuration.rust(True)
-    assert (
-        await responses_websocket.connect(
-            url="ws://127.0.0.1:1",
-            headers={},
-            timeout=0.1,
-            custom_llm_provider="azure",
-            model="test",
-        )
-        is None
-    )
+    fallback = _FakeNativeConnection()
+
+    async def python_fallback() -> _FakeNativeConnection:
+        return fallback
+
+    assert await responses_websocket.connect(
+        url="ws://127.0.0.1:1",
+        headers={},
+        timeout=0.1,
+        custom_llm_provider="azure",
+        model="test",
+        python_fallback=python_fallback,
+    ) is fallback
     with pytest.raises(APIError):
         await responses_websocket.connect(
             url="ws://127.0.0.1:1",
@@ -139,4 +158,5 @@ async def test_native_websocket_decline_falls_back_but_connection_failure_does_n
             timeout=0.1,
             custom_llm_provider="openai",
             model="test",
+            python_fallback=python_fallback,
         )

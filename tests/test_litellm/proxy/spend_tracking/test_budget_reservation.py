@@ -4,6 +4,7 @@ import json
 import math
 from types import MappingProxyType
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,6 +13,7 @@ from litellm.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.spend_tracking import budget_reservation
 from litellm.proxy.spend_tracking.budget_reservation import (
     count_request_input_tokens,
     estimate_request_max_cost,
@@ -232,58 +234,37 @@ class _FakeNative:
     RustUpstreamError = _FakeUpstream
 
 
-class _RecordingCounter:
-    """Stands in for one native counter; records `(tokenizer, body)` on the shared factory."""
-
-    def __init__(self, factory: _RecordingFactory, tokenizer: rust_token_counter.RustTokenizer) -> None:
-        self.factory = factory
-        self.tokenizer = tokenizer
-
-    async def acount_request(self, body: bytes) -> object:
-        self.factory.calls.append((self.tokenizer, body))
-        return {"model": "", "input_tokens": RUST_INPUT_TOKENS_BY_TOKENIZER[self.tokenizer]}
-
-
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: called with tokenizer JSON, or `from_*_ranks`."""
-
     def __init__(self) -> None:
-        self.calls: list[tuple[rust_token_counter.RustTokenizer, bytes]] = []
+        self.calls: list[tuple[str, bytes]] = []
 
-    def __call__(self, tokenizer_json: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "anthropic")
-
-    def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "cl100k_base")
-
-    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "o200k_base")
-
-
-class _DecliningCounter:
-    async def acount_request(self, body: bytes) -> object:
-        raise _FakeDeclined("unsupported content block")
+    async def __call__(
+        self,
+        body: bytes,
+        kind: str | None,
+        encoding: str,
+        disabled: bool,
+        legacy_accounting: bool,
+        resource_loader,
+    ) -> object:
+        tokenizer: Final = kind or encoding
+        self.calls.append((tokenizer, body))
+        if disabled or legacy_accounting or tokenizer not in RUST_INPUT_TOKENS_BY_TOKENIZER:
+            raise _FakeDeclined("unsupported tokenizer configuration")
+        return {"model": "", "input_tokens": RUST_INPUT_TOKENS_BY_TOKENIZER[tokenizer]}
 
 
 class _DecliningFactory:
-    def __call__(self, tokenizer_json: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_cl100k_ranks(self, rank_file: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_o200k_ranks(self, rank_file: str) -> _DecliningCounter:
-        return _DecliningCounter()
+    async def __call__(self, *args, **kwargs) -> object:
+        raise _FakeDeclined("unsupported content block")
 
 
 @pytest.fixture
 def rust_counter(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
-    rust_token_counter._counter.cache_clear()
     configuration.reset_rust_configuration()
     yield
     rust_token_counter.TOKEN_COUNTER.reset()
-    rust_token_counter._counter.cache_clear()
     configuration.reset_rust_configuration()
 
 
@@ -350,7 +331,7 @@ async def test_tiktoken_o200k_models_are_counted_by_rust(rust_counter: None, mod
 
 
 @pytest.mark.asyncio
-async def test_multi_model_request_counts_once_per_tokenizer_and_python_for_the_rest(rust_counter: None) -> None:
+async def test_multi_model_decline_discards_every_native_count(rust_counter: None) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(True)
     rust_token_counter.TOKEN_COUNTER.override(factory)
@@ -372,16 +353,14 @@ async def test_multi_model_request_counts_once_per_tokenizer_and_python_for_the_
         request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=raw_body
     )
 
-    assert factory.calls == [("cl100k_base", raw_body), ("anthropic", raw_body), ("o200k_base", raw_body)]
-    assert dict(counts) == {
-        CL100K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"],
-        "gemini/gemini-2.5-pro": RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"],
-        ANTHROPIC_TOKENIZER_MODEL: RUST_INPUT_TOKENS,
-        O200K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"],
-        "gpt-5": RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"],
-        "replicate/meta/llama-2-70b-chat": python_counts["replicate/meta/llama-2-70b-chat"],
-    }
-    assert counts["replicate/meta/llama-2-70b-chat"] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
+    assert factory.calls == [
+        ("cl100k_base", raw_body),
+        ("anthropic", raw_body),
+        ("o200k_base", raw_body),
+        ("llama2", raw_body),
+    ]
+    assert dict(counts) == dict(python_counts)
+    assert not set(counts.values()) & set(RUST_INPUT_TOKENS_BY_TOKENIZER.values())
 
 
 @pytest.mark.asyncio
@@ -431,7 +410,7 @@ async def test_direct_budget_counter_ignores_disabled_public_rollout(rust_counte
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ("replicate/meta/llama-2-70b-chat", "meta-llama/Llama-3-8b", "text-davinci-003"))
-async def test_models_without_a_rust_tokenizer_stay_in_python(
+async def test_models_with_unsupported_native_configuration_fall_back_to_python(
     rust_counter: None, monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
     monkeypatch.setattr(
@@ -449,6 +428,28 @@ async def test_models_without_a_rust_tokenizer_stay_in_python(
         request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=json.dumps(body).encode()
     )
 
-    assert factory.calls == []
+    tokenizer: Final = rust_token_counter.rust_tokenizer(model)
+    assert factory.calls == [(tokenizer.kind or tokenizer.encoding, json.dumps(body).encode())]
     assert dict(counts) == dict(python_counts)
     assert counts[model] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
+
+
+@pytest.mark.asyncio
+async def test_large_python_fallback_runs_off_event_loop(
+    rust_counter: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    litellm.rust(False)
+    body: Final = {"model": O200K_MODEL, "input": "x" * budget_reservation.TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS}
+    offload: Final = AsyncMock(side_effect=lambda function, **kwargs: function(**kwargs))
+    monkeypatch.setattr(budget_reservation.asyncio, "to_thread", offload)
+
+    counts: Final = await count_request_input_tokens(
+        request_body=body,
+        route="/v1/responses",
+        llm_router=None,
+        raw_body=json.dumps(body).encode(),
+    )
+
+    assert counts[O200K_MODEL] > 0
+    offload.assert_awaited_once()

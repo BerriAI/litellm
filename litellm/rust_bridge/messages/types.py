@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
 
@@ -15,6 +15,7 @@ class RustMessages(Protocol):
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
         has_agentic_hook: bool = False,
+        on_request: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -30,5 +31,6 @@ class RustAmessages(Protocol):
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
         has_agentic_hook: bool = False,
+        on_request: Callable[[], None] | None = None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError

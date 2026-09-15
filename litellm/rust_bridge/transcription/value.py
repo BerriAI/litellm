@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import (
     Final,
     cast,  # noqa: TID251  # native callable signatures are checked by bridge contract tests
@@ -54,7 +55,8 @@ def transcription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
+    python_fallback: Callable[[], dict[str, object]] | None,
+) -> dict[str, object]:
     execution: Final = COMPONENT.resolve(CapabilityContext(provider=custom_llm_provider or "", model=model))
     rust_transcription: Final = execution.select(_TRANSCRIPTION)
     return invoke(
@@ -73,7 +75,7 @@ def transcription(
         )
         if rust_transcription is not None
         else None,
-        python_fallback=lambda: None,
+        python_fallback=python_fallback,
         adapt=lambda response: response,
         context=BridgeErrorContext(route=COMPONENT.name.value, provider=custom_llm_provider or "", model=model),
     )
@@ -89,11 +91,13 @@ async def atranscription(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object] | None:
+    python_fallback: Callable[[], Awaitable[dict[str, object]]] | None,
+) -> dict[str, object]:
     execution: Final = COMPONENT.resolve(CapabilityContext(provider=custom_llm_provider or "", model=model))
     rust_atranscription: Final = execution.select(_ATRANSCRIPTION)
-    async def python_fallback() -> None:
-        return None
+
+    async def adapt(response: dict[str, object]) -> dict[str, object]:
+        return response
 
     return await ainvoke(
         execution=execution,
@@ -112,6 +116,6 @@ async def atranscription(
         if rust_atranscription is not None
         else None,
         python_fallback=python_fallback,
-        adapt=lambda response: response,
+        adapt=adapt,
         context=BridgeErrorContext(route=COMPONENT.name.value, provider=custom_llm_provider or "", model=model),
     )

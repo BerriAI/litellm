@@ -26,6 +26,14 @@ fn prepare_messages(
         options.custom_llm_provider.as_deref(),
         inputs.has_agentic_hook.unwrap_or(false),
     ))?;
+    if let Some(on_request) = inputs.on_request {
+        Python::attach(|py| {
+            on_request
+                .call0(py)
+                .map(|_| ())
+                .map_err(|error| crate::errors::host_callback_error(py, error))
+        })?;
+    }
 
     Ok(async move {
         let RouteOptions {
@@ -66,6 +74,7 @@ bridge_route! {
         extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
         has_agentic_hook: Option<bool>,
+        on_request: Option<Py<PyAny>>,
     },
     prepare = prepare_messages,
     errors = execution_error_to_pyerr,

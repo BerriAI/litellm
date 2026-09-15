@@ -28,13 +28,15 @@ class BridgeErrorContext:
 def invoke(
     *,
     native_call: Callable[[], NativeT] | None,
-    python_fallback: Callable[[], ResultT],
+    python_fallback: Callable[[], ResultT] | None,
     adapt: Callable[[NativeT], ResultT],
     execution: ComponentExecution,
     context: BridgeErrorContext,
 ) -> ResultT:
     execution.require_supported()
+    _validate_fallback(execution, python_fallback)
     if execution.decision is ExecutionDecision.PYTHON:
+        assert python_fallback is not None
         return python_fallback()
     if native_call is None:
         return _unavailable_or_fallback(execution, python_fallback)
@@ -61,20 +63,22 @@ def invoke(
 async def ainvoke(
     *,
     native_call: Callable[[], Awaitable[NativeT]] | None,
-    python_fallback: Callable[[], Awaitable[ResultT]],
-    adapt: Callable[[NativeT], ResultT],
+    python_fallback: Callable[[], Awaitable[ResultT]] | None,
+    adapt: Callable[[NativeT], Awaitable[ResultT]],
     execution: ComponentExecution,
     context: BridgeErrorContext,
 ) -> ResultT:
     execution.require_supported()
+    _validate_fallback(execution, python_fallback)
     if execution.decision is ExecutionDecision.PYTHON:
+        assert python_fallback is not None
         return await python_fallback()
     if native_call is None:
         return await _aunavailable_or_fallback(execution, python_fallback)
 
     exceptions: Final = native_exception_types()
     if exceptions is None:
-        return adapt(await native_call())
+        return await adapt(await native_call())
     declined, upstream = exceptions
     unavailable: Final = native_unavailable_exception()
     host_callback: Final = native_host_callback_exception()
@@ -88,53 +92,65 @@ async def ainvoke(
         return await _adeclined_or_fallback(execution, python_fallback, error)
     except upstream as error:
         _raise_upstream(error, context)
-    return adapt(value)
+    return await adapt(value)
 
 
 def _unavailable_or_fallback(
     execution: ComponentExecution,
-    python_fallback: Callable[[], ResultT],
+    python_fallback: Callable[[], ResultT] | None,
 ) -> ResultT:
     if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        assert python_fallback is not None
         return python_fallback()
     raise RustRouteUnavailableError(f"Rust {execution.route_name.value} bridge is unavailable")
 
 
 async def _aunavailable_or_fallback(
     execution: ComponentExecution,
-    python_fallback: Callable[[], Awaitable[ResultT]],
+    python_fallback: Callable[[], Awaitable[ResultT]] | None,
 ) -> ResultT:
     if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        assert python_fallback is not None
         return await python_fallback()
     raise RustRouteUnavailableError(f"Rust {execution.route_name.value} bridge is unavailable")
 
 
 def _declined_or_fallback(
     execution: ComponentExecution,
-    python_fallback: Callable[[], ResultT],
+    python_fallback: Callable[[], ResultT] | None,
     error: BaseException,
 ) -> ResultT:
     if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        assert python_fallback is not None
         return python_fallback()
     _raise_declined(execution, error)
 
 
 async def _adeclined_or_fallback(
     execution: ComponentExecution,
-    python_fallback: Callable[[], Awaitable[ResultT]],
+    python_fallback: Callable[[], Awaitable[ResultT]] | None,
     error: BaseException,
 ) -> ResultT:
     if execution.decision is ExecutionDecision.RUST_WITH_FALLBACK:
+        assert python_fallback is not None
         return await python_fallback()
     _raise_declined(execution, error)
+
+
+def _validate_fallback(execution: ComponentExecution, python_fallback: object | None) -> None:
+    has_python: Final = execution.decision in (ExecutionDecision.PYTHON, ExecutionDecision.RUST_WITH_FALLBACK)
+    if has_python and not callable(python_fallback):
+        raise ValueError(
+            f"{execution.route_name.value} declares a Python implementation but no callable fallback was supplied"
+        )
+    if not has_python and python_fallback is not None:
+        raise ValueError(f"{execution.route_name.value} declares no Python implementation but a fallback was supplied")
 
 
 def _raise_declined(execution: ComponentExecution, error: BaseException) -> NoReturn:
     reason_value: Final[object] = error.args[0] if error.args else str(error)
     reason: Final = reason_value if isinstance(reason_value, str) else str(reason_value)
-    raise RustRouteDeclinedError(
-        f"Rust {execution.route_name.value} bridge declined the request: {reason}"
-    ) from error
+    raise RustRouteDeclinedError(f"Rust {execution.route_name.value} bridge declined the request: {reason}") from error
 
 
 def _raise_host_callback(error: BaseException) -> NoReturn:

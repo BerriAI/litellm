@@ -8,7 +8,7 @@ from litellm.rust_bridge import _native
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import NATIVE_EXPORTS
 from litellm.rust_bridge.chat_completions.lifecycle import LIFECYCLE as CHAT_COMPLETIONS
-from litellm.rust_bridge.configuration import ComponentName, ExecutionDecision
+from litellm.rust_bridge.configuration import ExecutionDecision, ComponentName
 from litellm.rust_bridge.embeddings.lifecycle import LIFECYCLE as EMBEDDINGS
 from litellm.rust_bridge.image_edit.lifecycle import LIFECYCLE as IMAGE_EDIT
 from litellm.rust_bridge.image_generation.lifecycle import LIFECYCLE as IMAGE_GENERATION

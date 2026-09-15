@@ -9,7 +9,7 @@ import pytest
 
 from litellm.exceptions import APIError
 from litellm.rust_bridge import bindings, runtime
-from litellm.rust_bridge.configuration import ComponentName, ExecutionDecision
+from litellm.rust_bridge.configuration import ExecutionDecision, ComponentName
 from litellm.rust_bridge.errors import RustRouteDeclinedError, RustRouteUnavailableError, RustRouteUnsupportedError
 from litellm.rust_bridge.route import ComponentExecution
 
@@ -46,7 +46,7 @@ async def _invoke(
     decision: ExecutionDecision,
     native_call: Callable[[], object] | None,
     adapt: Callable[[object], object],
-    fallback: Callable[[], object] = lambda: "python",
+    fallback: Callable[[], object] | None = lambda: "python",
 ) -> object:
     execution: Final = ComponentExecution(route_name=ComponentName.MESSAGES, decision=decision)
     context: Final = runtime.BridgeErrorContext(route="messages", provider="anthropic", model="model")
@@ -64,13 +64,17 @@ async def _invoke(
         return native_call()
 
     async def afallback() -> object:
+        assert fallback is not None
         return fallback()
+
+    async def aadapt(value: object) -> object:
+        return adapt(value)
 
     return await runtime.ainvoke(
         execution=execution,
         native_call=call if native_call is not None else None,
-        python_fallback=afallback,
-        adapt=adapt,
+        python_fallback=afallback if fallback is not None else None,
+        adapt=aadapt,
         context=context,
     )
 
@@ -111,9 +115,30 @@ async def test_unavailable_and_declined_follow_policy(
     if required:
         expected: Final = RustRouteDeclinedError if isinstance(error, RustBridgeDeclined) else RustRouteUnavailableError
         with pytest.raises(expected):
-            await _invoke(asynchronous, decision, native_call, str)
+            await _invoke(asynchronous, decision, native_call, str, None)
         return
     assert await _invoke(asynchronous, decision, native_call, str) == "python"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("native_call", (None, lambda: (_ for _ in ()).throw(RustBridgeDeclined("declined"))))
+async def test_optional_failure_runs_python_exactly_once(
+    asynchronous: bool,
+    native_call: Callable[[], object] | None,
+) -> None:
+    fallback_calls: Final[list[None]] = []
+
+    result: Final = await _invoke(
+        asynchronous,
+        ExecutionDecision.RUST_WITH_FALLBACK,
+        native_call,
+        str,
+        lambda: fallback_calls.append(None) or "python",
+    )
+
+    assert result == "python"
+    assert fallback_calls == [None]
 
 
 @pytest.mark.asyncio
@@ -129,10 +154,35 @@ async def test_native_success_does_not_run_fallback(
         decision,
         lambda: value,
         lambda native: native,
-        lambda: calls.append("python") or "python",
+        None if decision is ExecutionDecision.RUST_REQUIRED else lambda: calls.append("python") or "python",
     )
     assert result is value
     assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("decision", (ExecutionDecision.PYTHON, ExecutionDecision.RUST_WITH_FALLBACK))
+async def test_python_capability_requires_fallback(asynchronous: bool, decision: ExecutionDecision) -> None:
+    native_calls: Final[list[bool]] = []
+    with pytest.raises(ValueError, match="declares a Python implementation"):
+        await _invoke(asynchronous, decision, lambda: native_calls.append(True), str, None)
+    assert native_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_rust_required_rejects_python_fallback(asynchronous: bool) -> None:
+    native_calls: Final[list[bool]] = []
+    with pytest.raises(ValueError, match="declares no Python implementation"):
+        await _invoke(
+            asynchronous,
+            ExecutionDecision.RUST_REQUIRED,
+            lambda: native_calls.append(True),
+            str,
+            lambda: "python",
+        )
+    assert native_calls == []
 
 
 @pytest.mark.asyncio
@@ -168,6 +218,31 @@ async def test_adaptation_failure_never_falls_back(asynchronous: bool, error: Ex
     with pytest.raises(type(error)) as caught:
         await _invoke(asynchronous, ExecutionDecision.RUST_WITH_FALLBACK, lambda: "native", adapt)
     assert caught.value is error
+
+
+@pytest.mark.asyncio
+async def test_async_adaptation_is_awaited_and_failure_never_falls_back() -> None:
+    fallback_calls: Final[list[None]] = []
+
+    async def adapt(_value: object) -> object:
+        await asyncio.sleep(0)
+        raise RuntimeError("async adapt failed")
+
+    execution: Final = ComponentExecution(
+        route_name=ComponentName.MESSAGES,
+        decision=ExecutionDecision.RUST_WITH_FALLBACK,
+    )
+
+    with pytest.raises(RuntimeError, match="async adapt failed"):
+        await runtime.ainvoke(
+            execution=execution,
+            native_call=lambda: asyncio.sleep(0, result="native"),
+            python_fallback=lambda: asyncio.sleep(0, result=fallback_calls.append(None)),
+            adapt=adapt,
+            context=runtime.BridgeErrorContext(route="messages", provider="anthropic", model="model"),
+        )
+
+    assert fallback_calls == []
 
 
 @pytest.mark.asyncio

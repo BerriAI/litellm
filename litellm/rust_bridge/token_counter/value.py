@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
+from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # native extension exposes untyped callables
 
 from pydantic import TypeAdapter
@@ -47,27 +49,43 @@ def _tokenizer_resource(tokenizer: str) -> str:
             raise ValueError(f"unsupported Rust tokenizer resource: {tokenizer}")
 
 
-async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:
+async def count_input_tokens(
+    *,
+    body: bytes | None,
+    tokenizers: Mapping[str, RustTokenizer],
+    python_fallback: Callable[[], Awaitable[Mapping[str, int]]],
+) -> Mapping[str, int]:
     counter: Final = TOKEN_COUNTER.load()
+    distinct_tokenizers: Final = tuple(dict.fromkeys(tokenizers.values()))
 
-    async def python_fallback() -> None:
-        return None
+    async def native_call() -> Mapping[str, int]:
+        assert counter is not None
+        assert body is not None
+        counts: Final = tuple(
+            [
+                _INPUT_TOKEN_COUNT.validate_python(
+                    await counter(
+                        body,
+                        tokenizer.kind,
+                        tokenizer.encoding,
+                        tokenizer.disabled,
+                        tokenizer.legacy_accounting,
+                        _tokenizer_resource,
+                    )
+                ).input_tokens
+                for tokenizer in distinct_tokenizers
+            ]
+        )
+        counts_by_tokenizer: Final = MappingProxyType(dict(zip(distinct_tokenizers, counts)))
+        return MappingProxyType({model: counts_by_tokenizer[tokenizer] for model, tokenizer in tokenizers.items()})
+
+    async def adapt(counts: Mapping[str, int]) -> Mapping[str, int]:
+        return counts
 
     return await ainvoke(
         execution=ComponentExecution(COMPONENT.name, ExecutionDecision.RUST_WITH_FALLBACK),
-        native_call=(
-            lambda: counter(
-                body,
-                tokenizer.kind,
-                tokenizer.encoding,
-                tokenizer.disabled,
-                tokenizer.legacy_accounting,
-                _tokenizer_resource,
-            )
-        )
-        if counter is not None
-        else None,
+        native_call=native_call if counter is not None and body is not None else None,
         python_fallback=python_fallback,
-        adapt=_INPUT_TOKEN_COUNT.validate_python,
+        adapt=adapt,
         context=BridgeErrorContext(route=COMPONENT.name.value, provider="", model=""),
     )

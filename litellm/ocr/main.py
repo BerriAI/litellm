@@ -80,14 +80,18 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
     native_call: Final[Callable[[], Awaitable[OCRResponse]] | None] = (
         (lambda: native(request, args, kwargs, True, HOST)) if native is not None else None
     )
+
     async def python_fallback() -> OCRResponse:
         return await fallback(*args, **kwargs)
+
+    async def adapt(value: OCRResponse) -> OCRResponse:
+        return value
 
     return await ainvoke(
         execution=execution,
         native_call=native_call,
         python_fallback=python_fallback,
-        adapt=lambda value: value,
+        adapt=adapt,
         context=BridgeErrorContext(
             route=COMPONENT.name.value,
             provider=request.custom_llm_provider or "",

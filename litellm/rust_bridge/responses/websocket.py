@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Final, Protocol, cast  # noqa: TID251  # native class is validated at load time
+from typing import Final, Protocol, TypeVar, cast  # noqa: TID251  # native class is validated at load time
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
@@ -19,6 +19,14 @@ class RustResponsesWebSocket(Protocol):
     def send_text(self, text: str) -> Awaitable[None]: ...
 
     def recv_text(self) -> Awaitable[str | None]: ...
+
+    def close(self) -> Awaitable[None]: ...
+
+
+class ResponsesWebSocket(Protocol):
+    def send(self, text: str) -> Awaitable[None]: ...
+
+    def recv(self) -> Awaitable[str | bytes]: ...
 
     def close(self) -> Awaitable[None]: ...
 
@@ -71,6 +79,9 @@ class _ConnectionAdapter:
         await self._connection.close()
 
 
+ConnectionT = TypeVar("ConnectionT", bound=ResponsesWebSocket)
+
+
 async def connect(
     *,
     url: str,
@@ -78,7 +89,8 @@ async def connect(
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
     model: str,
-) -> _ConnectionAdapter | None:
+    python_fallback: Callable[[], Awaitable[ConnectionT]],
+) -> ResponsesWebSocket:
     execution: Final = COMPONENT.resolve(
         CapabilityContext(
             provider=custom_llm_provider or "",
@@ -100,16 +112,14 @@ async def connect(
         if connection_type is not None
         else None
     )
-    async def python_fallback() -> None:
-        return None
 
-    connection: Final = await ainvoke(
+    async def adapt(connection: RustResponsesWebSocket) -> ResponsesWebSocket:
+        return _ConnectionAdapter(connection)
+
+    return await ainvoke(
         execution=execution,
         native_call=native_call,
         python_fallback=python_fallback,
-        adapt=lambda value: value,
+        adapt=adapt,
         context=BridgeErrorContext(route=COMPONENT.name.value, provider=custom_llm_provider or "", model=model),
     )
-    if connection is None:
-        return None
-    return _ConnectionAdapter(connection)

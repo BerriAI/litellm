@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Final, Literal, Protocol, TypeVar, cast, overload
+from typing import Final, Literal, Protocol, TypeVar, overload
 
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.configuration import (
@@ -55,7 +55,7 @@ class NativeLifecycle(Protocol[RequestT, ResponseT]):
 def _lifecycle(value: object) -> NativeLifecycle[object, object] | None:
     if not callable(value):
         return None
-    return cast(NativeLifecycle[object, object], value)  # cast-ok: callable native entrypoint validated above
+    return value  # pyright: ignore[reportReturnType]  # callable shape is validated by native contract tests
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,9 +65,7 @@ class ComponentExecution:
 
     def require_supported(self) -> None:
         if self.decision is ExecutionDecision.UNSUPPORTED:
-            raise RustRouteUnsupportedError(
-                f"No Python or Rust implementation for {self.route_name.value}"
-            )
+            raise RustRouteUnsupportedError(f"No Python or Rust implementation for {self.route_name.value}")
 
     def select(self, binding: NativeBinding[BindingT]) -> BindingT | None:
         self.require_supported()
@@ -75,9 +73,7 @@ class ComponentExecution:
             return None
         selected: Final = binding.load()
         if selected is None and self.decision is ExecutionDecision.RUST_REQUIRED:
-            raise RustRouteUnavailableError(
-                f"Rust {self.route_name.value} bridge is unavailable"
-            )
+            raise RustRouteUnavailableError(f"Rust {self.route_name.value} bridge is unavailable")
         return selected
 
 
@@ -87,10 +83,11 @@ class NativeComponent:
     capability: CapabilitySpec
     exports: tuple[str, ...]
 
-    def resolve(self, context: CapabilityContext = CapabilityContext()) -> ComponentExecution:
+    def resolve(self, context: CapabilityContext | None = None) -> ComponentExecution:
+        resolved_context: Final = context if context is not None else CapabilityContext()
         return ComponentExecution(
             route_name=self.name,
-            decision=capability_decision(self.capability, context=context),
+            decision=capability_decision(self.capability, context=resolved_context),
         )
 
     def bind(

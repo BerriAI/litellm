@@ -71,6 +71,7 @@ def test_enabled_sync_bridge_receives_audio(enabled: bool) -> None:
         extra_headers=None,
         optional_params={"temperature": 0},
         timeout=5.0,
+        python_fallback=None,
     )
     assert result == {"text": "hello"}
     assert bridge.calls[0]["audio"] == {"data": "AQI=", "format": "wav", "filename": "audio.wav"}
@@ -90,6 +91,7 @@ async def test_enabled_async_bridge(enabled: bool) -> None:
         extra_headers=None,
         optional_params={},
         timeout=None,
+        python_fallback=None,
     )
     assert result == {"text": "async"}
 
@@ -214,6 +216,7 @@ async def test_bedrock_transcription_errors_never_fall_back(
             extra_headers=None,
             optional_params={},
             timeout=None,
+            python_fallback=None,
         )
     with pytest.raises(expected, match=message):
         await rust_bridge.atranscription(
@@ -225,6 +228,7 @@ async def test_bedrock_transcription_errors_never_fall_back(
             extra_headers=None,
             optional_params={},
             timeout=None,
+            python_fallback=None,
         )
 
 
@@ -239,29 +243,29 @@ async def test_python_transcription_skips_rust_when_enabled() -> None:
         pytest.fail("Python provider must not call Rust")
 
     rust_bridge.configure_rust_transcription(transcription=unexpected, atranscription=aunexpected)
-    assert (
-        rust_bridge.transcription(
-            model="model",
-            audio={},
-            api_key=None,
-            api_base=None,
-            custom_llm_provider="openai",
-            extra_headers=None,
-            optional_params={},
-            timeout=None,
-        )
-        is None
-    )
-    assert (
-        await rust_bridge.atranscription(
-            model="model",
-            audio={},
-            api_key=None,
-            api_base=None,
-            custom_llm_provider="openai",
-            extra_headers=None,
-            optional_params={},
-            timeout=None,
-        )
-        is None
-    )
+    assert rust_bridge.transcription(
+        model="model",
+        audio={},
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="openai",
+        extra_headers=None,
+        optional_params={},
+        timeout=None,
+        python_fallback=lambda: {"text": "python"},
+    ) == {"text": "python"}
+
+    async def python_fallback() -> dict[str, object]:
+        return {"text": "python"}
+
+    assert await rust_bridge.atranscription(
+        model="model",
+        audio={},
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="openai",
+        extra_headers=None,
+        optional_params={},
+        timeout=None,
+        python_fallback=python_fallback,
+    ) == {"text": "python"}

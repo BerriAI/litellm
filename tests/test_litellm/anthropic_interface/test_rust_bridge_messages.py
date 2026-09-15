@@ -12,7 +12,6 @@ from litellm.rust_bridge import configuration
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
-from litellm.types.router import GenericLiteLLMParams
 
 rust_messages = importlib.import_module("litellm.rust_bridge.messages")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
@@ -32,6 +31,7 @@ REQUEST_BODY: dict[str, object] = {
     "max_tokens": 64,
     "messages": [{"role": "user", "content": "hi"}],
 }
+PYTHON_MESSAGES_RESPONSE: dict[str, object] = {"id": "python_fallback"}
 
 
 class RecordingMessages:
@@ -48,6 +48,7 @@ class RecordingMessages:
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
         has_agentic_hook: bool = False,
+        on_request=None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -60,6 +61,8 @@ class RecordingMessages:
                 "timeout_seconds": timeout_seconds,
             }
         )
+        if on_request is not None:
+            on_request()
         return dict(FAKE_MESSAGES_RESPONSE)
 
 
@@ -77,6 +80,7 @@ class RecordingAsyncMessages:
         extra_headers: dict[str, object] | None,
         timeout_seconds: float | None,
         has_agentic_hook: bool = False,
+        on_request=None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -89,6 +93,8 @@ class RecordingAsyncMessages:
                 "timeout_seconds": timeout_seconds,
             }
         )
+        if on_request is not None:
+            on_request()
         return dict(FAKE_MESSAGES_RESPONSE)
 
 
@@ -108,6 +114,12 @@ class RaisingAsyncMessages:
     async def __call__(self, **kwargs: object) -> dict[str, object]:
         self.calls += 1
         raise RuntimeError("upstream request failed with status 400: bad request")
+
+
+class DecliningAsyncMessages:
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        native = pytest.importorskip("litellm.rust_bridge._native")
+        raise native.RustBridgeDeclined("unsupported request")
 
 
 @pytest.fixture(autouse=True)
@@ -135,7 +147,7 @@ def test_load_rust_amessages_returns_injected_impl():
     assert rust_messages.load_rust_amessages() is bridge
 
 
-def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
+def test_messages_wrapper_returns_fallback_when_bridge_absent(monkeypatch):
     monkeypatch.setattr(
         importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
@@ -151,8 +163,10 @@ def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
         custom_llm_provider="azure_ai",
         extra_headers={},
         timeout=30.0,
+        python_fallback=lambda: dict(PYTHON_MESSAGES_RESPONSE),
+        adapt=lambda response: response,
     )
-    assert result is None
+    assert result == PYTHON_MESSAGES_RESPONSE
 
 
 def test_messages_wrapper_forwards_args_and_converts_timeout():
@@ -168,6 +182,8 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
         custom_llm_provider="azure_ai",
         extra_headers={"anthropic-beta": "token-efficient-tools-2025-02-19"},
         timeout=httpx.Timeout(600.0, read=42.0),
+        python_fallback=lambda: pytest.fail("native request should not fall back"),
+        adapt=lambda response: response,
     )
 
     assert response == FAKE_MESSAGES_RESPONSE
@@ -188,6 +204,12 @@ async def test_amessages_wrapper_forwards_args():
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
+    async def python_fallback() -> dict[str, object]:
+        pytest.fail("native request should not fall back")
+
+    async def adapt(response: dict[str, object]) -> dict[str, object]:
+        return response
+
     response = await rust_messages.amessages(
         model="claude-sonnet-4-5",
         body=REQUEST_BODY,
@@ -196,6 +218,8 @@ async def test_amessages_wrapper_forwards_args():
         custom_llm_provider="azure_ai",
         extra_headers=None,
         timeout=12.5,
+        python_fallback=python_fallback,
+        adapt=adapt,
     )
 
     assert response == FAKE_MESSAGES_RESPONSE
@@ -203,10 +227,9 @@ async def test_amessages_wrapper_forwards_args():
     assert bridge.calls[0]["timeout_seconds"] == 12.5
 
 
-def _gate(**overrides):
+async def _gate(**overrides):
     kwargs = {
         "custom_llm_provider": "azure_ai",
-        "litellm_params": GenericLiteLLMParams(api_key="sk-azure"),
         "has_agentic_hook": False,
         "model": "claude-sonnet-4-5",
         "api_key": "sk-azure",
@@ -216,7 +239,28 @@ def _gate(**overrides):
         "timeout": 30.0,
     }
     kwargs.update(overrides)
-    return BaseLLMHTTPHandler._maybe_rust_anthropic_messages(**kwargs)
+    request_body = kwargs.pop("request_body")
+
+    async def python_fallback() -> dict[str, object]:
+        return dict(PYTHON_MESSAGES_RESPONSE)
+
+    async def adapt(response: dict[str, object]) -> dict[str, object]:
+        adapted = dict(response)
+        adapted["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
+        return adapted
+
+    return await rust_messages.amessages(
+        model=kwargs["model"],
+        body={key: value for key, value in request_body.items() if key != "stream"},
+        has_agentic_hook=kwargs["has_agentic_hook"],
+        api_key=kwargs["api_key"],
+        api_base=kwargs["api_base"],
+        custom_llm_provider=kwargs["custom_llm_provider"],
+        extra_headers=kwargs["headers"],
+        timeout=kwargs["timeout"],
+        python_fallback=python_fallback,
+        adapt=adapt,
+    )
 
 
 @pytest.mark.asyncio
@@ -256,9 +300,9 @@ async def test_gate_skips_rust_when_flag_absent(monkeypatch):
     bridge = ExplodingAsyncMessages()
     rust_messages.set_rust_messages(amessages=bridge)
 
-    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
+    response = await _gate()
 
-    assert response is None
+    assert response == PYTHON_MESSAGES_RESPONSE
     assert bridge.calls == 0
 
 
@@ -268,7 +312,7 @@ async def test_gate_uses_process_enable_without_request_override():
     rust_messages.set_rust_messages(amessages=bridge)
     litellm.rust(True)
 
-    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
+    response = await _gate()
 
     assert response is not None
     assert bridge.calls[0]["custom_llm_provider"] == "azure_ai"
@@ -282,7 +326,6 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
 
     response = await _gate(
         custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
         api_key="sk-ant",
         api_base="https://api.anthropic.com",
         headers={"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
@@ -302,7 +345,6 @@ async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
 
     response = await _gate(
         custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
     )
 
     assert response is not None
@@ -317,29 +359,26 @@ async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
 
     response = await _gate(
         custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
     )
 
-    assert response is None
+    assert response == PYTHON_MESSAGES_RESPONSE
     assert bridge.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_for_unsupported_provider():
-    native = pytest.importorskip("litellm.rust_bridge._native")
+async def test_gate_falls_back_for_unsupported_provider():
     litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=native.amessages)
+    rust_messages.set_rust_messages(amessages=DecliningAsyncMessages())
     response = await _gate(custom_llm_provider="openai", api_base="http://127.0.0.1:1")
-    assert response is None
+    assert response == PYTHON_MESSAGES_RESPONSE
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_for_agentic_hook():
-    native = pytest.importorskip("litellm.rust_bridge._native")
+async def test_gate_falls_back_for_agentic_hook():
     litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=native.amessages)
+    rust_messages.set_rust_messages(amessages=DecliningAsyncMessages())
     response = await _gate(has_agentic_hook=True, api_base="http://127.0.0.1:1")
-    assert response is None
+    assert response == PYTHON_MESSAGES_RESPONSE
 
 
 @pytest.mark.asyncio
@@ -387,4 +426,4 @@ async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
 
     response = await _gate()
 
-    assert response is None
+    assert response == PYTHON_MESSAGES_RESPONSE

@@ -50,9 +50,8 @@ class BedrockAudioTranscriptionRustDispatch:
             extra_headers=extra_headers,
             optional_params=optional_params,
             timeout=timeout,
+            python_fallback=None,
         )
-        if rust_response is None:
-            raise RuntimeError("Rust audio transcription bridge is unavailable")
         return TranscriptionResponse(**rust_response)
 
     async def async_audio_transcriptions(
@@ -76,7 +75,6 @@ class BedrockAudioTranscriptionRustDispatch:
             extra_headers=extra_headers,
             optional_params=optional_params,
             timeout=timeout,
+            python_fallback=None,
         )
-        if rust_response is None:
-            raise RuntimeError("Rust audio transcription bridge is unavailable")
         return TranscriptionResponse(**rust_response)

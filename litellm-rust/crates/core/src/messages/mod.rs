@@ -27,7 +27,6 @@ pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Re
     execute_messages_provider_stream(request).await
 }
 
-
 pub fn admit(
     model: &str,
     provider: Option<&str>,

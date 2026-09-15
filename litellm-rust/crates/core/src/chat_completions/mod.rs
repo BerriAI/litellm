@@ -55,7 +55,6 @@ pub fn chat_completions_decline_reason(
         .map(|reason| reason.0)
 }
 
-
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdmissionContext {

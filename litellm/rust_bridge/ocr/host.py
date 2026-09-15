@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final, Protocol, cast
+from typing import Final, Protocol
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -35,7 +35,7 @@ class OcrLifecycleHost:
         request: LiteLLMOcrRequest,
         request_provider: str,
     ) -> Exception:
-        mapper: Final = cast(ExceptionMapper, litellm.exception_type)  # cast-ok: legacy public exception mapper
+        mapper: Final[ExceptionMapper] = litellm.exception_type  # pyright: ignore[reportAssignmentType]  # legacy public mapper is callable
         try:
             return mapper(
                 model=request.model.removeprefix(f"{request_provider}/"),

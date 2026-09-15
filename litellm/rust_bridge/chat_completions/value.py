@@ -8,7 +8,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    convert_to_model_response_object,
+    convert_to_model_response_object,  # pyright: ignore[reportUnknownVariableType]  # legacy converter lacks complete annotations
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.rust_bridge.bindings import BINDING_UNSET, BindingUnset
@@ -112,8 +112,9 @@ def chat_completions(
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    native_call: Final[Callable[[], Mapping[str, object]] | None] = (
-        lambda: rust_chat_completions(
+    def native_call() -> Mapping[str, object]:
+        assert rust_chat_completions is not None
+        return rust_chat_completions(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -125,12 +126,10 @@ def chat_completions(
             host_facts=_host_facts(stream, litellm_params),
             on_request=on_request,
         )
-        if rust_chat_completions is not None
-        else None
-    )
+
     return invoke(
         execution=execution,
-        native_call=native_call,
+        native_call=native_call if rust_chat_completions is not None else None,
         python_fallback=python_fallback,
         adapt=adapt,
         context=BridgeErrorContext(route=COMPONENT.name.value, provider=custom_llm_provider or "", model=model),
@@ -163,12 +162,13 @@ async def achat_completions(
     )
     rust_achat_completions: Final = execution.select(_ACHAT)
 
-    def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
+    async def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    native_call: Final[Callable[[], Awaitable[Mapping[str, object]]] | None] = (
-        lambda: rust_achat_completions(
+    def native_call() -> Awaitable[Mapping[str, object]]:
+        assert rust_achat_completions is not None
+        return rust_achat_completions(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -180,12 +180,10 @@ async def achat_completions(
             host_facts=_host_facts(stream, litellm_params),
             on_request=on_request,
         )
-        if rust_achat_completions is not None
-        else None
-    )
+
     return await ainvoke(
         execution=execution,
-        native_call=native_call,
+        native_call=native_call if rust_achat_completions is not None else None,
         python_fallback=python_fallback,
         adapt=adapt,
         context=BridgeErrorContext(route=COMPONENT.name.value, provider=custom_llm_provider or "", model=model),

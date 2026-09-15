@@ -17,7 +17,6 @@ pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Resu
         .await
 }
 
-
 pub fn admit(
     model: &str,
     provider: Option<&str>,

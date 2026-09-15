@@ -1392,50 +1392,34 @@ async def count_request_input_tokens(
 
     Tokenizing is the reservation path's dominant CPU cost and is O(prompt), so
     counting a large prompt inline stalls every other request on the worker.
-    Models whose tokenizer the Rust bridge ports (Anthropic, tiktoken cl100k_base
-    and o200k_base) are counted from the raw body by the bridge when it is enabled, once per
-    distinct tokenizer, which parses and tokenizes with the GIL released.
-    Everything it declines is counted in Python, large prompts in a worker
-    thread. The counts are reused by both the max-cost and the input-cost
-    estimate.
+    The Rust bridge counts the complete request once per distinct tokenizer.
+    If that operation is unavailable or declines any tokenizer, the complete
+    request is counted in Python, with large prompts moved to a worker thread.
+    The counts are reused by both the max-cost and input-cost estimates.
     """
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    tokenizers: Final[Mapping[str, RustTokenizer | None]] = MappingProxyType(
+    tokenizers: Final[Mapping[str, RustTokenizer]] = MappingProxyType(
         {model: rust_tokenizer(model) for model in models}
     )
-    distinct_tokenizers: Final[tuple[RustTokenizer, ...]] = tuple(
-        dict.fromkeys(tokenizer for tokenizer in tokenizers.values() if tokenizer is not None)
-    )
-    rust_counts_by_tokenizer: Final[Mapping[RustTokenizer, int]] = MappingProxyType(
-        {
-            tokenizer: count.input_tokens
-            for tokenizer in distinct_tokenizers
-            if raw_body is not None and (count := await count_input_tokens(raw_body, tokenizer)) is not None
-        }
-    )
-    rust_counts: Final = MappingProxyType(
-        {
-            model: rust_counts_by_tokenizer[tokenizer]
-            for model, tokenizer in tokenizers.items()
-            if tokenizer is not None and tokenizer in rust_counts_by_tokenizer
-        }
-    )
-    python_models: Final = tuple(model for model in models if model not in rust_counts)
-    python_counts: Final = (
-        MappingProxyType({})
-        if not python_models
-        else _count_input_tokens_for_models(request_body=request_body, models=python_models)
-        if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS
-        else await asyncio.to_thread(
+
+    async def python_fallback() -> Mapping[str, int]:
+        if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
+            return _count_input_tokens_for_models(request_body=request_body, models=models)
+        return await asyncio.to_thread(
             _count_input_tokens_for_models,
             request_body=request_body,
-            models=python_models,
+            models=models,
         )
+
+    counts: Final = await count_input_tokens(
+        body=raw_body,
+        tokenizers=tokenizers,
+        python_fallback=python_fallback,
     )
-    verbose_proxy_logger.debug("input token counts: rust=%s python=%s", dict(rust_counts), dict(python_counts))
-    return MappingProxyType({**rust_counts, **python_counts})
+    verbose_proxy_logger.debug("input token counts: %s", dict(counts))
+    return counts
 
 
 def _count_input_tokens_for_models(
