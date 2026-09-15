@@ -544,15 +544,15 @@ async def test_validate_team_no_mcp_config_blocks_all(
 
 
 @pytest.mark.asyncio
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-1", "server-2"),
 )
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
 )
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
     new_callable=AsyncMock,
     return_value=["server-1"],
@@ -572,15 +572,15 @@ async def test_validate_key_servers_granted_via_team_unified_access_group_pass(
 
 
 @pytest.mark.asyncio
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-1", "server-2"),
 )
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
 )
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
     new_callable=AsyncMock,
     return_value=["server-1"],
@@ -602,20 +602,20 @@ async def test_validate_key_servers_outside_team_unified_access_group_rejected(
 
 
 @pytest.mark.asyncio
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-1", "server-2"),
 )
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),
 )
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
     new_callable=AsyncMock,
     return_value=["server-2"],
 )
-@patch(
+@patch(  # test-quality-ok: module-level collaborator has no DI seam; matches this file's existing patch style
     "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
     new_callable=AsyncMock,
     return_value=[],
@@ -626,10 +626,11 @@ async def test_team_allowed_servers_union_object_permission_and_unified_access_g
     """Team scope is the union of object_permission servers and unified
     access group servers."""
     team_obj = _make_team_obj(mcp_servers=["server-1"], access_group_ids=["ag-1"])
-    await validate_key_mcp_servers_against_team(
+    result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["server-1", "server-2"]},
         team_obj=team_obj,
     )
+    assert result == {"mcp_servers": ["server-1", "server-2"]}
 
 
 @pytest.mark.asyncio
