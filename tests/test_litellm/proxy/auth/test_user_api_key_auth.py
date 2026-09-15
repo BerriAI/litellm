@@ -13,7 +13,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
 import pytest
-from fastapi import status
+from fastapi import HTTPException, status
 
 import litellm
 import litellm.proxy.proxy_server
@@ -32,7 +32,7 @@ from litellm.proxy._types import (
     JWTRoutingOverride,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
+from litellm.proxy.auth.auth_checks import TeamNotFoundError, UserNotFoundError, get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
@@ -6266,6 +6266,192 @@ async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypa
     assert result.is_session_token is True
 
 
+SESSION_TEAM_ID = "team-abc"
+SESSION_USER_ID = "member-1"
+
+
+def _mint_session_token(
+    monkeypatch,
+    *,
+    role=LitellmUserRoles.INTERNAL_USER,
+    team_id=SESSION_TEAM_ID,
+    team_models=("stale-model",),
+    models=(),
+):
+    """Mint a ``lite login`` token carrying the grants as they were at login time."""
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+    user_info = LiteLLM_UserTable(
+        user_id=SESSION_USER_ID, user_email="user@example.com", user_role=role.value, models=list(models)
+    )
+    return ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info, team_id=team_id, team_alias="stale-alias", team_models=list(team_models)
+    )
+
+
+def _session_user_row(*, teams=(SESSION_TEAM_ID,), role=LitellmUserRoles.INTERNAL_USER, models=()):
+    return LiteLLM_UserTable(user_id=SESSION_USER_ID, user_role=role.value, teams=list(teams), models=list(models))
+
+
+async def _authenticate_session_token_against_db(
+    cli_token, *, user_row=None, team_row=None, membership_row=None, user_error=None, team_error=None
+):
+    """Drive the real builder for a session token with the DB row readers replaced by the given rows or
+    errors. Returns the ``_return_user_api_key_auth_obj`` mock so the caller can read the token it was
+    handed; a denial surfaces as the exception the builder raises."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    attrs = _proxy_attrs_for_db_lookup()
+    attrs["prisma_client"].db.litellm_teammembership.find_first = AsyncMock(return_value=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    assemble = AsyncMock(return_value=UserAPIKeyAuth(user_id=SESSION_USER_ID, is_session_token=True))
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+        with (
+            patch(  # test-quality-ok: the builder has no injection seam for its assembler yet
+                "litellm.proxy.auth.user_api_key_auth._return_user_api_key_auth_obj", assemble
+            ),
+            patch(  # test-quality-ok: the builder reads its DB row loaders off module globals
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                AsyncMock(return_value=user_row, side_effect=user_error),
+            ),
+            patch(  # test-quality-ok: the builder reads its DB row loaders off module globals
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                AsyncMock(return_value=team_row, side_effect=team_error),
+            ),
+            patch(  # test-quality-ok: the builder reads its DB row loaders off module globals
+                "litellm.proxy.auth.user_api_key_auth.get_team_membership",
+                AsyncMock(return_value=membership_row),
+            ),
+        ):
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {cli_token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+    return assemble
+
+
+@pytest.mark.asyncio
+async def test_session_token_reads_team_grants_from_the_live_team_row(monkeypatch):
+    """LIT-7358: a lite login token snapshots the team's models at login, so adding a model to the team did
+    nothing for that CLI until the user logged in again. The team row has to be re-read on every request."""
+    from litellm.models.team import LiteLLM_ModelTable
+    from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
+
+    cli_token = _mint_session_token(monkeypatch, team_models=("stale-model",))
+    live_team = LiteLLM_TeamTableCachedObj(
+        team_id=SESSION_TEAM_ID,
+        team_alias="renamed-team",
+        models=["gpt-5.5", "claude-opus-5"],
+        litellm_model_table=LiteLLM_ModelTable(model_aliases={"fast": "gpt-5.5"}, created_by="a", updated_by="a"),
+    )
+    membership = LiteLLM_TeamMembership(user_id=SESSION_USER_ID, team_id=SESSION_TEAM_ID, spend=2.5)
+
+    assemble = await _authenticate_session_token_against_db(
+        cli_token, user_row=_session_user_row(), team_row=live_team, membership_row=membership
+    )
+
+    token = assemble.call_args.kwargs["valid_token_dict"]
+    assert token["team_models"] == ["gpt-5.5", "claude-opus-5"]
+    assert token["team_alias"] == "renamed-team"
+    assert token["team_model_aliases"] == {"fast": "gpt-5.5"}
+    assert token["team_member_spend"] == 2.5
+    assert token["is_session_token"] is True
+
+
+@pytest.mark.asyncio
+async def test_session_token_without_a_team_reads_models_from_the_live_user_row(monkeypatch):
+    cli_token = _mint_session_token(monkeypatch, team_id=None, team_models=(), models=("stale-model",))
+
+    assemble = await _authenticate_session_token_against_db(
+        cli_token, user_row=_session_user_row(teams=(), models=("gpt-5.5",))
+    )
+
+    assert assemble.call_args.kwargs["valid_token_dict"]["models"] == ["gpt-5.5"]
+
+
+@pytest.mark.asyncio
+async def test_demoted_admin_session_token_loses_admin_on_the_next_request(monkeypatch):
+    """The role baked into the token used to send a former admin down the admin early return forever."""
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    cli_token = _mint_session_token(monkeypatch, role=LitellmUserRoles.PROXY_ADMIN)
+
+    assemble = await _authenticate_session_token_against_db(
+        cli_token,
+        user_row=_session_user_row(role=LitellmUserRoles.INTERNAL_USER),
+        team_row=LiteLLM_TeamTableCachedObj(team_id=SESSION_TEAM_ID, models=["gpt-5.5"]),
+    )
+
+    assemble.assert_awaited_once()
+    assert assemble.call_args.kwargs["valid_token_dict"]["user_role"] == LitellmUserRoles.INTERNAL_USER
+
+
+@pytest.mark.asyncio
+async def test_session_token_is_refused_once_the_user_leaves_the_team(monkeypatch):
+    cli_token = _mint_session_token(monkeypatch)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _authenticate_session_token_against_db(cli_token, user_row=_session_user_row(teams=("other-team",)))
+
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert SESSION_TEAM_ID in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_session_token_is_refused_once_the_user_is_deleted(monkeypatch):
+    cli_token = _mint_session_token(monkeypatch)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _authenticate_session_token_against_db(cli_token, user_error=UserNotFoundError(user_id=SESSION_USER_ID))
+
+    assert exc_info.value.code == str(status.HTTP_401_UNAUTHORIZED)
+    assert exc_info.value.type == ProxyErrorTypes.auth_error
+
+
+@pytest.mark.asyncio
+async def test_session_token_is_refused_once_the_team_is_deleted(monkeypatch):
+    cli_token = _mint_session_token(monkeypatch)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _authenticate_session_token_against_db(
+            cli_token, user_row=_session_user_row(), team_error=TeamNotFoundError(team_id=SESSION_TEAM_ID)
+        )
+
+    assert exc_info.value.code == str(status.HTTP_404_NOT_FOUND)
+
+
+@pytest.mark.asyncio
+async def test_session_token_keeps_minted_grants_when_the_team_row_cannot_be_read(monkeypatch):
+    """A DB hiccup says nothing about the caller, so the grants minted at login stand for that request."""
+    from fastapi import HTTPException
+
+    cli_token = _mint_session_token(monkeypatch, team_models=("stale-model",))
+
+    assemble = await _authenticate_session_token_against_db(
+        cli_token, user_row=_session_user_row(), team_error=HTTPException(status_code=500, detail="db timeout")
+    )
+
+    token = assemble.call_args.kwargs["valid_token_dict"]
+    assert token["team_models"] == ["stale-model"]
+    assert token["team_alias"] == "stale-alias"
+
+
 @pytest.mark.asyncio
 async def test_cli_session_token_authenticates_when_jwt_auth_enabled_without_license(monkeypatch):
     """A lite login token is an encrypted (non-JWT) session blob. With
@@ -7442,3 +7628,226 @@ async def test_claude_view_never_reinterprets_explicit_names(monkeypatch, layer)
     assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
     await _normalize_claude_model(data, token, request, "/v1/messages")
     assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
+
+
+ISSUER_ONE = "https://issuer-one.example.com"
+ISSUER_TWO = "https://issuer-two.example.com"
+
+
+def _per_issuer_virtual_key_jwt_handler(
+    global_claim_field: str | None, global_behavior: str = "fallback_team_mapping"
+) -> MagicMock:
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field=global_claim_field,
+        unregistered_jwt_client_behavior=global_behavior,
+        issuers=[
+            {
+                "issuer": ISSUER_ONE,
+                "jwks_url": f"{ISSUER_ONE}/keys",
+                "audience": "audience-one",
+                "team_id_jwt_field": "sub",
+            },
+            {
+                "issuer": ISSUER_TWO,
+                "jwks_url": f"{ISSUER_TWO}/keys",
+                "audience": "audience-two",
+                "virtual_key_claim_field": "sub",
+                "unregistered_jwt_client_behavior": "reject",
+            },
+        ],
+    )
+    return jwt_handler
+
+
+def _fake_prisma_with_jwt_key_mapping(hashed_token: str | None) -> tuple[SimpleNamespace, AsyncMock]:
+    find_first = AsyncMock(return_value=None if hashed_token is None else SimpleNamespace(token=hashed_token))
+    prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_jwtkeymapping=SimpleNamespace(find_first=find_first)))
+    return prisma_client, find_first
+
+
+def _mapping_where(claim_name: str, claim_value: str) -> dict[str, str | bool]:
+    return {"jwt_claim_name": claim_name, "jwt_claim_value": claim_value, "is_active": True}
+
+
+@pytest.mark.asyncio
+async def test_per_issuer_virtual_key_claim_field_selects_the_issuer_mapping_for_the_db_lookup():
+    from litellm.proxy.auth.user_api_key_auth import _resolve_jwt_to_virtual_key
+
+    jwt_handler = _per_issuer_virtual_key_jwt_handler(global_claim_field=None)
+    prisma_client, find_first = _fake_prisma_with_jwt_key_mapping("hashed-mapped-key")
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        key="hashed-mapped-key",
+        value=UserAPIKeyAuth(token="hashed-mapped-key", api_key="hashed-mapped-key", team_id="svc-team"),
+    )
+
+    resolved = await _resolve_jwt_to_virtual_key(
+        jwt_claims={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_TWO, "sub": "svc-account-7"},
+        jwt_handler=jwt_handler,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    find_first.assert_awaited_once_with(where=_mapping_where("sub", "svc-account-7"))
+    assert isinstance(resolved, UserAPIKeyAuth)
+    assert resolved.token == "hashed-mapped-key"
+    assert resolved.team_id == "svc-team"
+    assert await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:svc-account-7") == "hashed-mapped-key"
+
+
+@pytest.mark.asyncio
+async def test_per_issuer_reject_behavior_does_not_leak_into_the_team_issuer():
+    from litellm.proxy.auth.user_api_key_auth import _resolve_jwt_to_virtual_key
+
+    jwt_handler = _per_issuer_virtual_key_jwt_handler(global_claim_field=None)
+    prisma_client, find_first = _fake_prisma_with_jwt_key_mapping(None)
+
+    team_issuer_result = await _resolve_jwt_to_virtual_key(
+        jwt_claims={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_ONE, "sub": "team-alpha"},
+        jwt_handler=jwt_handler,
+        prisma_client=prisma_client,
+        user_api_key_cache=DualCache(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    assert team_issuer_result is None
+    find_first.assert_not_awaited()
+
+    with pytest.raises(HTTPException) as exc:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_TWO, "sub": "unknown-svc"},
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "No registered mapping for sub='unknown-svc'" in str(exc.value.detail)
+    find_first.assert_awaited_once_with(where=_mapping_where("sub", "unknown-svc"))
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_sentinel_cached_by_another_issuer_does_not_bypass_reject():
+    from litellm.proxy.auth.user_api_key_auth import _JWT_PROXY_ADMIN_SENTINEL, _resolve_jwt_to_virtual_key
+
+    jwt_handler = _per_issuer_virtual_key_jwt_handler(global_claim_field="sub", global_behavior="auto_register")
+    prisma_client, find_first = _fake_prisma_with_jwt_key_mapping(None)
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(key="jwt_key_mapping:sub:admin-7", value=_JWT_PROXY_ADMIN_SENTINEL)
+
+    auto_register_issuer_result = await _resolve_jwt_to_virtual_key(
+        jwt_claims={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_ONE, "sub": "admin-7"},
+        jwt_handler=jwt_handler,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    assert auto_register_issuer_result is None
+    find_first.assert_not_awaited()
+
+    with pytest.raises(HTTPException) as exc:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_TWO, "sub": "admin-7"},
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "No registered mapping for sub='admin-7'" in str(exc.value.detail)
+    find_first.assert_awaited_once_with(where=_mapping_where("sub", "admin-7"))
+
+
+@pytest.mark.asyncio
+async def test_issuer_without_virtual_key_claim_field_falls_back_to_the_global_field():
+    from litellm.proxy.auth.user_api_key_auth import _resolve_jwt_to_virtual_key
+
+    jwt_handler = _per_issuer_virtual_key_jwt_handler(global_claim_field="client_id")
+    prisma_client, find_first = _fake_prisma_with_jwt_key_mapping(None)
+
+    with_claim = await _resolve_jwt_to_virtual_key(
+        jwt_claims={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_ONE, "sub": "team-alpha", "client_id": "app-9"},
+        jwt_handler=jwt_handler,
+        prisma_client=prisma_client,
+        user_api_key_cache=DualCache(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    without_claim = await _resolve_jwt_to_virtual_key(
+        jwt_claims={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_ONE, "sub": "team-alpha"},
+        jwt_handler=jwt_handler,
+        prisma_client=prisma_client,
+        user_api_key_cache=DualCache(),
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert with_claim is None
+    assert without_claim is None
+    find_first.assert_awaited_once_with(where=_mapping_where("client_id", "app-9"))
+
+
+@pytest.mark.asyncio
+async def test_auth_flow_enters_virtual_key_mapping_when_only_an_issuer_configures_the_claim_field():
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzdmMtYWNjb3VudC03In0.signature"
+    jwt_handler = _per_issuer_virtual_key_jwt_handler(global_claim_field=None)
+    jwt_handler.auth_jwt = AsyncMock(
+        return_value={JWTHandler.LITELLM_JWT_ISSUER_CLAIM: ISSUER_TWO, "sub": "svc-account-7"}
+    )
+    mapped_key = UserAPIKeyAuth(token="hashed-mapped-key", api_key="hashed-mapped-key", team_id="svc-team")
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    with (
+        patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
+            "litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}
+        ),
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: module-global proxy state
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(  # test-quality-ok: module-global proxy state
+            "litellm.proxy.proxy_server.user_api_key_cache", DualCache()
+        ),
+        patch(  # test-quality-ok: module-global proxy state
+            "litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()
+        ),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),  # test-quality-ok: module-global proxy state
+        patch(  # test-quality-ok: the regression is whether the builder reaches this seam at all
+            "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+            new_callable=AsyncMock,
+            return_value=mapped_key,
+        ) as resolve_mock,
+        patch(  # test-quality-ok: a mapped key must short-circuit standard JWT auth; reaching it is the failure
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("standard JWT auth must not run for a mapped virtual key"),
+        ),
+    ):
+        result = await _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=jwt_token,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-4o-mini"},
+        )
+
+    resolve_mock.assert_awaited_once()
+    assert resolve_mock.await_args.kwargs["jwt_claims"][JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == ISSUER_TWO
+    assert result.api_key == "hashed-mapped-key"
+    assert result.team_id == "svc-team"

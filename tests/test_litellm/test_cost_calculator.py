@@ -19,6 +19,7 @@ from litellm.cost_calculator import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -3908,6 +3909,57 @@ def _batch_cache_usage() -> Usage:
     )
 
 
+def test_batch_cost_calculator_prices_multimodal_tokens_at_modality_rates():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {
+        "input_cost_per_token_batches": 1e-7,
+        "input_cost_per_audio_token_batches": 3.25e-6,
+        "input_cost_per_image_token_batches": 2.25e-7,
+        "input_cost_per_video_token_batches": 6e-6,
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=64,
+            image_tokens=10,
+            video_tokens=6,
+        ),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-embedding-2",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(20 * 1e-7 + 64 * 3.25e-6 + 10 * 2.25e-7 + 6 * 6e-6)
+
+
+def test_batch_cost_calculator_falls_back_to_text_batch_rate_for_modalities():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {"input_cost_per_token_batches": 1e-7}
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=64),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-embedding-2",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(100 * 1e-7)
+
+
 def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
     """
     LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
@@ -4313,6 +4365,59 @@ def test_select_model_name_applies_region_to_private_provider_response_model(_lo
     assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
 
 
+def test_completion_cost_region_name_prices_mantle_on_the_regional_row(_local_model_cost_map):
+    """completion_cost(region_name=...) must price a Bedrock Mantle call from the
+    bedrock_mantle/<region>/<model> row when one exists, for the bare and the provider-prefixed
+    model alike, and keep the flat row for regions without their own row."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="xai.grok-4.3",
+        usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+    )
+    gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+    flat = litellm.model_cost["bedrock_mantle/xai.grok-4.3"]
+    expected_gov = 38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    expected_flat = 38 * flat["input_cost_per_token"] + 20 * flat["output_cost_per_token"]
+    assert expected_gov != expected_flat
+
+    for model in ("xai.grok-4.3", "bedrock_mantle/xai.grok-4.3"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+            region_name="us-gov-west-1",
+        ) == pytest.approx(expected_gov)
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+            region_name="eu-west-1",
+        ) == pytest.approx(expected_flat)
+    assert litellm.completion_cost(
+        completion_response=response, model="xai.grok-4.3", custom_llm_provider="bedrock_mantle"
+    ) == pytest.approx(expected_flat)
+
+
+def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_model_cost_map):
+    """A provider-prefixed model must still find its bedrock_mantle/<region>/<model> row instead of
+    composing the region key with the provider segment twice."""
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="bedrock_mantle/xai.grok-4.3",
+        prompt_tokens=38,
+        completion_tokens=20,
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+    gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+
+    assert prompt_cost + completion_cost == pytest.approx(
+        38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    )
+
+
 def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
     """An explicit base_model keeps pricing on that model's own key even when the request carries a
     region with different regional rates, so the private provider model never widens region pricing."""
@@ -4327,6 +4432,29 @@ def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map
     )
 
     assert selected == "bedrock/moonshotai.kimi-k2.5"
+
+
+def test_completion_cost_base_model_ignores_regional_row(_local_model_cost_map):
+    """A deployment with base_model set is priced from that model's own row even when the response
+    carries a region whose regional row charges different rates."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="my-bedrock-deployment",
+        usage={"prompt_tokens": 1000, "completion_tokens": 0, "total_tokens": 1000},
+    )
+    response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "eu-central-1"}
+    flat = litellm.model_cost["anthropic.claude-instant-v1"]
+    regional = litellm.model_cost["bedrock/eu-central-1/anthropic.claude-instant-v1"]
+    assert flat["input_cost_per_token"] != regional["input_cost_per_token"]
+
+    assert litellm.completion_cost(
+        completion_response=response,
+        model="my-bedrock-deployment",
+        custom_llm_provider="bedrock",
+        base_model="anthropic.claude-instant-v1",
+    ) == pytest.approx(1000 * flat["input_cost_per_token"])
 
 
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
@@ -4770,6 +4898,109 @@ def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> 
     assert combined.completion_tokens_details.reasoning_tokens == 95
     assert combined.completion_tokens_details.text_tokens == 38
     assert combined.completion_tokens_details.audio_tokens == 0
+
+
+def test_realtime_combine_sums_nested_cached_tokens_details():
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 283,
+                    "output_tokens": 0,
+                    "total_tokens": 283,
+                    "input_token_details": {
+                        "text_tokens": 116,
+                        "audio_tokens": 167,
+                        "cached_tokens": 192,
+                        "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128},
+                    },
+                }
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 150,
+                    "output_tokens": 0,
+                    "total_tokens": 150,
+                    "input_token_details": {
+                        "text_tokens": 50,
+                        "audio_tokens": 100,
+                        "cached_tokens": 100,
+                        "cached_tokens_details": {"audio_tokens": 100},
+                    },
+                }
+            },
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.cached_tokens == 292
+    assert combined.prompt_tokens_details.cached_tokens_details is not None
+    assert combined.prompt_tokens_details.cached_tokens_details.audio_tokens == 228
+    assert combined.prompt_tokens_details.cached_tokens_details.text_tokens == 64
+    assert combined.prompt_tokens_details.cached_tokens_details.image_tokens is None
+
+
+@pytest.mark.parametrize("details_first", [True, False])
+def test_realtime_combine_keeps_cached_split_when_only_one_usage_has_details(details_first: bool):
+    with_details: Final = {
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "input_tokens": 283,
+                "output_tokens": 0,
+                "total_tokens": 283,
+                "input_token_details": {
+                    "text_tokens": 116,
+                    "audio_tokens": 167,
+                    "cached_tokens": 192,
+                    "cached_tokens_details": {"text_tokens": 64, "audio_tokens": 128},
+                },
+            }
+        },
+    }
+    without_details: Final = {
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "input_tokens": 150,
+                "output_tokens": 0,
+                "total_tokens": 150,
+                "input_token_details": {"text_tokens": 50, "audio_tokens": 100, "cached_tokens": 100},
+            }
+        },
+    }
+    results: OpenAIRealtimeStreamList = (
+        [with_details, without_details] if details_first else [without_details, with_details]
+    )
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.cached_tokens == 292
+    assert combined.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(text_tokens=64, audio_tokens=128)
+
+
+def test_usage_without_cached_tokens_details_omits_key():
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=10),
+    )
+
+    dumped = usage.prompt_tokens_details.model_dump()
+    assert "cached_tokens_details" not in dumped
+    assert "cached_tokens_details" not in usage.prompt_tokens_details.model_dump_json()
 
 
 UNMAPPED_OCR_MODEL: Final = "azure_ai/some-unmapped-ocr-model-for-testing"

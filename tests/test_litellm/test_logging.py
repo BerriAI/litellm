@@ -32,6 +32,7 @@ from litellm._logging import (
     verbose_proxy_logger,
     verbose_router_logger,
     ALL_LOGGERS,
+    AccessLogPathFilter,
     AccessLogRedactionFilter,
     CorrelationContextFilter,
     CorrelationPlainFormatter,
@@ -1380,3 +1381,72 @@ def test_access_redaction_survives_the_uvicorn_json_log_config():
             lg.handlers[:] = handlers
             lg.setLevel(level)
             lg.propagate = True
+
+
+_DISABLED_ACCESS_LOG_PATHS_RAW = " /health/liveliness , ,/metrics/"
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        "/health/liveliness",
+        "/health/liveliness?x=1",
+        "/health/liveliness?probe=" + "x" * _MAX_SCRUBBED_ACCESS_ARG,
+        "/metrics/",
+        "/metrics/?format=prometheus&job=a",
+    ],
+)
+def test_uvicorn_access_logger_drops_a_configured_path(monkeypatch, full_path):
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", _DISABLED_ACCESS_LOG_PATHS_RAW)
+    assert _emit_access_line(full_path) == ""
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    ["/v1/chat/completions", "/health", "/health/liveliness/", "/metrics", "/v1/models?health=/health/liveliness"],
+)
+def test_uvicorn_access_logger_keeps_an_unconfigured_path(monkeypatch, full_path):
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", _DISABLED_ACCESS_LOG_PATHS_RAW)
+    assert f'"GET {full_path} HTTP/1.1" 200' in _emit_access_line(full_path)
+
+
+@pytest.mark.parametrize("raw", [None, "", " , ,"])
+def test_uvicorn_access_logger_keeps_every_line_when_no_path_is_configured(monkeypatch, raw):
+    if raw is None:
+        monkeypatch.delenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", raw)
+    assert '"GET /health/liveliness HTTP/1.1" 200' in _emit_access_line("/health/liveliness")
+
+
+def test_access_log_path_filter_survives_the_uvicorn_json_log_config(monkeypatch):
+    import logging.config
+
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", _DISABLED_ACCESS_LOG_PATHS_RAW)
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
+    try:
+        logging.config.dictConfig(_get_uvicorn_json_log_config())
+
+        assert _emit_access_line("/health/liveliness?x=1") == ""
+        assert '"GET /v1/models HTTP/1.1" 200' in _emit_access_line("/v1/models")
+    finally:
+        for lg, handlers, level in saved:
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = True
+
+
+@pytest.mark.parametrize("args", [None, ("127.0.0.1:1", "GET", 42)])
+def test_access_log_path_filter_keeps_a_record_without_a_string_path_arg(monkeypatch, args):
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", "/health/liveliness")
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='127.0.0.1:1 - "GET /health/liveliness HTTP/1.1" 200',
+        args=args,
+        exc_info=None,
+    )
+    assert AccessLogPathFilter().filter(record) is True
