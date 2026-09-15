@@ -18,6 +18,7 @@ fails the test; a pricing or token-count drift does not.
 import time
 from collections.abc import Callable
 from math import isclose
+from typing import Final
 
 import pytest
 from e2e_http import Success
@@ -284,13 +285,17 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
 def test_burst_of_concurrent_calls_loses_no_spend(
     client: SpendClient, resources: ResourceManager
 ) -> None:
-    from spend_reconciliation import assert_logs_match, create_traffic
+    from spend_reconciliation import TeamTraffic, assert_logs_match, create_traffic
 
-    traffic = create_traffic(client, resources)
-    for team in traffic:
+    traffic: Final = create_traffic(client, resources)
+
+    def assert_team(team: TeamTraffic) -> None:
         assert_logs_match(client, team)
-        key_spend = client.poll_key_spend(team.key, minimum=team.spend * 0.999999)
+        key_spend: Final = client.poll_key_spend(team.key, minimum=team.spend * 0.999999)
         assert isclose(key_spend, team.spend, rel_tol=1e-6, abs_tol=1e-9)
+
+    for team in traffic:
+        assert_team(team)
 
 
 @pytest.mark.covers("quota_management.spend_tracking.pagination.keeps_total")
