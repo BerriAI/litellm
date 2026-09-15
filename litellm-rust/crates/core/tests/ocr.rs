@@ -58,7 +58,8 @@ async fn facade_executes_direct_mistral_once() {
     let result = perform_ocr(wire_request(
         "mistral/model",
         &base,
-        json!({"pages":"0,2-4","extract_header":true,"unknown":"ignored"}),
+        json!({"pages":"0,2-4","extract_header":true,"unknown":{"nested":[null,false,0]},
+            "extra_body":{"future":true,"extract_header":false},"timeout":42}),
     ))
     .await
     .unwrap();
@@ -80,7 +81,9 @@ async fn facade_executes_direct_mistral_once() {
             "model":"model",
             "document":{"type":"document_url","document_url":"data:application/pdf;base64,YWJj"},
             "pages":"0,2-4",
-            "extract_header":true
+            "extract_header":false,
+            "unknown":{"nested":[null,false,0]},
+            "future":true
         })
     );
 }

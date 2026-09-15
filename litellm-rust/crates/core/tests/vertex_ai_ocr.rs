@@ -141,7 +141,8 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
                 "model": "mistral-ocr-maas",
                 "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
                 "pages": [0, 2],
-                "include_image_base64": true
+                "include_image_base64": true,
+                "unknown": "ignored"
             })
         );
     }

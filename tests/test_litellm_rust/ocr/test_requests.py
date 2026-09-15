@@ -19,6 +19,116 @@ pytestmark = pytest.mark.requires_rust_extension
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("wrapped", [False, True], ids=["kwargs", "extra-body"])
+@pytest.mark.parametrize(
+    "value",
+    [None, False, 0, "", [], {}, {"timeout": None, "extra_body": {"api_key": "data"}}],
+    ids=["null", "false", "zero", "empty-string", "empty-array", "empty-object", "nested-names"],
+)
+async def test_native_ocr_extension_values_cross_the_boundary(
+    ocr_server: RecordingServer, asynchronous: bool, wrapped: bool, value: object
+) -> None:
+    fields: Final = {"future": value}
+    arguments: Final = {"extra_body": fields} if wrapped else fields
+    if asynchronous:
+        await call_native_aocr(ocr_server, **arguments)
+    else:
+        call_native_ocr(ocr_server, **arguments)
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": OCR_DOCUMENT,
+        "future": value,
+    }
+
+
+def test_native_ocr_body_hook_edits_are_not_overwritten_by_extra_body(ocr_server: RecordingServer) -> None:
+    observed: Final = []
+
+    class Edit(RecordingLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            body = kwargs["additional_args"]["complete_input_dict"]
+            observed.append(body["future"])
+            body["future"] = {"from": "hook"}
+            body.pop("removed")
+
+    call_native_ocr(
+        ocr_server,
+        future={"from": "kwargs"},
+        extra_body={"future": {"from": "extra_body"}, "removed": True},
+        callbacks=[Edit()],
+    )
+    assert observed == [{"from": "extra_body"}]
+    assert ocr_server.requests[0].body["future"] == {"from": "hook"}
+    assert "removed" not in ocr_server.requests[0].body
+
+
+def test_native_ocr_document_override_survives_python_hook_projection(ocr_server: RecordingServer) -> None:
+    document: Final = {"type": "document_url", "document_url": "https://example.com/replacement.pdf"}
+    call_native_ocr(ocr_server, extra_body={"document": document})
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body["document"] == document
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_preserves_extensions_and_applies_shallow_overrides(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    future: Final = {"nested": [None, False, 0, "", [], {}], "timeout": "provider-data"}
+    overrides: Final = {"settings": {"b": 2}, "extract_header": False, "explicit_null": None}
+    arguments: Final = {
+        "future": future,
+        "settings": {"a": 1},
+        "extract_header": True,
+        "extra_body": overrides,
+    }
+    if asynchronous:
+        await call_native_aocr(ocr_server, **arguments)
+    else:
+        call_native_ocr(ocr_server, **arguments)
+
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": OCR_DOCUMENT,
+        "future": future,
+        "settings": {"b": 2},
+        "extract_header": False,
+        "explicit_null": None,
+    }
+    assert arguments["future"] is future
+    assert arguments["extra_body"] is overrides
+    assert overrides == {"settings": {"b": 2}, "extract_header": False, "explicit_null": None}
+
+
+@pytest.mark.parametrize("extra_body", [False, 1, [], "invalid"])
+def test_native_ocr_rejects_non_object_overrides_without_sending(
+    ocr_server: RecordingServer, extra_body: object
+) -> None:
+    ocr_server.expected_requests = 0
+    with pytest.raises(litellm.BadRequestError, match="extra_body"):
+        call_native_ocr(ocr_server, extra_body=extra_body)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_rejects_non_json_provider_options_without_sending(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    ocr_server.expected_requests = 0
+    if asynchronous:
+        with pytest.raises(litellm.APIConnectionError, match="unsupported type object"):
+            await call_native_aocr(ocr_server, future=object())
+    else:
+        with pytest.raises(litellm.APIConnectionError, match="unsupported type object"):
+            call_native_ocr(ocr_server, future=object())
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_native_azure_ocr_uses_token_provider_result_as_bearer_token(
     ocr_server: RecordingServer, isolated_azure_auth: None, asynchronous: bool
 ) -> None:
@@ -479,7 +589,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     from litellm.models.credentials import CredentialItem
 
     pages: Final = [0]
-    opaque: Final = object()
+    opaque: Final = {"future": [None, False, 0]}
     monkeypatch.setenv("MISTRAL_API_KEY", "environment-key")
     monkeypatch.setattr(
         litellm,
@@ -516,6 +626,8 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     assert response.pages[0].markdown == "native OCR response"
     assert ocr_server.requests[0].headers["authorization"] == f"Bearer {expected_key}"
     assert ocr_server.requests[0].body["pages"] == [0, 2]
+
+    assert ocr_server.requests[0].body["opaque"] == opaque
 
 
 @pytest.mark.parametrize("source", ["sdk", "proxy"])

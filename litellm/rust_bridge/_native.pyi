@@ -47,6 +47,7 @@ def _ocr_lifecycle(
     args: tuple[object, ...],
     kwargs: dict[str, object],
     asynchronous: bool,
+    sdk_reserved_param_names: list[str],
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]: ...
 def transcription(
     model: str,

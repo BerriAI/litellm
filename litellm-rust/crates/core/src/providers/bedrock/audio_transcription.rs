@@ -71,17 +71,27 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             inference_config.insert("temperature".to_string(), temperature.clone());
         }
         Ok(AudioTranscriptionRequestData {
-            body: json!({
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"audio": {"format": format, "source": {"bytes": data}}},
-                        {"text": instruction}
-                    ]
-                }],
-                "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": inference_config,
-            }),
+            body: crate::params::compose_body(
+                &json!({
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"audio": {"format": format, "source": {"bytes": data}}},
+                            {"text": instruction}
+                        ]
+                    }],
+                    "system": [{"text": "You are a transcription assistant."}],
+                    "inferenceConfig": inference_config,
+                }),
+                &optional_params,
+                &[
+                    "language",
+                    "prompt",
+                    "temperature",
+                    "response_format",
+                    "timestamp_granularities",
+                ],
+            )?,
         })
     }
 
@@ -195,6 +205,30 @@ mod tests {
             .expect("response");
         assert_eq!(result.text, "hello world");
         assert_eq!(result.into_json(), json!({"text": "hello world"}));
+    }
+
+    #[test]
+    fn extensions_survive_mapping_and_override_the_final_body() {
+        let params = json!({"language":"en", "temperature":0.1, "future":null,
+            "aws_secret_access_key":"secret", "extra_body":{"inferenceConfig":{"temperature":0.7}}});
+        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
+            .transform_transcription_request(
+                "model",
+                json!({"data":"AQI=", "format":"wav"}),
+                BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
+                    .map_transcription_params(params.as_object().unwrap()),
+            )
+            .unwrap();
+        assert_eq!(result.body["inferenceConfig"], json!({"temperature":0.7}));
+        assert_eq!(result.body.get("future"), Some(&Value::Null));
+        for name in [
+            "language",
+            "temperature",
+            "extra_body",
+            "aws_secret_access_key",
+        ] {
+            assert!(result.body.get(name).is_none());
+        }
     }
 
     #[test]

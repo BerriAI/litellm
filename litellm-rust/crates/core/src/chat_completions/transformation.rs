@@ -19,9 +19,8 @@ pub enum ChatCompletionsAuth {
 ///
 /// The core declines rather than guessing: the host turns this into a
 /// transparent fallback to the Python implementation, which covers the full
-/// surface. Acceptance is an allowlist, so a parameter or message shape the
-/// core has never seen declines by construction instead of being translated
-/// wrong.
+/// surface. Known features needing translation decline; opaque provider body
+/// extensions do not imply support for a new message or response shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unsupported(pub &'static str);
 
@@ -103,8 +102,12 @@ pub fn unsupported_param(
     config: &'static [&'static str],
     optional_params: &Map<String, Value>,
 ) -> Option<Unsupported> {
-    if optional_params
-        .get(STREAM_PARAM)
+    let overrides = crate::params::body_overrides(optional_params)
+        .ok()
+        .flatten();
+    if overrides
+        .and_then(|fields| fields.get(STREAM_PARAM))
+        .or_else(|| optional_params.get(STREAM_PARAM))
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
@@ -112,12 +115,50 @@ pub fn unsupported_param(
     }
     optional_params
         .keys()
+        .chain(overrides.into_iter().flat_map(|fields| fields.keys()))
         .any(|key| {
             key != STREAM_PARAM
                 && !supported
                     .iter()
                     .any(|(_, provider_name)| *provider_name == key)
                 && !config.contains(&key.as_str())
+                && matches!(
+                    key.as_str(),
+                    "tools"
+                        | "tool_choice"
+                        | "toolConfig"
+                        | "thinking"
+                        | "system"
+                        | "messages"
+                        | "metadata"
+                        | "output_config"
+                        | "outputConfig"
+                        | "requestMetadata"
+                        | "_parallel_tool_use_config"
+                        | "top_k"
+                        | "topK"
+                        | "model"
+                        | "functions"
+                        | "function_call"
+                        | "parallel_tool_calls"
+                        | "response_format"
+                        | "n"
+                        | "logprobs"
+                        | "top_logprobs"
+                        | "modalities"
+                        | "audio"
+                        | "prediction"
+                        | "reasoning_effort"
+                        | "max_completion_tokens"
+                        | "stop"
+                        | "max_tokens"
+                        | "top_p"
+                        | "frequency_penalty"
+                        | "presence_penalty"
+                        | "logit_bias"
+                        | "seed"
+                        | "stream_options"
+                )
         })
         .then_some(Unsupported("unrecognized request parameter"))
 }
