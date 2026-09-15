@@ -1456,10 +1456,6 @@ class TestLatencySurvivesTheReadPath:
         assert metrics.latency_requests == 2
         assert metrics.latency_ms / metrics.latency_requests == 600
 
-    def test_range_totals_are_declared(self):
-        assert "total_latency_ms" in DailySpendMetadata.model_fields
-        assert "total_latency_requests" in DailySpendMetadata.model_fields
-
     @pytest.mark.asyncio
     async def test_aggregated_response_carries_model_latency_and_range_total(self):
         base = {
