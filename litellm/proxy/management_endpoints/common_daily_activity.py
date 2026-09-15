@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_emails,
@@ -167,6 +167,32 @@ class _GroupingSetsRow(SimpleNamespace):
 class _EntityRollupRow(_GroupingSetsRow):
     entity_id: str | None
     api_key_rolled: int
+
+
+class _AggregatedQueryKwargs(TypedDict):
+    """Filter arguments shared by the three aggregated SQL builders."""
+
+    table_name: ReadOnly[str]
+    entity_id_field: ReadOnly[str]
+    entity_id: ReadOnly[str | list[str] | None]
+    start_date: ReadOnly[str]
+    end_date: ReadOnly[str]
+    model: ReadOnly[str | None]
+    api_key: ReadOnly[str | list[str] | None]
+    exclude_entity_ids: ReadOnly[list[str] | None]
+    timezone_offset_minutes: ReadOnly[int | None]
+    include_current_utc_day: ReadOnly[bool]
+
+
+_SqlQuery = tuple[str, list[str]]
+
+
+async def _query_raw_optional(
+    prisma_client: PrismaClient, query: _SqlQuery | None
+) -> list[dict[str, object]] | None:  # mutable-ok: prisma query_raw return shape
+    if query is None:
+        return None
+    return await prisma_client.db.query_raw(query[0], *query[1])
 
 
 def _reported_flat_cost(record: DailySpendRecord | _GroupingSetsRow) -> float:
@@ -689,6 +715,27 @@ def _ptu_flat_cost_select(table_name: str) -> str:
     return "0::float AS ptu_flat_cost"
 
 
+def _rollup_metric_select(table_name: str) -> str:
+    return f"""
+            SUM(spend)::float AS spend,
+            {_ptu_flat_cost_select(table_name)},
+            SUM(prompt_tokens)::bigint AS prompt_tokens,
+            SUM(completion_tokens)::bigint AS completion_tokens,
+            SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
+            SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
+            SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
+            SUM(compression_savings_spend)::float AS compression_savings_spend,
+            SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
+            SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
+            SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
+            SUM(api_requests)::bigint AS api_requests,
+            SUM(successful_requests)::bigint AS successful_requests,
+            SUM(failed_requests)::bigint AS failed_requests"""
+
+
+_MODEL_GROUP_EXPR: Final = "COALESCE(NULLIF(model_group, ''), model)"
+
+
 def _build_aggregated_sql_query(
     *,
     table_name: str,
@@ -702,12 +749,16 @@ def _build_aggregated_sql_query(
     timezone_offset_minutes: int | None = None,
     include_current_utc_day: bool = False,
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
-    """Build a parameterized SQL GROUP BY query for aggregated daily activity.
+    """Build the key-free GROUPING SETS query for aggregated daily activity.
 
-    Groups by (date, api_key, model, model_group, custom_llm_provider,
-    mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
-    The entity_id column is intentionally omitted from GROUP BY to collapse
-    rows across entities — this is where the biggest row reduction comes from.
+    Emits the grand total, per-date totals and the per-(date, model), model_group,
+    provider, mcp tool and endpoint rollups. api_key is never a grouping column here,
+    so the row count is bounded by dates x distinct models/providers/endpoints and
+    does not grow with the number of keys. Per-key rollups come from
+    _build_top_api_keys_sql_query. Both queries emit the same 7-bit group_level
+    bitmask (date, api_key, model, model_group, provider, mcp, endpoint); this one
+    hard-codes the api_key bit to "rolled up" so the dispatcher can consume the two
+    result sets as one stream.
 
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
@@ -730,14 +781,6 @@ def _build_aggregated_sql_query(
         exclude_entity_ids=exclude_entity_ids,
     )
 
-    # Postgres computes every rollup level the response needs — per-date
-    # totals, per-(date, model), per-(date, model, api_key), per-provider,
-    # etc. — in a single pass via GROUPING SETS. The GROUPING() bitmask
-    # encodes which level a row belongs to so Python can dispatch rows
-    # straight into their buckets without re-summing. The leaf grouping
-    # is omitted on purpose: nothing in the response shape needs it once
-    # all the rollups are present.
-    #
     # TODO: drop the successful_requests/failed_requests aggregates (and the
     # total_successful_requests metadata they feed) once the admin UI reads SGR
     # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
@@ -745,49 +788,104 @@ def _build_aggregated_sql_query(
     sql_query: Final = f"""
         SELECT
             date,
-            api_key,
+            NULL::text AS api_key,
             model,
-            COALESCE(NULLIF(model_group, ''), model) AS model_group,
+            {_MODEL_GROUP_EXPR} AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, COALESCE(NULLIF(model_group, ''), model),
-                     custom_llm_provider, mcp_namespaced_tool_name,
-                     endpoint) AS group_level,
-            SUM(spend)::float AS spend,
-            {_ptu_flat_cost_select(table_name)},
-            SUM(prompt_tokens)::bigint AS prompt_tokens,
-            SUM(completion_tokens)::bigint AS completion_tokens,
-            SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
-            SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
-            SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
-            SUM(compression_savings_spend)::float AS compression_savings_spend,
-            SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
-            SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
-            SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
-            SUM(api_requests)::bigint AS api_requests,
-            SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
+            (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
+                | GROUPING(model, {_MODEL_GROUP_EXPR},
+                           custom_llm_provider, mcp_namespaced_tool_name,
+                           endpoint) AS group_level,{_rollup_metric_select(table_name)}
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date),
-            (date, api_key),
             (date, model),
-            (date, model, api_key),
-            (date, COALESCE(NULLIF(model_group, ''), model)),
-            (date, COALESCE(NULLIF(model_group, ''), model), api_key),
+            (date, {_MODEL_GROUP_EXPR}),
             (date, custom_llm_provider),
-            (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name),
-            (date, mcp_namespaced_tool_name, api_key),
             (date, endpoint),
-            (date, endpoint, api_key),
             ()
         )
     """
 
     return sql_query, sql_params
+
+
+def _build_top_api_keys_sql_query(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    model: str | None,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
+    """Per-key companion to _build_aggregated_sql_query.
+
+    Ranks keys by spend over the same WHERE clause, keeps the top
+    USAGE_TOP_API_KEYS_LIMIT (ties broken by api_key so the set is stable across
+    refreshes) and emits the six (date, <dimension>, api_key) rollups for those keys
+    only. The PTU flat-cost sentinel never ranks, so it cannot occupy a visible slot.
+    """
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes, include_current_utc_day
+    )
+
+    where_clause, where_params = _build_aggregated_where_clause(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        adjusted_start=adjusted_start,
+        adjusted_end=adjusted_end,
+        model=model,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+    )
+    sentinel_param: Final = f"${len(where_params) + 1}"
+
+    sql_query: Final = f"""
+        WITH top_api_keys AS (
+            SELECT api_key
+            FROM "{pg_table}"
+            WHERE {where_clause} AND api_key <> {sentinel_param}
+            GROUP BY api_key
+            ORDER BY SUM(spend) DESC, api_key
+            LIMIT {USAGE_TOP_API_KEYS_LIMIT}
+        )
+        SELECT
+            date,
+            api_key,
+            model,
+            {_MODEL_GROUP_EXPR} AS model_group,
+            custom_llm_provider,
+            mcp_namespaced_tool_name,
+            endpoint,
+            GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
+                     custom_llm_provider, mcp_namespaced_tool_name,
+                     endpoint) AS group_level,{_rollup_metric_select(table_name)}
+        FROM "{pg_table}"
+        WHERE {where_clause} AND api_key IN (SELECT api_key FROM top_api_keys)
+        GROUP BY GROUPING SETS (
+            (date, api_key),
+            (date, model, api_key),
+            (date, {_MODEL_GROUP_EXPR}, api_key),
+            (date, custom_llm_provider, api_key),
+            (date, mcp_namespaced_tool_name, api_key),
+            (date, endpoint, api_key)
+        )
+    """
+
+    return sql_query, [*where_params, PTU_SENTINEL_API_KEY]
 
 
 def _build_entity_rollup_sql_query(
@@ -832,21 +930,7 @@ def _build_entity_rollup_sql_query(
             "{entity_id_field}" AS entity_id,
             date,
             api_key,
-            GROUPING(api_key) AS api_key_rolled,
-            SUM(spend)::float AS spend,
-            {_ptu_flat_cost_select(table_name)},
-            SUM(prompt_tokens)::bigint AS prompt_tokens,
-            SUM(completion_tokens)::bigint AS completion_tokens,
-            SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
-            SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
-            SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
-            SUM(compression_savings_spend)::float AS compression_savings_spend,
-            SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
-            SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
-            SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
-            SUM(api_requests)::bigint AS api_requests,
-            SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
+            GROUPING(api_key) AS api_key_rolled,{_rollup_metric_select(table_name)}
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -948,6 +1032,7 @@ async def _aggregate_spend_records(
 # current grouping set's key), 0 when the column is part of the key.
 _GROUP_GRAND_TOTAL: Final = 127  # 0b1111111 — all rolled up
 _GROUP_DATE: Final = 63  # 0b0111111 — only date kept
+_API_KEY_ROLLED_UP_BIT: Final = 32  # 0b0100000 — api_key position in the 7-bit mask
 _GROUP_DATE_API_KEY: Final = 31  # 0b0011111
 _GROUP_DATE_MODEL: Final = 47  # 0b0101111
 _GROUP_DATE_MODEL_API_KEY: Final = 15  # 0b0001111
@@ -1311,9 +1396,11 @@ async def get_daily_activity_aggregated(
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
-    Uses SQL GROUP BY to aggregate rows in the database rather than fetching
-    all individual rows into Python. This collapses rows across entities
-    (users/teams/orgs), reducing ~150k rows to ~2-3k grouped rows.
+    Runs two GROUPING SETS queries in parallel: a key-free one for totals and the
+    model/provider/mcp/endpoint rollups (row count independent of key cardinality)
+    and a bounded one for the per-key rollups of the top USAGE_TOP_API_KEYS_LIMIT
+    keys by spend. breakdown.api_keys and every api_key_breakdown therefore list at
+    most that many keys, while the totals and the key-free rollups cover every key.
 
     include_entity_breakdown runs a small companion rollup query and folds
     `breakdown.entities` onto the response, as entity-scoped views like Team Usage need.
@@ -1333,7 +1420,7 @@ async def get_daily_activity_aggregated(
         )
 
     try:
-        sql_query, sql_params = _build_aggregated_sql_query(
+        query_kwargs: Final = _AggregatedQueryKwargs(
             table_name=table_name,
             entity_id_field=entity_id_field,
             entity_id=entity_id,
@@ -1345,36 +1432,17 @@ async def get_daily_activity_aggregated(
             timezone_offset_minutes=timezone_offset_minutes,
             include_current_utc_day=include_current_utc_day,
         )
+        key_free_sql, key_free_params = _build_aggregated_sql_query(**query_kwargs)
+        top_keys_sql, top_keys_params = _build_top_api_keys_sql_query(**query_kwargs)
+        entity_query: Final = _build_entity_rollup_sql_query(**query_kwargs) if include_entity_breakdown else None
 
-        entity_query: Final = (
-            _build_entity_rollup_sql_query(
-                table_name=table_name,
-                entity_id_field=entity_id_field,
-                entity_id=entity_id,
-                start_date=start_date,
-                end_date=end_date,
-                model=model,
-                api_key=api_key,
-                exclude_entity_ids=exclude_entity_ids,
-                timezone_offset_minutes=timezone_offset_minutes,
-                include_current_utc_day=include_current_utc_day,
-            )
-            if include_entity_breakdown
-            else None
+        raw_key_free_rows, raw_top_key_rows, raw_entity_rows = await asyncio.gather(
+            prisma_client.db.query_raw(key_free_sql, *key_free_params),
+            prisma_client.db.query_raw(top_keys_sql, *top_keys_params),
+            _query_raw_optional(prisma_client, entity_query),
         )
 
-        # Execute the GROUPING SETS query (one row per rollup level), alongside
-        # the per-entity companion rollup when the caller wants entities.
-        raw_rows, raw_entity_rows = (
-            await asyncio.gather(
-                prisma_client.db.query_raw(sql_query, *sql_params),
-                prisma_client.db.query_raw(entity_query[0], *entity_query[1]),
-            )
-            if entity_query is not None
-            else (await prisma_client.db.query_raw(sql_query, *sql_params), None)
-        )
-
-        records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or [])]
+        records: Final = [_GroupingSetsRow(**row) for row in (*(raw_key_free_rows or ()), *(raw_top_key_rows or ()))]
 
         # The grouping-sets dispatcher places each row directly in its bucket
         # using the row's GROUPING() bitmask. No Python-side summing needed.
@@ -1426,6 +1494,7 @@ async def get_daily_activity_aggregated(
                 page=1,
                 total_pages=1,
                 has_more=False,
+                api_key_limit=USAGE_TOP_API_KEYS_LIMIT,
             ),
         )
 
