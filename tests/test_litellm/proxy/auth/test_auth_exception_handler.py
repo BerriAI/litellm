@@ -823,6 +823,89 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
     assert request_data == {"model": "gpt-4o"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data, metadata_key, route",
+    [
+        pytest.param({"model": "gpt-4o"}, "metadata", "/v1/chat/completions", id="chat_metadata"),
+        pytest.param({"litellm_metadata": {}}, "litellm_metadata", "/v1/responses", id="responses_litellm_metadata"),
+    ],
+)
+async def test_auth_failure_logs_user_agent(request_data: dict[str, object], metadata_key: str, route: str) -> None:
+    """Auth gate rejections never reach `add_litellm_data_to_request`, which is what
+    stamps `user_agent`, so the failure spend log and prometheus `user_agent` label
+    had nothing to identify an abusive client by."""
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity"
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_hook,
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                _http_request(headers={"user-agent": "abusive-client/9.9"}),
+                request_data,
+                route,
+                None,
+                "sk-bad-key",
+            )
+
+    logged_metadata = mock_hook.call_args[1]["request_data"][metadata_key]
+    assert logged_metadata["user_agent"] == "abusive-client/9.9"
+    assert logged_metadata["requester_ip_address"] == "10.1.2.3"
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_without_headers_scope_still_raises_original_error() -> None:
+    """A request scope with no `headers` entry must surface the auth error itself, not a
+    `KeyError` from reading the User-Agent."""
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity"
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_hook,
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                Request(scope={"type": "http"}),
+                {"model": "gpt-4o"},
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+
+    assert str(exc_info.value.code) == str(status.HTTP_401_UNAUTHORIZED)
+    assert "user_agent" not in mock_hook.call_args[1]["request_data"].get("metadata", {})
+
+
 def _marked_malformed_key_error() -> HTTPException:
     """Build the malformed-key 401 as its raise site does: marker stamped on it."""
     error = HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test")
