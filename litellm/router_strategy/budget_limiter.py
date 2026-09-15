@@ -93,13 +93,6 @@ class _LiteLLMParamsDictView:
         return dict(self._params)
 
 
-async def _push_increments_to_redis(redis_cache: RedisCache, queued: list[RedisPipelineIncrementOperation]) -> None:
-    try:
-        await redis_cache.async_increment_pipeline(increment_list=queued)
-    except Exception as e:
-        log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
-
-
 class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
