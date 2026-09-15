@@ -661,6 +661,11 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.route_priority import hot_routes_first
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.shutdown.scheduled_jobs import (
+    AwaitableAsyncIOExecutor,
+    pause_scheduled_jobs,
+    stop_in_flight_scheduler_jobs,
+)
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
@@ -1372,6 +1377,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     # End of startup event
     yield
 
+    # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
+    if scheduler is not None:
+        pause_scheduled_jobs(scheduler)
+
     # Shutdown event - drain in-flight requests before tearing down dependencies
     # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
     GracefulShutdownManager.start_shutdown()
@@ -1404,6 +1413,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
     await _drain_spend_event_producer_on_shutdown()
+
+    # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
+    if scheduler is not None and scheduler_executor is not None:
+        try:
+            await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+        except Exception as e:
+            verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
     await flush_spend_counters_on_shutdown()
 
@@ -2418,6 +2434,7 @@ celery_app_conn: Final = None
 celery_fn: Final = None  # Redis Queue for handling requests
 
 scheduler = None
+scheduler_executor: AwaitableAsyncIOExecutor | None = None  # rebind-ok: bound once the scheduler is built at startup
 
 # Global variable for anthropic beta headers reload scheduling
 last_anthropic_beta_headers_reload = None
@@ -9726,7 +9743,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
-        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler  # rebind-ok: startup publishes the one read-only baseline snapshot
+        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor  # rebind-ok: startup publishes the one read-only baseline snapshot
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -9735,9 +9752,9 @@ class ProxyStartupEvent:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
         # 3. Set replace_existing=True to avoid duplicate jobs
-        from apscheduler.executors.asyncio import AsyncIOExecutor
         from apscheduler.jobstores.memory import MemoryJobStore
 
+        scheduler_executor = AwaitableAsyncIOExecutor()  # rebind-ok: shutdown awaits the jobs this executor runs
         scheduler = AsyncIOScheduler(
             job_defaults={
                 "coalesce": APSCHEDULER_COALESCE,
@@ -9750,7 +9767,7 @@ class ProxyStartupEvent:
             jobstores={"default": MemoryJobStore()},  # explicitly use memory job store
             # Use simple executor to minimize overhead
             executors={
-                "default": AsyncIOExecutor(),
+                "default": scheduler_executor,
             },
             # Disable timezone awareness to reduce computation
             timezone=None,
