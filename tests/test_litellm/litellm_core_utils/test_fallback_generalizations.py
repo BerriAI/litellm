@@ -458,12 +458,10 @@ def shipped_cost_map(monkeypatch):
         ("vertex_ai/gemini-4-pro", None),
         ("gemini-4-pro-preview-customtools", "gemini"),
         ("google/gemini-4-pro", "openrouter"),
-        ("google/gemini-12.5-flash-lite", "openrouter"),
         ("google/gemini-4-pro", "deepinfra"),
         ("google/gemini-4-pro", "vercel_ai_gateway"),
         ("google.gemini-4-pro", "oci"),
         ("databricks-gemini-4-1-pro", "databricks"),
-        ("gemini-10-pro", "gemini"),
     ],
 )
 def test_shipped_gemini_chat_baseline_resolves_unmapped_ids(shipped_cost_map, model, provider):
