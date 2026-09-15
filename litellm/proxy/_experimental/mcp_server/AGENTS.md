@@ -30,6 +30,7 @@ litellm/proxy/_experimental/mcp_server/
     seams.py                 # injected Protocols (one per cache-touching mode)
     v1_adapters.py           # v1-backed seam bodies; delegate to auth/oauth2/db owners
     adapter.py               # to_subject / to_server_spec / raise_public (v1 <-> v2 boundary)
+  gateway_sign_in.py         # GatewaySignInProvider protocol: guardrails that need the caller signed in at connect
   discoverable_endpoints.py  # MCP OAuth metadata, authorize, token, callback
   byok_oauth_endpoints.py    # BYOK OAuth UI/API flow
   oauth_utils.py             # redirect URI and proxy base URL validation

@@ -43,6 +43,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPToolResultError,
     MCPUpstreamAuthError,
 )
+from litellm.proxy._experimental.mcp_server.gateway_sign_in import gateway_sign_in_required
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
@@ -57,6 +58,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     get_byok_www_authenticate,
+    get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -4016,6 +4018,21 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
+    async def _key_granted_single_server(
+        server: MCPServer,
+        mcp_servers: Sequence[str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None,
+    ) -> bool:
+        """Sign-in challenges are issued only on a single-server connect the key's grant admits, so a key
+        without access gets the grant's 403 instead of a sign-in it could not use."""
+        if len(mcp_servers or []) != 1:
+            return False
+        allowed: Final = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+        )
+        return any(granted.server_id == server.server_id for granted in allowed)
+
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -4138,8 +4155,24 @@ if MCP_AVAILABLE:
             # (transport level, where WWW-Authenticate survives) with the RFC 9728 resource_metadata
             # so the client discovers the IdP, SSOs, and retries with a subject token, which LiteLLM
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
-            # header lost, so the discovery flow needs this pre-emptive challenge.
-            if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
+            # header lost, so the discovery flow needs this pre-emptive challenge. Servers gated by a
+            # gateway sign-in provider (a guardrail exchanging the caller's bearer on their behalf) get the
+            # same challenge, also when the only bearer is the LiteLLM key itself, which admits the caller
+            # but is not an exchangeable subject, and when the issuer refuses the presented assertion
+            # (expired, wrong audience), so the client signs in again instead of failing every tool call.
+            # Only on the server's own route: the per-server metadata ``resource`` must equal the URL the
+            # client connected to (RFC 9728 3.3), which aggregate ``/mcp`` and multi-server connects never do.
+            granted_single_server = server is not None and await _key_granted_single_server(
+                server, mcp_servers, user_api_key_auth, client_ip
+            )
+            if server and (
+                (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
+                or (
+                    granted_single_server
+                    and tuple(_get_mcp_servers_in_path(get_route_relative_request_path(scope)) or ()) == (server_name,)
+                    and await gateway_sign_in_required(server, user_api_key_auth, oauth2_headers)
+                )
+            ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
@@ -4147,7 +4180,11 @@ if MCP_AVAILABLE:
                     get_request_root_path,
                 )
 
-                raise_token_exchange_challenge(server, root_path=get_request_root_path())
+                raise_token_exchange_challenge(
+                    server,
+                    root_path=get_request_root_path(),
+                    resource_metadata_url=get_passthrough_resource_metadata_url(scope=scope, server_name=server_name),
+                )
 
             # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
             # the exchange here at the transport edge, so a rejected subject raises the RFC 9728
@@ -4156,22 +4193,13 @@ if MCP_AVAILABLE:
             # and what each mints from. Gated to single-server routes the key may reach; the
             # multi-server aggregate keeps absorbing per-server auth failures so one bad server
             # cannot 401 the whole connect.
-            if (
-                server
-                and len(mcp_servers or []) == 1
-                and server.server_id
-                in frozenset(
-                    allowed.server_id
-                    for allowed in await _get_allowed_mcp_servers(
-                        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
-                    )
-                )
-            ):
+            if server and granted_single_server:
                 await global_mcp_server_manager.preflight_token_exchange(
                     server=server,
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
                     raw_headers=raw_headers,
+                    resource_metadata_url=get_passthrough_resource_metadata_url(scope=scope, server_name=server_name),
                 )
 
             # Pass-through OAuth: when the admin has opted a server into
