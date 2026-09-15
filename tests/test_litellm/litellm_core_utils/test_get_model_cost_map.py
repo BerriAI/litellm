@@ -776,3 +776,51 @@ def test_boot_load_skips_remote_fetch_for_cli_processes(
         assert source["source"] == "local"
     else:
         assert source["source"] == "remote"
+
+
+# ---------------------------------------------------------------------------
+# Non-httpx failures (pytest-socket, sandboxed sockets, custom transports)
+# ---------------------------------------------------------------------------
+
+
+class _Blocked(Exception):
+    """Stands in for pytest_socket.SocketConnectBlockedError or a bare OSError from a sandbox."""
+
+
+def test_boot_load_falls_back_when_fetch_raises_a_non_httpx_error():
+    """`import litellm` under pytest-socket --disable-socket must not crash: 1.100.1 caught
+    `Exception` here, 1.101.0 narrowed it to httpx errors and let everything else escape."""
+    client, calls = _mock_client([_Blocked("socket connect blocked")], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(
+        url=_URL,
+        max_attempts=3,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+    )
+
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert _retry_threads() == []
+    assert cost_map.keys() == _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map()).keys()
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["fallback_reason"] is not None
+    assert "_Blocked" in source["fallback_reason"]
+    assert "socket connect blocked" in source["fallback_reason"]
+
+
+@pytest.mark.asyncio
+async def test_refetch_non_httpx_error_fails_immediately_without_retry():
+    """A blocked socket or permission error won't heal on retry: one attempt, no sleeps, failure value."""
+    client, calls = _mock_client([_Blocked("socket connect blocked")])
+    sleeper = _SleepRecorder()
+
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert "_Blocked" in result.reason
+    assert calls["count"] == 1
+    assert sleeper.waits == []
