@@ -1,10 +1,19 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Final, cast
+import json
 from unittest.mock import patch
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
+import litellm
 from litellm.exceptions import Timeout
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import (
@@ -12,8 +21,8 @@ from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr 
     CrowdStrikeAIDRHandler,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-from litellm.types.guardrails import Guardrail, LitellmParams
-from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+from litellm.types.utils import Delta, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream
 
 
 @pytest.fixture
@@ -1578,3 +1587,304 @@ async def test_unparseable_transformed_response_fails_closed_under_fail_open() -
 
     assert exc_info.value.status_code == 500
     assert "failing closed" in exc_info.value.detail["error"]
+
+
+def _initialize_from_config(**litellm_params_kwargs: object) -> CrowdStrikeAIDRHandler:
+    litellm_params = LitellmParams(
+        guardrail="crowdstrike_aidr",
+        api_key="pts_crowdstrike_tokenid",
+        api_base="https://api.crowdstrike.com/aidr/aiguard",
+        default_on=True,
+        **litellm_params_kwargs,
+    )
+    guardrail = Guardrail(guardrail_name="crowdstrike-aidr-guard", litellm_params=litellm_params)
+    return initialize_guardrail(litellm_params=litellm_params, guardrail=guardrail)
+
+
+@pytest.mark.parametrize(
+    ("mode", "runs_pre_call", "runs_post_call"),
+    [("post_call", False, True), ("pre_call", True, False), (["pre_call", "post_call"], True, True)],
+)
+def test_initialize_guardrail_honors_configured_mode(
+    mode: str | list[str], runs_pre_call: bool, runs_post_call: bool
+) -> None:
+    handler = _initialize_from_config(mode=mode)
+
+    assert handler.should_run_guardrail({}, GuardrailEventHooks.pre_call) is runs_pre_call
+    assert handler.should_run_guardrail({}, GuardrailEventHooks.post_call) is runs_post_call
+
+
+def test_initialize_guardrail_rejects_unsupported_mode_instead_of_running_other_hooks() -> None:
+    with pytest.raises(ValueError, match="during_call is not in the supported event hooks"):
+        _initialize_from_config(mode="during_call")
+
+
+def test_initialize_guardrail_defaults_streaming_params() -> None:
+    handler = _initialize_from_config(mode="post_call")
+
+    assert handler.streaming_end_of_stream_only is False
+    assert handler.streaming_sampling_rate == 5
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        {"streaming_end_of_stream_only": True, "streaming_sampling_rate": 50},
+        {"optional_params": {"streaming_end_of_stream_only": True, "streaming_sampling_rate": 50}},
+    ],
+)
+def test_initialize_guardrail_forwards_streaming_params(configured: dict[str, object]) -> None:
+    handler = _initialize_from_config(mode="post_call", **configured)
+
+    assert handler.streaming_end_of_stream_only is True
+    assert handler.streaming_sampling_rate == 50
+
+
+def test_initialize_guardrail_rejects_non_positive_sampling_rate() -> None:
+    with pytest.raises(ValidationError):
+        _initialize_from_config(mode="post_call", streaming_sampling_rate=0)
+
+
+def test_update_in_memory_litellm_params_reapplies_streaming_params() -> None:
+    handler = _initialize_from_config(mode="post_call")
+
+    handler.update_in_memory_litellm_params(
+        LitellmParams(
+            guardrail="crowdstrike_aidr",
+            mode="post_call",
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=7,
+        )
+    )
+
+    assert handler.streaming_end_of_stream_only is True
+    assert handler.streaming_sampling_rate == 7
+
+
+def _stream_chunk(content: str, finish_reason: str | None) -> ModelResponseStream:
+    return ModelResponseStream(
+        model="gpt-4",
+        choices=[
+            litellm.StreamingChoices(
+                index=0, delta=Delta(role="assistant", content=content), finish_reason=finish_reason
+            )
+        ],
+    )
+
+
+async def _guard_calls_for_stream(handler: CrowdStrikeAIDRHandler, chunk_texts: list[str]) -> int:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    async def stream():
+        for i, content in enumerate(chunk_texts):
+            yield _stream_chunk(content, "stop" if i == len(chunk_texts) - 1 else None)
+
+    calls = 0
+
+    def _allow(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            status_code=200, json={"result": {"blocked": False, "transformed": False}}, request=request
+        )
+
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": handler,
+        "metadata": {"guardrails": ["crowdstrike-aidr-guard"]},
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_allow)) as client:
+        await handler.async_handler.close()
+        handler.async_handler.client = client
+        async for _ in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
+            response=stream(),
+            request_data=request_data,
+        ):
+            pass
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "expected_calls"),
+    [
+        ({}, 2),
+        ({"streaming_sampling_rate": 2}, 5),
+        ({"streaming_end_of_stream_only": True}, 1),
+        ({"streaming_end_of_stream_only": True, "streaming_sampling_rate": 2}, 1),
+    ],
+)
+async def test_streaming_params_from_config_control_output_scan_cadence(
+    configured: dict[str, object], expected_calls: int
+) -> None:
+    """10 chunks: default samples at 5 and 10, rate 2 samples 5 times, end-of-stream scans once.
+
+    The final pass is skipped because chunk 10 already scanned the complete output.
+    """
+    handler = _initialize_from_config(mode="post_call", **configured)
+
+    assert await _guard_calls_for_stream(handler, list("ABCDEFGHIJ")) == expected_calls
+
+
+@asynccontextmanager
+async def _guardrail_redacting(secret: str, replacement: str) -> AsyncIterator[CrowdStrikeAIDRHandler]:
+    def redacted(content: object) -> object:
+        if isinstance(content, str):
+            return content.replace(secret, replacement)
+        if isinstance(content, list):
+            return [
+                {**part, "text": redacted(part["text"])} if isinstance(part, dict) and "text" in part else part
+                for part in content
+            ]
+        return content
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent: Final = json.loads(request.content)["guard_input"]["messages"]
+        return httpx.Response(
+            status_code=200,
+            json={
+                "result": {
+                    "blocked": False,
+                    "transformed": True,
+                    "guard_output": {
+                        "messages": [{**message, "content": redacted(message.get("content"))} for message in sent]
+                    },
+                },
+            },
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler: Final = AsyncHTTPHandler()
+        handler.client = client
+        yield CrowdStrikeAIDRHandler(
+            mode="pre_call",
+            guardrail_name="crowdstrike-aidr-guard",
+            api_key="pts_crowdstrike_tokenid",
+            api_base="https://api.crowdstrike.com/aidr/aiguard",
+            async_handler=handler,
+        )
+
+
+class _MessageShapedGuardrail(CustomGuardrail):
+    """Returns one text per chat message and no ``structured_messages`` rewrite.
+
+    Prompt Security and friends scan messages rather than Responses text parts,
+    which is the shape that outnumbers the endpoint's own bookkeeping.
+    """
+
+    def __init__(self, redacted: str) -> None:
+        super().__init__(guardrail_name="message-shaped")
+        self.redacted: Final = redacted
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: str,
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages: Final = inputs.get("structured_messages") or ()
+        return {"texts": [self.redacted for _ in messages]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "instructions", "responses_input"),
+    [
+        (
+            "instructions add a system message",
+            "be terse",
+            [{"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]}],
+        ),
+        (
+            "tool items add messages that carry no text",
+            None,
+            [
+                {"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]},
+                {"type": "function_call", "call_id": "c1", "name": "get_x", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "42"},
+            ],
+        ),
+    ],
+)
+async def test_unalignable_rewrite_is_rejected_never_sent_unredacted(
+    case: str,
+    instructions: str | None,
+    responses_input: list[dict[str, object]],
+) -> None:
+    """An unalignable rewrite must fail the request, not forward the raw prompt.
+
+    Skipping the write-back would hand the model the unredacted text, so a
+    guardrail could be bypassed by adding ``instructions`` or a tool call.
+    """
+    from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+
+    data: dict[str, object] = {"model": "gpt-4o", "input": responses_input}
+    if instructions is not None:
+        data["instructions"] = instructions
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await OpenAIResponsesHandler().process_input_messages(
+            data=data,
+            guardrail_to_apply=_MessageShapedGuardrail("my ssn is <US_SSN>"),
+        )
+
+    assert "078-05-1120" in str(responses_input), case
+
+
+@pytest.mark.asyncio
+async def test_aligned_rewrite_is_written_back() -> None:
+    """Matching counts must still redact the input in place."""
+    responses_input: list[dict[str, object]] = [
+        {"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]}
+    ]
+
+    await OpenAIResponsesHandler().process_input_messages(
+        data={"model": "gpt-4o", "input": responses_input},
+        guardrail_to_apply=_MessageShapedGuardrail("my ssn is <US_SSN>"),
+    )
+
+    assert cast(list, responses_input[0]["content"])[0]["text"] == "my ssn is <US_SSN>"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "responses_input", "redacted_input"),
+    [
+        (
+            "instructions add a system message",
+            [{"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]}],
+            [{"role": "user", "content": [{"type": "input_text", "text": "my ssn is <US_SSN>"}]}],
+        ),
+        (
+            "tool items sit between two user turns",
+            [
+                {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+                {"type": "function_call", "call_id": "c1", "name": "get_x", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "42"},
+                {"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]},
+            ],
+            [
+                {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+                {"type": "function_call", "call_id": "c1", "name": "get_x", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "42"},
+                {"role": "user", "content": [{"type": "input_text", "text": "my ssn is <US_SSN>"}]},
+            ],
+        ),
+    ],
+)
+async def test_structured_rewrite_lands_on_shapes_the_flat_path_cannot_align(
+    case: str,
+    responses_input: list[dict[str, object]],
+    redacted_input: list[dict[str, object]],
+) -> None:
+    data: dict[str, object] = {"model": "gpt-5.6", "instructions": "be terse", "input": responses_input}
+
+    async with _guardrail_redacting("078-05-1120", "<US_SSN>") as guardrail:
+        await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert data["input"] == redacted_input, case
+    assert data["instructions"] == "be terse", case

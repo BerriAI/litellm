@@ -9,9 +9,11 @@ import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
+    _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
 )
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.utils import LlmProviders
 
@@ -1013,6 +1015,48 @@ def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(q
     assert "boom" in raised.value.message
 
 
+def _raise_and_map(
+    model: str | None, original_exception: Exception, custom_llm_provider: str | None
+) -> None:
+    """Calls exception_type() from inside the except block, as litellm/main.py does,
+    so traceback.format_exc() has a real stack."""
+    try:
+        raise original_exception
+    except type(original_exception) as caught:
+        exception_type(
+            model=model,
+            original_exception=caught,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+
+def test_an_unmapped_exception_message_keeps_traceback_for_sdk_callers(quiet_exception_mapping):
+    """Direct SDK callers debug unmapped provider exceptions with this traceback;
+    only the proxy's response boundary strips it."""
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(
+            model="MiniMax-M2.5",
+            original_exception=RuntimeError("socket hung up"),
+            custom_llm_provider="minimax",
+        )
+
+    assert "Traceback (most recent call last)" in raised.value.message
+    assert "test_exception_mapping_utils.py" in raised.value.message
+
+
+def test_an_unmapped_exception_with_no_model_or_provider_message_keeps_traceback(
+    quiet_exception_mapping,
+):
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(
+            model=None,
+            original_exception=ValueError("boom"),
+            custom_llm_provider=None,
+        )
+
+    assert "Traceback (most recent call last)" in raised.value.message
+
+
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
 CONTENT_POLICY_MESSAGE = (
     '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
@@ -1212,3 +1256,156 @@ def test_handle_error_marks_only_a_status_code_it_never_received():
         raise handler._handle_error(e=upstream, provider_config=None)
     assert received.value.status_code == 500
     assert received.value.status_code_is_synthesized is False
+
+
+def test_bedrock_500_preserves_provider_response_headers():
+    """A Bedrock 5xx must keep x-amzn-RequestId so AWS support can trace it (LIT-5428)."""
+    provider_response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-map-500"},
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=500,
+        message=provider_response.text,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-map-500"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, status_code, provider_message, expected_exception",
+    [
+        (
+            "bedrock_mantle",
+            400,
+            (
+                '{"error":{"code":"validation_error",'
+                '"message":"prompt tokens (1055489) exceed model maximum (1050000) for openai.gpt-5.6-sol",'
+                '"param":null,"type":"invalid_request_error"}}'
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            "bedrock",
+            400,
+            '{"message":"Input is too long for requested model."}',
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            "bedrock",
+            400,
+            '{"message":"Could not process image"}',
+            litellm.InternalServerError,
+        ),
+    ],
+)
+def test_bedrock_classified_errors_preserve_provider_response_headers(
+    custom_llm_provider, status_code, provider_message, expected_exception
+):
+    """Branches that classify a Bedrock error by its text must keep x-amzn-RequestId (LIT-5428)."""
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-classified"},
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(expected_exception) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-classified"
+
+
+@pytest.mark.parametrize(
+    "status_code, provider_message",
+    [
+        (504, '{"message":"Gateway timeout"}'),
+        (408, '{"message":"Bedrock did not answer in time"}'),
+        (408, '{"message":"Connect timeout on endpoint URL"}'),
+    ],
+)
+def test_bedrock_timeout_mapping_preserves_provider_headers(status_code, provider_message):
+    """A mapped bedrock timeout keeps the upstream response, like every other mapped bedrock error.
+
+    The proxy prefixes those headers on the way out, while retry and cooldown
+    logic still reads the raw retry-after off the response.
+    """
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-timeout", "set-cookie": "session=attacker"},
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-timeout"
+    assert exc_info.value.headers is None
+
+
+@pytest.mark.parametrize("status_code", [504, 408])
+def test_bedrock_timeout_mapping_keeps_retry_after_readable(status_code):
+    """Cooldown and retry timing read retry-after through _get_response_headers."""
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-retry-after", "retry-after": "7"},
+        text='{"message":"Bedrock did not answer in time"}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message='{"message":"Bedrock did not answer in time"}',
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    exception_headers = _get_response_headers(original_exception=exc_info.value)
+    assert exception_headers is not None
+    assert litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers) == 7

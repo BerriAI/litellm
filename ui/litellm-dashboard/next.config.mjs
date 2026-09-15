@@ -7,6 +7,9 @@ const __dirname = path.dirname(__filename);
 
 const nextConfig = {
   output: "export",
+  experimental: {
+    useTypeScriptCli: false,
+  },
   compiler: {
     removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["error", "warn"] } : false,
   },

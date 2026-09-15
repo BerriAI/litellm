@@ -237,6 +237,38 @@ async def test_record_turn_attributes_satisfaction_to_previous_response_model():
 
 
 @pytest.mark.asyncio
+async def test_external_default_keeps_feedback_history_without_entering_bandit_pool():
+    r = _make_router()
+    before = r._cells[(RequestType.GENERAL, "fast")]
+    await r.record_turn(
+        session_id="fallback",
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="fix this retry bug", assistant_content="clear the cache"),
+    )
+    await r.record_turn(
+        session_id="fallback",
+        model_name="external-default",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="the fix is still broken", assistant_content="keep cache entries"),
+    )
+    assert r._cells[(RequestType.GENERAL, "fast")].beta > before.beta
+    await r.record_turn(
+        session_id="fallback",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(
+            user_content="the fix is still broken",
+            assistant_content="use the corrected entry",
+            tool_results=[{"is_error": True, "content": "failure"}],
+        ),
+    )
+    assert r._feedback_contexts["fallback"].model_name == "smart"
+    assert all(model != "external-default" for _, model in r._cells)
+    assert r.config.available_models == ["fast", "smart"]
+
+
+@pytest.mark.asyncio
 async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_session():
     r = _make_router()
     context_limit = ar_module._FEEDBACK_CONTEXT_MAX_ENTRIES
@@ -269,7 +301,9 @@ async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_sess
 
 
 @pytest.mark.asyncio
-async def test_load_state_from_db_overrides_cold_start():
+async def test_load_state_from_db_adds_the_persisted_delta_to_the_cold_start_prior():
+    """A row holds an accumulated delta, not a full posterior; loading must add it to the
+    cold-start prior, not replace the cell outright."""
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]
 
@@ -284,14 +318,38 @@ async def test_load_state_from_db_overrides_cold_start():
     await r.load_state_from_db(prisma)
 
     new_cell = r._cells[(RequestType.GENERAL, "fast")]
-    assert (new_cell.alpha, new_cell.beta) == (42.0, 13.0)
-    assert (new_cell.alpha, new_cell.beta) != (cold.alpha, cold.beta)
+    assert (new_cell.alpha, new_cell.beta) == (cold.alpha + 42.0, cold.beta + 13.0)
+
+
+@pytest.mark.asyncio
+async def test_load_state_from_db_keeps_a_one_sided_delta_row_sampleable():
+    """A cell whose only DB activity is one signal type persists a one-sided row (e.g.
+    beta=0.0); loading it must not zero out a Beta shape parameter and crash thompson_sample()."""
+    from litellm.router_strategy.adaptive_router.bandit import thompson_sample
+
+    r = _make_router()
+
+    one_sided_row = MagicMock()
+    one_sided_row.request_type = "general"
+    one_sided_row.model_name = "fast"
+    one_sided_row.alpha = 1.0
+    one_sided_row.beta = 0.0
+
+    prisma = MagicMock()
+    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[one_sided_row])
+    await r.load_state_from_db(prisma)
+
+    loaded_cell = r._cells[(RequestType.GENERAL, "fast")]
+    assert loaded_cell.alpha > 0.0
+    assert loaded_cell.beta > 0.0
+    thompson_sample(loaded_cell)  # must not raise
 
 
 @pytest.mark.asyncio
 async def test_load_state_from_db_handles_unknown_request_type():
     r = _make_router()
-    cold = r._cells[(RequestType.GENERAL, "fast")]
+    cold_general = r._cells[(RequestType.GENERAL, "fast")]
+    cold_writing = r._cells[(RequestType.WRITING, "fast")]
 
     bad_row = MagicMock()
     bad_row.request_type = "nonexistent_type_v999"
@@ -309,10 +367,11 @@ async def test_load_state_from_db_handles_unknown_request_type():
     prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[bad_row, good_row])
     await r.load_state_from_db(prisma)
 
-    # Unknown skipped; good applied.
-    assert r._cells[(RequestType.GENERAL, "fast")].alpha == 7.0
-    # Other request types kept their cold-start values.
-    assert r._cells[(RequestType.WRITING, "fast")] == cold or True
+    # Unknown skipped; good added to the cold-start prior.
+    new_general = r._cells[(RequestType.GENERAL, "fast")]
+    assert new_general.alpha == cold_general.alpha + 7.0
+    # Other request types kept their own cold-start values.
+    assert r._cells[(RequestType.WRITING, "fast")] == cold_writing
 
 
 # ---- Session state eviction ---------------------------------------------

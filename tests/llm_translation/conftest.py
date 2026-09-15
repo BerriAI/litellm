@@ -44,7 +44,11 @@ _VCR_AUTO_MARKER_SKIP_FILES = frozenset(
     {"test_vcr_redis_persister.py", "test_ws_vcr.py"}
 )
 
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
+    "test_nvidia_nim.py::test_embedding_nvidia_nim",
+    "test_litellm_proxy_provider.py::test_litellm_gateway_from_sdk_embedding[False]",
+    "test_litellm_proxy_provider.py::test_litellm_gateway_from_sdk_embedding[True]",
+)
 
 
 _verbose_state = VerboseReporterState()

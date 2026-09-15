@@ -186,7 +186,6 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         base_url: Final = get_vertex_base_url(self.location)
         url: Final = f"{base_url}/v1beta1/projects/{self.project_id}/locations/{self.location}/ragCorpora"
 
-        # Build request body with camelCase keys (Vertex AI API format)
         vector_db_config: Final = self.vector_store_config.get("vector_db_config")
         embedding_model: Final = self.vector_store_config.get("embedding_model")
         embedding_model_config: Final = (
@@ -447,7 +446,6 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         # Add max embedding requests per minute if specified
         max_embedding_qpm: Final = self.vector_store_config.get("max_embedding_requests_per_min")
 
-        # Build request body with camelCase keys (Vertex AI API format)
         chunking_config: Final = (
             {"chunkSize": chunk_size or 1024, "chunkOverlap": chunk_overlap or 200}
             if chunk_size or chunk_overlap

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { ERROR_CODE_OPTIONS } from "./constants";
 import { LOG_FILTER_IDS } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
@@ -125,8 +125,7 @@ describe("RequestLogsFilters", () => {
     const user = userEvent.setup();
     const { set } = renderFilters();
 
-    await user.click(await screen.findByPlaceholderText("Search an internal user"));
-    await user.click(await screen.findByText("alice@example.com"));
+    await chooseSelectOption(user, await screen.findByPlaceholderText("Search an internal user"), "alice@example.com");
 
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.USER_ID, "alice@example.com");
   });
