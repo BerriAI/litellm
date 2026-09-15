@@ -2210,7 +2210,8 @@ class ComplexityRouter(CustomLogger):
         if capability is None or classifier_system_prompt is None:
             raise ValueError("capability classifier is not configured")
 
-        asks_newest_first: Final = tuple(_iter_human_asks_newest_first(messages or (), self._reminder_markers))
+        markers: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        asks_newest_first: Final = tuple(_iter_human_asks_newest_first(messages or (), markers))
         opening_task: Final = asks_newest_first[-1] if asks_newest_first else prompt
         latest_follow_up: Final = asks_newest_first[0] if len(asks_newest_first) > 1 else None
         task_messages: list[AllMessageValues] = [  # mutable-ok: the latest message gains optional image parts below
@@ -2239,9 +2240,7 @@ class ComplexityRouter(CustomLogger):
             messages_for_call,
             request_kwargs,
             max_output_tokens=capability.max_output_tokens,
-            encrypted_task=_encrypted_classifier_task(
-                request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
-            ),
+            encrypted_task=_encrypted_classifier_task(request_kwargs, markers),
         )
         verdict: Final = parse_capability_classifier_verdict(content)
         threshold: Final = verdict.routing_threshold(capability.base_threshold, capability.threshold_step)

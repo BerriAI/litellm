@@ -2589,6 +2589,40 @@ class TestCapabilityClassifier:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_markers", (False, True))
+    async def test_task_forecast_uses_request_scoped_codex_markers(
+        self, mock_router_instance: MagicMock, custom_markers: bool
+    ) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response(_capability_reply(p_solve=0.8)))
+        mock_router_instance.acompletion = completion
+        router: Final = self._router(
+            mock_router_instance,
+            escalation_keywords=[],
+            **({"reminder_markers": [{"open": "<custom>", "close": "</custom>"}]} if custom_markers else {}),
+        )
+        envelope: Final = "\n".join(_CODEX_ENVELOPES)
+        opening: Final = f"{envelope}\nFix nested behavior"
+        messages: Final = [
+            {"role": "user", "content": opening},
+            {"role": "user", "content": "Preserve empty inputs"},
+            {"role": "user", "content": envelope},
+        ]
+        original: Final = deepcopy(messages)
+        for user_agent in ("codex-tui", "curl/8.7.1", "codex_cli_rs/0.62.0"):
+            result: Final = await router.async_pre_routing_hook(
+                model="capability-router", messages=messages, request_kwargs={"metadata": {"user_agent": user_agent}}
+            )
+            assert result is not None and result.model == "efficient-model"
+            sent: Final = completion.call_args.kwargs["messages"]
+            if user_agent.startswith("codex") and not custom_markers:
+                assert [message["content"] for message in sent[1:]] == ["Fix nested behavior", "Preserve empty inputs"]
+            else:
+                assert [message["content"] for message in sent[1:]] == [opening, envelope]
+            assert result.messages == original
+        assert completion.await_count == 3
+        assert messages == original
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("p_solve,expected_model", ((0.95, "capable-model"), (0.98, "efficient-model")))
     async def test_fitted_probability_controls_routing_and_preserves_raw_score(
         self, mock_router_instance: MagicMock, p_solve: float, expected_model: str
