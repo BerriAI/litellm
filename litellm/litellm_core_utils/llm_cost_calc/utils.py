@@ -957,8 +957,7 @@ def _calculate_input_cost(
 
     ### AUDIO COST
     if prompt_tokens_details["audio_tokens"] and not (
-        prompt_tokens_details["audio_length_seconds"]
-        and model_info.get("input_cost_per_audio_per_second") is not None
+        prompt_tokens_details["audio_length_seconds"] and model_info.get("input_cost_per_audio_per_second") is not None
     ):
         audio_cost_key: Final = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
         prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
@@ -976,8 +975,7 @@ def _calculate_input_cost(
 
     ### VIDEO TOKEN COST
     if prompt_tokens_details["video_tokens"] and not (
-        prompt_tokens_details["video_length_seconds"]
-        and model_info.get("input_cost_per_video_per_second") is not None
+        prompt_tokens_details["video_length_seconds"] and model_info.get("input_cost_per_video_per_second") is not None
     ):
         video_token_cost_key = "input_cost_per_video_token"
         if model_info.get(video_token_cost_key) is None:
