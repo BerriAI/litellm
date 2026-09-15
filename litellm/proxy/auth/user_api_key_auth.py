@@ -1354,12 +1354,16 @@ async def _user_api_key_auth_builder(
         _lockout_reason: Final = insecure_master_key_reason(
             master_key, alternative_auth_enabled=alternative_auth_enabled(general_settings)
         )
-        if _lockout_reason is not None and master_key_lockout_action(
-            route=route,
-            method=request.method,
-            reason=_lockout_reason,
-            stored_credentials_present=stored_credentials_present(),
-        ) is not None:
+        if (
+            _lockout_reason is not None
+            and master_key_lockout_action(
+                route=route,
+                method=request.method,
+                reason=_lockout_reason,
+                stored_credentials_present=stored_credentials_present(),
+            )
+            is not None
+        ):
             raise master_key_lockout_exception()
         with tracer.trace("litellm.proxy.auth.pre_db_read_auth_checks"):
             await pre_db_read_auth_checks(
