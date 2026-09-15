@@ -13,7 +13,7 @@ vi.mock("../utils/roles", async (importOriginal) => {
     rolesWithWriteAccess: ["admin", "internal"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
     isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
-    isUserTeamAdminForAnyTeam: () => false,
+    isUserTeamAdminForAnyTeam: actual.isUserTeamAdminForAnyTeam,
   };
 });
 
@@ -23,7 +23,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => navState.pathname,
 }));
 
-const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
+const { mockUseAuthorized, mockUseOrganizations, mockUseTeams } = vi.hoisted(() => {
   const mockUseAuthorized = vi.fn(() => ({
     userId: "test-user-id",
     accessToken: "test-access-token",
@@ -42,7 +42,13 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
     error: null,
   }));
 
-  return { mockUseAuthorized, mockUseOrganizations };
+  const mockUseTeams = vi.fn(() => ({
+    data: [] as Array<{ members_with_roles: Array<{ user_id: string; role: string }> }>,
+    isLoading: false,
+    error: null,
+  }));
+
+  return { mockUseAuthorized, mockUseOrganizations, mockUseTeams };
 });
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -54,7 +60,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useTeams: () => ({ data: [], isLoading: false, error: null }),
+  useTeams: mockUseTeams,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
@@ -110,6 +116,12 @@ describe("Sidebar (leftnav)", () => {
   afterEach(() => {
     mockUseAuthorized.mockReset();
     mockUseOrganizations.mockReset();
+    mockUseTeams.mockReset();
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    });
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
   });
@@ -512,6 +524,107 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByText("Organizations")).toBeInTheDocument();
+  });
+
+  it("shows Projects to an internal user who administers a team", () => {
+    mockUseAuthorized.mockReturnValue({
+      userId: "team-admin-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "teamadmin@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+
+    expect(screen.getByRole("link", { name: /Projects/ })).toBeInTheDocument();
+  });
+
+  it("hides Projects when the feature flag is disabled for a team admin", () => {
+    mockUseAuthorized.mockReturnValue({
+      userId: "team-admin-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "teamadmin@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
+
+    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
+  });
+
+  it("hides Projects from an internal user who is not a team admin", () => {
+    mockUseAuthorized.mockReturnValue({
+      userId: "team-member-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "teamuser@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+
+    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
+  });
+
+  it("applies the internal-user page allowlist to Projects for team admins", () => {
+    mockUseAuthorized.mockReturnValue({
+      userId: "team-admin-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "teamadmin@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(
+      <Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={["teams"]} />,
+    );
+
+    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
   it("marks the nav item for the current route active", () => {
