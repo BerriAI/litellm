@@ -2954,6 +2954,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "TIUM",
+    "provider_display_name": "Tium",
+    "litellm_provider": "tium",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.tium.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "tium/glm-5.3"
+  },
+  {
     "provider": "TogetherAI",
     "provider_display_name": "TogetherAI",
     "litellm_provider": "together_ai",
