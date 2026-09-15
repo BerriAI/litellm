@@ -14,6 +14,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_assistant_message_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
@@ -458,7 +459,11 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
     @override
     def structured_messages_cover_full_request(self) -> bool:
-        return effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self)
+        return (
+            effective_skip_system_message_for_guardrail(self)
+            or effective_skip_tool_message_for_guardrail(self)
+            or effective_skip_assistant_message_for_guardrail(self)
+        )
 
     def _writeback_messages(
         self,
@@ -467,7 +472,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         sent_indices: tuple[int, ...],
         request_data: dict[str, object],
     ) -> list[AllMessageValues] | None:
-        if effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self):
+        if self.structured_messages_cover_full_request():
             request_messages: Final = request_data.get("messages")
             full_messages = (
                 cast("list[AllMessageValues]", request_messages)

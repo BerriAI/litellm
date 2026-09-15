@@ -9910,6 +9910,18 @@
               "description": "Minimum severity to block (high, medium, low)",
               "title": "Severity Threshold"
             },
+            "skip_assistant_message_in_guardrail": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, skip assistant-role messages in request history when building guardrail evaluation inputs. When False, include them even if the global litellm.skip_assistant_message_in_guardrail setting is True. When None, inherit the global setting. Does not skip checks on newly generated responses.",
+              "title": "Skip Assistant Message In Guardrail"
+            },
             "skip_system_message_in_guardrail": {
               "anyOf": [
                 {
@@ -12670,6 +12682,18 @@
               ],
               "description": "The Singulr Guardrail ID. Get guardrail ID from Singulr Platform.",
               "title": "Singulr Guardrail Id"
+            },
+            "skip_assistant_message_in_guardrail": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, skip assistant-role messages in request history when building guardrail evaluation inputs. When False, include them even if the global litellm.skip_assistant_message_in_guardrail setting is True. When None, inherit the global setting. Does not skip checks on newly generated responses.",
+              "title": "Skip Assistant Message In Guardrail"
             },
             "skip_system_message_in_guardrail": {
               "anyOf": [

@@ -6,9 +6,11 @@ with guardrail transformations, including tool calls.
 """
 
 import json
-from typing import Any, Literal, Optional
+from copy import deepcopy
+from typing import Any, Final, Literal, Optional
 
 import pytest
+import litellm
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -24,6 +26,66 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
+
+
+@pytest.mark.parametrize(
+    "global_skip,per_guardrail_skip,expected_skip",
+    [(False, None, False), (True, None, True), (False, True, True), (True, False, False)],
+)
+@pytest.mark.asyncio
+async def test_skip_assistant_preserves_history_and_scans_other_roles(
+    monkeypatch: pytest.MonkeyPatch,
+    global_skip: bool,
+    per_guardrail_skip: bool | None,
+    expected_skip: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "skip_assistant_message_in_guardrail", global_skip, raising=False)
+    guardrail: Final = MockGuardrail()
+    guardrail.skip_assistant_message_in_guardrail = per_guardrail_skip
+    data: Final = {
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "previous reply",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": '{"q":"old"}'}}],
+            },
+            {"role": "tool", "content": "tool result", "tool_call_id": "call_1"},
+        ],
+    }
+    original_assistant: Final = deepcopy(data["messages"][1])
+
+    result: Final = await OpenAIChatCompletionsHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.last_inputs is not None
+    assert guardrail.last_inputs["texts"] == (
+        ["hello", "tool result"] if expected_skip else ["hello", "previous reply", "tool result"]
+    )
+    assert [message["role"] for message in guardrail.last_inputs["structured_messages"]] == (
+        ["user", "tool"] if expected_skip else ["user", "assistant", "tool"]
+    )
+    assert guardrail.tool_calls_modified is not expected_skip
+    assert result["messages"][0]["content"] == "HELLO"
+    assert result["messages"][2]["content"] == "TOOL RESULT"
+    if expected_skip:
+        assert result["messages"][1] == original_assistant
+    else:
+        assert result["messages"][1]["content"] == "PREVIOUS REPLY"
+
+
+@pytest.mark.asyncio
+async def test_skip_assistant_history_does_not_skip_new_output() -> None:
+    guardrail: Final = MockGuardrail()
+    guardrail.skip_assistant_message_in_guardrail = True
+    handler: Final = OpenAIChatCompletionsHandler()
+    data: Final = {"messages": [{"role": "assistant", "content": "old reply"}]}
+
+    assert await handler.process_input_messages(data, guardrail) == data
+    assert guardrail.last_inputs is None
+
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="new reply"))])
+    result: Final = await handler.process_output_response(response, guardrail)
+    assert result.choices[0].message.content == "NEW REPLY"
 
 
 class MockGuardrail(CustomGuardrail):
