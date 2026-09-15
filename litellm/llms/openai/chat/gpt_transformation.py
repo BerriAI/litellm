@@ -691,6 +691,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_response_object=model_response,
             hidden_params={"headers": raw_response_headers},
             _response_headers=raw_response_headers,
+            convert_tool_call_to_json_mode=json_mode,
         )
 
         return cast(ModelResponse, final_response_obj)

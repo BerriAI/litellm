@@ -6,12 +6,17 @@ from collections.abc import Coroutine, Mapping, Sequence
 from typing import Any, Final, Literal, cast, overload
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+)
 from litellm.utils import supports_reasoning, supports_vision
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -25,6 +30,18 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         params: Final = super().get_supported_openai_params(model)
         params.extend(["thinking", "reasoning_effort"])
         return params
+
+    def _create_json_tool_call_for_response_format(
+        self,
+        json_schema: dict,
+    ) -> ChatCompletionToolParam:
+        return ChatCompletionToolParam(
+            type="function",
+            function=ChatCompletionToolParamFunctionChunk(
+                name=RESPONSE_FORMAT_TOOL_NAME,
+                parameters=json_schema,
+            ),
+        )
 
     def map_openai_params(
         self,
@@ -43,6 +60,38 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
+        _response_format: Final = non_default_params.get("response_format")
+        if _response_format is not None and isinstance(_response_format, dict):
+            json_schema: dict | None = None
+            if "response_schema" in _response_format:
+                json_schema = _response_format["response_schema"]
+            elif "json_schema" in _response_format and isinstance(_response_format["json_schema"], dict):
+                json_schema = _response_format["json_schema"].get("schema")
+
+            if json_schema is not None:
+                if not litellm.supports_response_schema(model=model, custom_llm_provider="deepseek"):
+                    if "tools" in non_default_params:
+                        raise litellm.BadRequestError(
+                            message=f"DeepSeek model '{model}' does not support native structured outputs. "
+                            "LiteLLM uses a tool-calling workaround for structured outputs on this model, "
+                            "which is incompatible with user-provided tools. "
+                            "Either use a model that supports native structured outputs, "
+                            "or remove the tools parameter.",
+                            model=model,
+                            llm_provider="deepseek",
+                        )
+                    _tool_choice: Final = {
+                        "type": "function",
+                        "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
+                    }
+                    _tool: Final = self._create_json_tool_call_for_response_format(
+                        json_schema=json_schema,
+                    )
+                    optional_params["tools"] = [_tool]
+                    optional_params["tool_choice"] = _tool_choice
+                    optional_params["json_mode"] = True
+                    non_default_params.pop("response_format", None)
+
         # Let parent handle standard params first
         optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
@@ -51,8 +100,12 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value: Final = optional_params.pop("thinking", None)
         reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
 
+        if optional_params.get("json_mode") is True:
+            # DeepSeek rejects named tool_choice and tool_choice="required" while thinking mode is enabled (HTTP 400).
+            # Disable thinking mode when applying the tool-call workaround so tool_choice is accepted.
+            optional_params["thinking"] = {"type": "disabled"}
         # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
-        if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
+        elif isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
             optional_params["thinking"] = {"type": thinking_value["type"]}
 
         # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
