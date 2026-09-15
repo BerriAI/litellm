@@ -143,24 +143,20 @@ class TestProxyInitializationHelpers:
     def _uvicorn_access_info_enabled(args: dict) -> bool:
         import logging
 
-        names = ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi")
-        saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
+        loggers = tuple(logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"))
+        saved = tuple((lg, lg.handlers[:], lg.level, lg.propagate) for lg in loggers)
         try:
             uvicorn.Config(**args).configure_logging()
             return logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
         finally:
-            for lg, handlers, level in saved:
+            for lg, handlers, level, propagate in saved:
                 lg.handlers[:] = handlers
                 lg.setLevel(level)
+                lg.propagate = propagate
 
     def test_litellm_log_error_silences_uvicorn_info_lines(self, monkeypatch):
-        import logging
-
         monkeypatch.setenv("LITELLM_LOG", "ERROR")
-        with patch(  # test-quality-ok: numeric_level is resolved from LITELLM_LOG once at import; no other way to set it
-            "litellm._logging.numeric_level", logging.ERROR
-        ):
-            args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
 
         assert "log_config" not in args
         assert self._uvicorn_access_info_enabled(args) is False
