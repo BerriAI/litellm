@@ -45010,7 +45010,6 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
         "prompt_cache_min_tokens": 1024,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -45043,7 +45042,6 @@
         "mode": "chat",
         "output_cost_per_token": 3e-05,
         "prompt_cache_min_tokens": 1024,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -45075,7 +45073,6 @@
         "mode": "chat",
         "output_cost_per_token": 3e-05,
         "prompt_cache_min_tokens": 512,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -45125,8 +45122,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 512,
-        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
+        "prompt_cache_min_tokens": 512
     },
     "us-gov.nvidia.nemotron-nano-3-30b": {
         "input_cost_per_token": 7.2e-08,
