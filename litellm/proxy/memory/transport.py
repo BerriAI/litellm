@@ -8,7 +8,7 @@ from typing import Final, TypeAlias
 from uuid import uuid4
 
 import anyio
-from fastapi import Request
+from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from starlette.responses import Response, StreamingResponse
 
@@ -16,11 +16,25 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import wait_for_request_parallel_release
 
 _GATEWAY_ROUND: Final[ContextVar[int | None]] = ContextVar("litellm_gateway_memory_round", default=None)
+_ROUND_ACCOUNTING: Final[ContextVar[tuple[str, asyncio.Future[None]] | None]] = ContextVar(
+    "litellm_memory_round_accounting", default=None
+)
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _ROUND_HEADERS: Final = frozenset(("idempotency-key", "x-request-id", "x-litellm-call-id"))
 RoundExecutor: TypeAlias = Callable[
     [Request, dict[str, object], UserAPIKeyAuth], Awaitable[Response]
 ]  # mutable-ok: The processor mutates its fresh request copy.
+
+
+def begin_gateway_accounting(call_id: str) -> None:
+    _ROUND_ACCOUNTING.set((call_id, asyncio.get_running_loop().create_future()))
+
+
+def gateway_accounting(call_id: str | None = None) -> asyncio.Future[None] | None:
+    accounting: Final = _ROUND_ACCOUNTING.get()
+    if accounting is None or (call_id is not None and accounting[0] != call_id):
+        return None
+    return accounting[1]
 
 
 def in_gateway_round() -> bool:
@@ -110,6 +124,14 @@ class GatewayRound:
                     await self.writer.send(bytes(response.body))
                 if response.background is not None:
                     await response.background()
+                accounting: Final = gateway_accounting()
+                if accounting is not None:
+                    try:
+                        await asyncio.wait_for(asyncio.shield(accounting), timeout=15)
+                    except TimeoutError as exc:
+                        raise HTTPException(
+                            status_code=503, detail="Memory could not confirm model spend; retry later"
+                        ) from exc
                 await wait_for_request_parallel_release()
         except BaseException as exc:
             if not self.started.done():

@@ -106,3 +106,38 @@ async def test_memory_rounds_share_one_rpm_admission_but_keep_token_limits():
             pass
     assert token_limited.value.status_code == 429
     assert "tokens" in token_limited.value.detail
+
+
+@pytest.mark.asyncio
+async def test_round_waits_for_accounting_before_it_can_continue():
+    from starlette.responses import Response
+
+    from litellm.proxy.memory.transport import begin_gateway_accounting, gateway_accounting
+
+    delivered = asyncio.Event()
+    accounting = []
+
+    async def execute(inner, data, auth):
+        begin_gateway_accounting(data["litellm_call_id"])
+        accounting.append(gateway_accounting())
+        return Response(b"answer")
+
+    async def read():
+        async with gateway_round(
+            execute,
+            Request({"type": "http", "method": "POST", "path": "/v1/messages", "headers": []}),
+            {},
+            UserAPIKeyAuth(),
+        ) as call:
+            async for chunk in call.chunks():
+                assert chunk == b"answer"
+                delivered.set()
+
+    task = asyncio.create_task(read())
+    try:
+        await asyncio.wait_for(delivered.wait(), timeout=1)
+        assert not task.done()
+        accounting[0].set_result(None)
+        await asyncio.wait_for(task, timeout=1)
+    finally:
+        task.cancel()

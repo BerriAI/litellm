@@ -956,3 +956,34 @@ async def test_previous_response_uses_owned_upstream_and_pending_tool_outputs(pr
     assert body["previous_response_id"] == "native-last"
     assert pending in body["input"]
     assert any(item.get("call_id") == "client-call" for item in body["input"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    (
+        b"",
+        b"<html>private provider error</html>",
+        b'data: {"error":"private provider error"}\n\n',
+        b'{"error":"private provider error"}',
+    ),
+)
+@pytest.mark.parametrize("status", (429, 502))
+async def test_error_response_retains_status_and_retry_after_without_parsing_provider_body(
+    prisma_edge: MagicMock, body: bytes, status: int
+) -> None:
+    execute = AsyncMock(return_value=Response(body, status_code=status, headers={"retry-after": "7"}))
+    loop = GatewayMemoryLoop(
+        execute,
+        request(),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        "acompletion",
+        store(prisma_edge),
+        UserAPIKeyAuth(),
+    )
+    with pytest.raises(HTTPException) as error:
+        async for _ in loop.run():
+            pass
+    assert error.value.status_code == status
+    assert error.value.headers["retry-after"] == "7"
+    assert "private provider" not in error.value.detail

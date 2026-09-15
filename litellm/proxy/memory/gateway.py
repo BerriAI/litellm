@@ -196,7 +196,9 @@ class GatewayMemoryLoop:
             if status >= 400:
                 raise HTTPException(
                     status_code=status,
-                    detail=str(_OBJECT.validate_json(await call.read()).get("error", "Gateway model call failed")),
+                    detail="The gateway model request was rate limited"
+                    if status == 429
+                    else "The gateway model request failed",
                     headers={  # mutable-ok: FastAPI's HTTPException accepts a native header dictionary.
                         name.decode("latin-1"): value.decode("latin-1")
                         for name, value in start.headers

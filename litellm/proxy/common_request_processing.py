@@ -2361,11 +2361,24 @@ class ProxyBaseLLMRequestProcessing:
             ) -> Response:
                 from litellm.proxy.auth.user_api_key_auth import (
                     _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # Reuse the authenticated admission and budget checks.
+                    _run_post_custom_auth_checks,  # pyright: ignore[reportPrivateUsage]  # Reuse expiry and model-budget checks on the already authenticated identity.
+                    _should_skip_budget_checks,  # pyright: ignore[reportPrivateUsage]  # Preserve free-model budget exemptions.
                 )
 
                 processor: Final = ProxyBaseLLMRequestProcessing(data=body)
                 headers: Final = Response()
                 try:
+                    from litellm.proxy.auth.auth_checks import (
+                        _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # Reuse key-budget enforcement for every billed round.
+                    )
+
+                    await _run_post_custom_auth_checks(
+                        auth, inner_request, body, inner_request.url.path, auth.parent_otel_span
+                    )
+                    if not _should_skip_budget_checks(
+                        body, inner_request.url.path, inner_request, llm_router, auth.team_id
+                    ):
+                        await _virtual_key_max_budget_check(auth, proxy_logging_obj)
                     await _run_centralized_common_checks(auth, inner_request, body, inner_request.url.path)
                     result: Final = await processor._process_llm_request(
                         request=inner_request,
@@ -2431,9 +2444,10 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
 
-        from litellm.proxy.memory.transport import in_gateway_round
+        from litellm.proxy.memory.transport import begin_gateway_accounting, in_gateway_round
 
         if in_gateway_round() and route_type in ("acompletion", "aresponses", "anthropic_messages"):
+            begin_gateway_accounting(logging_obj.litellm_call_id)
             self.data["caching"] = False
             self.data["cache"] = {  # mutable-ok: The existing inference pipeline consumes native cache controls.
                 "no-cache": True,

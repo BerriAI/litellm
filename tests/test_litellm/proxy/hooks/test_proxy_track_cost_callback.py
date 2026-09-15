@@ -2393,3 +2393,50 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
         == "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key."
     )
     assert error_information["error_class"] == "ProxyModelNotFoundError"
+
+
+@pytest.mark.asyncio
+async def test_memory_accounting_finishes_counters_before_a_sidecar_can_defer_them(tmp_path):
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from litellm.proxy.memory.transport import begin_gateway_accounting, gateway_accounting, gateway_round
+
+    fallback = AsyncMock()
+    producer = SpendEventProducer(
+        address=UnixAddress(path=str(tmp_path / "absent.sock")),
+        on_unavailable="fallback",
+        buffer_size=10,
+        connect_timeout=1.0,
+        fallback=fallback,
+    )
+    logger = _ProxyDBLogger(producer)
+
+    async def execute(request, body, auth):
+        begin_gateway_accounting("call-1")
+        pending = gateway_accounting()
+        await logger.async_log_success_event(
+            {**_offload_kwargs(), "litellm_call_id": "nested-call"},
+            _offload_response(),
+            datetime.now(),
+            datetime.now(),
+        )
+        assert not pending.done()
+        await logger.async_log_success_event(_offload_kwargs(), _offload_response(), datetime.now(), datetime.now())
+        return Response(b"done")
+
+    async def run():
+        async with gateway_round(
+            execute,
+            Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}),
+            {},
+            UserAPIKeyAuth(),
+        ) as call:
+            assert await call.read() == b"done"
+
+    row, counters, _ = await _spend_row_written_by(run)
+    assert row["spend"] == 0.0125
+    assert counters["response_cost"] == 0.0125
+    await producer.close(drain_timeout=1)
+    fallback.assert_awaited_once()
+    assert b"nested-call" in fallback.call_args.args[0]

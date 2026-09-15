@@ -105,6 +105,16 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        from litellm.proxy.memory.transport import gateway_accounting
+
+        accounting: Final = gateway_accounting(str(kwargs.get("litellm_call_id")))
+        if accounting is not None:
+            try:
+                await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            finally:
+                if not accounting.done():
+                    accounting.set_result(None)
+            return
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
