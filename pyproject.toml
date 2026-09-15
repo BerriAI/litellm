@@ -181,6 +181,7 @@ dev = [
     "hypothesis==6.165.10",
     "reportlab==5.0.1",
     "basedpyright==1.39.7",
+    "mypy==1.20.1",
     "keyring==25.7.0",
     "pytest==9.0.3",
     "tomli==2.4.1; python_version < '3.11'",
@@ -288,6 +289,7 @@ profile = "release"
 editable-profile = "dev"
 include = [
     "litellm/proxy/_experimental/out/**",
+    "litellm/rust_bridge/_native.pyi",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
 ]
 exclude = [
