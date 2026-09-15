@@ -1405,6 +1405,46 @@ def test_log_event_holds_a_client_lease_during_export():
     assert state.active_leases == 0
 
 
+def test_log_event_renews_a_client_the_cache_evicted_before_the_lease():
+    """The cache can evict this logger after handing it to the callback and before the lease opens.
+
+    v2 lost that callback's events to a shut-down client; the callback must export through a fresh one.
+    """
+    from litellm.integrations.langfuse.langfuse_sdk import register_langfuse_client, shutdown_langfuse_client
+
+    logger, _ = _steering_logger()
+    evicted = logger.Langfuse
+    logger.langfuse_client_parameters = {
+        "public_key": "pk-steering-test",
+        "secret_key": "sk-steering-test",
+        "base_url": "http://127.0.0.1:1",
+    }
+    logger.langfuse_environment = None
+    logger.langfuse_release = None
+    logger.is_mock_mode = True
+    register_langfuse_client(evicted)
+    shutdown_langfuse_client(evicted)
+
+    now = datetime.datetime.now()
+    returned = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "the-input"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "the-output"}}]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert returned["trace_id"] is not None
+    assert logger.Langfuse is not evicted
+    assert logger.Langfuse._resources is not evicted._resources
+    assert logger.Langfuse not in _lifecycle_state(logger.Langfuse).retired
+    shutdown_langfuse_client(logger.Langfuse)
+
+
 def _exported_span(logger, exporter):
     logger.Langfuse.flush()
     return exporter.get_finished_spans()[-1]

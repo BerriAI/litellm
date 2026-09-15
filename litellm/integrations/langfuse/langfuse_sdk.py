@@ -4,7 +4,7 @@ import os
 import re
 import threading
 from base64 import b64encode
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
@@ -259,14 +259,20 @@ class _LangfuseLifecycleState:
         self.teardown_in_progress = False
         self.teardown_owner: int | None = None
         self.pending_clients: set[Langfuse] = set()  # mutable-ok: eviction and callback threads queue into it
+        self.retired: WeakSet[Langfuse] = WeakSet()  # mutable-ok: eviction marks its clients here from its own thread
 
-    def open_lease(self) -> None:
+    def open_lease(self, client: Langfuse) -> bool:
+        """Take a lease on ``client``; False when eviction already reached it, so a lease would guard a dead client."""
         with self.lock:
+            if client in self.retired:
+                return False
             self.active_leases += 1
+            return True
 
     def claim_for_teardown(self, client: Langfuse) -> bool:
         """Whether this thread owns ``client``'s teardown; a lease or another teardown in flight queues it instead."""
         with self.lock:
+            self.retired.add(client)
             if self.active_leases > 0 or self.teardown_in_progress:
                 self.pending_clients.add(client)
                 return False
@@ -326,21 +332,25 @@ def _lifecycle_state(client: Langfuse) -> _LangfuseLifecycleState:
 
 
 @contextmanager
-def lease_langfuse_client(client: Langfuse) -> Generator[None]:
+def lease_langfuse_client(client: Langfuse, renew: Callable[[], Langfuse]) -> Generator[Langfuse]:
     """Hold off cache eviction's teardown of ``client`` while the export inside is in flight.
 
     Eviction reaches a client the cache handed a callback moments earlier, so closing the SDK client
     and its tracer provider there drops the spans that callback is still writing. The lease protects
     exactly the window it wraps: an eviction arriving inside it is deferred to the last lease exit.
-    Taking a lease never blocks; a teardown already running keeps running, because the spans of a
-    lease taken that late were lost before the lease began, and stalling every other callback in the
-    process would not bring them back. A client the registry hands out during the deferral registers
-    as a holder, and the reference count keeps its bundle alive from there.
+    Taking a lease never blocks. When eviction already claimed ``client`` between the cache lookup
+    and this call, the lease is taken on ``renew()``'s fresh client instead and that client is what
+    the caller must export through: the registry hands it the live bundle when one remains, where
+    it registers as a holder and the reference count degrades the queued teardown to a flush, or a
+    fresh bundle once the old one is gone.
     """
     state: Final = _lifecycle_state(client)
-    state.open_lease()
+    if not state.open_lease(client):
+        with lease_langfuse_client(renew(), renew) as leased:
+            yield leased
+        return
     try:
-        yield
+        yield client
     finally:
         _run_teardowns(state, state.release_lease())
 
