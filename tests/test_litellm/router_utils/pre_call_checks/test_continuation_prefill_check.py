@@ -20,6 +20,25 @@ def test_deployment_supports_prefill_reads_capability():
     assert _deployment_supports_prefill(_deployment(NON_PREFILL_MODEL, "b")) is False
 
 
+def test_deployment_model_info_override_wins_over_cost_map():
+    # model_info True opts in a model that is not in the cost map
+    assert (
+        _deployment_supports_prefill(
+            {"litellm_params": {"model": "vendor/custom-model"}, "model_info": {"supports_assistant_prefill": True}}
+        )
+        is True
+    )
+    # model_info False opts out a model the cost map would otherwise allow
+    assert (
+        _deployment_supports_prefill(
+            {"litellm_params": {"model": PREFILL_MODEL}, "model_info": {"supports_assistant_prefill": False}}
+        )
+        is False
+    )
+    # model_info without the key falls through to the cost map
+    assert _deployment_supports_prefill(_deployment(PREFILL_MODEL, "z")) is True
+
+
 def test_deployment_supports_prefill_rejects_malformed_deployments():
     assert _deployment_supports_prefill({}) is False
     assert _deployment_supports_prefill({"litellm_params": {}}) is False

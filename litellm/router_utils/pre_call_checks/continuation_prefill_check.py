@@ -35,6 +35,19 @@ _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 def _deployment_supports_prefill(deployment: object) -> bool:
     try:
         deployment_map: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment)
+    except ValidationError:
+        return False
+    # A per-deployment model_info override wins, so a model that is not in the cost
+    # map (or is registered generically) can still opt in or out explicitly with
+    # `model_info: {"supports_assistant_prefill": true|false}`.
+    try:
+        model_info: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("model_info"))
+        declared: Final = model_info.get("supports_assistant_prefill")
+        if isinstance(declared, bool):
+            return declared
+    except ValidationError:
+        pass
+    try:
         litellm_params: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("litellm_params"))
     except ValidationError:
         return False
