@@ -67,19 +67,20 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
     return null;
   }
 
+  const callbackConfig = findCallbackConfig(callbackConfigs, selectedCallback);
   return (
     <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
-        const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
         const paramType = paramConfig.type || "text";
         const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         const isRequired = paramConfig.required || false;
         const selectOptions: string[] = Array.isArray(paramConfig.options) ? paramConfig.options : [];
         const isSelect = paramType === "select" && selectOptions.length > 0;
+        const isBoolean = paramType === "boolean";
         const fieldId = `${fieldIdPrefix}-${param}`;
         const validationRules = isRequired ? { required: `Please enter the ${fieldLabel.toLowerCase()}` } : undefined;
-        const registration = isSelect ? undefined : register(param, validationRules);
+        const registration = isSelect || isBoolean ? undefined : register(param, validationRules);
 
         return (
           <Field key={param} className="mb-4">
@@ -111,7 +112,22 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
                 )}
               />
             )}
+            {isBoolean && (
+              <Controller
+                control={control}
+                name={param}
+                render={({ field }) => (
+                  <Switch
+                    id={fieldId}
+                    checked={/^(true|1)$/i.test(String(field.value ?? ""))}
+                    onCheckedChange={(checked: boolean) => field.onChange(checked ? "true" : "false")}
+                    onBlur={field.onBlur}
+                  />
+                )}
+              />
+            )}
             {!isSelect &&
+              !isBoolean &&
               (paramType === "password" ? (
                 <Input
                   id={fieldId}
@@ -221,6 +237,31 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
   );
 };
 
+const CALLBACK_CONFIG_ALIASES: Record<string, string> = { s3_v2: "s3" };
+
+interface DynamicParamConfig {
+  type?: string;
+  ui_name?: string;
+  required?: boolean;
+  options?: string[];
+}
+
+interface CallbackConfigWithParams {
+  id: string;
+  dynamic_params?: Record<string, DynamicParamConfig>;
+}
+
+const findCallbackConfig = (
+  callbackConfigs: readonly CallbackConfigWithParams[],
+  callbackName: string | null,
+): CallbackConfigWithParams | undefined => {
+  if (!callbackName) {
+    return undefined;
+  }
+  const configId = CALLBACK_CONFIG_ALIASES[callbackName] ?? callbackName;
+  return callbackConfigs.find((config) => config.id === configId);
+};
+
 // Shared helper function to get dynamic params for a callback
 const getDynamicParamsForCallback = (
   callbackName: string | null,
@@ -231,7 +272,7 @@ const getDynamicParamsForCallback = (
     return fallbackVariables ? Object.keys(fallbackVariables) : [];
   }
 
-  const callbackConfig = callbackConfigs.find((config) => config.id === callbackName);
+  const callbackConfig = findCallbackConfig(callbackConfigs, callbackName);
   if (callbackConfig?.dynamic_params) {
     return Object.keys(callbackConfig.dynamic_params);
   }
