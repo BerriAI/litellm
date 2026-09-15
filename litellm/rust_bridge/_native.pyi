@@ -1,9 +1,11 @@
 from asyncio import Future
 from collections.abc import Coroutine, Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, TypeAlias, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
+
+_InputSource: TypeAlias = Literal["request", "deployment", "environment"]
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
@@ -16,7 +18,7 @@ def ocr(
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, object] | None = None,
     optional_params: Mapping[str, object] | None = None,
-    input_sources: Mapping[str, str] | None = None,
+    input_sources: Mapping[str, _InputSource] | None = None,
     timeout_seconds: float | None = None,
 ) -> dict[str, object]: ...
 def aocr(
@@ -27,7 +29,7 @@ def aocr(
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, object] | None = None,
     optional_params: Mapping[str, object] | None = None,
-    input_sources: Mapping[str, str] | None = None,
+    input_sources: Mapping[str, _InputSource] | None = None,
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
 
