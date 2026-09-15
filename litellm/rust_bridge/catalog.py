@@ -32,6 +32,11 @@ _RUST_REQUIRED: Final = CapabilityDefinition(
     python_available=False,
     rollout=RolloutPolicy.RUST_REQUIRED,
 )
+_UNSUPPORTED: Final = CapabilityDefinition(
+    rust=RustImplementationState.UNIMPLEMENTED,
+    python_available=False,
+    rollout=RolloutPolicy.UNSUPPORTED,
+)
 
 
 def _completed_only(context: CapabilityContext, completed: CapabilityDefinition) -> CapabilityDefinition:
@@ -51,7 +56,9 @@ def _chat_completions_capability(context: CapabilityContext) -> CapabilityDefini
 
 
 def _transcription_capability(context: CapabilityContext) -> CapabilityDefinition:
-    return _completed_only(context, _RUST_REQUIRED if context.provider == "bedrock" else _PYTHON_ONLY)
+    if context.provider != "bedrock":
+        return _PYTHON_ONLY
+    return _RUST_REQUIRED if context.delivery is DeliveryMode.COMPLETED else _UNSUPPORTED
 
 
 def _responses_capability(context: CapabilityContext) -> CapabilityDefinition:

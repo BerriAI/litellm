@@ -9,6 +9,7 @@ from litellm.rust_bridge import configuration
 from litellm.rust_bridge.catalog import COMPONENTS, NATIVE_EXPORTS
 from litellm.rust_bridge.configuration import CapabilityContext, ComponentName, DeliveryMode, ExecutionDecision
 from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.route import RouteUnsupported
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +57,7 @@ def test_declared_exports_exist_on_the_native_bridge() -> None:
         (
             ComponentName.TRANSCRIPTION,
             CapabilityContext(provider="bedrock", delivery=DeliveryMode.STREAMING),
-            ExecutionDecision.PYTHON,
+            ExecutionDecision.UNSUPPORTED,
         ),
         (ComponentName.RESPONSES, CapabilityContext(), ExecutionDecision.PYTHON),
         (ComponentName.RESPONSES, CapabilityContext(delivery=DeliveryMode.WEBSOCKET), ExecutionDecision.PYTHON),
@@ -95,6 +96,18 @@ def test_bedrock_transcription_ignores_the_optional_rust_switch() -> None:
 
     configuration.rust(False)
     assert COMPONENTS[ComponentName.TRANSCRIPTION].resolve(context).decision is ExecutionDecision.RUST_REQUIRED
+
+
+def test_streaming_bedrock_transcription_routes_nowhere() -> None:
+    transcription: Final = COMPONENTS[ComponentName.TRANSCRIPTION]
+    context: Final = CapabilityContext(provider="bedrock", delivery=DeliveryMode.STREAMING)
+    binding: Final = transcription.bind(
+        next(iter(transcription.exports)),
+        validate=lambda value: value,
+        loader=lambda: pytest.fail("native must not be loaded"),
+    )
+
+    assert transcription.resolve(context).select(binding) == RouteUnsupported(ComponentName.TRANSCRIPTION)
 
 
 def test_ocr_matches_the_legacy_gate_under_the_environment_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
