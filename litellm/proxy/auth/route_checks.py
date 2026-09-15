@@ -1,5 +1,5 @@
 import re
-from collections.abc import Sequence
+from collections.abc import Collection
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -26,9 +26,11 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
         "/user/new",
         "/management/v1/users/bulk",
         "/user/delete",
+        "/management/v1/users/bulk_delete",
         "/user/bulk_update",
         # team
         "/team/new",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
         "/team/update",
         "/team/delete",
         "/team/block",
@@ -588,7 +590,7 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: Sequence[str]) -> bool:
+    def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 
@@ -761,8 +763,10 @@ class RouteChecks:
             "/user/new",
             "/management/v1/users/bulk",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/bulk_update",
             "/team/new",
+            "/management/v1/teams/{team_id}/members/bulk_delete",
             "/team/update",
             "/team/delete",
             "/model/new",
@@ -826,7 +830,7 @@ class RouteChecks:
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
                             )
-            elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
+            elif RouteChecks.check_route_access(route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES) or (
                 route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
             ):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
@@ -861,9 +865,9 @@ class RouteChecks:
         # Hard-block known write routes regardless of HTTP method (defensive
         # — these are POSTs in practice, but pinning them here protects
         # against future GET-shaped writes).
-        if route in RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES or (
-            route.startswith("/key/") and route.endswith("/regenerate")
-        ):
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES
+        ) or (route.startswith("/key/") and route.endswith("/regenerate")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
