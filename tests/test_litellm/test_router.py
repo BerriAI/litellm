@@ -2363,6 +2363,26 @@ def test_build_completion_continuation_input_folds_into_existing_prefill():
     assert twice[-1] == {"role": "assistant", "content": "part one part two", "prefix": True}
 
 
+def test_continuation_output_ceilings_reduces_by_emitted_tokens():
+    """A continuation must complete within the caller's original allowance, so each
+    output ceiling is reduced by the tokens already emitted."""
+    assert litellm.Router._continuation_output_ceilings({"max_tokens": 100}, 30) == {"max_tokens": 70}
+    assert litellm.Router._continuation_output_ceilings({"max_tokens": 100, "max_completion_tokens": 40}, 25) == {
+        "max_tokens": 75,
+        "max_completion_tokens": 15,
+    }
+    # no ceiling configured -> nothing to reduce, continuation proceeds as before
+    assert litellm.Router._continuation_output_ceilings({}, 50) == {}
+
+
+def test_continuation_output_ceilings_none_when_allowance_exhausted():
+    """When the emitted tokens already meet or exceed a ceiling, there is no budget
+    left to continue, so the helper signals a decline rather than a fresh allowance."""
+    assert litellm.Router._continuation_output_ceilings({"max_tokens": 20}, 20) is None
+    assert litellm.Router._continuation_output_ceilings({"max_tokens": 20}, 25) is None
+    assert litellm.Router._continuation_output_ceilings({"max_tokens": 100, "max_completion_tokens": 10}, 10) is None
+
+
 def test_mid_stream_continuation_eligible_allows_text_response_format():
     """response_format={"type": "text"} is the unconstrained default and must stay
     eligible, unlike json_object / json_schema."""

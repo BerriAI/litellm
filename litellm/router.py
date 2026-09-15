@@ -2857,6 +2857,17 @@ class Router:
                             MID_STREAM_CONTINUATION_MARKER,
                         )
 
+                        emitted_tokens: Final = int(
+                            getattr(complete_response_object_usage, "completion_tokens", 0) or 0
+                        )
+                        reduced_ceilings: Final = self._continuation_output_ceilings(initial_kwargs, emitted_tokens)
+                        if reduced_ceilings is None:
+                            # The caller's output allowance is already spent; surface the
+                            # error rather than grant a fresh allowance on this fallback hop.
+                            if e.original_exception is not None:
+                                raise e.original_exception from e
+                            raise
+                        initial_kwargs.update(reduced_ceilings)
                         initial_kwargs["messages"] = self._build_completion_continuation_input(
                             messages, e.generated_content
                         )
@@ -3075,6 +3086,28 @@ class Router:
         if request_kwargs.get("merge_reasoning_content_in_choices") is True:
             return False
         return True
+
+    @staticmethod
+    def _continuation_output_ceilings(
+        request_kwargs: Mapping[str, object],
+        emitted_tokens: int,
+    ) -> Mapping[str, int] | None:
+        """The max_tokens / max_completion_tokens a continuation should carry, each
+        reduced by the tokens already emitted so the whole answer stays within the
+        caller's original allowance instead of getting a fresh one on every fallback
+        hop. Reductions compound across hops because the trimmed ceiling is what the
+        next hop sees. Returns None when the allowance is already exhausted, so the
+        stream must not be continued."""
+        ceilings: Final = MappingProxyType(
+            {
+                key: value - emitted_tokens
+                for key in ("max_tokens", "max_completion_tokens")
+                if isinstance(value := request_kwargs.get(key), int)
+            }
+        )
+        if ceilings and min(ceilings.values()) <= 0:
+            return None
+        return ceilings
 
     @staticmethod
     def _build_completion_continuation_input(

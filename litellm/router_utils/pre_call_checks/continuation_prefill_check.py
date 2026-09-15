@@ -46,6 +46,7 @@ def _deployment_supports_prefill(deployment: object) -> bool:
         if isinstance(declared, bool):
             return declared
     except ValidationError:
+        # No usable model_info override; fall through to the cost-map lookup.
         pass
     try:
         litellm_params: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("litellm_params"))
