@@ -51,5 +51,10 @@
       "ABLATIONS.md",
       "ablation_diagnostics.json"
     ]
+  },
+  "validation_status": {
+    "live_benchmark_valid": false,
+    "reason": "Solver-visible Git history exposed upstream fixes; live quality and savings claims withdrawn",
+    "replacement": "Fresh isolated training and evaluation in progress"
   }
 }

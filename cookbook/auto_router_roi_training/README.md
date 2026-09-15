@@ -1,3 +1,5 @@
+> **Historical benchmark invalidated:** the 25-task live run exposed upstream fixes through Git objects outside the task checkout. Its quality and savings figures are withdrawn. These files retain the audit record, not evidence of routing improvements. Fresh isolated experiments are in progress
+
 # Experimental Auto Router training snapshots
 
 These opt-in profiles compare the original cards, a research-informed card rewrite, and cards with training-derived capability priors. They also compare raw probabilities, per-model logit calibration, and regularized task-dependent logit calibration. The router makes one judge call; all learned probability adjustments and threshold comparisons run locally

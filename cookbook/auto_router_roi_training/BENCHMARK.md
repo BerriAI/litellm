@@ -1,3 +1,5 @@
+> **Historical benchmark invalidated:** the 25-task live run exposed upstream fixes through Git objects outside the task checkout. Its quality and savings figures are withdrawn. These files retain the audit record, not evidence of routing improvements. Fresh isolated experiments are in progress
+
 # Auto Router training experiment
 
 Profiles were fitted on 83 DeepSWE tasks and selected on 30 repository-disjoint validation tasks before inspecting live grades. The live comparison uses 25 native-image-eligible SWE-bench Verified tasks and four current solver models at high effort. Each solver runs once per task; frozen task-pinned policies reuse those attempts and add their judge cost
