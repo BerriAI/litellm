@@ -1373,7 +1373,7 @@ _GUARDRAIL_BLOCK_ERROR = {
 
 def _openai_handler_error(
     error_type: str,
-    headers: dict[str, str],
+    headers: dict[str, str] | list[tuple[str, str]],
     status_code: int = 400,
     message: str = _GUARDRAIL_BLOCK_ERROR["message"],
 ) -> OpenAIError:
@@ -1435,3 +1435,18 @@ def test_openai_compatible_vendor_400_keeps_body_but_not_headers():
 
     assert exc_info.value.body["type"] == "vendor_specific_error"
     assert not exc_info.value.response.headers
+
+
+def test_litellm_proxy_repeated_response_header_keeps_each_value():
+    repeated = [("x-litellm-call-id", "call-guardrail"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        exception_type(
+            model="claude-haiku-4-5",
+            original_exception=_openai_handler_error("None", repeated),
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers.multi_items() == repeated

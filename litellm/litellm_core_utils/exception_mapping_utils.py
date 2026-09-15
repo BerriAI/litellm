@@ -259,9 +259,10 @@ def _litellm_proxy_response(
     headers: Final = getattr(original_exception, "headers", None)
     if not isinstance(headers, Mapping) or not headers:
         return response
+    pairs: Final = headers.multi_items() if isinstance(headers, httpx.Headers) else headers.items()
     return httpx.Response(
         status_code=response.status_code,
-        headers={str(k): str(v) for k, v in headers.items()},
+        headers=[(str(k), str(v)) for k, v in pairs],
         request=getattr(original_exception, "request", None),
     )
 
