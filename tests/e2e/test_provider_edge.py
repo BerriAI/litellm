@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -85,7 +86,10 @@ class _FakeProvider(ThreadingHTTPServer):
         super().__init__(bind, _FakeProviderHandler)
         self.hits: list[str] = []
         self.echo_request = echo_request
-        self.requests: list[tuple[dict[str, str], bytes]] = []
+        self.requests: tuple[tuple[Mapping[str, str], bytes], ...] = ()
+
+    def capture_request(self, headers: Mapping[str, str], body: bytes) -> None:
+        self.requests = (*self.requests, (MappingProxyType(dict(headers)), body))
 
 
 class _FakeProviderHandler(BaseHTTPRequestHandler):
@@ -103,8 +107,12 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length") or "0")
         body = self.rfile.read(length) if length else b""
         provider.hits.append(f"{self.command} {self.path}")
-        provider.requests.append((dict(self.headers.items()), body))
-        payload = json.dumps({"echo": body.decode("utf-8"), "path": self.path, "hit": len(provider.hits)} if provider.echo_request else {"ok": True}).encode()
+        provider.capture_request(dict(self.headers.items()), body)
+        payload: Final = json.dumps(
+            {"echo": body.decode("utf-8"), "path": self.path, "hit": len(provider.hits)}
+            if provider.echo_request
+            else {"ok": True}
+        ).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(payload)))
