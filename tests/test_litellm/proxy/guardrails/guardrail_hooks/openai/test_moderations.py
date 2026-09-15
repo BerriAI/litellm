@@ -3,16 +3,19 @@
 Test OpenAI Moderation Guardrail
 """
 
+import json
 import os
-import sys
+from typing import Final
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
@@ -484,22 +487,25 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
                 "metadata": {"guardrails": ["test-openai-moderation"]},
             }
 
-            # Should raise HTTPException when processing streaming harmful content
-            from fastapi import HTTPException
+            # Chunks have already been flushed by end-of-stream moderation, so
+            # the block surfaces as the in-stream error frame, not a raise.
+            import json as _json
 
-            with pytest.raises(HTTPException) as exc_info:
-                result_chunks = []
-                async for (
-                    chunk
-                ) in unified_guardrail.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=mock_stream(),
-                    request_data=request_data,
-                ):
-                    result_chunks.append(chunk)
+            result_chunks = []
+            async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                result_chunks.append(chunk)
 
-            assert exc_info.value.status_code == 400
-            assert "Violated OpenAI moderation policy" in str(exc_info.value.detail)
+            frame = result_chunks[-1]
+            assert isinstance(frame, bytes)
+            text = frame.decode()
+            assert text.startswith("data: ")
+            assert "Violated OpenAI moderation policy" in text
+            payload = _json.loads(text[len("data: ") :])
+            assert payload["error"]["code"] == "400"
 
 
 @pytest.mark.asyncio
@@ -729,10 +735,15 @@ async def test_openai_moderation_post_call_request_data_passthrough():
 
         mock_make_request.assert_called_once()
 
-        # Guardrail info in the REAL request_data (not a throwaway)
-        guardrail_info_list = request_data["metadata"].get(
-            "standard_logging_guardrail_information"
+        # Guardrail info in the REAL request_data (not a throwaway). The unified hook
+        # seeds litellm_metadata, so read the bucket the resolver names rather than
+        # assuming "metadata"; the spend log reads it the same way.
+        from litellm.litellm_core_utils.core_helpers import (
+            get_metadata_variable_name_from_kwargs,
         )
+
+        bucket = request_data[get_metadata_variable_name_from_kwargs(request_data)]
+        guardrail_info_list = bucket.get("standard_logging_guardrail_information")
         assert guardrail_info_list is not None
         assert isinstance(guardrail_info_list[0]["guardrail_response"], dict)
         assert "results" in guardrail_info_list[0]["guardrail_response"]
@@ -983,3 +994,30 @@ async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags()
             assert guardrail.streaming_sampling_rate == 2
     finally:
         litellm.logging_callback_manager._reset_all_callbacks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("input_type", "stage"), [("request", "pre_call"), ("response", "post_call")])
+async def test_openai_moderation_records_moderation_id_as_scan_metadata(input_type: str, stage: str):
+    """Each moderation call's id is exposed with the guardrail name, stage and provider that produced it."""
+    payload: Final = {
+        "id": f"modr-{stage}",
+        "model": "omni-moderation-latest",
+        "results": [{"flagged": False, "categories": {}, "category_scores": {}, "category_applied_input_types": {}}],
+    }
+    http_client: Final = AsyncHTTPHandler()
+    http_client.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)))
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail: Final = OpenAIModerationGuardrail(guardrail_name="openai-mod")
+    guardrail.async_handler = http_client
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type=input_type)
+
+    headers: Final = get_logging_caching_headers(request_data)
+    assert headers is not None
+    assert headers["x-litellm-guardrail-scan-id"] == f"modr-{stage}"
+    assert json.loads(headers["x-litellm-guardrail-scan-metadata"]) == [
+        {"guardrail": "openai-mod", "stage": stage, "provider": "openai_moderation", "scan_id": f"modr-{stage}"}
+    ]

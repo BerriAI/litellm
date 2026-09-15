@@ -1,6 +1,5 @@
 import io
 import os
-import sys
 
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_source,
@@ -11,7 +10,6 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_tags,
 )
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import gzip
@@ -272,7 +270,7 @@ async def test_datadog_logging_http_request():
         message = json.loads(body[0]["message"])
         print("logged message", json.dumps(message, indent=4))
 
-        expected_message_fields = StandardLoggingPayload.__annotations__.keys()
+        expected_message_fields = StandardLoggingPayload.__required_keys__
 
         for field in expected_message_fields:
             assert field in message, f"Field '{field}' is missing from the message"

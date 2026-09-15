@@ -3,25 +3,31 @@
 Registers OpenAI's omni moderation model at runtime, drives it through the real
 OpenAI SDK (LIT-4577), and asserts the product promise on both sides of the
 decision: clearly violent text comes back flagged with at least one policy
-category tripped, and benign text comes back not flagged.
+category tripped, and benign text comes back not flagged. The malformed-body
+negative stays on the shared transport, since the SDK refuses to send it.
 """
 
 from __future__ import annotations
 
 import pytest
-from openai.types import Moderation
-from pydantic import TypeAdapter
-
 from e2e_config import unique_marker
+from e2e_http import assert_client_error
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from openai.types import Moderation
 from proxy_client import ProxyClient
+from pydantic import BaseModel, TypeAdapter
 from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
 VIOLENT_TEXT = "I am going to find you and kill you, and I will hurt everyone you love."
 BENIGN_TEXT = "I enjoyed the sunny afternoon and a relaxing walk in the park today."
+
+
+class _OptionalModerationBody(BaseModel):
+    model: str | None = None
+    input: str | None = None
 
 
 def _register_moderation_model(proxy: ProxyClient, resources: ResourceManager) -> str:
@@ -70,3 +76,17 @@ class TestModerations:
         assert not item.flagged, (
             f"benign text was flagged as {_flagged_categories(item)}: {item!r}"
         )
+
+    @pytest.mark.skip(reason="stage red: product gap, /v1/moderations 500s (KeyError 'input') on missing input instead of 400")
+    @pytest.mark.covers("llm.moderations.openai.input_validation.nonstream.works")
+    def test_missing_input_returns_error(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model = _register_moderation_model(proxy, resources)
+        key = resources.key()
+        result = proxy.transport.send(
+            "/v1/moderations",
+            headers=proxy.transport.bearer(key),
+            json=_OptionalModerationBody(model=model),
+        )
+        assert_client_error(result, "moderations missing input")

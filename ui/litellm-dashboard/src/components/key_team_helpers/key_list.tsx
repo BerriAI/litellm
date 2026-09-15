@@ -1,6 +1,8 @@
 import { Setter } from "@/types";
 import { useEffect, useState } from "react";
 import { keyListCall, Member, Organization } from "../networking";
+import type { ObjectPermission } from "../object_permission_types";
+import type { ModelBudgetUsage, ModelMaxBudget } from "./ModelMaxBudgetEditor";
 
 export interface Team {
   team_id: string;
@@ -11,6 +13,9 @@ export interface Team {
   tpm_limit: number | null;
   rpm_limit: number | null;
   organization_id: string;
+  metadata?: Record<string, unknown> | null;
+  budget_reset_at?: string | null;
+  blocked?: boolean;
   created_at: string;
   updated_at?: string | null;
   keys: KeyResponse[];
@@ -22,6 +27,8 @@ export interface Team {
   access_group_models?: string[];
   access_group_mcp_server_ids?: string[];
   access_group_agent_ids?: string[];
+  // Parent org's model ceiling. undefined = no org / not loaded; [] or ["all-proxy-models"] = no ceiling.
+  organization_models?: string[] | null;
 }
 
 export interface KeyResponse {
@@ -50,7 +57,8 @@ export interface KeyResponse {
   key_type: string | null;
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
-  model_max_budget: Record<string, number>;
+  model_max_budget: ModelMaxBudget;
+  model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
   soft_budget_cooldown: boolean;
   blocked: boolean;
   litellm_budget_table: Record<string, unknown>;
@@ -59,6 +67,7 @@ export interface KeyResponse {
   created_at: string;
   created_by?: string;
   updated_at: string;
+  settings_updated_at?: string | null;
   last_active: string | null;
   team_spend: number;
   team_alias: string;
@@ -90,17 +99,10 @@ export interface KeyResponse {
   user_tpm_limit: number;
   user_rpm_limit: number;
   user_email: string;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    mcp_tool_permissions?: Record<string, string[]>;
-    vector_stores: string[];
-    agents?: string[];
-    agent_access_groups?: string[];
-  };
+  object_permission?: ObjectPermission | null;
   access_group_ids?: string[];
   budget_fallbacks?: Record<string, string[]>;
+  router_settings?: Record<string, unknown> | null;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;

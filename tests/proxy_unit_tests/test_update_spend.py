@@ -1,21 +1,28 @@
 import asyncio
-import os
-import sys
 from unittest.mock import Mock
 from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 
 import pytest
 from fastapi import Request
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from unittest.mock import MagicMock, patch, AsyncMock
 
 
 import httpx
-from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
+import math
+from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
+from litellm.proxy.utils import update_spend
+
+# The flush chunks the queue by BATCH_SIZE and then splits each chunk by the row
+# budget, so statement counts below are derived from both rather than hardcoded.
+_OUTER_BATCH_SIZE = 1000
+
+
+def _statements_for(rows: int) -> int:
+    full, remainder = divmod(rows, _OUTER_BATCH_SIZE)
+    chunks = [_OUTER_BATCH_SIZE] * full + ([remainder] if remainder else [])
+    return sum(math.ceil(chunk / SPEND_LOG_WRITE_BATCH_MAX_ROWS) for chunk in chunks)
 
 
 class MockPrismaClient:
@@ -28,11 +35,15 @@ class MockPrismaClient:
         # Initialize transaction lists
         self.spend_log_transactions = []
         self.daily_user_spend_transactions = {}
+        self.tool_usage_transactions = []
+        self.autorouter_turn_transactions = []
 
-        # Add lock for spend_log_transactions (matches real PrismaClient)
+        # Add locks for the transaction queues (matches real PrismaClient)
         import asyncio
 
         self._spend_log_transactions_lock = asyncio.Lock()
+        self._tool_usage_transactions_lock = asyncio.Lock()
+        self._autorouter_turn_transactions_lock = asyncio.Lock()
 
     def jsonify_object(self, obj):
         return obj
@@ -162,7 +173,7 @@ async def test_update_spend_logs_non_connection_error():
     prisma_client.db.litellm_spendlogs.create_many = create_many_mock
 
     # Execute and verify it raises immediately without retrying
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='Unexpected database error') as exc_info:
         await update_spend(prisma_client, None, proxy_logging_obj)
 
     # Verify error message
@@ -238,25 +249,16 @@ async def test_update_spend_logs_multiple_batches_success():
     await update_spend(prisma_client, None, proxy_logging_obj)
 
     # Verify
-    assert create_many_mock.call_count == 2  # Should have made 2 batch calls
+    assert create_many_mock.call_count == _statements_for(1500)
 
-    # Get the actual data from each batch call
-    first_batch = create_many_mock.call_args_list[0][1]["data"]
-    second_batch = create_many_mock.call_args_list[1][1]["data"]
+    # No statement may exceed the row budget, which is what bounds the query
+    # engine's resident memory.
+    batches = [call[1]["data"] for call in create_many_mock.call_args_list]
+    assert all(len(batch) <= SPEND_LOG_WRITE_BATCH_MAX_ROWS for batch in batches)
 
-    # Verify batch sizes
-    assert len(first_batch) == 1000
-    assert len(second_batch) == 500
-
-    # Verify exact IDs in each batch
-    expected_first_batch_ids = {str(i) for i in range(1000)}
-    expected_second_batch_ids = {str(i) for i in range(1000, 1500)}
-
-    actual_first_batch_ids = {item["id"] for item in first_batch}
-    actual_second_batch_ids = {item["id"] for item in second_batch}
-
-    assert actual_first_batch_ids == expected_first_batch_ids
-    assert actual_second_batch_ids == expected_second_batch_ids
+    # Every row is written exactly once and in order, whatever the split.
+    written_ids = [item["id"] for batch in batches for item in batch]
+    assert written_ids == [str(i) for i in range(1500)]
 
     # Verify all logs were processed
     assert len(prisma_client.spend_log_transactions) == 0
@@ -294,8 +296,9 @@ async def test_update_spend_logs_multiple_batches_with_failure():
     # Execute
     await update_spend(prisma_client, None, proxy_logging_obj)
 
-    # Verify
-    assert create_many_mock.call_count == 6  # 4 batches + 2 retries for failed batch
+    # The first attempt aborts on its second statement, then the whole flush
+    # replays, so the total is those two calls plus one complete pass.
+    assert create_many_mock.call_count == 2 + _statements_for(4000)
 
     # Verify all batches were processed
     all_processed_logs = []
