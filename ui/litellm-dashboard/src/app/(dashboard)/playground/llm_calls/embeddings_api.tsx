@@ -1,5 +1,6 @@
 import { toast } from "@/lib/toast";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
 
 export async function makeOpenAIEmbeddingsRequest(
   input: string,
@@ -8,6 +9,7 @@ export async function makeOpenAIEmbeddingsRequest(
   accessToken: string,
   tags?: string[],
   customBaseUrl?: string,
+  customHeaders?: CustomHeaders,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -20,11 +22,7 @@ export async function makeOpenAIEmbeddingsRequest(
   }
 
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   try {
     const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
