@@ -546,6 +546,45 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost == pytest.approx(258 * 4.5e-7)
 
+    @pytest.mark.parametrize(
+        "input_value,resolved_files,expected_image_tokens",
+        [
+            (GCS_URL, {}, 258),
+            ("gs://my-bucket/clip.mp4", {}, 0),
+            ("gs://my-bucket/unknown.bin", {}, 0),
+            ("files/image-123", {"files/image-123": {"mime_type": "image/jpeg"}}, 258),
+            ("files/missing", {}, 0),
+            ("data:application/octet-stream;base64,abc", {}, 0),
+            ([[IMAGE_DATA_URI]], {}, 258),
+            ([], {}, 0),
+        ],
+    )
+    def test_missing_modality_details_classifies_image_inputs(self, input_value, resolved_files, expected_image_tokens):
+        response_json = {
+            "embedding": {"values": [0.1]},
+            "usageMetadata": {
+                "promptTokenCount": 258,
+                "totalTokenCount": 258,
+            },
+        }
+        result = process_embed_content_response(
+            input=input_value,
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+            resolved_files=resolved_files,
+        )
+        assert result.usage.prompt_tokens_details.image_tokens == expected_image_tokens
+        assert result.usage.prompt_tokens_details.text_tokens == 0
+
+        prompt_cost, _ = generic_cost_per_token(
+            model=self.MODEL,
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        expected_rate = 4.5e-7 if expected_image_tokens else 2e-7
+        assert prompt_cost == pytest.approx(258 * expected_rate)
+
     def test_mixed_text_and_image_without_modality_details_not_billed_as_image(self):
         response_json = {
             "embedding": {"values": [0.1]},

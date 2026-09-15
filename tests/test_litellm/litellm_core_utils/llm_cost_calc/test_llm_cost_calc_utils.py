@@ -108,6 +108,74 @@ def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
     assert prompt_cost == pytest.approx(2 * 0.00016)
 
 
+def test_generic_cost_per_token_prefers_image_per_image_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_image_token": 4.5e-7,
+        "input_cost_per_image": 0.00012,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=258,
+        completion_tokens=0,
+        total_tokens=258,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_tokens=258,
+            image_count=1,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(0.00012)
+
+
+def test_generic_cost_per_token_prefers_video_per_second_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "gemini-embedding-2",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2e-7,
+        "input_cost_per_video_token": 1.2e-5,
+        "input_cost_per_video_per_second": 0.00079,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "embedding",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=516,
+        completion_tokens=0,
+        total_tokens=516,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            video_tokens=516,
+            video_length_seconds=2,
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-embedding-2",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(2 * 0.00079)
+
+
 def test_missing_cache_read_uses_off_peak_input_rate():
     from datetime import datetime, timezone
 
