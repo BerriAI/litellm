@@ -101,3 +101,21 @@ async def test_should_email_an_email_only_admin_without_querying_the_database():
     )
     assert await get_team_admin_emails(team, prisma) == ("mail-only@example.com",)
     assert prisma.db.litellm_usertable.queries == []
+
+
+@pytest.mark.asyncio
+async def test_should_fall_back_to_the_inline_email_when_the_user_record_has_none():
+    team: Final = LiteLLM_TeamTable(
+        team_id="t1",
+        members_with_roles=[Member(user_id="u-no-email", user_email="inline@example.com", role="admin")],
+    )
+    assert await get_team_admin_emails(team, _prisma(USERS)) == ("inline@example.com",)
+
+
+@pytest.mark.asyncio
+async def test_should_prefer_the_user_record_email_over_a_differing_inline_one():
+    team: Final = LiteLLM_TeamTable(
+        team_id="t1",
+        members_with_roles=[Member(user_id="u-admin", user_email="stale@example.com", role="admin")],
+    )
+    assert await get_team_admin_emails(team, _prisma(USERS)) == ("admin@example.com",)
