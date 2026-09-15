@@ -88,6 +88,7 @@ def open_trace_context(
     client: Langfuse,
     trace_id: str,
     parent_observation_id: str | None,
+    existing_trace: bool = False,
 ) -> tuple[Context, bool]:
     """Build the OTel context that places new observations inside ``trace_id``.
 
@@ -96,11 +97,16 @@ def open_trace_context(
     observation is a child of something that will never be exported; the public
     SDK path compensates by marking the span as root and this path must do the
     same.
+
+    ``existing_trace`` is the v2 ``existing_trace_id`` contract: the trace is
+    appended to, never rewritten. The server takes a root observation's name and
+    I/O as the trace's, so a continuation must not claim root; trace fields it
+    does want changed travel as explicit ``langfuse.trace.*`` attributes.
     """
     remote_parent: Final = client._create_remote_parent_span(  # pyright: ignore[reportPrivateUsage]  # no public equivalent in v4
         trace_id=trace_id, parent_span_id=parent_observation_id
     )
-    return otel_trace.set_span_in_context(remote_parent), parent_observation_id is None
+    return otel_trace.set_span_in_context(remote_parent), parent_observation_id is None and not existing_trace
 
 
 def start_generation(

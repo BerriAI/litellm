@@ -1923,6 +1923,28 @@ def test_update_trace_keys_input_output_reach_the_trace_even_under_a_parent():
     assert "the-output" in str(span.attributes["langfuse.trace.output"])
 
 
+def test_existing_trace_id_appends_without_claiming_trace_root():
+    """Langfuse copies a root observation's name and I/O onto the trace, so a
+    continuation that claimed root would rename the trace after every request;
+    v2 only ever touched the keys in ``update_trace_keys``."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"existing_trace_id": "trace-1", "trace_name": "second-call"})
+
+    assert span.parent is not None
+    assert span.attributes.get("langfuse.internal.as_root") is None
+    assert "langfuse.trace.name" not in (span.attributes or {})
+
+
+def test_a_fresh_trace_still_claims_root_so_its_generation_names_it():
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"trace_id": "a" * 32, "trace_name": "first-call"})
+
+    assert span.attributes.get("langfuse.internal.as_root") is True
+    assert span.attributes["langfuse.trace.name"] == "first-call"
+
+
 def test_trace_io_is_not_stamped_when_update_trace_keys_does_not_ask():
     rig = _steering_logger()
 
