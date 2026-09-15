@@ -47,7 +47,7 @@ import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
-import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
+import { formatAvgLatency, valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import {
   fetchedRangeKey,
   selectForRange,
@@ -285,6 +285,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               failed_requests: 0,
               cache_read_input_tokens: 0,
               cache_creation_input_tokens: 0,
+              latency_ms: 0,
             },
             metadata: {},
             api_key_breakdown: {},
@@ -299,6 +300,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
         modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
         modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        modelSpend[model].metrics.latency_ms =
+          (modelSpend[model].metrics.latency_ms ?? 0) + (metrics.metrics.latency_ms || 0);
       });
     });
 
@@ -310,6 +313,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         successful_requests: metrics.metrics.successful_requests,
         failed_requests: metrics.metrics.failed_requests,
         tokens: metrics.metrics.total_tokens,
+        latency_ms: metrics.metrics.latency_ms ?? 0,
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, topModelsLimit);
@@ -331,6 +335,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               failed_requests: 0,
               cache_read_input_tokens: 0,
               cache_creation_input_tokens: 0,
+              latency_ms: 0,
             },
             metadata: {},
             api_key_breakdown: {},
@@ -346,6 +351,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
         modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
           metrics.metrics.cache_creation_input_tokens || 0;
+        modelGroupSpend[modelGroup].metrics.latency_ms =
+          (modelGroupSpend[modelGroup].metrics.latency_ms ?? 0) + (metrics.metrics.latency_ms || 0);
       });
     });
 
@@ -357,6 +364,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         successful_requests: metrics.metrics.successful_requests,
         failed_requests: metrics.metrics.failed_requests,
         tokens: metrics.metrics.total_tokens,
+        latency_ms: metrics.metrics.latency_ms ?? 0,
       }))
       .sort((a, b) => b.spend - a.spend)
       .slice(0, topModelsLimit);
@@ -853,6 +861,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                           </p>
                                           <p className="text-muted-foreground">
                                             Tokens: {data.tokens.toLocaleString()}
+                                          </p>
+                                          <p className="text-muted-foreground">
+                                            Avg Latency: {formatAvgLatency(data.latency_ms, data.successful_requests)}
                                           </p>
                                         </div>
                                       );

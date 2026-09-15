@@ -158,6 +158,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
+        "latency_ms": 0,
     }
     mock_rows = [
         # (date, endpoint) — rolls up across api_keys and models
@@ -651,6 +652,7 @@ def test_update_breakdown_metrics_includes_user_email():
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
+        latency_ms=0,
         ptu_flat_cost=0.0,
         user_id="alice",
     )
@@ -811,6 +813,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
+        "latency_ms": 0,
     }
     mock_rows = [
         {
@@ -903,6 +906,7 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
+        latency_ms=0,
     )
 
 
@@ -1336,6 +1340,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
+            "latency_ms": None,
         }
     ]
     mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
@@ -1381,6 +1386,7 @@ def _no_spend_record():
         api_requests=None,
         successful_requests=None,
         failed_requests=None,
+        latency_ms=None,
     )
 
 
@@ -1397,6 +1403,7 @@ def test_record_to_spend_metrics_handles_none_values():
     assert metrics.cache_read_input_tokens == 0
     assert metrics.cache_creation_input_tokens == 0
     assert metrics.compression_saved_tokens == 0
+    assert metrics.latency_ms == 0
 
 
 def test_update_metrics_handles_none_values():
@@ -1412,6 +1419,90 @@ def test_update_metrics_handles_none_values():
     assert metrics.cache_read_input_tokens == 0
     assert metrics.cache_creation_input_tokens == 0
     assert metrics.compression_saved_tokens == 0
+    assert metrics.latency_ms == 0
+
+
+class TestLatencySurvivesTheReadPath:
+    """The Usage page derives average latency as latency_ms / successful_requests, so
+    the summed duration has to be summed by both rollup queries, accumulated across
+    rows, carried by the single-row conversion and totalled in the range metadata."""
+
+    @pytest.mark.parametrize("build_query", [_build_aggregated_sql_query, _build_entity_rollup_sql_query])
+    def test_both_rollup_queries_sum_latency(self, build_query):
+        sql, _ = build_query(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            start_date="2026-09-01",
+            end_date="2026-09-15",
+            model=None,
+            api_key=None,
+        )
+        assert "SUM(latency_ms)::bigint AS latency_ms" in sql
+
+    def test_latency_accumulates_across_rows(self):
+        first = _no_spend_record()
+        first.latency_ms = 1200
+        first.successful_requests = 2
+        second = _no_spend_record()
+        second.latency_ms = 300
+        second.successful_requests = 1
+        metrics = update_metrics(update_metrics(SpendMetrics(), first), second)
+        assert metrics.latency_ms == 1500
+        assert metrics.latency_ms / metrics.successful_requests == 500
+
+    def test_range_total_is_declared(self):
+        assert "total_latency_ms" in DailySpendMetadata.model_fields
+
+    @pytest.mark.asyncio
+    async def test_aggregated_response_carries_model_latency_and_range_total(self):
+        base = {
+            "date": "2026-09-15",
+            "api_key": None,
+            "model": None,
+            "model_group": None,
+            "custom_llm_provider": None,
+            "mcp_namespaced_tool_name": None,
+            "endpoint": None,
+            "spend": 1.0,
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "api_requests": 3,
+            "successful_requests": 3,
+            "failed_requests": 0,
+        }
+        mock_rows = [
+            {**base, "model": "gpt-5", "group_level": 47, "latency_ms": 4500},
+            {**base, "group_level": 63, "latency_ms": 4500},
+            {**base, "date": None, "group_level": 127, "latency_ms": 4500},
+        ]
+        mock_prisma = MagicMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+        result = await get_daily_activity_aggregated(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=None,
+            entity_metadata_field=None,
+            start_date="2026-09-15",
+            end_date="2026-09-15",
+            model=None,
+            api_key=None,
+        )
+
+        model_metrics = result.results[0].breakdown.models["gpt-5"].metrics
+        assert model_metrics.latency_ms == 4500
+        assert model_metrics.latency_ms / model_metrics.successful_requests == 1500
+        assert result.metadata.total_latency_ms == 4500
 
 
 class TestEverySavingsDriverSurvivesTheReadPath:
@@ -1492,6 +1583,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         api_requests=0,
         successful_requests=0,
         failed_requests=0,
+        latency_ms=0,
         ptu_flat_cost=ptu_flat_cost,
     )
 
@@ -1557,6 +1649,7 @@ def _grouping_row(
         api_requests=0,
         successful_requests=0,
         failed_requests=0,
+        latency_ms=0,
     )
 
 
@@ -1718,6 +1811,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         api_requests=0,
         successful_requests=0,
         failed_requests=0,
+        latency_ms=0,
         ptu_flat_cost=0.0,
         team_id="team-1",
     )
@@ -2119,6 +2213,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
+        "latency_ms": 0,
         "prompt_tokens": 0,
         "completion_tokens": 0,
         "api_requests": 0,

@@ -3110,6 +3110,11 @@
               "title": "Total Gateway Injected Caching Savings Spend",
               "type": "number"
             },
+            "total_latency_ms": {
+              "default": 0,
+              "title": "Total Latency Ms",
+              "type": "integer"
+            },
             "total_pages": {
               "default": 1,
               "title": "Total Pages",
@@ -3622,6 +3627,12 @@
               "default": 0.0,
               "title": "Gateway Injected Caching Savings Spend",
               "type": "number"
+            },
+            "latency_ms": {
+              "default": 0,
+              "description": "Summed duration of successful requests, in ms",
+              "title": "Latency Ms",
+              "type": "integer"
             },
             "prompt_caching_savings_spend": {
               "default": 0.0,

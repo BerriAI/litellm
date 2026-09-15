@@ -32,6 +32,7 @@ class SpendMetrics(BaseModel):
     successful_requests: int = Field(default=0)
     failed_requests: int = Field(default=0)
     api_requests: int = Field(default=0)
+    latency_ms: int = Field(default=0, description="Summed duration of successful requests, in ms")
 
 
 class MetricBase(BaseModel):
@@ -93,6 +94,7 @@ class DailySpendMetadata(BaseModel):
     total_prompt_caching_savings_spend: float = Field(default=0.0)
     total_gateway_injected_caching_savings_spend: float = Field(default=0.0)
     total_autorouter_savings_spend: float = Field(default=0.0)
+    total_latency_ms: int = Field(default=0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
@@ -125,6 +127,7 @@ class LiteLLM_DailyUserSpend(BaseModel):
     api_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
+    latency_ms: int = 0
 
 
 class GroupedData(TypedDict):

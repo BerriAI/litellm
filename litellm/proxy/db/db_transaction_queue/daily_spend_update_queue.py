@@ -141,6 +141,9 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["autorouter_savings_spend"] = (
                         payload.get("autorouter_savings_spend", 0) or 0
                     ) + daily_transaction.get("autorouter_savings_spend", 0)
+                    daily_transaction["latency_ms"] = (payload.get("latency_ms", 0) or 0) + daily_transaction.get(
+                        "latency_ms", 0
+                    )
 
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)

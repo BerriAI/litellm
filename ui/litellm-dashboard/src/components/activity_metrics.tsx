@@ -9,7 +9,7 @@ import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
-import { valueFormatter } from "./UsagePage/utils/value_formatters";
+import { formatAvgLatency, valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
@@ -28,7 +28,7 @@ const ModelSection = ({
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-5 gap-4">
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">Total Requests</p>
@@ -60,6 +60,15 @@ const ModelSection = ({
               ${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful
               request
             </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Avg Latency</p>
+            <h3 className="text-lg font-medium text-foreground">
+              {formatAvgLatency(metrics.total_latency_ms, metrics.total_successful_requests)}
+            </h3>
+            <p className="text-sm text-muted-foreground">per successful request</p>
           </CardContent>
         </Card>
       </div>
@@ -471,6 +480,7 @@ export const processActivityData = (
           total_spend: 0,
           total_cache_read_input_tokens: 0,
           total_cache_creation_input_tokens: 0,
+          total_latency_ms: 0,
           top_api_keys: [],
           top_models: [],
           daily_data: [],
@@ -486,6 +496,7 @@ export const processActivityData = (
       modelMetrics[model].total_failed_requests += modelData.metrics.failed_requests;
       modelMetrics[model].total_cache_read_input_tokens += modelData.metrics.cache_read_input_tokens || 0;
       modelMetrics[model].total_cache_creation_input_tokens += modelData.metrics.cache_creation_input_tokens || 0;
+      modelMetrics[model].total_latency_ms += modelData.metrics.latency_ms || 0;
 
       // Add daily data
       modelMetrics[model].daily_data.push({
@@ -500,6 +511,7 @@ export const processActivityData = (
           failed_requests: modelData.metrics.failed_requests,
           cache_read_input_tokens: modelData.metrics.cache_read_input_tokens || 0,
           cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0,
+          latency_ms: modelData.metrics.latency_ms || 0,
         },
       });
     });

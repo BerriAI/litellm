@@ -2748,6 +2748,49 @@ async def test_daily_transaction_internal_call_keeps_spend_but_not_request_count
     assert user_sent["successful_requests"] == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_status", "metadata", "expected_latency_ms"),
+    [
+        ("success", {}, 1234),
+        ("failure", {}, 0),
+        ("success", {"internal_call_origin": "shadow_eval_judge"}, 0),
+    ],
+)
+async def test_daily_transaction_latency_counts_only_requests_the_caller_saw_succeed(
+    request_status, metadata, expected_latency_ms
+):
+    """The rollup stores summed duration over successful requests, so the dashboard's
+    average is latency_ms / successful_requests. A failed or internal call has no
+    successful request to divide by and must not inflate the numerator."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value=request_status)
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload={
+            "request_id": "req-latency-1",
+            "user": "test-user",
+            "startTime": "2026-09-15T00:00:00",
+            "api_key": "test-key",
+            "model": "claude-sonnet-5",
+            "custom_llm_provider": "anthropic",
+            "model_group": "claude-sonnet-5",
+            "call_type": "acompletion",
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "spend": 0.05,
+            "request_duration_ms": 1234,
+            "metadata": json.dumps(metadata),
+        },
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["latency_ms"] == expected_latency_ms
+
+
 def _deadlock_error():
     from prisma.errors import RawQueryError
 

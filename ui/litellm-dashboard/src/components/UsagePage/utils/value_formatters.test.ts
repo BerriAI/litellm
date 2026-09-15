@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { valueFormatter, valueFormatterSpend } from "./value_formatters";
+import { formatAvgLatency, valueFormatter, valueFormatterSpend } from "./value_formatters";
 
 describe("valueFormatter", () => {
   it("should format numbers >= 1,000,000 as millions with 2 decimal places", () => {
@@ -60,5 +60,30 @@ describe("valueFormatterSpend", () => {
 
   it("should treat exactly 1,000 as the thousands boundary", () => {
     expect(valueFormatterSpend(1_000)).toBe("$1k");
+  });
+});
+
+describe("formatAvgLatency", () => {
+  it("divides the summed duration by the successful request count", () => {
+    expect(formatAvgLatency(4500, 3)).toBe("1.50 s");
+    expect(formatAvgLatency(1000, 4)).toBe("250 ms");
+  });
+
+  it("switches from milliseconds to seconds at exactly one second", () => {
+    expect(formatAvgLatency(999, 1)).toBe("999 ms");
+    expect(formatAvgLatency(1000, 1)).toBe("1.00 s");
+  });
+
+  it("rounds sub-second averages to whole milliseconds", () => {
+    expect(formatAvgLatency(1001, 3)).toBe("334 ms");
+  });
+
+  it("shows a dash instead of dividing by zero or reporting a zero average", () => {
+    expect(formatAvgLatency(4500, 0)).toBe("-");
+    expect(formatAvgLatency(0, 3)).toBe("-");
+  });
+
+  it("shows a dash for a response that predates the latency column", () => {
+    expect(formatAvgLatency(undefined, 3)).toBe("-");
   });
 });

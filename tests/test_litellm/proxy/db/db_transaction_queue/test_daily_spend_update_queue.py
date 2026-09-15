@@ -209,6 +209,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "prompt_caching_savings_spend": 0,
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
+        "latency_ms": 0,
     }
 
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
@@ -261,6 +262,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "prompt_caching_savings_spend": 0,
         "gateway_injected_caching_savings_spend": 0,
         "autorouter_savings_spend": 0,
+        "latency_ms": 0,
     }
 
     # Add updates to queue

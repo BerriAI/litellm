@@ -85,10 +85,10 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 23 bound columns per row plus the inlined updated_at, so the row count is what
+    # 24 bound columns per row plus the inlined updated_at, so the row count is what
     # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 23
-    assert "$2300::text" in sql
+    assert len(params) == 100 * 24
+    assert "$2400::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
@@ -104,13 +104,37 @@ def test_conflict_target_is_the_full_unique_constraint():
 
 @pytest.mark.parametrize(
     "column",
-    ["prompt_tokens", "completion_tokens", "spend", "api_requests", "successful_requests", "failed_requests"],
+    [
+        "prompt_tokens",
+        "completion_tokens",
+        "spend",
+        "api_requests",
+        "successful_requests",
+        "failed_requests",
+        "latency_ms",
+    ],
 )
 def test_counters_increment_rather_than_overwrite(column):
     """An overwrite would silently discard every earlier flush's spend for that row."""
     sql, _ = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(),)))
 
     assert f'"{column}" = "LiteLLM_DailyTagSpend"."{column}" + EXCLUDED."{column}"' in sql
+
+
+def test_latency_is_summed_across_a_batch_and_written_as_a_bigint():
+    """A per-request duration only yields an average later if every flush adds its sum.
+
+    A row queued by a pod on the previous release carries no latency key at all and
+    must merge as zero rather than dropping the batch."""
+    merged = merge_by_conflict_key(TAG_TABLE, (tag_txn(latency_ms=1200), tag_txn(latency_ms=300), tag_txn()))
+    sql, params = build_bulk_upsert(TAG_TABLE, merged)
+
+    assert len(merged) == 1
+    assert merged[0][1]["latency_ms"] == 1500
+    insert_columns = re.search(r'INSERT INTO "LiteLLM_DailyTagSpend" \((.*?), "updated_at"\)', sql).group(1)
+    position = insert_columns.split(", ").index('"latency_ms"')
+    assert f"${position + 1}::bigint" in sql
+    assert params[position] == 1500
 
 
 def test_request_id_is_preserved_when_a_later_batch_carries_none():
