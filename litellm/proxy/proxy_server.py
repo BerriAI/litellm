@@ -7080,8 +7080,12 @@ class ProxyConfig:
 
         ## PASS-THROUGH ENDPOINTS ##
         if "pass_through_endpoints" in _general_settings:
-            general_settings["pass_through_endpoints"] = _general_settings["pass_through_endpoints"]
-            await initialize_pass_through_endpoints(pass_through_endpoints=general_settings["pass_through_endpoints"])
+            db_pass_through_endpoints: Final = _general_settings["pass_through_endpoints"]
+            general_settings["pass_through_endpoints"] = [
+                *db_pass_through_endpoints,
+                *(config_passthrough_endpoints or []),
+            ]
+            await initialize_pass_through_endpoints(pass_through_endpoints=db_pass_through_endpoints)
 
         ## UI ACCESS MODE ##
         if "ui_access_mode" in _general_settings:
