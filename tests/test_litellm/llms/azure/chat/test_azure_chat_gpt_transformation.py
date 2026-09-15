@@ -328,11 +328,11 @@ def test_transform_request_strips_litellm_format_from_managed_file_id():
             ],
         }
     ]
-    messages = update_messages_with_model_file_ids(messages, None, {})
+    updated_messages = update_messages_with_model_file_ids(messages, None, {})
 
     request = AzureOpenAIConfig().transform_request(
         model="gpt-5.4",
-        messages=messages,
+        messages=updated_messages,
         optional_params={},
         litellm_params={},
         headers={},
