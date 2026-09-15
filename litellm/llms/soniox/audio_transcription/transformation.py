@@ -9,9 +9,13 @@ async API requires multiple HTTP calls and does not fit the single-request
 contract of `base_llm_http_handler.audio_transcriptions`.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Final, NoReturn
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -56,6 +60,56 @@ SONIOX_HANDLER_ONLY_PARAMS: Final[list[str]] = [
     "soniox_cleanup",
     "filename",
 ]
+
+
+SONIOX_JSON_PARAMS: Final[frozenset[str]] = frozenset({"context", "translation", "language_hints"})
+SONIOX_BOOL_PARAMS: Final[frozenset[str]] = frozenset(
+    {"enable_speaker_diarization", "enable_language_identification", "language_hints_strict"}
+)
+_JSON_CONTAINER: Final = TypeAdapter[dict[str, object] | list[object]](dict[str, object] | list[object])
+
+
+@dataclass(frozen=True, slots=True)
+class SonioxInvalidBoolParam:
+    key: str
+    value: str
+
+
+def raise_soniox_form_error(error: SonioxInvalidBoolParam) -> NoReturn:
+    raise SonioxException(
+        message=f"`{error.key}` must be a boolean, got {error.value!r}", status_code=400, headers=None
+    )
+
+
+def _decode_form_value(key: str, value: object) -> object | SonioxInvalidBoolParam:
+    if not isinstance(value, str):
+        return value
+    if key in SONIOX_BOOL_PARAMS:
+        lowered: Final = value.strip().lower()
+        if lowered in ("true", "1"):
+            return True
+        if lowered in ("false", "0"):
+            return False
+        return SonioxInvalidBoolParam(key=key, value=value)
+    if key in SONIOX_JSON_PARAMS and value.lstrip()[:1] in ("{", "["):
+        try:
+            return _JSON_CONTAINER.validate_json(value)
+        except ValidationError:
+            return value
+    if key == "language_hints":
+        return tuple(hint.strip() for hint in value.split(",") if hint.strip())
+    return value
+
+
+def decode_soniox_form_params(
+    optional_params: Mapping[str, object],
+) -> Mapping[str, object] | SonioxInvalidBoolParam:
+    """Multipart form fields reach the proxy as strings; restore the JSON types Soniox expects."""
+    decoded: Final = {key: _decode_form_value(key, value) for key, value in optional_params.items()}
+    return next(
+        (value for value in decoded.values() if isinstance(value, SonioxInvalidBoolParam)),
+        MappingProxyType(decoded),
+    )
 
 
 class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
