@@ -320,8 +320,17 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def _is_thinking_disabled(thinking: Mapping | None) -> bool:
-        """Return True when the client's thinking param is absent or explicitly disabled."""
-        return thinking is None or (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+        """Return True (suppressed) unless the client explicitly opted in.
+
+        Only ``{"type": "enabled"|"adaptive"}`` enables the reasoning
+        translation. Absent, disabled, or malformed objects (missing
+        ``type``) fail closed: the request side
+        (``translate_anthropic_thinking_to_reasoning_effort``) already
+        defaults a missing ``type`` to ``disabled``, and a malformed
+        object must not surface provider ``reasoning_content`` through
+        a thinking block (review finding).
+        """
+        return not (isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive"))
 
     @staticmethod
     def _route_openai_thinking_to_responses_api_if_needed(

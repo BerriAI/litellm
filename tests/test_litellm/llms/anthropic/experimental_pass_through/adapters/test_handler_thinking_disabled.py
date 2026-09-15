@@ -1,10 +1,11 @@
 """Handler-level tests for ``thinking_disabled`` computation and threading.
 
 Covers the boolean logic that decides whether thinking is disabled
-(``thinking is None or thinking.type == "disabled"``) and verifies it is
-threaded correctly to ``ANTHROPIC_ADAPTER`` output-translation calls for
-both the async and sync handler entry points, in streaming and non-streaming
-modes.
+(fail-closed: only an explicit ``{\"type\": \"enabled"|\"adaptive\"}``
+enables it; absent, disabled, or malformed objects disable it) and
+verifies it is threaded correctly to ``ANTHROPIC_ADAPTER`` output-
+translation calls for both the async and sync handler entry points, in
+streaming and non-streaming modes.
 
 Mocks ``litellm.acompletion`` / ``litellm.completion`` and
 ``ANTHROPIC_ADAPTER`` directly, alongside the preparation helpers that run
@@ -22,7 +23,10 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
 
 THINKING_PARAMS = [
     (None, True),
+    ({}, True),
     ({"type": "disabled"}, True),
+    ({"budget_tokens": 1024}, True),
+    ({"type": "weird"}, True),
     ({"type": "enabled", "budget_tokens": 1024}, False),
     ({"type": "adaptive"}, False),
 ]
@@ -52,8 +56,12 @@ async def test_async_handler_streaming_threads_thinking_disabled(thinking_param,
             "_prepare_completion_kwargs",
             return_value=({}, {}),
         ),
-        patch("litellm.acompletion", return_value=MagicMock()),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
-        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.acompletion", return_value=MagicMock()
+        ),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
+        ) as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
     ):
         mock_adapter.translate_completion_output_params_streaming.return_value = iter([])
         await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
@@ -91,8 +99,12 @@ async def test_async_handler_non_streaming_threads_thinking_disabled(thinking_pa
             "_prepare_completion_kwargs",
             return_value=({}, {}),
         ),
-        patch("litellm.acompletion", return_value=MagicMock()),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
-        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.acompletion", return_value=MagicMock()
+        ),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
+        ) as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
     ):
         mock_adapter.translate_completion_output_params.return_value = MagicMock()
         await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
@@ -130,8 +142,12 @@ def test_sync_handler_streaming_threads_thinking_disabled(thinking_param, expect
             "_prepare_completion_kwargs",
             return_value=({}, {}),
         ),
-        patch("litellm.completion", return_value=MagicMock()),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
-        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.completion", return_value=MagicMock()
+        ),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
+        ) as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
     ):
         mock_adapter.translate_completion_output_params_streaming.return_value = iter([])
         LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
@@ -169,8 +185,12 @@ def test_sync_handler_non_streaming_threads_thinking_disabled(thinking_param, ex
             "_prepare_completion_kwargs",
             return_value=({}, {}),
         ),
-        patch("litellm.completion", return_value=MagicMock()),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
-        patch("litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER") as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.completion", return_value=MagicMock()
+        ),  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+        patch(  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
+            "litellm.llms.anthropic.experimental_pass_through.adapters.handler.ANTHROPIC_ADAPTER"
+        ) as mock_adapter,  # test-quality-ok: handler unit test - fakes completion dispatch + adapter seams; unit under test is the thinking_disabled translation wiring, not the transport
     ):
         mock_adapter.translate_completion_output_params.return_value = MagicMock()
         LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
