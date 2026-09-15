@@ -7436,18 +7436,38 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
 
 
 @pytest.mark.asyncio
-async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path():
-    """The auth check lets any matching ``auth: false`` entry through, so a DB
-    ``auth: true`` entry can only lock down a YAML-declared path if the YAML
-    entry is dropped from the merged list."""
+@pytest.mark.parametrize(
+    ("db_methods", "yaml_methods"),
+    [(None, None), (["POST"], ["GET"])],
+    ids=["all-methods", "disjoint-methods"],
+)
+async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path(
+    db_methods: list[str] | None, yaml_methods: list[str] | None
+):
+    """The auth check matches pass-through entries by path only and lets any
+    matching ``auth: false`` entry through, so a DB ``auth: true`` entry can only
+    lock down a YAML-declared path if the YAML entry is dropped from the merged
+    list, whatever ``methods`` either entry declares."""
     from litellm.proxy._types import ProxyException
     from litellm.proxy.proxy_server import ProxyConfig
 
-    yaml_endpoint: Final = {"path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": False}
-    db_endpoint: Final = {"id": "db-1", "path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": True}
+    yaml_endpoint: Final = {
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": False,
+        "methods": yaml_methods,
+    }
+    db_endpoint: Final = {
+        "id": "db-1",
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": True,
+        "methods": db_methods,
+    }
 
     request: Final = MagicMock()
     request.url.path = "/v1/cuopt/request"
+    request.method = "POST"
     request.headers = {}
     request.query_params = {}
 
