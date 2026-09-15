@@ -7433,13 +7433,14 @@ def _reserved_stamp_key(key_metadata: dict | None = None) -> UserAPIKeyAuth:
 _PLANTED_STAMPS = {
     "attempted_fallbacks": 99,
     "original_model_group": "spoofed-group",
+    "request_retry_count": -100,
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     "client_key": "client_value",
 }
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_both_buckets():
+async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_both_buckets() -> None:
     """attempted_fallbacks and original_model_group are router-written facts the spend row
     reads back; a client planting them in either bucket is dropped at the boundary so the
     router never sees a reserved key it did not write."""
@@ -7465,11 +7466,12 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
     assert "_client_output_ceiling" not in updated["metadata"]
+    assert "request_retry_count" not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_json_string_litellm_metadata():
+async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_json_string_litellm_metadata() -> None:
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     data = {
@@ -7490,11 +7492,12 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_js
     assert "litellm_metadata" not in updated
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
+    assert "request_retry_count" not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite_pricing_override_opt_in():
+async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite_pricing_override_opt_in() -> None:
     """The pricing strip is gated on allow_client_pricing_override; the reserved-stamp strip
     is not, because no key or team setting makes a client-written fallback count valid."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
@@ -7518,6 +7521,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_despite
     assert updated["metadata"]["model_info"] == {"input_cost_per_token": 0.0}
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
+    assert "request_retry_count" not in updated["metadata"]
 
 
 @pytest.mark.asyncio
