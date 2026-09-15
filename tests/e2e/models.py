@@ -283,10 +283,15 @@ class ChatToolResultTurn(BaseModel):
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
 
 
+class ChatStreamOptions(BaseModel):
+    include_usage: bool
+
+
 class ChatBody(BaseModel):
     model: str
     messages: Sequence[ChatTurn]
     stream: bool = False
+    stream_options: ChatStreamOptions | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     temperature: float | None = None
@@ -488,12 +493,18 @@ class AnthropicToolResultTurn(BaseModel):
 type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
+class AnthropicToolChoice(BaseModel):
+    type: Literal["auto", "any", "tool", "none"]
+    name: str | None = None
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    tool_choice: AnthropicToolChoice | None = None
     guardrails: list[str] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
