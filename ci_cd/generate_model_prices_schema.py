@@ -172,10 +172,7 @@ COST_DESCRIPTIONS: dict[str, str] = {
     ),
     "cache_creation_input_token_cost": "USD per token written to the provider's prompt cache.",
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
-    "input_cost_per_audio_token_batches": "USD per audio prompt token via the provider's batch API.",
-    "input_cost_per_image_token_batches": "USD per image prompt token via the provider's batch API.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
-    "input_cost_per_video_token_batches": "USD per video prompt token via the provider's batch API.",
     "output_cost_per_token_batches": "USD per generated token via the provider's batch API.",
 }
 
