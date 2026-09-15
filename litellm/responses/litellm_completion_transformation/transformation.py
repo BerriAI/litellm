@@ -2831,6 +2831,22 @@ class LiteLLMCompletionResponsesConfig:
                 if cache_write_tokens is not None
                 else MappingProxyType({})
             )
+            # The cost path reads the grounding counters off the input details, and a realtime
+            # session's usage is rebuilt from its own response.done, so dropping them here bills
+            # no per-query grounding fee at all.
+            grounding_request_counts: Final[Mapping[str, int]] = MappingProxyType(
+                {
+                    counter: count
+                    for counter, count in (
+                        ("web_search_requests", getattr(prompt_details, "web_search_requests", None)),
+                        (
+                            "google_maps_grounding_requests",
+                            getattr(prompt_details, "google_maps_grounding_requests", None),
+                        ),
+                    )
+                    if count is not None
+                }
+            )
             response_usage.input_tokens_details = InputTokensDetails(
                 cached_tokens=prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
                 text_tokens=prompt_details.text_tokens,
@@ -2839,6 +2855,7 @@ class LiteLLMCompletionResponsesConfig:
                     cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
                 ),
                 **cache_write_extra,
+                **grounding_request_counts,
             )
 
         # Translate completion_tokens_details to output_tokens_details
