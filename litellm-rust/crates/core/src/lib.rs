@@ -14,7 +14,6 @@ pub mod params;
 pub mod providers;
 pub mod realtime;
 pub mod responses;
-pub mod router;
 pub mod routing_utils;
 mod url_utils;
 
