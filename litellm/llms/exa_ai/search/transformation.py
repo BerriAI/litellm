@@ -165,8 +165,15 @@ class ExaAISearchConfig(BaseSearchConfig):
         - results[].title → SearchResult.title
         - results[].url → SearchResult.url
         - results[].text → SearchResult.snippet
+        - results[].highlights → SearchResult.snippet (fallback when "text" is absent)
+        - results[].summary → SearchResult.snippet (fallback when "text" and "highlights" are absent)
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
+
+        Exa only returns "text" when `contents.text` is requested. Requesting
+        `contents.highlights` and/or `contents.summary` instead returns those fields
+        with no "text" field at all, so we fall back to them to avoid silently
+        dropping content the caller already paid for.
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -180,10 +187,11 @@ class ExaAISearchConfig(BaseSearchConfig):
         # Transform results to SearchResult objects
         results: Final = []
         for result in response_json.get("results", []):
+            snippet = result.get("text") or "\n\n".join(result.get("highlights") or []) or result.get("summary") or ""
             search_result = SearchResult(
                 title=result.get("title", ""),
                 url=result.get("url", ""),
-                snippet=result.get("text", ""),  # Exa AI uses "text" for content
+                snippet=snippet,
                 date=result.get("publishedDate"),  # ISO 8601 datetime string
                 last_updated=None,  # Exa AI doesn't provide last_updated in response
             )
