@@ -404,7 +404,7 @@ def _parse_json_logs_env(value: str | None) -> bool:
 json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
-numeric_level: Final[str] = getattr(logging, log_level.upper())
+numeric_level: Final[int] = getattr(logging, log_level.upper())
 handler: Final = LevelRoutingStreamHandler()
 handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
