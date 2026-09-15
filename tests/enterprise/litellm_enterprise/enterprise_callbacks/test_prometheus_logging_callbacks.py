@@ -244,6 +244,7 @@ def test_increment_token_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
     )
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
@@ -261,6 +262,7 @@ def test_increment_token_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
     )
     prometheus_logger.litellm_input_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -280,6 +282,7 @@ def test_increment_token_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
     )
     prometheus_logger.litellm_output_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -443,6 +446,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
         service_tier=None,
     )
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
@@ -463,6 +467,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
         service_tier=None,
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
@@ -483,6 +488,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
         service_tier=None,
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
@@ -629,6 +635,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
         client_ip=None,
         user_agent=None,
         requested_model=None,
@@ -649,6 +656,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        call_type="completion",
         client_ip=None,
         user_agent=None,
         requested_model=None,
@@ -870,6 +878,7 @@ async def test_async_post_call_failure_hook(prometheus_logger, known_model_route
             client_ip=None,
             user_agent=None,
             api_provider="openai",
+            call_type=None,
         )
     finally:
         litellm.prometheus_emit_rate_limit_labels = original_emit
@@ -894,6 +903,7 @@ async def test_async_post_call_failure_hook(prometheus_logger, known_model_route
         client_ip=None,
         user_agent=None,
         api_provider="openai",
+        call_type=None,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -1030,6 +1040,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         model_id="model-123",
         api_base="https://api.openai.com",
         api_provider="openai",
+        call_type="completion",
         requested_model="my_custom_model_group",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
@@ -1046,6 +1057,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         model_id="model-123",
         api_base="https://api.openai.com",
         api_provider="openai",
+        call_type="completion",
         requested_model="my_custom_model_group",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
@@ -1062,6 +1074,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         model_id="model-123",
         api_base="https://api.openai.com",
         api_provider="openai",
+        call_type="completion",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
@@ -1073,6 +1086,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         api_base="https://api.openai.com",
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         api_provider="openai",
+        call_type="completion",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         litellm_model_name="gpt-5-mini",
         model_group="my_custom_model_group",
