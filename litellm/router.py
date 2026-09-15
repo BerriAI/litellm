@@ -8046,10 +8046,24 @@ class Router:
         It should instantly retry only when:
             1. there are healthy deployments in the same model group
             2. there are fallbacks for the completion call
+
+        A raised error may set ``no_compatible_deployment_available = True`` to
+        declare that condition 1 does not hold for this request even though the
+        model group still reports healthy deployments, because the request is
+        pinned to a deployment that is not currently usable.
         """
 
         ## base case - single deployment
         if all_deployments is not None and len(all_deployments) == 1:
+            pass
+        elif getattr(e, "no_compatible_deployment_available", False):
+            # The failing request is pinned to one specific deployment, so the
+            # other healthy deployments in the model group cannot serve it -- a
+            # pre-call check has already rejected them (encrypted-content
+            # affinity is the current example: only the deployment that minted
+            # the ciphertext can decrypt it). "A healthy deployment exists" is
+            # therefore not evidence that an immediate retry can succeed, so fall
+            # through and honor the back-off the raised error advertises.
             pass
         elif healthy_deployments is not None and isinstance(healthy_deployments, list) and len(healthy_deployments) > 0:
             return 0
