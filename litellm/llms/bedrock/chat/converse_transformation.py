@@ -1225,8 +1225,6 @@ class AmazonConverseConfig(BaseConfig):
                 cache_point["ttl"] = ttl
         return cache_point
 
-    # Note shown when a mid-conversation system entry is converted to a user
-    # turn. Mirrors AnthropicMessagesTransformation._CONVERTED_SYSTEM_NOTE.
     _CONVERTED_MID_CONVERSATION_SYSTEM_NOTE: Final = (
         "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
     )
@@ -1271,16 +1269,9 @@ class AmazonConverseConfig(BaseConfig):
     def _reordered_around_tool_results(
         self, messages: list, index: int
     ) -> tuple:  # mutable-ok: reads input list, returns fresh tuple
-        """Move a system run wedged between an assistant tool-call turn and its
-        tool-result turn(s) to after the tool results.
-
-        A converted system entry becomes a user turn, and a user turn between
-        a tool call and its result would split them. Everything else stays in
-        place so the cached prefix stays byte-identical."""
+        """Move system run between tool call and results to after results."""
         message: Final = messages[index]
         if self._opens_with_tool_result(message):
-            # With consecutive tool results, emit the run only after the last
-            # one so the results stay in one unbroken block.
             if index + 1 < len(messages) and self._opens_with_tool_result(messages[index + 1]):
                 return (message,)
             tool_run_start: Final = next(
@@ -1310,13 +1301,7 @@ class AmazonConverseConfig(BaseConfig):
         return (message,)
 
     def _system_role_message_as_user(self, message: Mapping) -> dict:  # mutable-ok: builds fresh response dict
-        """Convert a mid-conversation system entry to a user turn, in place.
-
-        The Converse API only accepts user/assistant roles in ``messages``,
-        so keeping the role is not an option. Hoisting it to the top-level
-        ``system`` block would mutate the system prefix and collapse implicit
-        prompt caching; converting in place keeps everything before the entry
-        byte-identical."""
+        """Convert mid-conversation system entry to user turn in place."""
         content = message.get("content")
         text_blocks: list[dict] = []  # mutable-ok: local builder list, not shared
         if isinstance(content, str) and content:
@@ -1340,10 +1325,6 @@ class AmazonConverseConfig(BaseConfig):
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        # Only the leading run of system entries is hoisted to the top-level
-        # Bedrock ``system`` block. Mid-conversation entries are converted to
-        # user turns in place so the ``system`` prefix (and the implicit
-        # prompt cache keyed on the prompt prefix) is stable across turns.
         leading_count: Final = next(
             (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
             len(messages),
@@ -1377,8 +1358,7 @@ class AmazonConverseConfig(BaseConfig):
                 converted = self._system_role_message_as_user(
                     cast(Mapping, message)
                 )  # cast-ok: system check narrows to Mapping
-                # Drop entries with no text (same as the old hoist, which
-                # extracted nothing from them) instead of injecting a bare note.
+                # Skip note-only converts.
                 if len(converted["content"]) > 1:
                     new_messages.append(converted)
             else:
