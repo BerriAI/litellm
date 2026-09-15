@@ -95,9 +95,10 @@ def assert_logs_match(client: SpendClient, traffic: TeamTraffic) -> None:
     assert frozenset(row.request_id for row in rows) == expected_ids, "stored IDs must equal returned response IDs"
     assert len(rows) == len(traffic.responses), "expected exactly one scoped spend row per response"
     by_id: Final = {row.request_id: row for row in rows}
-    for response in traffic.responses:
-        row = by_id[response.id]
-        usage = response.usage
+
+    def assert_response(response: ChatResponse) -> None:
+        row: Final = by_id[response.id]
+        usage: Final = response.usage
         assert usage is not None and usage.prompt_tokens is not None and usage.completion_tokens is not None
         assert row.team_id == traffic.team_id
         assert row.status == "success"
@@ -105,5 +106,8 @@ def assert_logs_match(client: SpendClient, traffic: TeamTraffic) -> None:
         assert row.prompt_tokens == usage.prompt_tokens
         assert row.completion_tokens == usage.completion_tokens
         assert row.total_tokens == usage.total_tokens
-        expected_cost = usage.prompt_tokens * INPUT_RATE + usage.completion_tokens * OUTPUT_RATE
+        expected_cost: Final = usage.prompt_tokens * INPUT_RATE + usage.completion_tokens * OUTPUT_RATE
         assert row.spend is not None and isclose(row.spend, expected_cost, rel_tol=1e-6, abs_tol=1e-9)
+
+    for response in traffic.responses:
+        assert_response(response)

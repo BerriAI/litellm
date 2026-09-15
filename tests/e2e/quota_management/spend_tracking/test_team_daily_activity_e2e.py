@@ -15,9 +15,10 @@ from typing import Final
 import pytest
 from e2e_http import ProbeResult
 from lifecycle import ResourceManager
+from proxy_client import Converged, await_converged
 from pydantic import BaseModel
 from spend_e2e_client import SpendClient
-from spend_reconciliation import assert_logs_match, create_traffic
+from spend_reconciliation import TeamTraffic, assert_logs_match, create_traffic
 
 pytestmark = pytest.mark.e2e
 
@@ -92,7 +93,7 @@ class TestTeamDailyActivity:
         team_ids: Final = ",".join(team.team_id for team in traffic)
 
         def fetch(
-            page: int, start: str = started.isoformat(), end: str = ended.isoformat()
+            page: int, start: str = (started - timedelta(days=1)).isoformat(), end: str = ended.isoformat()
         ) -> TeamDailyActivityResponse:
             result: Final = _probe(
                 client,
@@ -112,22 +113,27 @@ class TestTeamDailyActivity:
             assert first.metadata.total_pages <= len(traffic) * 2, "unexpected extra scoped daily groups"
             return (first, *(fetch(page) for page in range(2, first.metadata.total_pages + 1)))
 
-        deadline: Final = time.monotonic() + client.proxy.poll_timeout
-        while True:
-            observed = pages()
-            if sum(page.metadata.total_api_requests for page in observed) >= sum(len(t.responses) for t in traffic):
-                break
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(client.proxy.poll_interval)
+        outcome: Final = await_converged(
+            pages,
+            converged=lambda values: (
+                sum(page.metadata.total_api_requests for page in values) >= sum(len(team.responses) for team in traffic)
+            ),
+            timeout=client.proxy.poll_timeout,
+            interval=client.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        observed: Final = outcome.result if isinstance(outcome, Converged) else outcome.last_result
+        assert observed is not None, "daily aggregation must return a response before the deadline"
 
         assert len(observed) >= 2, "two teams must exercise a page boundary"
-        for index, page in enumerate(observed, 1):
+
+        def assert_page(index: int, page: TeamDailyActivityResponse) -> None:
             assert page.metadata.page == index
             assert page.metadata.total_pages == len(observed)
             assert page.metadata.has_more == (index < len(observed))
             assert len(page.results) == 1, "each fetched daily group must appear in results"
-            row = page.results[0]
+            row: Final = page.results[0]
             assert started <= datetime.fromisoformat(row.date).date() <= ended
             assert len(row.breakdown.entities) == 1
             assert row.metrics.total_tokens == page.metadata.total_tokens
@@ -138,6 +144,9 @@ class TestTeamDailyActivity:
             assert row.metrics.failed_requests == page.metadata.total_failed_requests
             assert isclose(row.metrics.spend, page.metadata.total_spend, rel_tol=1e-6, abs_tol=1e-9)
 
+        for index, page in enumerate(observed, 1):
+            assert_page(index, page)
+
         entities: Final = tuple(
             (team_id, entity.metrics)
             for page in observed
@@ -145,8 +154,9 @@ class TestTeamDailyActivity:
             for team_id, entity in row.breakdown.entities.items()
         )
         assert frozenset(team_id for team_id, _ in entities) == frozenset(team.team_id for team in traffic)
-        for team in traffic:
-            metrics = tuple(metrics for team_id, metrics in entities if team_id == team.team_id)
+
+        def assert_team(team: TeamTraffic) -> None:
+            metrics: Final = tuple(metrics for team_id, metrics in entities if team_id == team.team_id)
             assert sum(m.api_requests for m in metrics) == len(team.responses)
             assert sum(m.successful_requests for m in metrics) == len(team.responses)
             assert sum(m.failed_requests for m in metrics) == 0
@@ -154,6 +164,10 @@ class TestTeamDailyActivity:
             assert sum(m.completion_tokens for m in metrics) == team.completion_tokens
             assert sum(m.total_tokens for m in metrics) == team.prompt_tokens + team.completion_tokens
             assert isclose(sum(m.spend for m in metrics), team.spend, rel_tol=1e-6, abs_tol=1e-9)
+
+        for team in traffic:
+            assert_team(team)
+
         assert isclose(
             sum(page.metadata.total_spend for page in observed),
             sum(team.spend for team in traffic),
@@ -163,6 +177,12 @@ class TestTeamDailyActivity:
         assert sum(page.metadata.total_tokens for page in observed) == sum(
             team.prompt_tokens + team.completion_tokens for team in traffic
         )
+
+        for days in (7, 30):
+            assert (
+                tuple(fetch(page, (started - timedelta(days=days)).isoformat()) for page in range(1, len(observed) + 1))
+                == observed
+            ), f"{days}-day activity must preserve the same isolated groups and totals"
 
         empty_date: Final = (started - timedelta(days=7)).isoformat()
         empty: Final = fetch(1, empty_date, empty_date)
