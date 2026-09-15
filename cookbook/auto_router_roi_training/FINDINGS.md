@@ -2,7 +2,7 @@
 
 Both implementations now support runnable, opt-in trained profiles. Training covered three cards, raw probabilities, per-model calibration, task-dependent calibration, and pair-specific boundaries, including combinations. All fitting and policy selection used the DeepSWE training and validation splits. The 25 fresh SWE-bench tasks were used only for evaluation
 
-The selected profiles did not improve the overall quality and cost tradeoff. They remain experimental configurations, with the original defaults preserved
+The selected profiles did not establish a consistent improvement over the original routers. Most paid more for the same solve count or traded away solves for savings. They remain experimental configurations, with the original defaults preserved
 
 ## Comparison with the existing routers
 
