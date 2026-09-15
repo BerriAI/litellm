@@ -15226,6 +15226,17 @@
               "title": "Jwt Claim Value",
               "type": "string"
             },
+            "jwt_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jwt Issuer"
+            },
             "key": {
               "title": "Key",
               "type": "string"
@@ -15310,6 +15321,17 @@
               "title": "Jwt Claim Value",
               "type": "string"
             },
+            "jwt_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jwt Issuer"
+            },
             "updated_at": {
               "format": "date-time",
               "title": "Updated At",
@@ -15365,6 +15387,17 @@
                 }
               ],
               "title": "Is Active"
+            },
+            "jwt_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jwt Issuer"
             },
             "key": {
               "anyOf": [
