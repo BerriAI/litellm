@@ -2736,20 +2736,29 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="sends alerts if requests hang for 5min+",
     )
     ui_access_mode: Literal["admin_only", "all"] | None = Field("all", description="Control access to the Proxy UI")
-    max_failed_login_attempts: int | None = Field(
-        None,
-        ge=1,
-        description="Number of failed Admin UI sign-in attempts allowed for one username, from any source address, within `failed_login_window_seconds`, before further attempts for that username are refused with 429. Attempts are answered with a doubling delay well before this ceiling. Set under `general_settings` in config.yaml. Defaults to 50",
-    )
     max_failed_login_attempts_per_source: int | None = Field(
         None,
         ge=1,
-        description="Number of failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`, before further attempts from that address are refused with 429. Counted independently of `max_failed_login_attempts`. Set under `general_settings` in config.yaml. Defaults to 250",
+        description="Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Only enforced when `trusted_proxy_ranges` is set, since otherwise every client behind an ingress shares one address. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10",
+    )
+    max_failed_login_attempts_per_source_overrides: dict[str, int] | None = Field(
+        None,
+        description="Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins. Set under `general_settings` in config.yaml",
+    )
+    max_failed_login_attempts_per_user: int | None = Field(
+        None,
+        ge=1,
+        description="Failed Admin UI sign-in attempts allowed from one source address for one username within `failed_login_window_seconds`. One more blocks that address for that username for `failed_login_block_seconds`, and its further failures stop counting against `max_failed_login_attempts_per_source`, so a script stuck on one account does not block everyone behind the same address. Set under `general_settings` in config.yaml. Defaults to 5",
     )
     failed_login_window_seconds: int | None = Field(
         None,
         ge=1,
-        description="Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 900",
+        description="Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 60",
+    )
+    failed_login_block_seconds: int | None = Field(
+        None,
+        ge=1,
+        description="How long a blocked source address, or source address and username, stays blocked. The block is soft: a correct password still signs in, but each attempt from a blocked key takes one of 5 held slots per worker and a wrong password is held for 30 seconds before it is refused with 429. Set under `general_settings` in config.yaml. Defaults to 300",
     )
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
     reject_clientside_metadata_tags: bool | None = Field(

@@ -27,7 +27,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
-from litellm.proxy.auth.login_throttle import LoginThrottle
+from litellm.proxy.auth.login_throttle import LoginAttempt, LoginThrottle
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -219,9 +219,21 @@ async def authenticate_user(
 
     admin_credentials_match: Final = _admin_credentials_match(username, password, master_key, general_settings)
 
-    if not admin_credentials_match:
-        await throttle.raise_if_blocked(username)
+    async with throttle.attempt(username, exempt=admin_credentials_match) as attempt:
+        return await _sign_in(
+            username, password, master_key, prisma_client, attempt, general_settings, admin_credentials_match
+        )
 
+
+async def _sign_in(
+    username: str,
+    password: str,
+    master_key: str,
+    prisma_client: PrismaClient | None,
+    attempt: LoginAttempt,
+    general_settings: Mapping[str, object],
+    admin_credentials_match: bool,
+) -> LoginResult:
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: LiteLLM_UserTable | None = None
     user_role: (
@@ -315,7 +327,7 @@ async def authenticate_user(
 
             key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
-        await throttle.clear(username)
+        await attempt.succeeded()
 
         return LoginResult(
             user_id=user_id,
@@ -372,7 +384,7 @@ async def authenticate_user(
 
             key = response["token"]
 
-            await throttle.clear(username)
+            await attempt.succeeded()
 
             return LoginResult(
                 user_id=user_id,
@@ -382,7 +394,7 @@ async def authenticate_user(
                 login_method="username_password",
             )
         else:
-            await throttle.delay_for(username, await throttle.record_failure(username))
+            await attempt.failed()
             raise ProxyException(
                 message=_invalid_credentials_message(general_settings),
                 type=ProxyErrorTypes.auth_error,
@@ -390,7 +402,7 @@ async def authenticate_user(
                 code=401,
             )
     else:
-        await throttle.delay_for(username, await throttle.record_failure(username))
+        await attempt.failed()
         raise ProxyException(
             message=_invalid_credentials_message(general_settings),
             type=ProxyErrorTypes.auth_error,
