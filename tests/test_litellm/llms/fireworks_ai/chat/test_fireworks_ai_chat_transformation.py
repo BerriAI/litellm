@@ -1177,6 +1177,89 @@ def test_reasoning_effort_string_passthrough():
     assert result["reasoning_effort"] == "high"
 
 
+def test_reasoning_effort_dict_extracts_effort_key():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": "high", "summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "high"
+    assert isinstance(result["reasoning_effort"], str)
+
+
+def test_reasoning_effort_dict_without_effort_key_omitted():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_dict_with_none_effort_omitted():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": None, "summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_dict_with_non_string_effort_omitted():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": ["high"]}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_none_omitted():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": None},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_dict_with_boolean_effort():
+    config = FireworksAIConfig()
+    assert (
+        config.map_openai_params(
+            {"reasoning_effort": {"effort": True}}, {}, _REASONING_MODEL, drop_params=False
+        )["reasoning_effort"]
+        == "medium"
+    )
+    assert (
+        config.map_openai_params(
+            {"reasoning_effort": {"effort": False}}, {}, _REASONING_MODEL, drop_params=False
+        )["reasoning_effort"]
+        == "none"
+    )
+
+
+def test_reasoning_effort_dict_with_auto_effort_omitted():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": "auto"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
 def test_reasoning_effort_integer_passthrough():
     config = FireworksAIConfig()
     result = config.map_openai_params(

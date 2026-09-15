@@ -327,12 +327,16 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param == "reasoning_effort":
-                if value is True:
+                # the /v1/messages and /v1/responses bridges wrap the level as {"effort", "summary"};
+                # Fireworks only accepts the bare level, so unwrap it and drop the summary
+                resolved_value = value.get("effort") if isinstance(value, Mapping) else value
+                if resolved_value is True:
                     optional_params["reasoning_effort"] = "medium"
-                elif value is False:
+                elif resolved_value is False:
                     optional_params["reasoning_effort"] = "none"
-                elif value != "auto":
-                    optional_params["reasoning_effort"] = value
+                elif isinstance(resolved_value, (str, int)) and resolved_value != "auto":
+                    optional_params["reasoning_effort"] = resolved_value
+                # any other value (None, "auto", list, ...) is omitted so Fireworks uses the model default
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
