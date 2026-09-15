@@ -19,11 +19,13 @@ CLAUDE_CODE_BETAS = (
 
 
 def _claude_code_turn(system_output_config):
-    """Claude Code changes effort mid-conversation by appending a ``role: system``
-    message that carries ``output_config``; the rest of the body is unchanged."""
     return [
         {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
-        {"role": "system", "content": [{"type": "text", "text": "# Environment"}], "output_config": system_output_config},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "# Environment"}],
+            "output_config": system_output_config,
+        },
     ]
 
 
@@ -52,17 +54,12 @@ def bundled_beta_allowlist(monkeypatch):
 
 
 def test_per_message_output_config_adds_per_turn_control_beta():
-    """Anthropic rejects ``messages.N.output_config`` with a 400 unless the request
-    opts into ``per-turn-control-2026-07-01``, so a body carrying it must get the beta
-    even from a client whose ``anthropic-beta`` header never reached the proxy."""
     headers = _validate(_claude_code_turn({"effort": "high"}))
 
     assert PER_TURN_CONTROL in _betas(headers)
 
 
 def test_top_level_output_config_alone_does_not_add_per_turn_control_beta():
-    """Effort set once at the top level is plain GA request shape; only a message-level
-    ``output_config`` needs the per-turn beta."""
     headers = _validate([{"role": "user", "content": "Hello"}])
 
     assert PER_TURN_CONTROL not in _betas(headers)
@@ -75,8 +72,6 @@ def test_string_messages_are_skipped_when_scanning_for_output_config():
 
 
 def test_forwarded_client_betas_survive_alongside_the_added_one():
-    """With ``forward_client_headers_to_llm_api`` on, Claude Code's own beta list
-    arrives on the request; it is merged with the auto-added set, not replaced."""
     headers = _validate(_claude_code_turn({"effort": "low"}), headers={"anthropic-beta": CLAUDE_CODE_BETAS})
 
     assert _betas(headers) >= set(CLAUDE_CODE_BETAS.split(","))
@@ -84,9 +79,6 @@ def test_forwarded_client_betas_survive_alongside_the_added_one():
 
 
 def test_case_variant_client_beta_header_is_merged():
-    """A client or config can spell the header ``Anthropic-Beta``; the proxy forwards it as
-    is, so the merge must read it whatever the casing and write one canonical header instead
-    of a lowercase one that clobbers it."""
     headers = _validate(
         _claude_code_turn({"effort": "low"}), headers={"Anthropic-Beta": "interleaved-thinking-2025-05-14"}
     )
@@ -96,9 +88,6 @@ def test_case_variant_client_beta_header_is_merged():
 
 
 def test_added_per_turn_control_beta_survives_the_anthropic_allowlist():
-    """The proxy filters ``anthropic-beta`` against the bundled allowlist right after
-    the headers are built. A name missing from it is dropped silently, which would turn
-    the auto-added beta back into the original 400, so the allowlist must carry it."""
     headers = _validate(_claude_code_turn({"effort": "high"}))
 
     filtered = update_headers_with_filtered_beta(headers=headers, provider="anthropic")
@@ -114,8 +103,6 @@ def test_per_turn_control_beta_is_dropped_for_providers_without_it(provider):
 
 
 def test_json_provider_passthrough_adds_per_turn_control_beta():
-    """The generic Anthropic-compatible provider path builds its headers separately from
-    the Anthropic config and must scan the messages the same way."""
     config = JSONProviderAnthropicMessagesConfig(
         SimpleProviderConfig(
             "anthropic_like",
