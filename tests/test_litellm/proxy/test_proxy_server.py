@@ -7619,6 +7619,45 @@ async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_startup_schedules_first_retention_cleanup_soon_after_boot(monkeypatch):
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+
+    with (
+        patch(  # test-quality-ok: initialize_scheduled_background_jobs reads these module globals, there is no seam to inject them
+            "litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()
+        ),
+        patch(  # test-quality-ok: same module global as above
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ),
+        patch(  # test-quality-ok: same module global as above
+            "litellm.proxy.proxy_server.get_secret_bool", return_value=False
+        ),
+    ):
+        before = datetime.now(timezone.utc)
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={"maximum_health_check_retention_period": "90d"},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        job = proxy_server_module.scheduler.get_job("spend_log_cleanup_job")
+        assert job is not None
+        assert 0 < (job.next_run_time - before).total_seconds() < 3600
+        assert job.trigger.interval.total_seconds() == 24 * 3600
+
+
+@pytest.mark.asyncio
 async def test_store_model_in_db_db_override_when_config_false():
     """
     Verify the early DB check in initialize_scheduled_background_jobs
