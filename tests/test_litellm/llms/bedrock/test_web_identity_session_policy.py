@@ -230,7 +230,7 @@ class TestInvalidIdentityTokenSurfacesAudience:
     operator can diagnose the mismatch without enabling LITELLM_LOG=DEBUG on a
     prod instance."""
 
-    _AUD = "https://guidepoint.litellm-prod.ai"
+    _AUD = "https://gateway.example.com"
     _ISS = "https://accounts.google.com"
     _STS_MESSAGE = (
         "An error occurred (InvalidIdentityToken) when calling the "
@@ -322,6 +322,9 @@ _BEDROCK_ROUTE_ACTIONS: Final = MappingProxyType(
         "knowledgebases": "bedrock:ListKnowledgeBases",
         "agents/{agent_id}/agentAliases/{alias_id}/sessions/{session_id}/text": "bedrock:InvokeAgent",
         "runtimes/{agent_runtime_arn}/invocations": "bedrock-agentcore:InvokeAgentRuntime",
+        "runtimes/{agent_runtime_arn}/invocations with X-Amzn-Bedrock-AgentCore-Runtime-User-Id": (
+            "bedrock-agentcore:InvokeAgentRuntimeForUser"
+        ),
         "mcp": "bedrock-agentcore:InvokeGateway",
     }
 )

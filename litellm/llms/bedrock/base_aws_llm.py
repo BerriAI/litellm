@@ -133,6 +133,7 @@ _WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = Map
         ),
         "BedrockAgentCoreLiteLLM": (
             "bedrock-agentcore:InvokeAgentRuntime",
+            "bedrock-agentcore:InvokeAgentRuntimeForUser",
             "bedrock-agentcore:InvokeGateway",
         ),
         "ClaudePlatformLiteLLM": (
