@@ -1,0 +1,1 @@
+Rendered before/after footer captures for PR #41186. The top section is captured standalone output against a real recorded session. The lower section is an isolated Unicode rendering fixture. These are rendered captures, not native application screenshots.
