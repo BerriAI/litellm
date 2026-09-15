@@ -1,20 +1,3 @@
-"""
-Cancel the proxy's in-flight scheduled jobs at shutdown so they can record how they ended.
-
-APScheduler's ``AsyncIOExecutor.shutdown`` cancels the job tasks it has in flight but cannot
-wait for them, because it is not a coroutine, and under uvicorn nothing else ever will: uvicorn
-re-raises the SIGTERM it captured as soon as the ASGI lifespan shutdown returns, so the process
-dies before ``asyncio.run`` reaches its cancel-all-tasks step. A job mid-run at that point is
-killed without ever observing cancellation, which is how a spend-log cleanup interrupted by a
-rolling restart left no outcome metric and no log line behind. Cancelling here and awaiting the
-cancelled tasks while the database is still connected is what lets a job's own
-``CancelledError`` handler run.
-
-The wait is bounded by ``JOB_CANCEL_TIMEOUT_SECONDS``. A job that has just been cancelled has only
-its own cleanup left to do, so the bound is there for a job that swallows cancellation, not one
-that honours it, and it keeps shutdown well inside a Kubernetes termination grace period.
-"""
-
 # pyright: reportMissingTypeStubs=false  # apscheduler ships no type information
 
 import asyncio
@@ -34,6 +17,8 @@ class StoppableScheduler(Protocol):
     @property
     def running(self) -> bool: ...
 
+    def pause(self) -> None: ...
+
     def shutdown(self, wait: bool = ...) -> None: ...
 
 
@@ -45,6 +30,12 @@ class AwaitableAsyncIOExecutor(AsyncIOExecutor):  # pyright: ignore[reportUntype
     def in_flight_jobs(self) -> tuple["asyncio.Future[object]", ...]:
         """The job tasks that are running right now, as a snapshot"""
         return tuple(future for future in self._pending_futures if not future.done())
+
+
+def pause_scheduled_jobs(scheduler: StoppableScheduler) -> None:
+    """Stop the scheduler from starting jobs that shutdown would only cancel; running jobs continue"""
+    if scheduler.running:
+        scheduler.pause()
 
 
 async def cancel_in_flight_scheduler_jobs(scheduler: StoppableScheduler, executor: AwaitableAsyncIOExecutor) -> None:
