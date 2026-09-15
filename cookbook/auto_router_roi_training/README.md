@@ -28,7 +28,7 @@ curl http://localhost:4000/v1/chat/completions \
 
 `profiles.json` contains the exact cards, coefficients, thresholds and validation results for each alias. `manifest.json` records model versions, effort, sources and limitations. `training_records.jsonl` retains the numerical forecasts and paired outcome evidence used for fitting and selection
 
-For controlled comparisons, `fixed_boundary_profiles.json` contains 18 additional configurations: each model pair, each of the three cards, and raw, per-model, or task-dependent calibration. Calibration uses the fixed middle regularization strength of 10. These keep the original routing boundary unchanged and were not selected using live outcomes. Replace one alias's `complexity_router_config` with the chosen entry to benchmark it
+For controlled comparisons, `fixed_boundary_profiles.json` contains 18 additional configurations: each model pair, each of the three cards, and raw, per-model, or task-dependent calibration. Calibration uses the fixed middle regularization strength of 10. These keep the original routing boundary unchanged and were not selected using live outcomes. Replace one alias's `complexity_router_config` with the chosen entry's `complexity_router_config` value to benchmark it
 
 ## What was fitted
 
