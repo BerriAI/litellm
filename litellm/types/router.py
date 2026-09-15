@@ -358,7 +358,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     forward_reasoning_content: bool | None = None
-    reasoning_content_field: Literal["reasoning_content", "reasoning"] | None = None
+    reasoning_content_field: str | None = Field(
+        default=None,
+        description="Historical assistant reasoning field: reasoning_content (default) or reasoning.",
+    )
     model_info: dict | None = None
     mock_response: str | ModelResponse | Exception | Any | None = None
 

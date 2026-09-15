@@ -586,6 +586,7 @@ async def test_reasoning_field_sdk_router_final_wire(
                 ("legacy", {}),
                 ("normalized", {"reasoning_content_field": "reasoning"}),
                 ("explicit-default", {"reasoning_content_field": "reasoning_content"}),
+                ("unknown", {"reasoning_content_field": "unknown"}),
             )
         ],
         num_retries=0,
@@ -602,7 +603,9 @@ async def test_reasoning_field_sdk_router_final_wire(
                 "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
             },
         )
-        for alias, field in (("normalized", "reasoning"), ("legacy", None), ("explicit-default", "reasoning_content")):
+        for alias, field in (
+            ("normalized", "reasoning"), ("legacy", None), ("explicit-default", "reasoning_content"), ("unknown", "unknown")
+        ):
             kwargs: Final = (
                 {"model": alias, "messages": messages}
                 if via_router
@@ -637,7 +640,7 @@ async def test_reasoning_field_sdk_router_final_wire(
             assert "reasoning_content_field" not in payload
             assert "forward_reasoning_content" not in payload
             assert messages == original
-        assert route.call_count == 3
+        assert route.call_count == 4
 
 
 @pytest.mark.asyncio
