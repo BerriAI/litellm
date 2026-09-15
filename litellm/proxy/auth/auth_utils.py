@@ -976,6 +976,32 @@ def _get_deployment_default_tpm_limit(model_name: str) -> int | None:
     return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
 
 
+def get_key_own_model_rate_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> dict[str, int] | None:
+    """
+    Per-model limit the key sets on itself: key metadata first, then model_max_budget.
+
+    Unlike get_key_model_rpm_limit / get_key_model_tpm_limit this never falls back to the
+    team, so callers can tell a key override apart from an inherited team limit.
+    """
+    if user_api_key_dict.metadata:
+        result: Final = user_api_key_dict.metadata.get(rate_limit_key)
+        if result:
+            return result
+
+    if not user_api_key_dict.model_max_budget:
+        return None
+    budget_key: Final = "rpm_limit" if rate_limit_key == "model_rpm_limit" else "tpm_limit"
+    model_limit: Final = {
+        model: budget[budget_key]
+        for model, budget in user_api_key_dict.model_max_budget.items()
+        if isinstance(budget, dict) and budget.get(budget_key) is not None
+    }
+    return model_limit or None
+
+
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
     model_name: str | None = None,
@@ -989,20 +1015,9 @@ def get_key_model_rpm_limit(
     3. Team metadata (model_rpm_limit)
     4. Deployment default_api_key_rpm_limit (when model_name is provided)
     """
-    # 1. Check key metadata first (takes priority)
-    if user_api_key_dict.metadata:
-        result: Final = user_api_key_dict.metadata.get("model_rpm_limit")
-        if result:
-            return result
-
-    # 2. Check model_max_budget
-    if user_api_key_dict.model_max_budget:
-        model_rpm_limit: Final[dict[str, int]] = {}
-        for model, budget in user_api_key_dict.model_max_budget.items():
-            if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
-                model_rpm_limit[model] = budget["rpm_limit"]
-        if model_rpm_limit:
-            return model_rpm_limit
+    key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_rpm_limit")
+    if key_own_limit is not None:
+        return key_own_limit
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
@@ -1032,20 +1047,9 @@ def get_key_model_tpm_limit(
     3. Team metadata (model_tpm_limit)
     4. Deployment default_api_key_tpm_limit (when model_name is provided)
     """
-    # 1. Check key metadata first (takes priority)
-    if user_api_key_dict.metadata:
-        result: Final = user_api_key_dict.metadata.get("model_tpm_limit")
-        if result:
-            return result
-
-    # 2. Check model_max_budget (iterate per-model like RPM does)
-    if user_api_key_dict.model_max_budget:
-        model_tpm_limit: Final[dict[str, int]] = {}
-        for model, budget in user_api_key_dict.model_max_budget.items():
-            if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
-                model_tpm_limit[model] = budget["tpm_limit"]
-        if model_tpm_limit:
-            return model_tpm_limit
+    key_own_limit: Final = get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit")
+    if key_own_limit is not None:
+        return key_own_limit
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:

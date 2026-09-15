@@ -22,6 +22,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_own_model_rate_limit,
     get_key_tag_rpm_limit,
     get_model_from_request,
     get_project_model_rpm_limit,
@@ -140,6 +141,35 @@ class TestLogOnceIfBudgetReservationDisabled:
 
 class TestGetKeyModelRpmLimit:
     """Tests for get_key_model_rpm_limit function."""
+
+    def test_own_limit_excludes_team_metadata(self):
+        """A team-only limit is inherited, not owned: the key resolves it but does not override it."""
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"some_other_key": "value"},
+            team_metadata={"model_rpm_limit": {"gpt-4": 50}, "model_tpm_limit": {"gpt-4": 500}},
+        )
+        assert get_key_model_rpm_limit(user_api_key_dict) == {"gpt-4": 50}
+        assert get_key_own_model_rate_limit(user_api_key_dict, "model_rpm_limit") is None
+        assert get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit") is None
+
+    def test_own_limit_resolves_metadata_then_model_max_budget(self):
+        from_metadata = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"model_rpm_limit": {"gpt-4": 100}},
+            model_max_budget={"gpt-4": {"rpm_limit": 10, "tpm_limit": 1000}},
+            team_metadata={"model_rpm_limit": {"gpt-4": 50}},
+        )
+        assert get_key_own_model_rate_limit(from_metadata, "model_rpm_limit") == {"gpt-4": 100}
+        assert get_key_own_model_rate_limit(from_metadata, "model_tpm_limit") == {"gpt-4": 1000}
+
+        from_budget = UserAPIKeyAuth(
+            api_key="sk-123",
+            model_max_budget={"gpt-4": {"rpm_limit": 10}, "gpt-3.5-turbo": {"tpm_limit": 1000}},
+            team_metadata={"model_rpm_limit": {"gpt-4": 50}},
+        )
+        assert get_key_own_model_rate_limit(from_budget, "model_rpm_limit") == {"gpt-4": 10}
+        assert get_key_own_model_rate_limit(from_budget, "model_tpm_limit") == {"gpt-3.5-turbo": 1000}
 
     def test_returns_key_metadata_when_present(self):
         """Key metadata takes priority over team metadata."""
