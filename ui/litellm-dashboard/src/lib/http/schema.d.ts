@@ -8499,6 +8499,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/teams/{team_id}/members/bulk_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Team Members Action
+         * @description Remove up to 500 members from one team in one call. Same authorization as
+         *     `/team/member_delete`: proxy admins, the team's admins, and admins of the team's
+         *     organization. Each member is named by exactly one of `user_id` or `user_email`;
+         *     unknown body fields are a 422 and an unknown team is a 404.
+         *
+         *     `data` holds one result per requested member, in request order. A row is
+         *     `success: false` with an `error` when it names nobody on the team or repeats an
+         *     earlier row. The roster is rewritten once, under the team's advisory lock, so a
+         *     concurrent member_add is never overwritten from a stale read.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
+         *     ```
+         */
+        post: operations["bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/users/bulk": {
         parameters: {
             query?: never;
@@ -8541,6 +8574,38 @@ export interface paths {
          *     `key`, `error`) and `meta` with `total_requested`, `created` and `failed`.
          */
         post: operations["bulk_create_users_route_management_v1_users_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/users/bulk_delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Users Action
+         * @description Delete up to 500 users in one call, taking each out of every team it belongs to.
+         *     Same authorization as `/user/delete`: proxy admins may delete anyone, org admins
+         *     only users inside organizations they administer. Unknown body fields are a 422.
+         *
+         *     `data` holds one result per requested `user_id`, in request order. A row is
+         *     `success: false` with an `error` when the id is unknown, repeated in the request,
+         *     or outside the caller's scope. Rows that pass those checks are deleted together,
+         *     in one transaction, so either all of them go or none does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"user_ids": ["user-1", "user-2"]}'
+         *     ```
+         */
+        post: operations["bulk_delete_users_action_management_v1_users_bulk_delete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24581,6 +24646,22 @@ export interface components {
             budgets: string[];
         };
         /**
+         * BulkDeleteUserRequest
+         * @description Body of `POST /management/v1/users/bulk_delete`.
+         */
+        BulkDeleteUserRequest: {
+            /** User Ids */
+            user_ids: string[];
+        };
+        /**
+         * BulkDeleteUsersResponse
+         * @description `{data: [...]}` with one `UserDeleteResult` per requested user, in request order.
+         */
+        BulkDeleteUsersResponse: {
+            /** Data */
+            data: components["schemas"]["UserDeleteResult"][];
+        };
+        /**
          * BulkNewUserItem
          * @description One row of `POST /management/v1/users/bulk`: the `/user/new` body, with keys opt-in and invite emails
          *     unsupported. Unknown fields are rejected, as on every `/management/v1` request body.
@@ -24766,6 +24847,22 @@ export interface components {
             updated_team?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * BulkTeamMemberDeleteRequest
+         * @description Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`.
+         */
+        BulkTeamMemberDeleteRequest: {
+            /** Members */
+            members: components["schemas"]["TeamMemberRef"][];
+        };
+        /**
+         * BulkTeamMemberDeleteResponse
+         * @description `{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order.
+         */
+        BulkTeamMemberDeleteResponse: {
+            /** Data */
+            data: components["schemas"]["TeamMemberDeleteResult"][];
         };
         /**
          * BulkUpdateKeyRequest
@@ -35541,7 +35638,7 @@ export interface components {
             default_model?: string | null;
             /**
              * Deployment Affinity
-             * @description When True and a session_id is resolvable on the request, pin the deployment chosen inside each routed model group and reuse it whenever the session returns to that group, without pinning which group the session routes to. Independent of session_affinity, which pins the model group instead (and always carries this deployment pin with it): with session_affinity off, every turn is still classified on its own merits while a session that escalates to a stronger tier and comes back still lands on the deployment it used before, which is what keeps a provider prompt cache warm. Pins are held per model group, so switching tiers does not disturb the pin left behind in the previous group. On by default because re-shuffling a conversation across deployments of the same model discards that cache for no benefit; set False to keep every turn load-balanced across the group, which is what a deployment set with tight per-deployment rate limits wants. Inert when no session_id is resolvable, since there is nothing to key a pin on, and suppressed when plugins are configured, for the same reason session_affinity is.
+             * @description When True and a client session_id is resolvable, reuse the session's chosen model for each classified tier and its deployment within each model group. With session_affinity off, every turn is still classified: moving to another tier leaves the previous tier's model pin intact for a later return. Pins yield to current candidate, context, modality, and availability constraints. Adaptive selection chooses the initial model from its eligible pool, then reuses that choice per tier. This reduces avoidable provider prompt-cache misses; it does not guarantee cache hits. Set False to select models and load-balance deployments on every turn, unless session_affinity or user_turn classification requires a pin. Inert without a client session_id and suppressed when plugins are configured.
              * @default true
              */
             deployment_affinity: boolean;
@@ -35685,7 +35782,7 @@ export interface components {
             session_affinity: boolean;
             /**
              * Session Affinity Ttl Seconds
-             * @description TTL for the session affinity pin; refreshed on every cache hit. Bounds both the session_affinity model pin and the deployment_affinity deployment pin, so it measures idle time for the session's routing decisions rather than total session length
+             * @description TTL for the session affinity pin; refreshed on every cache hit. Bounds both the session_affinity model pin and the deployment_affinity per-tier model and deployment pins, so it measures idle time for the session's routing decisions rather than total session length
              * @default 3600
              */
             session_affinity_ttl_seconds: number;
@@ -37507,6 +37604,20 @@ export interface components {
             user_id?: string | null;
         };
         /**
+         * TeamMemberDeleteResult
+         * @description Outcome for one requested member, in request order.
+         */
+        TeamMemberDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
          * TeamMemberInfoResponse
          * @description Response for GET /team/{team_id}/members/me — caller's own membership row.
          */
@@ -37535,6 +37646,16 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMemberRef
+         * @description One member to remove, named by exactly one of `user_id` or `user_email`.
+         */
+        TeamMemberRef: {
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -39722,6 +39843,25 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id?: string | null;
+        };
+        /**
+         * UserDeleteResult
+         * @description Outcome for one requested user, in request order. `teams_removed` lists the teams the user left.
+         */
+        UserDeleteResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            /**
+             * Teams Removed
+             * @default []
+             */
+            teams_removed: string[];
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /**
          * UserHeaderMapping
@@ -51534,6 +51674,41 @@ export interface operations {
             };
         };
     };
+    bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bulk_create_users_route_management_v1_users_bulk_post: {
         parameters: {
             query?: never;
@@ -51554,6 +51729,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BulkNewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_users_action_management_v1_users_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Who the caller is acting for; recorded on the audit log entries this call writes. */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteUsersResponse"];
                 };
             };
             /** @description Validation Error */
