@@ -1,7 +1,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -433,3 +432,39 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def test_hosted_vllm_flattens_function_tools_into_nested_function_shape():
+    config = HostedVLLMChatConfig()
+    input_schema = {
+        "type": "object",
+        "properties": {"site_id": {"type": "string"}},
+        "required": ["site_id"],
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "matomo-matomo_site_list",
+                    "description": "Get Matomo site details",
+                    "parameters": input_schema,
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0] == {
+        "type": "function",
+        "function": {
+            "name": "matomo-matomo_site_list",
+            "description": "Get Matomo site details",
+            "parameters": input_schema,
+        },
+    }
