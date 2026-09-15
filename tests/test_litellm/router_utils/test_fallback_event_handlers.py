@@ -956,7 +956,11 @@ class TestTriggerCooldownForFailedDeployment:
         """The proxy's x-litellm-timeout header lets a caller set an arbitrarily short
         timeout, which litellm.Timeout reports as status 408 regardless of the
         deployment's actual health. Without this guard, a caller could force a 408 on
-        every deployment in the fallback chain from a single request."""
+        every deployment in the fallback chain from a single request.
+
+        The failure logger never stamps end_time for a fallback hop (has_logged_async_failure
+        is already set), so model_call_details still carries the previous hop's end_time, which
+        predates this hop's api_call_start_time. The guard must not trust it."""
         mock_router = MagicMock()
         mock_router.cooldown_time = 60.0
         mock_router.get_model_info.return_value = None
@@ -977,7 +981,7 @@ class TestTriggerCooldownForFailedDeployment:
                 model_call_details={
                     "litellm_params": {"client_side_timeout": True, "timeout": 0.5},
                     "api_call_start_time": datetime.now() - timedelta(seconds=1),
-                    "end_time": datetime.now(),
+                    "end_time": datetime.now() - timedelta(seconds=5),
                 },
             )
 
