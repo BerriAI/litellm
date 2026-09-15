@@ -3439,6 +3439,34 @@ async def test_load_config_warns_per_worker_login_counters_without_general_setti
 
 
 @pytest.mark.asyncio
+async def test_load_config_warns_that_the_source_login_limit_is_off_without_trusted_proxy_ranges(
+    tmp_path, monkeypatch, caplog
+):
+    """The per-source failed-login limit is skipped when the source cannot be attributed, and the
+    operator must be told so at startup; a configured range silences it."""
+    import logging
+
+    from litellm.proxy.auth.login_throttle import warn_source_login_limit_is_off
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("NUM_WORKERS", "1")
+    warn_source_login_limit_is_off.cache_clear()
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert "trusted_proxy_ranges is not set" in caplog.text
+
+    caplog.clear()
+    warn_source_login_limit_is_off.cache_clear()
+    config_file.write_text("model_list: []\ngeneral_settings:\n  trusted_proxy_ranges: ['10.0.0.0/8']\n")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert "trusted_proxy_ranges is not set" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values
@@ -13331,14 +13359,16 @@ async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
         ps.general_settings.clear()
         await ProxyConfig()._update_general_settings(
             db_general_settings={
-                "max_failed_login_attempts": 999,
+                "max_failed_login_attempts_per_user": 999,
                 "max_failed_login_attempts_per_source": 999,
                 "failed_login_window_seconds": 1,
+                "failed_login_block_seconds": 1,
             }
         )
-        assert "max_failed_login_attempts" not in ps.general_settings
+        assert "max_failed_login_attempts_per_user" not in ps.general_settings
         assert "max_failed_login_attempts_per_source" not in ps.general_settings
         assert "failed_login_window_seconds" not in ps.general_settings
+        assert "failed_login_block_seconds" not in ps.general_settings
     finally:
         ps.general_settings.clear()
         ps.general_settings.update(original)

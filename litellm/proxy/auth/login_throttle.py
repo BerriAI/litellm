@@ -1,142 +1,231 @@
 """Failed-login accounting for the Admin UI sign-in path.
 
-Counts failed credential checks over a fixed window against two independent keys, the
-username on its own and the source address on its own, so that one username attacked from
-many sources and one source spraying many usernames are both counted. Repeated failures
-are answered slowly, doubling from one second, and refused with 429 once either counter
-reaches its limit. Built per request by ``LoginThrottle.from_request`` because it carries
-that request's resolved source address, and because the coordination cache is assigned at
-startup and can be reassigned later.
+Wrong passwords are counted over a short window per source address and per source-and-username
+pair; too many in one window blocks that key for a fixed time. Blocks are soft: a correct password
+still signs in, while a wrong one from a blocked key is held open before its 429 and only a few can
+be held at once, which bounds how many guesses a blocked key gets checked. A blocked pair stops
+counting against its source, so one script stuck on one account does not block the whole office.
 """
+
+from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable, Mapping
+import ipaddress
+import math
+import time
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
-from typing import Final, NamedTuple, NoReturn
+from typing import Final, Literal, NamedTuple, NoReturn
 
-from fastapi import Request
+from fastapi import Request, status
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.network import TrustedProxyConfig, normalize_cidr_ranges, resolve_client_ip
-from litellm.proxy.auth.trusted_proxy_utils import TRUSTED_PROXY_RANGES_KEY
 from litellm.secret_managers.main import get_secret_bool
 
-DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS: Final = 50
-DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE: Final = 250
-DEFAULT_FAILED_LOGIN_WINDOW_SECONDS: Final = 900
+DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE: Final = 10
+DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_USER: Final = 5
+DEFAULT_FAILED_LOGIN_WINDOW_SECONDS: Final = 60
+DEFAULT_FAILED_LOGIN_BLOCK_SECONDS: Final = 300
 
-USERNAME_DELAY_ONSET: Final = 3
-SOURCE_DELAY_ONSET: Final = 25
-FIRST_DELAY_SECONDS: Final = 1.0
-MAX_DELAY_SECONDS: Final = 30.0
-MAX_CONCURRENT_DELAYS_PER_SOURCE: Final = 5
+BLOCKED_ATTEMPT_HOLD_SECONDS: Final = 30
+MAX_HELD_ATTEMPTS_PER_KEY: Final = 5
+IPV6_SOURCE_PREFIX_LENGTH: Final = 64
 
-_MAX_DELAY_DOUBLINGS: Final = 16
+SOURCE_LIMIT_KEY: Final = "max_failed_login_attempts_per_source"
+SOURCE_LIMIT_OVERRIDES_KEY: Final = "max_failed_login_attempts_per_source_overrides"
+USER_LIMIT_KEY: Final = "max_failed_login_attempts_per_user"
+WINDOW_KEY: Final = "failed_login_window_seconds"
+BLOCK_KEY: Final = "failed_login_block_seconds"
+TRUSTED_PROXY_RANGES_KEY: Final = "trusted_proxy_ranges"
 
 _CACHE_KEY_PREFIX: Final = "login_fail"
 _UNKNOWN_SOURCE: Final = "unknown"
-_MAX_LOGGED_USERNAME_CHARS: Final = 128
+_MAX_TRACKED_COUNTERS: Final = 20_000
+_MAX_TRACKED_BLOCKS: Final = 10_000
+_NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
+_NOT_BLOCKED: Final = (0, 0)
+_LOCAL_BLOCK_EXPIRY: Final = TypeAdapter[float | None](float | None)
+_SOURCE_LIMIT_OVERRIDES: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
 
-_MAX_TRACKED_LOGIN_USERNAMES: Final = 10_000
-_MAX_TRACKED_LOGIN_SOURCES: Final = 10_000
+Scope = Literal["user", "source"]
+
+_BlockTtls = tuple[int, int]
+_LUA_BLOCK_TTLS: Final = TypeAdapter[_BlockTtls](_BlockTtls)
+_Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+# KEYS: pair counter, pair block, source counter, source block (one cluster slot via the source hash tag)
+# ARGV: pair limit, source limit (0 = source scope off), window seconds, block seconds
+# Both scripts return {pair block TTL, source block TTL}; 0 or below means not blocked
+_BLOCK_TTLS_LUA: Final = "return {redis.call('TTL', KEYS[2]), redis.call('TTL', KEYS[4])}"
+_RECORD_FAILURE_LUA: Final = (
+    "local function bump(count_key, block_key, limit) "
+    "local blocked = redis.call('TTL', block_key) "
+    "if blocked > 0 then return blocked end "
+    "local count = redis.call('INCR', count_key) "
+    "if redis.call('TTL', count_key) < 0 then redis.call('EXPIRE', count_key, ARGV[3]) end "
+    "if count > limit then redis.call('SET', block_key, '1', 'EX', ARGV[4]) return tonumber(ARGV[4]) end "
+    "return 0 end "
+    "local user_block = bump(KEYS[1], KEYS[2], tonumber(ARGV[1])) "
+    "local source_block = 0 "
+    "if tonumber(ARGV[2]) > 0 and user_block == 0 then "
+    "source_block = bump(KEYS[3], KEYS[4], tonumber(ARGV[2])) end "
+    "return {user_block, source_block}"
+)
+
+_COUNTERS: Final = InMemoryCache(
+    max_size_in_memory=_MAX_TRACKED_COUNTERS, default_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS
+)
+_BLOCKS: Final = InMemoryCache(max_size_in_memory=_MAX_TRACKED_BLOCKS, default_ttl=DEFAULT_FAILED_LOGIN_BLOCK_SECONDS)
+_HELD_ATTEMPTS: Final[dict[str, int]] = {}
 
 
-def _bounded_store(max_entries: int) -> DualCache:
-    return DualCache(
-        in_memory_cache=InMemoryCache(max_size_in_memory=max_entries),
-        default_in_memory_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS,
-    )
+async def _sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
 
 
-_FAILED_LOGIN_USERNAME_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_USERNAMES)
-_FAILED_LOGIN_SOURCE_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_SOURCES)
-_NO_SETTINGS: Final = MappingProxyType({})
-_UNAVAILABLE: Final = object()
-
-_DELAYS_IN_FLIGHT: Final[dict[str, int]] = {}  # mutable-ok: per-source slots taken and released around each held delay
+@cache
+def _rate_limit_disabled() -> bool:
+    return get_secret_bool("LITELLM_DISABLE_LOGIN_RATE_LIMIT", default_value=False) is True
 
 
 @cache
 def warn_login_counters_are_per_worker(num_workers: str) -> None:
-    """Warn once per process that failed sign-in counters are not shared across workers."""
     verbose_proxy_logger.warning(
-        "Running %s workers but Redis is not configured for LiteLLM caching. "
-        "Failed Admin UI sign-in attempts are counted per worker, so an attacker "
-        "gets max_failed_login_attempts guesses per worker instead of overall. "
-        "Configure Redis via the 'cache' section in your proxy config.",
+        "Running %s workers but Redis is not configured. Failed Admin UI sign-in attempts are counted "
+        "per worker, so the effective limits are %s times the configured values. Configure Redis "
+        "to share one count across workers.",
+        num_workers,
         num_workers,
     )
 
 
 @cache
-def _rate_limit_disabled() -> bool:
-    """Resolved once per process so an unauthenticated flood never reaches the secret manager."""
-    return bool(get_secret_bool("LITELLM_DISABLE_LOGIN_RATE_LIMIT", False))
+def warn_source_login_limit_is_off() -> None:
+    verbose_proxy_logger.warning(
+        "%s is not set, so failed Admin UI sign-in attempts are limited per source address and username "
+        "only. Set it to the address ranges of the proxies in front of LiteLLM to also limit each "
+        "source address across usernames.",
+        TRUSTED_PROXY_RANGES_KEY,
+    )
 
 
-async def _sleep(seconds: float) -> None:
-    """The wait a rejected sign-in is held for. Replaced in tests so the suite pays no wall clock."""
-    await asyncio.sleep(seconds)
-
-
-class FailureCounts(NamedTuple):
-    """Failures recorded so far in this window against each of the two keys."""
-
-    username: int
-    source: int
-
-
-def _parse_int_setting(value: object) -> object:
-    if not isinstance(value, str):
-        return value
-    try:
-        return int(value.strip())
-    except ValueError:
-        return value
-
-
-def _int_setting(name: str, value: object, default: int, minimum: int) -> int:
-    if value is None:
+def _positive_int(raw: object, key: str, default: int) -> int:
+    if raw is None:
         return default
-    parsed: Final = _parse_int_setting(value)
-    if isinstance(parsed, bool) or not isinstance(parsed, int) or parsed < minimum:
+    try:
+        value: Final = int(str(raw))
+    except (TypeError, ValueError):
+        verbose_proxy_logger.warning("Invalid %s value %r; using %s", key, raw, default)
+        return default
+    if value < 1:
+        verbose_proxy_logger.warning("Invalid %s value %s (must be >= 1); using %s", key, value, default)
+        return default
+    return value
+
+
+def _int_setting(settings: Mapping[str, object], key: str, default: int) -> int:
+    return _positive_int(settings.get(key), key, default)
+
+
+def _parse_address(client_ip: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(client_ip)
+    except ValueError:
+        return None
+
+
+def _parse_network(raw_range: str) -> _Network | None:
+    try:
+        return ipaddress.ip_network(raw_range.strip(), strict=False)
+    except ValueError:
         verbose_proxy_logger.warning(
-            "general_settings.%s=%r is not an integer >= %s; using the default of %s", name, value, minimum, default
+            "Invalid address or range %r in %s; skipping", raw_range, SOURCE_LIMIT_OVERRIDES_KEY
+        )
+        return None
+
+
+def _source_limit(settings: Mapping[str, object], client_ip: str) -> int:
+    """Failure allowance for this address: the most specific configured range containing it, else the default."""
+    default: Final = _int_setting(settings, SOURCE_LIMIT_KEY, DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE)
+    raw_overrides: Final = settings.get(SOURCE_LIMIT_OVERRIDES_KEY)
+    if raw_overrides is None:
+        return default
+    try:
+        overrides: Final = _SOURCE_LIMIT_OVERRIDES.validate_python(raw_overrides)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Invalid %s value; expected a mapping of address or range to limit", SOURCE_LIMIT_OVERRIDES_KEY
         )
         return default
-    return parsed
+    address: Final = _parse_address(client_ip)
+    if address is None:
+        return default
+    matches: Final = sorted(
+        (network.prefixlen, _positive_int(raw_limit, SOURCE_LIMIT_OVERRIDES_KEY, default))
+        for raw_range, raw_limit in overrides.items()
+        if (network := _parse_network(raw_range)) is not None and address in network
+    )
+    return matches[-1][1] if matches else default
 
 
-def _as_count(cached: object) -> int:
-    return int(cached) if isinstance(cached, int | float) and not isinstance(cached, bool) else 0
+def source_group(client_ip: str) -> str:
+    """The bucket an address is counted in: IPv4 as is, IPv6 by its /64, so one prefix holder cannot rotate."""
+    address: Final = _parse_address(client_ip)
+    if address is None:
+        return client_ip
+    if isinstance(address, ipaddress.IPv6Address):
+        mapped: Final = address.ipv4_mapped
+        if mapped is not None:
+            return str(mapped)
+        return str(ipaddress.ip_network((address, IPV6_SOURCE_PREFIX_LENGTH), strict=False))
+    return str(address)
+
+
+class _Keys(NamedTuple):
+    pair_counter: str
+    pair_block: str
+    source_counter: str
+    source_block: str
+
+
+@dataclass(frozen=True, slots=True)
+class Block:
+    scope: Scope
+    retry_after: int
 
 
 @dataclass(frozen=True, slots=True)
 class LoginThrottle:
-    """Fixed-window failed-login accounting for one request's username and source address."""
+    """Failed-login limits for one request's source address; ``source_limit`` is None when the
+    source scope is off because ``trusted_proxy_ranges`` is unset and the peer address is the ingress."""
 
     client_ip: str
-    max_attempts: int
-    max_attempts_per_source: int
+    source_limit: int | None
+    user_limit: int
     window_seconds: int
-    username_cache: DualCache
-    source_cache: DualCache
+    block_seconds: int
+    counters: InMemoryCache
+    blocks: InMemoryCache
     redis_cache: RedisCache | None = None
     enabled: bool = True
 
     @classmethod
     def from_request(
-        cls, request: Request, general_settings: Mapping[str, object] | None, redis_cache: RedisCache | None
-    ) -> "LoginThrottle":
-        """Build the throttle for this request from the proxy's general_settings and shared Redis cache."""
-        settings: Final = general_settings or _NO_SETTINGS
+        cls,
+        request: Request,
+        general_settings: Mapping[str, object] | None,
+        redis_cache: RedisCache | None,
+    ) -> LoginThrottle:
+        settings: Final = general_settings if general_settings is not None else _NO_SETTINGS
         cidrs: Final = normalize_cidr_ranges(
             settings.get(TRUSTED_PROXY_RANGES_KEY), setting_name=TRUSTED_PROXY_RANGES_KEY
         )
@@ -145,199 +234,166 @@ class LoginThrottle:
         )
         return cls(
             client_ip=resolved or _UNKNOWN_SOURCE,
-            max_attempts=_int_setting(
-                "max_failed_login_attempts",
-                settings.get("max_failed_login_attempts"),
-                DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS,
-                1,
-            ),
-            max_attempts_per_source=_int_setting(
-                "max_failed_login_attempts_per_source",
-                settings.get("max_failed_login_attempts_per_source"),
-                DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE,
-                1,
-            ),
-            window_seconds=_int_setting(
-                "failed_login_window_seconds",
-                settings.get("failed_login_window_seconds"),
-                DEFAULT_FAILED_LOGIN_WINDOW_SECONDS,
-                1,
-            ),
-            username_cache=_FAILED_LOGIN_USERNAME_CACHE,
-            source_cache=_FAILED_LOGIN_SOURCE_CACHE,
+            source_limit=_source_limit(settings, resolved) if cidrs and resolved is not None else None,
+            user_limit=_int_setting(settings, USER_LIMIT_KEY, DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_USER),
+            window_seconds=_int_setting(settings, WINDOW_KEY, DEFAULT_FAILED_LOGIN_WINDOW_SECONDS),
+            block_seconds=_int_setting(settings, BLOCK_KEY, DEFAULT_FAILED_LOGIN_BLOCK_SECONDS),
+            counters=_COUNTERS,
+            blocks=_BLOCKS,
             redis_cache=redis_cache,
             enabled=not _rate_limit_disabled(),
         )
 
-    @staticmethod
-    def _loggable(username: str) -> str:
-        """The username with anything that could forge a log line removed."""
-        return "".join(c for c in username if c.isprintable())[:_MAX_LOGGED_USERNAME_CHARS]
+    def _keys(self, username: str) -> _Keys:
+        group: Final = source_group(self.client_ip)
+        user: Final = hashlib.sha256(username.casefold().encode("utf-8")).hexdigest()
+        return _Keys(
+            pair_counter=f"{_CACHE_KEY_PREFIX}:{{{group}}}:user:{user}",
+            pair_block=f"{_CACHE_KEY_PREFIX}:{{{group}}}:block:user:{user}",
+            source_counter=f"{_CACHE_KEY_PREFIX}:{{{group}}}:source",
+            source_block=f"{_CACHE_KEY_PREFIX}:{{{group}}}:block:source",
+        )
 
-    @staticmethod
-    def _username_key(username: str) -> str:
-        identity: Final = hashlib.sha256(username.casefold().encode("utf-8")).hexdigest()
-        return f"{_CACHE_KEY_PREFIX}:user:{identity}"
-
-    def _source_key(self) -> str:
-        return f"{_CACHE_KEY_PREFIX}:source:{self.client_ip}"
-
-    async def _outcome(self, work: Awaitable[object]) -> object:
+    @asynccontextmanager
+    async def attempt(self, username: str, *, exempt: bool = False) -> AsyncGenerator[LoginAttempt]:
+        if not self.enabled or exempt:
+            yield LoginAttempt(throttle=self, username=username, block=None)
+            return
+        keys: Final = self._keys(username)
+        block: Final = await self._active_block(keys)
+        if block is None:
+            yield LoginAttempt(throttle=self, username=username, block=None)
+            return
+        slot: Final = keys.pair_block if block.scope == "user" else keys.source_block
+        held: Final = _HELD_ATTEMPTS.get(slot, 0)
+        if held >= MAX_HELD_ATTEMPTS_PER_KEY:
+            verbose_proxy_logger.warning(
+                "Admin UI sign-in refused: %s attempts already held for a blocked %s; username=%r source=%s",
+                held,
+                block.scope,
+                username,
+                self.client_ip,
+            )
+            self.refuse(BLOCKED_ATTEMPT_HOLD_SECONDS)
+        _HELD_ATTEMPTS[slot] = held + 1
         try:
-            return await work
-        except Exception as exc:  # noqa: BLE001  # an unreachable cache must never deny a valid credential
-            verbose_proxy_logger.warning("login attempt accounting unavailable: %s", exc)
-            return _UNAVAILABLE
+            yield LoginAttempt(throttle=self, username=username, block=block)
+        finally:
+            remaining: Final = _HELD_ATTEMPTS.get(slot, 1) - 1
+            if remaining > 0:
+                _HELD_ATTEMPTS[slot] = remaining
+            else:
+                _HELD_ATTEMPTS.pop(slot, None)
 
-    async def _shared(self, work: Callable[[RedisCache], Awaitable[object]]) -> object:
-        """The Redis result, or ``_UNAVAILABLE`` when Redis is not configured or the call raised."""
-        redis_cache: Final = self.redis_cache
-        if redis_cache is None:
-            return _UNAVAILABLE
-        return await self._outcome(work(redis_cache))
+    async def _active_block(self, keys: _Keys) -> Block | None:
+        local: Final = self._local_block_ttls(keys)
+        shared: Final = await self._shared_block_ttls(keys)
+        user_ttl: Final = max(local[0], shared[0])
+        source_ttl: Final = max(local[1], shared[1])
+        if user_ttl > 0:
+            return Block(scope="user", retry_after=user_ttl)
+        if self.source_limit is not None and source_ttl > 0:
+            return Block(scope="source", retry_after=source_ttl)
+        return None
 
-    async def _failures(self, store: DualCache, key: str) -> int:
-        """The shared count plus this worker's own.
-
-        A failure is written to exactly one of the two: Redis, or this worker's store when Redis
-        refused it. So the local store is empty while Redis is healthy, and once Redis answers
-        again the guesses it missed still count. Read through ``async_batch_get_counts`` because
-        ``async_get_cache`` turns a failed GET into ``None``, which would pass as an empty counter.
-        """
-        local: Final = _as_count(await self._outcome(store.async_get_cache(key=key)))
-        shared: Final = await self._shared(lambda redis_cache: redis_cache.async_batch_get_counts((key,)))
-        if not isinstance(shared, tuple):
-            return local
-        return _as_count(shared[0]) + local
-
-    async def _remaining_window(self, key: str) -> int:
-        """Seconds until this counter expires.
-
-        Counters are only ever written together with their expiry, so a counter without one
-        was stripped out of band (PERSIST, a restore). It is given the full window again,
-        since nothing increments a key once the limit is reached.
-        """
+    async def _shared_block_ttls(self, keys: _Keys) -> _BlockTtls:
         if self.redis_cache is None:
-            return self.window_seconds
-        ttl: Final = await self._shared(lambda redis_cache: redis_cache.async_get_ttl(key))
-        if isinstance(ttl, int) and ttl > 0:
-            return min(ttl, self.window_seconds)
-        await self._shared(lambda redis_cache: redis_cache.async_increment_with_floor(key, 0, self.window_seconds))
-        return self.window_seconds
+            return _NOT_BLOCKED
+        try:
+            return _LUA_BLOCK_TTLS.validate_python(
+                await self.redis_cache.async_register_script(_BLOCK_TTLS_LUA)(list(keys), [])
+            )
+        except Exception as err:
+            self._warn_redis(err)
+            return _NOT_BLOCKED
 
-    def _refused(self, retry_after: int, param: str) -> ProxyException:
-        return ProxyException(
+    def _local_block_ttls(self, keys: _Keys) -> _BlockTtls:
+        return self._local_block_ttl(keys.pair_block), self._local_block_ttl(keys.source_block)
+
+    def _local_block_ttl(self, block_key: str) -> int:
+        expires_at: Final = _LOCAL_BLOCK_EXPIRY.validate_python(self.blocks.get_cache(block_key))
+        if expires_at is None:
+            return 0
+        return max(math.ceil(expires_at - time.time()), 0)
+
+    async def record_failure(self, username: str) -> _BlockTtls:
+        keys: Final = self._keys(username)
+        source_limit: Final = self.source_limit or 0
+        if self.redis_cache is not None:
+            try:
+                return _LUA_BLOCK_TTLS.validate_python(
+                    await self.redis_cache.async_register_script(_RECORD_FAILURE_LUA)(
+                        list(keys), [self.user_limit, source_limit, self.window_seconds, self.block_seconds]
+                    )
+                )
+            except Exception as err:
+                self._warn_redis(err)
+        user_block: Final = self._local_bump(keys.pair_counter, keys.pair_block, self.user_limit)
+        if source_limit == 0 or user_block > 0:
+            return user_block, 0
+        return user_block, self._local_bump(keys.source_counter, keys.source_block, source_limit)
+
+    def _local_bump(self, count_key: str, block_key: str, limit: int) -> int:
+        blocked: Final = self._local_block_ttl(block_key)
+        if blocked > 0:
+            return blocked
+        count: Final = int(self.counters.increment_cache(count_key, 1, ttl=self.window_seconds))
+        if count <= limit:
+            return 0
+        self.blocks.set_cache(block_key, time.time() + self.block_seconds, ttl=self.block_seconds)
+        return self.block_seconds
+
+    async def clear_pair(self, username: str) -> None:
+        pair_counter: Final = self._keys(username).pair_counter
+        if self.redis_cache is not None:
+            try:
+                await self.redis_cache.async_delete_cache(pair_counter)
+            except Exception as err:
+                self._warn_redis(err)
+        self.counters.delete_cache(pair_counter)
+
+    def _warn_redis(self, err: Exception) -> None:
+        verbose_proxy_logger.warning(
+            "Redis failed while counting Admin UI sign-in attempts; using this worker's own counters "
+            "until it recovers: %s",
+            err,
+        )
+
+    @staticmethod
+    def refuse(retry_after: int) -> NoReturn:
+        raise ProxyException(
             message="Too many failed sign-in attempts. Try again later.",
             type=ProxyErrorTypes.auth_error,
-            param=param,
-            code=429,
-            headers={"Retry-After": str(retry_after)},  # mutable-ok: ProxyException coerces header values
+            param="username",
+            code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers={"Retry-After": str(retry_after)},
         )
 
-    async def _refuse(self, key: str, scope: str, param: str, username: str, failures: int, limit: int) -> NoReturn:
-        retry_after: Final = await self._remaining_window(key)
+
+@dataclass(frozen=True, slots=True)
+class LoginAttempt:
+    throttle: LoginThrottle
+    username: str
+    block: Block | None
+
+    async def succeeded(self) -> None:
+        if not self.throttle.enabled:
+            return
+        await self.throttle.clear_pair(self.username)
+
+    async def failed(self) -> None:
+        if not self.throttle.enabled:
+            return
+        if self.block is not None:
+            await _sleep(BLOCKED_ATTEMPT_HOLD_SECONDS)
+            self.throttle.refuse(max(self.block.retry_after - BLOCKED_ATTEMPT_HOLD_SECONDS, 1))
+        user_block, source_block = await self.throttle.record_failure(self.username)
+        if user_block == 0 and source_block == 0:
+            return
         verbose_proxy_logger.warning(
-            "Admin UI sign-in attempts exhausted for %s; username=%s source=%s failures=%s limit=%s window=%ss",
-            scope,
-            self._loggable(username),
-            self.client_ip,
-            failures,
-            limit,
-            self.window_seconds,
+            "Admin UI sign-in blocked for %s seconds after too many failures; scope=%s username=%r source=%s",
+            user_block or source_block,
+            "user" if user_block else "source",
+            self.username,
+            self.throttle.client_ip,
         )
-        raise self._refused(retry_after, param)
-
-    async def raise_if_blocked(self, username: str) -> None:
-        """Refuse before the database lookup and before the invite-link password hash."""
-        if not self.enabled:
-            return
-        username_key: Final = self._username_key(username)
-        source_key: Final = self._source_key()
-        username_failures: Final = await self._failures(self.username_cache, username_key)
-        if username_failures >= self.max_attempts:
-            await self._refuse(
-                username_key, "username", "max_failed_login_attempts", username, username_failures, self.max_attempts
-            )
-        source_failures: Final = await self._failures(self.source_cache, source_key)
-        if source_failures >= self.max_attempts_per_source:
-            await self._refuse(
-                source_key,
-                "source address",
-                "max_failed_login_attempts_per_source",
-                username,
-                source_failures,
-                self.max_attempts_per_source,
-            )
-
-    async def _bump(self, store: DualCache, key: str) -> int:
-        shared: Final = await self._shared(
-            lambda redis_cache: redis_cache.async_increment_with_floor(key, 1, self.window_seconds)
-        )
-        if shared is _UNAVAILABLE:
-            return _as_count(
-                await self._outcome(store.async_increment_cache(key=key, value=1, ttl=self.window_seconds))
-            )
-        return _as_count(shared) + _as_count(await self._outcome(store.async_get_cache(key=key)))
-
-    async def record_failure(self, username: str) -> FailureCounts:
-        """Count one rejected credential guess against this username and against this source."""
-        if not self.enabled:
-            return FailureCounts(username=0, source=0)
-        return FailureCounts(
-            username=await self._bump(self.username_cache, self._username_key(username)),
-            source=await self._bump(self.source_cache, self._source_key()),
-        )
-
-    @staticmethod
-    def delay_seconds(counts: FailureCounts) -> float:
-        """Seconds to hold a rejected attempt for, doubling per failure past whichever onset is further along."""
-        steps: Final = min(
-            max(counts.username - USERNAME_DELAY_ONSET, counts.source - SOURCE_DELAY_ONSET),
-            _MAX_DELAY_DOUBLINGS,
-        )
-        if steps < 0:
-            return 0.0
-        return min(FIRST_DELAY_SECONDS * float(2**steps), MAX_DELAY_SECONDS)
-
-    async def delay_for(self, username: str, counts: FailureCounts) -> None:
-        """Hold this rejected attempt open before answering it, so guessing costs wall-clock time.
-
-        Only ever reached once the credentials are known to be wrong, so a valid password is
-        never delayed. Sources are capped at ``MAX_CONCURRENT_DELAYS_PER_SOURCE`` held
-        connections; over that, the attempt is refused immediately instead of parking a socket.
-        """
-        if not self.enabled:
-            return
-        delay: Final = self.delay_seconds(counts)
-        if delay <= 0:
-            return
-        in_flight: Final = _DELAYS_IN_FLIGHT.get(self.client_ip, 0)
-        if in_flight >= MAX_CONCURRENT_DELAYS_PER_SOURCE:
-            verbose_proxy_logger.warning(
-                "Admin UI sign-in attempts held concurrently exhausted; username=%s source=%s in_flight=%s",
-                self._loggable(username),
-                self.client_ip,
-                in_flight,
-            )
-            raise self._refused(int(MAX_DELAY_SECONDS), "concurrent_failed_logins")
-        _DELAYS_IN_FLIGHT[self.client_ip] = in_flight + 1
-        try:
-            await _sleep(delay)
-        finally:
-            remaining: Final = _DELAYS_IN_FLIGHT.get(self.client_ip, 1) - 1
-            if remaining > 0:
-                _DELAYS_IN_FLIGHT[self.client_ip] = remaining
-            else:
-                _DELAYS_IN_FLIGHT.pop(self.client_ip, None)
-
-    async def clear(self, username: str) -> None:
-        """Drop the username counter after a successful sign-in.
-
-        The source counter is left alone. It is shared by every account behind that address,
-        so one success there says nothing about the other attempts it is counting.
-        """
-        if not self.enabled:
-            return
-        key: Final = self._username_key(username)
-        await self._shared(lambda redis_cache: redis_cache.async_delete_cache(key))
-        await self._outcome(self.username_cache.async_delete_cache(key=key))

@@ -325,7 +325,12 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
-from litellm.proxy.auth.login_throttle import LoginThrottle, warn_login_counters_are_per_worker
+from litellm.proxy.auth.login_throttle import (
+    TRUSTED_PROXY_RANGES_KEY,
+    LoginThrottle,
+    warn_login_counters_are_per_worker,
+    warn_source_login_limit_is_off,
+)
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -5803,11 +5808,10 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
 
-        ### FAILED-LOGIN ACCOUNTING MULTI-INSTANCE PREREQUISITE CHECK ###
-        # Failed Admin UI sign-in counters live in redis_usage_cache when available so a
-        # brute-force run is counted once across workers instead of once per worker.
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
+        if not general_settings.get(TRUSTED_PROXY_RANGES_KEY):
+            warn_source_login_limit_is_off()
 
         _bg_hc_model_groups: Final = parse_background_health_check_model_groups(general_settings)
         _enable_hc_routing = False

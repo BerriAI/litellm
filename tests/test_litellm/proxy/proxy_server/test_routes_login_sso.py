@@ -10,10 +10,7 @@ Routes covered:
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from .conftest import normalize
 
@@ -495,13 +492,36 @@ def _install_real_auth(monkeypatch, **settings):
 
 
 def _form_login(client, username="admin", password="wrong"):
-    return client.post(
-        "/login", data={"username": username, "password": password}, follow_redirects=False
-    ).status_code
+    return client.post("/login", data={"username": username, "password": password}, follow_redirects=False).status_code
 
 
 def _json_login(client, path, username="admin", password="wrong"):
     return client.post(path, json={"username": username, "password": password}).status_code
+
+
+def _db_user(monkeypatch, email: str):
+    """A database user with a stored hash, faked so the route reaches the known-user branch without Postgres."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server as ps
+
+    user = MagicMock()
+    user.user_id = "u-1"
+    user.user_email = email
+    user.user_role = "internal_user"
+    user.password = "scrypt:stored"
+    repo = MagicMock()
+    repo.return_value.table.find_first = AsyncMock(return_value=user)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.auth.login_utils.UserRepository", repo)
+    monkeypatch.setattr("litellm.proxy.auth.login_utils._rehash_password_if_needed", AsyncMock())
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.verify_password", lambda given, stored: given == "right-db-password"
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.generate_key_helper_fn", AsyncMock(return_value={"token": "sk-ui"})
+    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
 
 
 def test_budget_is_shared_across_every_login_endpoint(client, monkeypatch, reset_login_throttle):
@@ -511,92 +531,117 @@ def test_budget_is_shared_across_every_login_endpoint(client, monkeypatch, reset
     """
     _install_real_auth(
         monkeypatch,
-        max_failed_login_attempts=10,
+        max_failed_login_attempts_per_user=10,
         control_plane_url="https://cp.example.com",
     )
 
     assert [_form_login(client) for _ in range(5)] == [401] * 5
     assert [_json_login(client, "/v2/login") for _ in range(5)] == [401] * 5
 
-    assert _json_login(client, "/v3/login") == 429, "the eleventh attempt must be refused on a third route"
+    assert _json_login(client, "/v3/login") == 401, "the eleventh failure crosses the limit and installs the block"
+    assert _json_login(client, "/v3/login") == 429, "the twelfth attempt must be refused on a third route"
 
 
 def test_budget_is_shared_across_username_casing(client, monkeypatch, reset_login_throttle):
     """The database lookup is case-insensitive, so casing must not partition the counter."""
-    _install_real_auth(monkeypatch, max_failed_login_attempts=10)
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=3)
 
-    assert [_json_login(client, "/v2/login", username="admin@corp.com") for _ in range(5)] == [401] * 5
-    assert [_json_login(client, "/v2/login", username="ADMIN@corp.com") for _ in range(5)] == [401] * 5
+    assert [_json_login(client, "/v2/login", username="admin@corp.com") for _ in range(2)] == [401] * 2
+    assert [_json_login(client, "/v2/login", username="ADMIN@corp.com") for _ in range(2)] == [401] * 2
 
     assert _json_login(client, "/v2/login", username="Admin@corp.com") == 429
 
 
 def test_a_refused_attempt_carries_retry_after(client, monkeypatch, reset_login_throttle):
-    """The 429 tells the caller how long the window has left."""
-    _install_real_auth(monkeypatch, max_failed_login_attempts=2, failed_login_window_seconds=77)
+    """The 429 tells the caller how long the block has left, after the 30 seconds it was already held."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1, failed_login_block_seconds=77)
 
     assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
 
     refused = client.post("/v2/login", json={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
-    assert refused.headers.get("retry-after") == "77"
+    assert refused.headers.get("retry-after") == "47"
 
 
 def test_the_form_returns_a_human_readable_lockout_page(client, monkeypatch, reset_login_throttle):
     """The no-JavaScript form must render a wait page when its POST is throttled."""
-    _install_real_auth(monkeypatch, max_failed_login_attempts=2, failed_login_window_seconds=77)
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1, failed_login_block_seconds=77)
 
     assert [_form_login(client) for _ in range(2)] == [401, 401]
 
     refused = client.post("/login", data={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
     assert refused.headers.get("content-type", "").startswith("text/html")
-    assert "Try again in about 77 seconds" in refused.text
-    assert refused.headers.get("retry-after") == "77"
+    assert "Try again in about 47 seconds" in refused.text
+    assert refused.headers.get("retry-after") == "47"
 
 
 def test_a_second_username_from_the_same_source_still_gets_through(client, monkeypatch, reset_login_throttle):
-    """The username counter carries no address, so one account exhausting it cannot block another."""
-    _install_real_auth(monkeypatch, max_failed_login_attempts=2)
+    """The pair block is per username, so one account's block cannot take the office down with it."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1)
 
-    for _ in range(3):
-        _json_login(client, "/v2/login", username="admin")
+    assert [_json_login(client, "/v2/login", username="admin") for _ in range(3)] == [401, 401, 429]
 
     assert _json_login(client, "/v2/login", username="someone-else@example.com") == 401
 
 
-def test_a_spray_across_usernames_is_refused_on_the_source_counter(client, monkeypatch, reset_login_throttle):
-    """A fresh username per guess keeps every username counter at one, so the address is what stops it."""
-    _install_real_auth(monkeypatch, max_failed_login_attempts=100, max_failed_login_attempts_per_source=4)
+def test_a_spray_across_usernames_is_blocked_on_the_source_when_the_source_is_attributable(
+    client, monkeypatch, reset_login_throttle
+):
+    """A fresh username per guess keeps every pair at one, so the address is what stops it."""
+    _install_real_auth(monkeypatch, trusted_proxy_ranges=["10.0.0.0/8"], max_failed_login_attempts_per_source=4)
 
-    sprayed = [_json_login(client, "/v2/login", username=f"sprayed-{i}@corp.com") for i in range(4)]
-    assert sprayed == [401] * 4
+    sprayed = [_json_login(client, "/v2/login", username=f"sprayed-{i}@corp.com") for i in range(5)]
+    assert sprayed == [401] * 5
 
-    assert _json_login(client, "/v2/login", username="sprayed-5@corp.com") == 429
+    assert _json_login(client, "/v2/login", username="sprayed-6@corp.com") == 429
 
 
-def test_the_configured_admin_password_still_signs_in_while_refused(client, monkeypatch, reset_login_throttle):
+def test_a_spray_across_usernames_is_not_blocked_without_trusted_proxy_ranges(
+    client, monkeypatch, reset_login_throttle
+):
+    """Without a configured proxy range the peer address is whoever fronts the proxy, shared by every
+    client, so a source-wide block would block them all and the source scope stays off."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=4)
+
+    sprayed = [_json_login(client, "/v2/login", username=f"sprayed-{i}@corp.com") for i in range(8)]
+    assert sprayed == [401] * 8
+
+
+def test_the_configured_admin_password_still_signs_in_while_blocked(client, monkeypatch, reset_login_throttle):
     """The operator must never be locked out of the console by traffic aimed at it."""
     from unittest.mock import AsyncMock, patch
 
-    _install_real_auth(monkeypatch, max_failed_login_attempts=2)
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1)
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
 
-    assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
-    assert _json_login(client, "/v2/login") == 429
+    assert [_json_login(client, "/v2/login") for _ in range(3)] == [401, 401, 429]
 
-    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
-        "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
+    with (
+        patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()),
+        patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
+        ),
     ):
         assert _json_login(client, "/v2/login", password="right-password") == 200
 
 
-def test_sign_in_succeeds_again_once_the_budget_is_restored(client, monkeypatch, reset_login_throttle):
-    """A cleared bucket lets the same username straight back in."""
-    _install_real_auth(monkeypatch, max_failed_login_attempts=2)
+def test_a_database_users_correct_password_signs_in_while_blocked(client, monkeypatch, reset_login_throttle):
+    """The block is soft: guessing at an account slows the guesser down, it does not lock the owner out."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1)
+    _db_user(monkeypatch, "user@corp.com")
 
-    assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
-    assert _json_login(client, "/v2/login") == 429
+    assert [_json_login(client, "/v2/login", username="user@corp.com") for _ in range(3)] == [401, 401, 429]
+
+    assert _json_login(client, "/v2/login", username="user@corp.com", password="right-db-password") == 200
+    assert _json_login(client, "/v2/login", username="user@corp.com") == 429, "the block itself is still in force"
+
+
+def test_sign_in_succeeds_again_once_the_block_is_cleared(client, monkeypatch, reset_login_throttle):
+    """A cleared store lets the same username straight back to a plain credential check."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1)
+
+    assert [_json_login(client, "/v2/login") for _ in range(3)] == [401, 401, 429]
 
     reset_login_throttle()
     assert _json_login(client, "/v2/login") == 401
