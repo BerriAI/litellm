@@ -3,6 +3,7 @@ import json
 import re
 import traceback
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, Protocol, cast
 
 import httpx
@@ -206,7 +207,7 @@ def _get_response_headers(original_exception: Exception) -> httpx.Headers | None
 
 def _accepted_init_kwargs(exception_class: type[Exception], candidates: Mapping[str, object]) -> Mapping[str, object]:
     accepted: Final = inspect.signature(exception_class).parameters
-    return {name: value for name, value in candidates.items() if name in accepted}
+    return MappingProxyType({name: value for name, value in candidates.items() if name in accepted})
 
 
 def extract_and_raise_litellm_exception(
@@ -236,7 +237,9 @@ def extract_and_raise_litellm_exception(
         message=error_str,
         llm_provider=custom_llm_provider,
         model=model,
-        **_accepted_init_kwargs(raised_exception_obj, {"response": response, "body": body, "headers": headers}),
+        **_accepted_init_kwargs(
+            raised_exception_obj, MappingProxyType({"response": response, "body": body, "headers": headers})
+        ),
     )
 
 
