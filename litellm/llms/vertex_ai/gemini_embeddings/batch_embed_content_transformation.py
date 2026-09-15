@@ -297,9 +297,6 @@ def transform_openai_input_gemini_embed_content(
     return request_body
 
 
-_IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
-_VIDEO_TOKENS_PER_SECOND: Final = 258.0
-_AUDIO_TOKENS_PER_SECOND: Final = 32.0
 _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
 
 
@@ -310,40 +307,6 @@ def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
         return _usage_metadata_adapter.validate_python(raw_usage_metadata)
     except ValidationError:
         return None
-
-
-def _flatten_input(input: GeminiEmbeddingInput) -> tuple[str, ...]:
-    if isinstance(input, str):
-        return (input,)
-    return tuple(sub for element in input for sub in (element if isinstance(element, list) else [element]))
-
-
-def _is_image_element(
-    element: str,
-    resolved_files: Mapping[str, Mapping[str, str]],
-) -> bool:
-    if element.startswith("data:") and ";base64," in element:
-        try:
-            mime_type, _ = _parse_data_url(element)
-        except ValueError:
-            return False
-        return mime_type in _IMAGE_MIME_TYPES
-    if _is_gcs_url(element):
-        try:
-            return _infer_mime_type_from_gcs_url(element) in _IMAGE_MIME_TYPES
-        except ValueError:
-            return False
-    if _is_file_reference(element):
-        file_info: Final = resolved_files.get(element)
-        return file_info is not None and file_info.get("mime_type") in _IMAGE_MIME_TYPES
-    return False
-
-
-def _count_input_images(
-    input: GeminiEmbeddingInput,
-    resolved_files: Mapping[str, Mapping[str, str]],
-) -> int:
-    return sum(1 for element in _flatten_input(input) if _is_image_element(element, resolved_files))
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
@@ -362,7 +325,6 @@ def _usage_from_embed_content_response(
     input: GeminiEmbeddingInput,
     model: str,
     raw_usage_metadata: object,
-    resolved_files: Mapping[str, Mapping[str, str]],
 ) -> Usage:
     usage_metadata: Final = _parse_usage_metadata(raw_usage_metadata)
     if usage_metadata is None:
@@ -374,28 +336,17 @@ def _usage_from_embed_content_response(
     details: Final[Sequence[PromptTokensDetails]] = usage_metadata.get("promptTokensDetails") or ()
     text_tokens: Final = _tokens_for_modality(details, "TEXT")
     audio_tokens: Final = _tokens_for_modality(details, "AUDIO")
+    image_tokens: Final = _tokens_for_modality(details, "IMAGE")
     video_tokens: Final = _tokens_for_modality(details, "VIDEO")
-    image_count: Final = _count_input_images(input, resolved_files)
-
-    video_length_seconds: Final = video_tokens / _VIDEO_TOKENS_PER_SECOND if video_tokens > 0 else 0.0
-    audio_length_seconds: Final = audio_tokens / _AUDIO_TOKENS_PER_SECOND if audio_tokens > 0 else 0.0
-
-    # generic_cost_per_token rewrites text_tokens to the full prompt minus
-    # other modalities when both text_tokens and image_count are zero. For
-    # video, that misallocates video tokens to text; a 1-token floor sidesteps
-    # the rewrite and keeps billing on input_cost_per_video_per_second.
-    needs_video_text_floor: Final = video_length_seconds > 0 and text_tokens == 0 and image_count == 0
-    resolved_text_tokens: Final = 1 if needs_video_text_floor else text_tokens
 
     return Usage(
         prompt_tokens=prompt_tokens,
         total_tokens=total_tokens,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=resolved_text_tokens,
+            text_tokens=text_tokens,
             audio_tokens=audio_tokens,
-            image_count=image_count,
-            video_length_seconds=video_length_seconds,
-            audio_length_seconds=audio_length_seconds,
+            image_tokens=image_tokens,
+            video_tokens=video_tokens,
         ),
     )
 
@@ -415,8 +366,6 @@ def process_embed_content_response(
         model_response: EmbeddingResponse to populate
         model: Model name
         response_json: Raw JSON response from embedContent endpoint
-        resolved_files: Mapping of file references (files/abc) to {mime_type, uri},
-            used to bill resolved image references at the per-image rate
 
     Returns:
         EmbeddingResponse with single embedding
@@ -438,7 +387,6 @@ def process_embed_content_response(
         input=input,
         model=model,
         raw_usage_metadata=response_json.get("usageMetadata"),
-        resolved_files=resolved_files or {},
     )
 
     return model_response
