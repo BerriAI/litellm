@@ -29,6 +29,7 @@ class OpenCodeConfig(OpenAIGPTConfig):
     """OpenAI chat-completions config for the OpenCode gateway."""
 
     def __init__(self, surface: str = "zen") -> None:
+        super().__init__()
         self.surface: Final = surface
 
     @property
