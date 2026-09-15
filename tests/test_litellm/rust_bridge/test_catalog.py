@@ -97,3 +97,11 @@ def test_bedrock_transcription_ignores_the_optional_rust_switch() -> None:
 
     configuration.rust(False)
     assert COMPONENTS[ComponentName.TRANSCRIPTION].resolve(context).decision is ExecutionDecision.RUST_REQUIRED
+
+
+def test_ocr_matches_the_legacy_gate_under_the_environment_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    configuration.rust(True)
+
+    assert configuration.rust_ocr_enabled() is False
+    assert COMPONENTS[ComponentName.OCR].resolve().decision is ExecutionDecision.PYTHON

@@ -114,5 +114,5 @@ def test_bind_only_allows_declared_exports(monkeypatch: pytest.MonkeyPatch) -> N
     component: Final = NativeComponent(name=ComponentName.TOKEN_COUNTER, capability=OPT_IN, exports=("route",))
 
     assert component.bind("route", validate=lambda value: value if isinstance(value, int) else None).load() == 3
-    with pytest.raises(ValueError, match="'other'.*token_counter"):
+    with pytest.raises(ValueError, match=r"'other'.*token_counter"):
         component.bind("other", validate=lambda value: value)
