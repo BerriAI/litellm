@@ -500,6 +500,28 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost == pytest.approx(516 * 1.2e-5 + 64 * 6.5e-6)
 
+    def test_preview_alias_bills_audio_per_token(self):
+        response_json = {
+            "embedding": {"values": [0.1]},
+            "usageMetadata": {
+                "promptTokenCount": 64,
+                "totalTokenCount": 64,
+                "promptTokensDetails": [{"modality": "AUDIO", "tokenCount": 64}],
+            },
+        }
+        result = process_embed_content_response(
+            input="audio",
+            model_response=EmbeddingResponse(),
+            model="gemini-embedding-2-preview",
+            response_json=response_json,
+        )
+        prompt_cost, _ = generic_cost_per_token(
+            model="gemini-embedding-2-preview",
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        assert prompt_cost == pytest.approx(64 * 6.5e-6)
+
     def test_image_without_modality_details_uses_image_rate(self):
         response_json = {
             "embedding": {"values": [0.1]},
