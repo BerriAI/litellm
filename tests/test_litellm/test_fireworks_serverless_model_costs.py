@@ -14,15 +14,7 @@ import os
 
 import pytest
 
-NEW_ENTRIES = {
-    "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813": {
-        "input_cost_per_token": 1.32e-06,
-        "cache_read_input_token_cost": 4.4e-08,
-        "output_cost_per_token": 3.96e-06,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 131072,
-    },
-}
+from litellm.utils import get_model_info
 
 
 @pytest.fixture(scope="module")
@@ -32,20 +24,17 @@ def model_data():
         return json.load(f)
 
 
-TWIN_PINNED_PRICES = {
-    "deepseek-v4-flash-0731": {
-        "input_cost_per_token": 2.2e-07,
-        "cache_read_input_token_cost": 7e-09,
-        "output_cost_per_token": 6.6e-07,
-    },
-    "deepseek-v4p1-flash": {
-        "input_cost_per_token": 2.2e-07,
-        "cache_read_input_token_cost": 7e-09,
-        "output_cost_per_token": 6.6e-07,
-        "supports_vision": True,
-        "max_output_tokens": 393216,
-    },
-}
+def test_bare_fireworks_ids_resolve_through_prefixed_entries():
+    """Bare IDs from #37274 resolve via the provider-prefix lookup path."""
+    for bare_id, prefixed_key in [
+        (
+            "accounts/fireworks/models/deepseek-v4-pro-0813",
+            "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813",
+        ),
+    ]:
+        info = get_model_info(model=bare_id, custom_llm_provider="fireworks_ai")
+        assert info.get("key") == prefixed_key
+        assert info["litellm_provider"] == "fireworks_ai"
 
 
 def test_fireworks_account_prefixed_twins_agree_on_price(model_data):

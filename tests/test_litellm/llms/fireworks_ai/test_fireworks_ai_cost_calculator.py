@@ -22,6 +22,16 @@ def _usage(prompt_tokens: int, cached_tokens: int, completion_tokens: int) -> Us
     )
 
 
+def test_warm_call_cheaper_than_cold_call():
+    prompt_tokens = 7036
+    completion_tokens = 8
+
+    cold_prompt_cost, _ = cost_per_token(model=MODEL, usage=_usage(prompt_tokens, 16, completion_tokens))
+    warm_prompt_cost, _ = cost_per_token(model=MODEL, usage=_usage(prompt_tokens, 7020, completion_tokens))
+
+    assert warm_prompt_cost < cold_prompt_cost
+
+
 OFF_PEAK_MODEL = "accounts/fireworks/models/off-peak-test"
 OFF_PEAK_WINDOW = "14:00-00:00"
 INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)

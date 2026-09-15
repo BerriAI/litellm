@@ -31,6 +31,18 @@ def model_data():
         return json.load(f)
 
 
+def test_usgov_east_haiku_profile_mirrors_in_region_row(model_data):
+    """us-gov-east-1 serves claude-3-haiku through the us-gov. inference profile
+    only, so the profile row must bill exactly like the in-region gov row.
+    """
+    profile = model_data["us-gov.anthropic.claude-3-haiku-20240307-v1:0"]
+    in_region = model_data["bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0"]
+    assert profile["litellm_provider"] == "bedrock_converse"
+    assert {k: v for k, v in profile.items() if k != "litellm_provider"} == {
+        k: v for k, v in in_region.items() if k != "litellm_provider"
+    }
+
+
 GOV_ROW_SOURCES = {
     "us-gov.anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",
     "bedrock/us-gov-west-1/anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",

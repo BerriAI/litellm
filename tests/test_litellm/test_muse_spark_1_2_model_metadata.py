@@ -29,6 +29,15 @@ def test_muse_spark_1_2_routes_to_meta_model_api(model: str):
     assert api_base == "https://api.meta.ai/v1"
 
 
+@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
+def test_muse_spark_1_2_backup_matches_main(model: str):
+    """Ensure the bundled model cost map stays in sync with the canonical file."""
+    main_cost = _load_cost_map()
+    backup_cost = _load_cost_map("litellm/model_prices_and_context_window_backup.json")
+
+    assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"
+
+
 def test_muse_spark_contributor_tier_is_cheaper_than_standard():
     cost_map = _load_cost_map()
     standard = cost_map[MUSE_SPARK_STANDARD]

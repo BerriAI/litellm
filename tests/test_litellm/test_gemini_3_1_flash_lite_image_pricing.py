@@ -109,6 +109,11 @@ def test_per_route_capabilities_match_model_cards(model: str, path: Path):
         assert info[field] == value, f"{model} {field} in {path.name}: {info.get(field)} != {value}"
 
 
+@pytest.mark.parametrize("model", ALL_KEYS)
+def test_backup_matches_main(model: str):
+    assert _load(BACKUP_PATH).get(model) == _load(MAIN_PATH).get(model)
+
+
 def test_gemini_prefix_routes_to_gemini():
     routed_model, provider, _, _ = get_llm_provider(model=GEMINI)
     assert routed_model == UNPREFIXED

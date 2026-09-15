@@ -17,6 +17,7 @@ from litellm import ModelResponse
 from litellm.cost_calculator import cost_per_token
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+from litellm.utils import get_model_info
 
 
 class TestPerplexityIntegration:
@@ -54,6 +55,23 @@ class TestPerplexityIntegration:
                     "supports_web_search": True,
                 }
             }
+
+    def test_model_info_includes_custom_fields(self):
+        """Test that get_model_info returns the custom Perplexity cost fields."""
+        model_info = get_model_info(model="sonar-deep-research", custom_llm_provider="perplexity")
+
+        # Verify custom fields are included
+        required_fields = [
+            "citation_cost_per_token",
+            "search_context_cost_per_query",
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "output_cost_per_reasoning_token",
+        ]
+
+        for field in required_fields:
+            assert field in model_info, f"Missing field: {field}"
+            assert model_info[field] is not None, f"Null value for field: {field}"
 
     def test_various_citation_sizes(self):
         """Test cost calculation with various citation sizes."""
