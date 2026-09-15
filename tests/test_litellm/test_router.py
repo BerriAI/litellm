@@ -15832,3 +15832,31 @@ async def test_model_name_colliding_with_a_deployment_id_still_load_balances_the
     assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
     assert by_group.choices[0].message.content == "B"
     assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+
+
+def test_sync_completion_runs_pre_call_checks_for_a_model_name_colliding_with_a_deployment_id():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "k", "weight": 0, "mock_response": "A"},
+                "model_info": {"id": "gpt-5-nano"},
+            },
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k", "weight": 1, "mock_response": "B"},
+                "model_info": {"id": "gpt-5-mini-dep"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    with patch.object(router, "routing_strategy_pre_call_checks") as pre_call_checks:
+        by_group = router.completion(model="gpt-5-nano", messages=[{"role": "user", "content": "hi"}])
+        assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
+        assert pre_call_checks.call_args.kwargs["deployment"]["model_info"]["id"] == "gpt-5-mini-dep"
+
+        by_id = router.completion(model="gpt-5-mini-dep", messages=[{"role": "user", "content": "hi"}])
+        assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
