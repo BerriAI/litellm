@@ -1432,12 +1432,7 @@ def _runs_recorded(outcome: str) -> float:
 
 @pytest.mark.asyncio
 async def test_a_cancelled_run_records_aborted_and_logs_its_progress_before_re_raising(monkeypatch):
-    """
-    Shutdown cancels a run by throwing CancelledError into whichever batch is in
-    flight. That is a BaseException, so the Exception handler never saw it and
-    an interrupted run left no outcome metric and no log line; operators could
-    not tell that cleanup stopped early, let alone how far it got.
-    """
+    """A run cut short by shutdown must leave its outcome and how far it got behind"""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
     mock_logger = MagicMock()
@@ -1485,11 +1480,7 @@ async def test_a_cancelled_run_records_aborted_and_logs_its_progress_before_re_r
 
 @pytest.mark.asyncio
 async def test_progress_reported_for_a_cancelled_run_is_that_run_only(monkeypatch):
-    """
-    The scheduler holds one cleaner for the life of the process, so the
-    progress counters must start from zero on every run rather than carrying
-    an earlier run's totals into the cancellation line.
-    """
+    """The scheduler holds one cleaner for the life of the process, so progress must not carry over"""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
     mock_logger = MagicMock()
@@ -1509,3 +1500,43 @@ async def test_progress_reported_for_a_cancelled_run_is_that_run_only(monkeypatc
     (error_call,) = mock_logger.error.call_args_list
     rendered = error_call[0][0] % error_call[0][1:]
     assert "(rows_deleted=150, batches=1)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_progress_reported_by_an_overlapping_run_is_its_own(monkeypatch):
+    """With APSCHEDULER_MAX_INSTANCES above one, two runs share the cleaner but not their progress"""
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(cleanup_module, "verbose_proxy_logger", mock_logger)
+
+    first_batch_done = asyncio.Event()
+    second_run_done = asyncio.Event()
+
+    async def _slow_execute_raw(sql, *args):
+        first_batch_done.set()
+        await second_run_done.wait()
+        return 100
+
+    slow_client = MagicMock()
+    _wire_tx(slow_client.db)
+    slow_client.db.execute_raw = _slow_execute_raw
+    fast_client = MagicMock()
+    _wire_tx(fast_client.db)
+    fast_client.db.execute_raw = AsyncMock(side_effect=[150, 150, 0, 0])
+
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+
+    slow_run = asyncio.ensure_future(cleaner.cleanup_old_spend_logs(slow_client))
+    await asyncio.wait_for(first_batch_done.wait(), timeout=5)
+    await cleaner.cleanup_old_spend_logs(fast_client)
+    second_run_done.set()
+    await asyncio.sleep(0)
+    slow_run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await slow_run
+
+    (error_call,) = mock_logger.error.call_args_list
+    rendered = error_call[0][0] % error_call[0][1:]
+    assert "(rows_deleted=100, batches=1)" in rendered
