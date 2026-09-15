@@ -113,7 +113,7 @@ export function AutomaticMemoryEntries({
   };
   const accessDescription = status.data?.active
     ? "Your assistant can save and search memories using your gateway permissions."
-    : "Automatic memory is off. Your administrator can enable it; saved memories remain available here.";
+    : "Automatic memory is off for your account. Saved memories remain available here.";
   const gettingStarted = status.data?.active
     ? "Use your assistant as usual. Its memories will appear here."
     : "Your administrator can enable memory. Existing access permissions decide what you can see.";
@@ -131,7 +131,7 @@ export function AutomaticMemoryEntries({
         </div>
         {status.isSuccess && (
           <span className="rounded-full border px-3 py-1 text-sm" role="status">
-            {status.data?.active ? "On · Managed by your admin" : "Off · Managed by your admin"}
+            {status.data?.active ? "On for your account" : "Off for your account"}
           </span>
         )}
       </div>

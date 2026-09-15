@@ -105,7 +105,7 @@ describe("Memory dashboard", () => {
   it("shows recent content and attribution while automatic memory is off", async () => {
     session("internal_user");
     renderWithProviders(<Memory />);
-    expect(await screen.findByText("Off · Managed by your admin")).toBeVisible();
+    expect(await screen.findByText("Off for your account")).toBeVisible();
     expect(await screen.findByText("Use port 8123")).toBeVisible();
     expect(screen.getByText("Alex Rivera")).toBeVisible();
     expect(screen.getByText("Engineering")).toBeVisible();
@@ -128,7 +128,7 @@ describe("Memory dashboard", () => {
     await waitFor(() => expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument());
     expect(screen.getByRole("link", { name: "Manage team permissions" })).toHaveAttribute("href", "/ui/teams");
     await user.click(screen.getByRole("tab", { name: "Memories" }));
-    expect(await screen.findByText("On · Managed by your admin")).toBeVisible();
+    expect(await screen.findByText("On for your account")).toBeVisible();
     expect(calls.some(({ path }) => path.includes("policies") || path.includes("preference"))).toBe(false);
   });
 
@@ -227,7 +227,7 @@ describe("Memory dashboard", () => {
     session("internal_user");
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
-    await screen.findByText("Off · Managed by your admin");
+    await screen.findByText("Off for your account");
     fireEvent.change(screen.getByRole("textbox", { name: "Search memories" }), { target: { value: "demo" } });
     await user.click(screen.getByLabelText("Team"));
     await user.click(await screen.findByRole("option", { name: "Engineering" }));
@@ -242,7 +242,7 @@ describe("Memory dashboard", () => {
     session("proxy_admin");
     const user = userEvent.setup();
     renderWithProviders(<Memory />);
-    await screen.findByText("Off · Managed by your admin");
+    await screen.findByText("Off for your account");
     await user.click(screen.getByRole("combobox", { name: "Contributor" }));
     await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
     await waitFor(() => expect(calls.some(({ params }) => params.includes("user_id=u1"))).toBe(true));
