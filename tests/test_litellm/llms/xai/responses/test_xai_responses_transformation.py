@@ -164,6 +164,22 @@ class TestXAIResponsesAPITransformation:
 
         assert result["tools"][0]["filters"] == {"allowed_domains": ["nested.com"]}
 
+    def test_web_search_empty_nested_filters_win_over_flat(self):
+        """An explicit empty 'filters' object means unrestricted search, even when stale flat fields are present"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[{"type": "web_search", "allowed_domains": ["flat.com"], "filters": {}}]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        assert result["tools"][0] == {"type": "web_search"}
+
     def test_web_search_search_context_size_removed(self):
         """Test that search_context_size is removed from web_search tools"""
         config = XAIResponsesAPIConfig()

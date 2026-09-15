@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_STR_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _usage_restated_from_xai_ticks(usage: ResponseAPIUsage | None) -> ResponseAPIUsage | None:
@@ -91,7 +94,10 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "XAI does not support 'search_context_size' parameter. Removing it from web_search tool."
             )
 
-        domains: Final = tool.get("filters") or tool
+        nested_filters: Final = tool.get("filters")
+        domains: Final = (
+            _STR_MAPPING_ADAPTER.validate_python(nested_filters) if isinstance(nested_filters, Mapping) else tool
+        )
         filters: Final = {key: domains[key] for key in ("allowed_domains", "excluded_domains") if key in domains}
 
         if filters:
