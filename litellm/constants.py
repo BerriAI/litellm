@@ -976,6 +976,7 @@ openai_compatible_providers: Final[list] = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "vispark",  # Vispark Lab - JSON-configured provider
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
@@ -1001,6 +1002,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "poe",
     "chutes",
     "v0",
+    "vispark",
     "lambda_ai",
     "hyperbolic",
     "wandb",
