@@ -205,18 +205,18 @@ def _extract_anthropic_tool_exchange_spans(
     return spans, None
 
 
-def _has_cache_control(message: Mapping[str, object]) -> bool:
+def _message_has_cache_control(message: Mapping[str, object]) -> bool:
     if message.get("cache_control") is not None:
         return True
     content: Final = message.get("content")
-    return isinstance(content, list) and any(
-        isinstance(part, Mapping) and part.get("cache_control") is not None for part in content
-    )
+    if isinstance(content, list):
+        return any(isinstance(part, Mapping) and part.get("cache_control") is not None for part in content)
+    return False
 
 
 def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     last_breakpoint: Final = max(
-        (index for index, msg in enumerate(messages) if _has_cache_control(msg)),
+        (index for index, msg in enumerate(messages) if _message_has_cache_control(msg)),
         default=-1,
     )
     return tuple(range(last_breakpoint + 1))
@@ -232,16 +232,15 @@ def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int
 
     The last user message is what the model is being asked to act on right now,
     so compressing it replaces the live instruction with a marker. Compression
-    guardrails share this policy; see the Headroom guardrail.
-    The provider caches the exact bytes of that prefix, so rewriting any row inside
-    it turns the next request's cache read into a cache write.
+    guardrails share this policy; see the Headroom guardrail. A cache_control
+    breakpoint pins the provider's prompt-cache prefix to the exact bytes of every
+    row up to it, so rewriting any row inside that prefix turns the next request's
+    cache read into a cache write.
     """
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
-    last_assistant: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[
-        -1:
-    ]
-    return tuple(dict.fromkeys(system_indices + last_user + last_assistant + _cached_prefix_indices(messages)))
+    assistant_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")
+    return tuple(dict.fromkeys(system_indices + last_user + assistant_indices[-1:] + _cached_prefix_indices(messages)))
 
 
 def _combine_scores(
@@ -443,7 +442,7 @@ def compress(
         combined_scores = bm25_scores
 
     # Protected messages are never compressed
-    protected_indices: Final = get_protected_indices(normalized_messages)
+    protected_indices: Final = get_protected_indices(original_messages)
     kept_indices: set[int] = set(protected_indices)
 
     tool_exchange_spans: list[set[int]] = []
