@@ -300,10 +300,10 @@ async def _resolve_mcp_server_identifiers_to_ids(
     return resolved
 
 
-async def _mcp_server_display_names(
+async def _mcp_server_display_name_map(
     server_ids: AbstractSet[str],
     prisma_client: PrismaClient | None,
-) -> list[str]:
+) -> Mapping[str, str]:
     """
     Map MCP server IDs to human-readable names for error messages.
 
@@ -331,8 +331,7 @@ async def _mcp_server_display_names(
             )
         }
     )
-    id_to_name: Final = MappingProxyType({**registry_names, **db_names})
-    return sorted(id_to_name.get(server_id, server_id) for server_id in server_ids)
+    return MappingProxyType({**registry_names, **db_names})
 
 
 _MCP_TOOL_PERMISSIONS_ADAPTER: Final = TypeAdapter(dict[str, list[str] | None])
@@ -729,18 +728,19 @@ async def validate_key_mcp_servers_against_team(
         )
         disallowed_servers: Final = active_requested_servers - allowed_servers - grandfathered_servers
         if disallowed_servers:
-            disallowed_names: Final = await _mcp_server_display_names(
-                server_ids=disallowed_servers,
+            display_names: Final = await _mcp_server_display_name_map(
+                server_ids=disallowed_servers | team_allowed_servers | allow_all_keys_servers,
                 prisma_client=prisma_client,
             )
-            allow_all_names: Final = await _mcp_server_display_names(
-                server_ids=allow_all_keys_servers,
-                prisma_client=prisma_client,
+            disallowed_names: Final = sorted(
+                display_names.get(server_id, server_id) for server_id in disallowed_servers
+            )
+            allow_all_names: Final = sorted(
+                display_names.get(server_id, server_id) for server_id in allow_all_keys_servers
             )
             if team_obj is not None:
-                team_allowed_names: Final = await _mcp_server_display_names(
-                    server_ids=team_allowed_servers,
-                    prisma_client=prisma_client,
+                team_allowed_names: Final = sorted(
+                    display_names.get(server_id, server_id) for server_id in team_allowed_servers
                 )
                 team_display: Final = team_obj.team_alias or team_obj.team_id
                 detail = (
