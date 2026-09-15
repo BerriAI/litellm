@@ -17,13 +17,12 @@ fails the test; a pricing or token-count drift does not.
 
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from math import isclose
 
 import pytest
-
-from e2e_http import Result, Success
+from e2e_http import Success
 from lifecycle import ResourceManager
-from models import ChatResponse, LiteLLMParamsBody, SpendLogs, SpendLogsParams
+from models import LiteLLMParamsBody, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -280,51 +279,18 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
     ), f"key aggregate {key_spend} != sum of logs {logs_total}; rows: {_summarize(rows)}"
 
 
+@pytest.mark.replayable
 @pytest.mark.covers("quota_management.spend_tracking.concurrent_burst.loses_no_spend")
 def test_burst_of_concurrent_calls_loses_no_spend(
-    client: SpendClient, scoped_key: str
+    client: SpendClient, resources: ResourceManager
 ) -> None:
-    """Six concurrent calls on one key: every call lands its own spend row under a
-    distinct request_id and the key aggregate equals the sum of the rows.
-    Sequential accuracy is covered by test_key_spend_equals_sum_of_logs; this pins
-    the concurrent increment path (parallel writers racing on one key's counter),
-    where a lost update can never be reproduced by sequential calls."""
-    burst = 6
+    from spend_reconciliation import assert_logs_match, create_traffic
 
-    def call(idx: int) -> Result[ChatResponse]:
-        return client.chat(
-            scoped_key,
-            "gemini-2.5-flash",
-            f"burst call {idx} {unique_marker()}",
-            max_tokens=16,
-        )
-
-    with ThreadPoolExecutor(max_workers=burst) as pool:
-        results = tuple(pool.map(call, range(burst)))
-    failed = [r for r in results if not is_ok(r)]
-    assert not failed, f"{len(failed)}/{burst} burst calls failed; first: {failed[0]}"
-
-    rows = client.poll_logs_for_key(
-        scoped_key,
-        min_rows=burst,
-        predicate=lambda rs: len([r for r in rs if (r.spend or 0) > 0]) >= burst,
-    )
-    costed = [r for r in rows if (r.spend or 0) > 0]
-    assert len(costed) >= burst, (
-        f"only {len(costed)}/{burst} burst calls produced a costed row - "
-        f"rows lost under concurrency: {_summarize(rows)}"
-    )
-    request_ids = [r.request_id for r in costed]
-    assert len(set(request_ids)) == len(request_ids), (
-        f"concurrent rows collapsed onto shared request_ids: {_summarize(rows)}"
-    )
-
-    logs_total = sum((r.spend or 0) for r in rows)
-    key_spend = client.poll_key_spend(scoped_key, minimum=logs_total * 0.999)
-    assert _approx_equal(key_spend, logs_total), (
-        f"key aggregate {key_spend} != sum of {len(rows)} rows {logs_total} - "
-        f"spend increments lost under concurrency: {_summarize(rows)}"
-    )
+    traffic = create_traffic(client, resources)
+    for team in traffic:
+        assert_logs_match(client, team)
+        key_spend = client.poll_key_spend(team.key, minimum=team.spend * 0.999999)
+        assert isclose(key_spend, team.spend, rel_tol=1e-6, abs_tol=1e-9)
 
 
 @pytest.mark.covers("quota_management.spend_tracking.pagination.keeps_total")
