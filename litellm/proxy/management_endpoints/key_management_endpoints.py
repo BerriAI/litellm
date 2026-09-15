@@ -1199,7 +1199,7 @@ async def _common_key_generation_helper(
         else None
     )
     if isinstance(_default_allowed_routes, list) and not data_json.get("allowed_routes"):
-        data_json["allowed_routes"] = list(_default_allowed_routes)
+        data_json = {**data_json, "allowed_routes": list(_default_allowed_routes)}
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
