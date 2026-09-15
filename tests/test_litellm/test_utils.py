@@ -5312,8 +5312,6 @@ async def test_wrapper_async_restores_originating_task_context_after_success(mon
 
 
 class _ConvertStreamDeploymentHook(CustomLogger):
-    """Headroom-style interception: downgrade stream=True to a non-streaming provider call."""
-
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
     ) -> dict[str, object] | None:
@@ -5372,8 +5370,6 @@ def _assert_cache_hit_logged_as_stream(capture: _SuccessKwargsCapture, success_k
 async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_object(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression LIT-7729: the fake CustomStreamWrapper hit the non-streaming success path, which
-    built no standard_logging_object and deduped the wrapper's own end-of-stream dispatch."""
     capture: Final = _install_converted_stream_callbacks(monkeypatch)
 
     response: Final = await litellm.acompletion(
@@ -5400,8 +5396,6 @@ async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_ob
 async def test_wrapper_async_logs_converted_responses_stream_with_standard_logging_object(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression LIT-7729, Responses surface: the fake MockResponsesAPIStreamingIterator took the
-    same non-streaming success path and lost its standard_logging_object."""
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
     capture: Final = _install_converted_stream_callbacks(monkeypatch)
@@ -5446,8 +5440,6 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
 async def test_wrapper_async_replays_cached_converted_chat_stream_as_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A cache hit for a converted stream must replay as a stream: the caller still iterates the
-    result even though the deployment hook set kwargs["stream"] to False."""
     capture: Final = _install_converted_stream_callbacks(monkeypatch)
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
     request: Final = {
@@ -5476,7 +5468,6 @@ async def test_wrapper_async_replays_cached_converted_chat_stream_as_stream(
 async def test_wrapper_async_replays_cached_converted_responses_stream_as_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Responses surface of the cache-hit replay: the hit must come back as a streaming iterator."""
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
     capture: Final = _install_converted_stream_callbacks(monkeypatch)

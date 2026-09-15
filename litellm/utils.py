@@ -847,8 +847,6 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
 
 
 def _is_converted_stream_result(result: object) -> bool:
-    """True if `result` is a lazy stream wrapper the caller must iterate, even when a deployment
-    hook downgraded `kwargs["stream"]` to False for the provider call."""
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 

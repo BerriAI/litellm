@@ -109,8 +109,6 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
 
 
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
-    """True when the caller must receive a stream, including when a deployment hook downgraded
-    `kwargs["stream"]` to False for the provider call."""
     return kwargs.get("stream", False) is True or converted_stream_requested(kwargs)
 
 
