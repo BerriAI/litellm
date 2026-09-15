@@ -661,8 +661,14 @@ def test_transcription_sessions_requires_auth(proxy_app):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    {"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+    {"model": "gpt-4o-realtime-preview", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+    {"input_audio_transcription": {"model": "gpt-4o-realtime-preview"}, "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+    {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+])
 async def test_transcription_sessions_rejects_disallowed_resolved_model(
-    proxy_app,
+    proxy_app, body,
 ):
     proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="test-user",
@@ -679,7 +685,7 @@ async def test_transcription_sessions_rejects_disallowed_resolved_model(
             response = client.post(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
-                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+                json=body,
             )
 
         assert response.status_code == 403
@@ -1032,6 +1038,7 @@ async def test_transcription_sessions_encrypts_client_secret(
 
     async def _capturing_route(*args, **kwargs):
         captured_route_type["route_type"] = kwargs.get("route_type")
+        captured_route_type["session"] = kwargs["data"]["transcription_session"]
         return await mock_route_request_transcription_sessions(*args, **kwargs)
 
     try:
@@ -1054,6 +1061,8 @@ async def test_transcription_sessions_encrypts_client_secret(
                 "/v1/realtime/transcription_sessions",
                 headers={"Authorization": "Bearer sk-test-master-key"},
                 json={
+                    "model": "gpt-realtime-whisper",
+                    "audio": {"input": {"transcription": {"model": "gpt-live-transcribe", "language": "en"}}},
                     "input_audio_format": "pcm16",
                     "input_audio_transcription": {"model": "gpt-realtime-whisper"},
                 },
@@ -1072,6 +1081,10 @@ async def test_transcription_sessions_encrypts_client_secret(
         assert "upstream_ephemeral_key" in decrypted
         # Routed through the dedicated transcription_sessions route type.
         assert captured_route_type["route_type"] == "acreate_realtime_transcription_session"
+        assert captured_route_type["session"]["input_audio_transcription"]["model"] == "gpt-realtime-whisper"
+        assert captured_route_type["session"]["audio"]["input"]["transcription"] == {
+            "model": "gpt-realtime-whisper", "language": "en",
+        }
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 

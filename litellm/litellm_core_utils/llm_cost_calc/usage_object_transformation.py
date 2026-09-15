@@ -31,9 +31,13 @@ class TranscriptionUsageObjectTransformation:
                 prompt_tokens=usage_object.input_tokens,
                 completion_tokens=usage_object.output_tokens,
                 total_tokens=usage_object.total_tokens,
-                prompt_tokens_details=PromptTokensDetailsWrapper(
-                    text_tokens=usage_object.input_token_details.text_tokens,
-                    audio_tokens=usage_object.input_token_details.audio_tokens,
+                prompt_tokens_details=(
+                    PromptTokensDetailsWrapper(
+                        text_tokens=usage_object.input_token_details.text_tokens,
+                        audio_tokens=usage_object.input_token_details.audio_tokens,
+                    )
+                    if usage_object.input_token_details is not None
+                    else None
                 ),
             )
         return None
