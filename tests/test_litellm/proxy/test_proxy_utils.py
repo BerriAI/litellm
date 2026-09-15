@@ -9,7 +9,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, send_email
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -2328,3 +2328,18 @@ class TestPrismaClientTokenAuthBehindThePool:
         assert isinstance(client.db, RoutingPrismaWrapper)
         assert client.db.writer.iam_token_db_auth is True
         assert client.db.reader.iam_token_db_auth is True
+
+
+@pytest.mark.asyncio
+async def test_send_email_raises_transport_errors_only_when_asked(monkeypatch):
+    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SMTP_PORT", "9")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "proxy@example.com")
+    monkeypatch.setenv("SMTP_TIMEOUT", "5")
+    monkeypatch.delenv("SMTP_USERNAME", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+
+    with pytest.raises(ConnectionRefusedError):
+        await send_email(receiver_email="a@x.io", subject="s", html="<p>x</p>", raise_on_error=True)
+
+    assert await send_email(receiver_email="a@x.io", subject="s", html="<p>x</p>") is None

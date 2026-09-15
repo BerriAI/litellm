@@ -4,7 +4,7 @@ from datetime import datetime as dt
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
@@ -125,6 +125,28 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         ge=60,
         description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
     )
+    model_deprecation_email_thresholds: tuple[int, ...] = Field(
+        default=(30, 7, 0),
+        description=(
+            "Days before a model's deprecation_date at which team admins are emailed. "
+            "One email per team per threshold. An empty list disables deprecation emails."
+        ),
+    )
+    model_deprecation_email_ttl: int = Field(
+        default=90 * 24 * 60 * 60,
+        ge=1,
+        description=(
+            "Seconds each (team, model, threshold) deprecation email is remembered after sending so the same "
+            "milestone is not emailed twice. Default is 90 days."
+        ),
+    )
+
+    @field_validator("model_deprecation_email_thresholds")
+    @classmethod
+    def _normalize_deprecation_email_thresholds(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if any(threshold < 0 for threshold in value):
+            raise ValueError("model_deprecation_email_thresholds must be non-negative")
+        return tuple(sorted(frozenset(value), reverse=True))
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):
@@ -156,6 +178,7 @@ class SlackAlertingCacheKeys(Enum):
     latency_key = "latency_daily_metrics"
     report_sent_key = "daily_metrics_report_sent"
     deprecation_alert_sent_key = "model_deprecation_alert_sent"
+    deprecation_email_pass_key = "model_deprecation_email_pass_at"
 
 
 class AlertType(str, Enum):
