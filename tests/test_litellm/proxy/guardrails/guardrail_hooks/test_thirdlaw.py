@@ -94,10 +94,29 @@ def _request_data() -> JsonDict:
     data: JsonDict = {
         **body,
         "litellm_call_id": "call-123",
+        "litellm_session_id": "session-123",
         "metadata": {
             "user_api_key_hash": "hash-1",
             "user_api_key_alias": "alias-1",
             "user_api_key_user_id": "user-1",
+            "user_api_key_project_id": "project-1",
+            "user_api_key_project_alias": "project-alias-1",
+            "user_api_key_org_alias": "org-alias-1",
+            "agent_id": "agent-1",
+            "tags": ["team:eng", "env:prod"],
+            # Mirrors litellm core's actual merge behavior: user_api_key_auth_metadata already
+            # carries the team's own custom metadata (here, "team_cost_center"), plus a key-level
+            # reserved control key ("guardrails") that litellm core's merge does not strip today.
+            "user_api_key_auth_metadata": {
+                "cost_center": "eng-42",
+                "team_cost_center": "team-eng-42",
+                "guardrails": ["leaked-key-level-guardrail"],
+            },
+            "user_api_key_auth": UserAPIKeyAuth(
+                team_metadata={"cost_center": "team-eng-42", "guardrails": ["team-guard"], "tags": ["team-tag"]},
+                project_metadata={"cost_center": "project-eng-42", "policies": ["project-policy"]},
+                organization_metadata={"cost_center": "org-eng-42", "disable_global_guardrails": True},
+            ),
             "guardrails": ["thirdlaw-guard"],
         },
         "guardrails": ["thirdlaw-guard"],
@@ -292,6 +311,60 @@ async def test_pre_call_sends_live_body_not_snapshot():
     await _run_pre_call(g, _request_data())
     messages = _sent_payload(g)["request_body"]["messages"]
     assert messages == [{"role": "user", "content": "my api key is sk-user-secret"}]
+
+
+async def test_pre_call_payload_includes_extended_identity_and_hierarchy_metadata():
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _run_pre_call(g, _request_data())
+    metadata = _sent_payload(g)["metadata"]
+
+    assert metadata["litellm_session_id"] == "session-123"
+    assert metadata["user_api_key_project_id"] == "project-1"
+    assert metadata["user_api_key_project_alias"] == "project-alias-1"
+    assert metadata["user_api_key_org_alias"] == "org-alias-1"
+    assert metadata["agent_id"] == "agent-1"
+    assert metadata["tags"] == ["team:eng", "env:prod"]
+    assert metadata["user_api_key_auth_metadata"] == {"cost_center": "eng-42", "team_cost_center": "team-eng-42"}
+
+
+async def test_pre_call_payload_strips_reserved_keys_from_hierarchy_metadata():
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _run_pre_call(g, _request_data())
+    metadata = _sent_payload(g)["metadata"]
+
+    assert metadata["project_metadata"] == {"cost_center": "project-eng-42"}
+    assert metadata["organization_metadata"] == {"cost_center": "org-eng-42"}
+    for reserved_key in ("guardrails", "tags", "policies", "disable_global_guardrails"):
+        assert reserved_key not in metadata["user_api_key_auth_metadata"]
+        assert reserved_key not in metadata["project_metadata"]
+        assert reserved_key not in metadata["organization_metadata"]
+
+
+async def test_pre_call_payload_does_not_duplicate_team_metadata():
+    """team_metadata is already merged into user_api_key_auth_metadata by litellm core
+
+    (litellm_pre_call_utils.py's add_management_endpoint_metadata_to_request_metadata layers
+    the team's own custom metadata onto that same dict), so it must not be forwarded again
+    under its own key.
+    """
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _run_pre_call(g, _request_data())
+    metadata = _sent_payload(g)["metadata"]
+
+    assert "team_metadata" not in metadata
+    assert metadata["user_api_key_auth_metadata"]["team_cost_center"] == "team-eng-42"
+
+
+async def test_pre_call_payload_omits_hierarchy_metadata_when_absent():
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    data = _request_data()
+    data["metadata"].pop("user_api_key_auth", None)
+    data["metadata"].pop("tags", None)
+    await _run_pre_call(g, data)
+    metadata = _sent_payload(g)["metadata"]
+
+    for absent_field in ("tags", "project_metadata", "organization_metadata"):
+        assert absent_field not in metadata
 
 
 async def test_all_headers_forwarded_without_credentials_by_default():
