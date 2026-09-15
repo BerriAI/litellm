@@ -4871,3 +4871,47 @@ def test_redacted_thinking_blocks_never_carry_cache_control():
     replayed: Final = outbound["messages"][1]["content"][0]
     assert replayed["type"] == "redacted_thinking"
     assert "cache_control" not in replayed
+
+
+def test_translate_anthropic_to_openai_rejects_all_unrecognized_content_blocks():
+    import pytest
+
+    import litellm
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    request = {
+        "model": "openai/gpt-4o",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": [{"type": "not_a_real_block", "text": "hello"}]}],
+    }
+
+    with pytest.raises(litellm.BadRequestError):
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    with_system = {
+        **request,
+        "messages": [
+            {"role": "system", "content": "keep this"},
+            *request["messages"],
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError):
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(with_system)
+
+    mixed = {
+        "model": "openai/gpt-4o",
+        "max_tokens": 1024,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "not_a_real_block", "text": "ignored"},
+                    {"type": "text", "text": "hello"},
+                ],
+            }
+        ],
+    }
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(mixed)
+    assert openai_request["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
