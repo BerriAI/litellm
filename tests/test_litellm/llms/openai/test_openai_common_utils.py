@@ -411,3 +411,20 @@ async def test_async_genuine_bad_request_still_raises(provider, stream):
 )
 def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
     assert is_openai_backed_api_base(api_base) is expected
+
+
+def test_litellm_built_http_clients_negotiate_http2_only_when_enabled(monkeypatch):
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    monkeypatch.setattr(litellm, "http2", False)
+    async_client = BaseOpenAILLM._get_async_http_client()
+    sync_client = BaseOpenAILLM._get_sync_http_client()
+    assert async_client is not None and async_client._transport._pool._http2 is False
+    assert sync_client is not None and sync_client._transport._pool._http2 is False
+
+    monkeypatch.setattr(litellm, "http2", True)
+    async_client = BaseOpenAILLM._get_async_http_client()
+    sync_client = BaseOpenAILLM._get_sync_http_client()
+    assert async_client is not None and async_client._transport._pool._http2 is True
+    assert sync_client is not None and sync_client._transport._pool._http2 is True
