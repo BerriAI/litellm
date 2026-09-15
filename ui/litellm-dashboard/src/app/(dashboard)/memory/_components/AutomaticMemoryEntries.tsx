@@ -1,123 +1,57 @@
 "use client";
 
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain } from "lucide-react";
 import { type FormEvent, useState } from "react";
-
-import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { toast } from "@/lib/toast";
-
-import { MemoryPreference } from "./MemorySettings";
-import { MemoryKeyPicker } from "./MemoryTargetPicker";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { MemoryTeamPicker, MemoryUserPicker } from "./MemoryTargetPicker";
 import { MemoryEntriesTable } from "./MemoryEntriesTable";
 
 type Entry = components["schemas"]["MemoryEntry"];
 type Capture = components["schemas"]["MemoryCapture"];
 type Cursor = { before_updated_at: string; before_memory_id: string } | null;
-type Status = components["schemas"]["MemoryStatus"];
 
-function memoryDescription(status?: Status) {
-  if (!status) return "What your assistants remember across conversations.";
-  if (status.activation === "disabled" || !status.scope)
-    return "Memory is off. Your administrator can make it available.";
-  if (status.activation === "automatic") {
-    if (status.active) return "Memory is on. Your administrator manages this setting.";
-    return "Memory is off. Your administrator can make it available.";
-  }
-  if (status.active) return "Your assistants can save and recall memories. You can turn this off at any time.";
-  return "Your assistants won't save or recall memories. Turn it on whenever you're ready.";
-}
-
-function emptyDescription(query: string, active: boolean) {
-  if (query) return "Try a different search.";
-  if (active) return "Use your assistant as usual. What it remembers will appear here.";
-  return "Turn on memory, then use your assistant as usual. Your memories will appear here.";
-}
-
-function loadMoreLabel(fetching: boolean, failed: boolean) {
-  if (fetching) return "Loading…";
-  return failed ? "Try again" : "Load more memories";
-}
-
-type DashboardProps = Readonly<{ userId: string; readOnly: boolean; proxyAdmin: boolean }>;
-
-export function AutomaticMemoryEntries({ userId, readOnly, proxyAdmin }: DashboardProps) {
-  const [selection, setSelection] = useState<string>();
-  const keyOptions = {
-    userID: proxyAdmin ? undefined : userId,
-    sortBy: "created_at",
-    sortOrder: "desc",
-    includeTeamKeys: proxyAdmin,
-    includeCreatedByKeys: proxyAdmin,
-  };
-  const keys = useKeys(1, 1, keyOptions);
-  const keyId = selection ?? keys.data?.keys[0]?.token ?? "";
-  return (
-    <MemoryDashboard key={`${userId}:${keyId}`} userId={userId} keyId={keyId} readOnly={readOnly}>
-      <div className="w-full space-y-1.5 sm:w-80">
-        <Label htmlFor="memory-entry-key" className="text-xs text-muted-foreground">
-          Key context
-        </Label>
-        <MemoryKeyPicker
-          inputId="memory-entry-key"
-          value={keyId}
-          disabled={keys.isPending}
-          userId={proxyAdmin ? undefined : userId}
-          onChange={setSelection}
-        />
-        {keys.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {keys.error.message}
-          </p>
-        )}
-        {keys.isSuccess && keys.data.total_count === 0 && (
-          <p className="text-sm text-muted-foreground">Create a virtual key to start using memory.</p>
-        )}
-      </div>
-    </MemoryDashboard>
-  );
-}
-
-function MemoryDashboard({
+export function AutomaticMemoryEntries({
   userId,
-  keyId,
   readOnly,
-  children,
-}: Readonly<{
-  userId: string;
-  keyId: string;
-  readOnly: boolean;
-  children: React.ReactNode;
-}>) {
+  proxyAdmin,
+}: Readonly<{ userId: string; readOnly: boolean; proxyAdmin: boolean }>) {
   const cache = useQueryClient();
-  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  const [query] = useDebouncedValue(search, { wait: DEBOUNCE_WAIT_MS });
+  const [teamId, setTeamId] = useState("");
+  const [filterUserId, setFilterUserId] = useState("");
   const [editing, setEditing] = useState<Entry | null>(null);
   const [deleting, setDeleting] = useState<Entry | null>(null);
-  const statusOptions = {
-    queryKey: ["memoryStatus", userId, keyId],
-    enabled: !!keyId,
-    refetchOnMount: true,
-    queryFn: async ({ signal }: { signal: AbortSignal }) =>
-      (await fetchClient.GET("/v2/memory/status", { params: { query: { key_id: keyId } }, signal })).data,
-  };
-  const status = useQuery(statusOptions);
-  const entriesOptions = {
-    queryKey: ["memoryEntries", userId, keyId, query],
-    enabled: !!keyId && !!status.data?.scope,
-    refetchOnMount: true,
+  const status = useQuery({
+    queryKey: ["memoryStatus", userId, readOnly, proxyAdmin],
+    queryFn: async ({ signal }) => (await fetchClient.GET("/v2/memory/status", { signal })).data,
+  });
+  const entries = useInfiniteQuery({
+    queryKey: ["memoryEntries", userId, query, teamId, filterUserId, status.data?.team_ids, status.data?.admin_view],
+    enabled: status.isSuccess,
     initialPageParam: null as Cursor,
-    queryFn: async ({ signal, pageParam }: { signal: AbortSignal; pageParam: Cursor }) =>
+    queryFn: async ({ signal, pageParam }) =>
       (
         await fetchClient.GET("/v2/memory/entries", {
-          params: { query: { key_id: keyId, query, limit: 20, ...pageParam } },
+          params: {
+            query: {
+              query,
+              limit: 20,
+              team_id: teamId || undefined,
+              user_id: filterUserId || undefined,
+              ...pageParam,
+            },
+          },
           signal,
         })
       ).data ?? [],
@@ -127,11 +61,10 @@ function MemoryDashboard({
         ? { before_updated_at: last.updated_at, before_memory_id: last.memory_id }
         : undefined;
     },
-  };
-  const entries = useInfiniteQuery(entriesOptions);
+  });
   const save = useMutation({
-    mutationFn: async (body: Capture) =>
-      fetchClient.POST("/v2/memory/entries", { params: { query: { key_id: keyId } }, body }),
+    mutationFn: ({ memory_id, body }: { memory_id: string; body: Capture }) =>
+      fetchClient.PUT("/v2/memory/entries/{memory_id}", { params: { path: { memory_id } }, body }),
     onSuccess: () => {
       setEditing(null);
       toast.success("Memory updated");
@@ -140,10 +73,8 @@ function MemoryDashboard({
     onError: (error: Error) => toast.error(error.message),
   });
   const remove = useMutation({
-    mutationFn: async (memory_id: string) =>
-      fetchClient.DELETE("/v2/memory/entries/{memory_id}", {
-        params: { path: { memory_id }, query: { key_id: keyId } },
-      }),
+    mutationFn: (memory_id: string) =>
+      fetchClient.DELETE("/v2/memory/entries/{memory_id}", { params: { path: { memory_id } } }),
     onSuccess: () => {
       setDeleting(null);
       toast.success("Memory deleted");
@@ -158,80 +89,114 @@ function MemoryDashboard({
   const saveCorrection = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!editing) return;
-    const body: Capture = {
-      key: editing.key,
-      title: editing.title,
-      content: editing.content,
-      evidence: editing.evidence,
-      when_to_use: editing.when_to_use,
-      scope: editing.scope,
-      kind: editing.kind,
-      certainty: editing.certainty,
-      source: editing.source,
-      expected_revision: editing.updated_at,
-    };
-    save.mutate(body);
+    save.mutate({
+      memory_id: editing.memory_id,
+      body: {
+        key: editing.key,
+        title: editing.title,
+        content: editing.content,
+        evidence: editing.evidence,
+        when_to_use: editing.when_to_use,
+        scope: editing.scope,
+        kind: editing.kind,
+        certainty: editing.certainty,
+        source: editing.source,
+        expected_revision: editing.updated_at,
+      },
+    });
   };
-  const description = memoryDescription(status.data);
+  const filtered = Boolean(query || teamId || filterUserId);
+  const accessDescription = status.data?.active
+    ? "Your assistant can save and search memories using your gateway permissions."
+    : "Automatic memory is off. Your administrator can enable it; saved memories remain available here.";
+  const gettingStarted = status.data?.active
+    ? "Use your assistant as usual. Its memories will appear here."
+    : "Your administrator can enable memory. Existing access permissions decide what you can see.";
+  const moreLabel = entries.isError ? "Try again" : "Load more memories";
   return (
-    <section className="space-y-8" aria-labelledby="memory-title">
+    <section className="space-y-6" aria-labelledby="memory-title">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-2">
           <h1 id="memory-title" className="text-[28px] font-semibold tracking-tight">
             Memory
           </h1>
-          <p className="text-sm text-muted-foreground">{description}</p>
-        </div>
-        {status.data && !status.error && (
-          <MemoryPreference userId={userId} keyId={keyId} status={status.data} readOnly={readOnly} />
-        )}
-        {keyId && status.isPending && <Skeleton className="h-12 w-40" aria-label="Loading memory status" />}
-      </div>
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        {children}
-        {status.data?.user_id && (
           <p className="text-sm text-muted-foreground">
-            Memory for{" "}
-            <span className="font-medium text-foreground">{status.data.user_name ?? status.data.user_id}</span>
-            {status.data.scope === "user" && ". Shared across this user's keys in this organization."}
+            What your assistants remember, with the people who contributed it.
           </p>
+        </div>
+        {status.isSuccess && (
+          <span className="rounded-full border px-3 py-1 text-sm" role="status">
+            {status.data?.active ? "On · Managed by your admin" : "Off · Managed by your admin"}
+          </span>
         )}
       </div>
-      {status.error && (
-        <p role="alert" className="text-sm text-destructive">
-          Could not load memory status: {status.error.message}
+      {status.error ? (
+        <p role="alert" className="text-destructive">
+          Could not load memory access: {status.error.message}
         </p>
-      )}
-      {status.data?.scope && (
-        <div className="space-y-3">
-          <h2 className="sr-only">Saved memories</h2>
+      ) : (
+        <>
+          <p className="text-sm text-muted-foreground">
+            {status.isPending ? "Loading memory access..." : accessDescription}
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="w-full space-y-1 sm:w-64">
+              <Label htmlFor="memory-team-filter">Team</Label>
+              <MemoryTeamPicker inputId="memory-team-filter" value={teamId} onChange={setTeamId} disabled={busy} />
+            </div>
+            {proxyAdmin && (
+              <div className="w-full space-y-1 sm:w-64">
+                <Label htmlFor="memory-author-filter">Contributor</Label>
+                <MemoryUserPicker
+                  inputId="memory-author-filter"
+                  value={filterUserId}
+                  onChange={setFilterUserId}
+                  disabled={busy}
+                />
+              </div>
+            )}
+            {(teamId || filterUserId) && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setTeamId("");
+                  setFilterUserId("");
+                }}
+              >
+                Clear filters
+              </Button>
+            )}
+          </div>
           <MemoryEntriesTable
             entries={memories}
-            query={query}
-            onQueryChange={setQuery}
-            loading={entries.isPending}
+            query={search}
+            onQueryChange={setSearch}
+            loading={entries.isPending || status.isPending}
             readOnly={readOnly}
-            canEdit={status.data.active}
+            canEdit={true}
             busy={busy}
             onEdit={setEditing}
             onDelete={setDeleting}
             empty={
               entries.error ? (
-                <p className="text-destructive">Could not load memories: {entries.error.message}</p>
+                <p role="alert" className="text-destructive">
+                  Could not load memories: {entries.error.message}
+                </p>
               ) : (
                 <div className="flex flex-col items-center gap-2 py-8 text-center">
                   <Brain className="mb-1 size-6 text-muted-foreground" />
-                  <h3 className="font-medium">{query ? "No matching memories" : "No memories yet"}</h3>
-                  <p className="text-sm text-muted-foreground">{emptyDescription(query, status.data.active)}</p>
+                  <h3 className="font-medium">
+                    {query || teamId || filterUserId ? "No matching memories" : "No memories yet"}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    {filtered ? "Try another search or clear the filters." : gettingStarted}
+                  </p>
                 </div>
               )
             }
             footer={
-              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <span className="text-xs text-muted-foreground">
-                  {memories.length} memories
-                  {!status.data.active && memories.length > 0 && " · Saved memories stay here while memory is off"}
-                </span>
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <span className="text-xs text-muted-foreground">{memories.length} memories shown</span>
                 {(entries.hasNextPage || entries.isError) && (
                   <Button
                     variant="outline"
@@ -241,19 +206,27 @@ function MemoryDashboard({
                       entries.isError && !entries.isFetchNextPageError ? entries.refetch() : entries.fetchNextPage()
                     }
                   >
-                    {loadMoreLabel(entries.isFetching, entries.isError)}
+                    {entries.isFetching ? "Loading..." : moreLabel}
                   </Button>
                 )}
               </div>
             }
           />
           {entries.isFetchNextPageError && (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="text-destructive">
               Could not load more memories: {entries.error.message}
             </p>
           )}
-        </div>
+        </>
       )}
+      <details className="text-sm text-muted-foreground">
+        <summary className="cursor-pointer">How access works</summary>
+        <p className="mt-2">
+          You can read your own memories and any teams&apos; memories you have permission to view. Team admins can
+          inspect their team&apos;s records, and proxy admins can inspect all. Team permissions also apply when your
+          assistant searches memory.
+        </p>
+      </details>
       <Dialog
         open={!!editing}
         onOpenChange={(open) => {
@@ -293,7 +266,7 @@ function MemoryDashboard({
                 <Button type="button" variant="outline" disabled={busy} onClick={() => setEditing(null)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={busy || !status.data?.active}>
+                <Button type="submit" disabled={busy}>
                   Save correction
                 </Button>
               </div>

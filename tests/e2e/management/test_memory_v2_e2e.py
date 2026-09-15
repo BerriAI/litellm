@@ -1,11 +1,15 @@
+import fcntl
 import hashlib
 import os
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import Success, unwrap
+from e2e_http import NoBody, Success, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from memory_client import MemoryClient
@@ -20,13 +24,13 @@ from models import (
     KeyGenerateBody,
     LiteLLMParamsBody,
     MemoryCaptureBody,
-    MemoryEntriesData,
     MemoryEntryParams,
     MemoryLegacyParams,
     MemoryLegacyRows,
-    MemoryPolicyBody,
     MemoryResponsesBody,
+    MemorySettingsBody,
     MemoryStreamEvent,
+    MemoryTeamPermissionBody,
     MemoryWireResponse,
     TeamNewBody,
     UserNewBody,
@@ -78,8 +82,17 @@ def memory_models(client: ManagementClient, resources: ResourceManager) -> Memor
 
 
 @pytest.fixture
-def memory(client: ManagementClient) -> MemoryClient:
-    return MemoryClient(client.proxy)
+def memory(client: ManagementClient) -> Iterator[MemoryClient]:
+    # Serialize global configuration changes across local pytest workers.
+    with (Path(tempfile.gettempdir()) / "litellm-memory-v2-e2e.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        memory = MemoryClient(client.proxy)
+        original = memory.settings()
+        try:
+            yield memory
+        finally:
+            unwrap(memory.set_settings(original))
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 @pytest.fixture
@@ -110,14 +123,9 @@ def subjects(client: ManagementClient, memory: MemoryClient, resources: Resource
         return key
 
     keys: Final = tuple(create_key(user) for user in (owner, owner, other))
-    policy: Final = unwrap(
-        memory.set_policy(MemoryPolicyBody(target_type="team", target_id=team, activation="automatic"))
-    )
-    resources.defer(lambda: memory.delete_policy(policy.policy_id))
+    unwrap(memory.set_settings(MemorySettingsBody(enabled=True, everyone=False, user_ids=[owner, other])))
     resources.defer(lambda: memory.cleanup_user_entries(owner))
     resources.defer(lambda: memory.cleanup_user_entries(other))
-    resources.defer(lambda: memory.preference(keys[0], False))
-    resources.defer(lambda: memory.preference(keys[2], False))
     return MemorySubjects(owner=keys[0], sibling=keys[1], outsider=keys[2], user_id=owner, team_id=team)
 
 
@@ -206,21 +214,16 @@ class TestMemoryV2:
             assert not public.has_memory_tools
             if endpoint == "responses":
                 assert public.instructions is None
-        assert memory.entries(subjects.sibling) == []
+        assert any(marker in entry.content for entry in memory.entries(subjects.sibling))
         assert memory.entries(subjects.outsider) == []
 
-    @pytest.mark.covers("mgmt.memory_v2.policy.opt_in")
-    def test_admin_selects_opt_in_or_automatic_and_key_override_wins(
-        self,
-        client: ManagementClient,
-        memory: MemoryClient,
-        subjects: MemorySubjects,
-        resources: ResourceManager,
-        memory_models: MemoryModels,
+    @pytest.mark.covers("mgmt.memory_v2.settings.enrollment")
+    def test_admin_enrollment_follows_user_and_disable_preserves_dashboard(
+        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects, memory_models: MemoryModels
     ) -> None:
-        unwrap(memory.set_policy(MemoryPolicyBody(target_type="team", target_id=subjects.team_id, activation="opt_in")))
+        unwrap(memory.set_settings(MemorySettingsBody()))
         assert not memory.status(subjects.owner).active
-        marker: Final = f"unsaved-{unique_marker()}"
+        marker = f"unsaved-{unique_marker()}"
         unwrap(
             client.proxy.chat(
                 subjects.owner,
@@ -236,39 +239,26 @@ class TestMemoryV2:
             )
         )
         assert memory.entries(subjects.owner) == []
-        memory.preference(subjects.owner, True)
-        assert memory.status(subjects.owner).active
-        assert memory.status(subjects.sibling).active
+        unwrap(memory.set_settings(MemorySettingsBody(enabled=True, everyone=False, user_ids=[subjects.user_id])))
+        assert memory.status(subjects.owner).active and memory.status(subjects.sibling).active
         assert not memory.status(subjects.outsider).active
-        saved: Final = unwrap(memory.capture(subjects.owner, _fact(unique_marker())))
-        assert saved.memory_id in [entry.memory_id for entry in memory.entries(subjects.owner)]
-        key_policy: Final = memory.policy_for_key(subjects.owner, "disabled")
-        resources.defer(lambda: memory.delete_policy(key_policy.policy_id))
+        saved = unwrap(memory.capture(subjects.owner, _fact(unique_marker())))
+        unwrap(memory.set_settings(MemorySettingsBody()))
         assert not memory.status(subjects.owner).active
-        assert memory.status(subjects.sibling).active
-        memory.policy_for_key(subjects.owner, "automatic")
-        memory.preference(subjects.owner, False)
-        assert memory.status(subjects.owner).active
-        assert not memory.status(subjects.sibling).active
+        assert unwrap(memory.read(subjects.sibling, saved.memory_id)).content == saved.content
+        _assert_denied(memory.capture(subjects.owner, _fact(unique_marker())))
 
     @pytest.mark.covers("mgmt.memory_v2.entries.isolation")
-    def test_private_entries_are_isolated_even_for_sibling_keys_and_legacy_api(
+    def test_owner_keys_share_but_other_users_and_legacy_api_do_not(
         self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects
     ) -> None:
-        marker: Final = unique_marker()
-        saved: Final = unwrap(memory.capture(subjects.owner, _fact(marker)))
-        assert memory.entries(subjects.owner)[0].memory_id == saved.memory_id
-        for key in (subjects.sibling, subjects.outsider):
-            assert memory.entries(key) == []
-            _assert_denied(memory.delete_entry(key, saved.memory_id))
-            result = client.proxy.transport.get(
-                "/v2/memory/entries",
-                headers=client.proxy.transport.bearer(key),
-                params=MemoryEntryParams(key_id=hashlib.sha256(subjects.owner.encode()).hexdigest()),
-                response_type=MemoryEntriesData,
-            )
-            _assert_denied(result)
-        legacy: Final = client.proxy.transport.get(
+        saved = unwrap(memory.capture(subjects.owner, _fact(unique_marker())))
+        assert memory.entries(subjects.sibling)[0].memory_id == saved.memory_id
+        assert memory.entries(subjects.outsider) == []
+        assert memory.entries(subjects.outsider, MemoryEntryParams(user_id=subjects.user_id)) == []
+        _assert_denied(memory.read(subjects.outsider, saved.memory_id))
+        _assert_denied(memory.delete_entry(subjects.outsider, saved.memory_id))
+        legacy = client.proxy.transport.get(
             "/v1/memory",
             headers=client.proxy.transport.bearer(subjects.sibling),
             params=MemoryLegacyParams(),
@@ -278,15 +268,36 @@ class TestMemoryV2:
             assert saved.memory_id not in [row.memory_id for row in legacy.data.memories]
         assert memory.entries(subjects.owner)[0].content == saved.content
 
-    @pytest.mark.covers("mgmt.memory_v2.policy.admin_only")
-    def test_members_cannot_enable_or_broaden_memory(self, memory: MemoryClient, subjects: MemorySubjects) -> None:
-        before: Final = memory.status(subjects.owner)
-        for target_type, target_id in (("gateway", "*"), ("team", subjects.team_id), ("user", subjects.user_id)):
-            body = MemoryPolicyBody.model_validate(
-                {"target_type": target_type, "target_id": target_id, "activation": "automatic", "scope": "team"}
+    @pytest.mark.covers("mgmt.memory_v2.settings.admin_only")
+    def test_members_cannot_enable_memory(self, memory: MemoryClient, subjects: MemorySubjects) -> None:
+        before = memory.settings()
+        _assert_denied(memory.set_settings(MemorySettingsBody(enabled=True), caller=subjects.owner))
+        assert memory.settings() == before
+
+    @pytest.mark.covers("mgmt.memory_v2.entries.team_permissions")
+    def test_delegated_team_reads_allow_recall_but_not_edit_and_can_be_revoked(
+        self, client: ManagementClient, memory: MemoryClient, subjects: MemorySubjects
+    ) -> None:
+        saved = unwrap(memory.capture(subjects.owner, _fact(unique_marker())))
+        assert memory.entries(subjects.outsider) == []
+        for permissions, visible in ((["/spend/logs"], False), (["/v2/memory/entries"], True), ([], False)):
+            unwrap(
+                client.proxy.transport.post(
+                    "/team/permissions_update",
+                    headers=client.proxy.transport.master,
+                    json=MemoryTeamPermissionBody(team_id=subjects.team_id, team_member_permissions=permissions),
+                    response_type=NoBody,
+                )
             )
-            _assert_denied(memory.set_policy(body, caller=subjects.owner))
-        assert memory.status(subjects.owner) == before
+            entries = memory.entries(subjects.outsider, MemoryEntryParams(team_id=subjects.team_id))
+            assert bool(entries) is visible
+            if visible:
+                assert entries[0].memory_id == saved.memory_id and not entries[0].can_edit
+                assert unwrap(memory.read(subjects.outsider, saved.memory_id)).content == saved.content
+                _assert_denied(memory.update(subjects.outsider, saved.memory_id, _fact(unique_marker())))
+                _assert_denied(memory.delete_entry(subjects.outsider, saved.memory_id))
+            else:
+                _assert_denied(memory.read(subjects.outsider, saved.memory_id))
 
     @pytest.mark.covers("mgmt.memory_v2.entries.correction_delete")
     def test_corrections_require_current_revision_and_deleted_memory_is_not_recalled(

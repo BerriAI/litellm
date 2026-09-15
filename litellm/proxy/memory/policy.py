@@ -1,46 +1,43 @@
 import hashlib
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from typing import Final
 
-from fastapi import HTTPException
-
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UI_TEAM_ID, KeyManagementRoutes, LiteLLM_TeamTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.config_sync_pubsub import coordination_redis_cache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
-from litellm.repositories.table_repositories import MemoryPolicyRepository, MemoryPreferenceRepository
-from litellm.types.memory_v2 import MemoryPolicy, MemoryScope, MemoryStatus
+from litellm.proxy.management_helpers.record_permissions import permitted_record_teams
+from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.types.memory_v2 import MemorySettings, MemoryStatus
 
 _CONFIGURED_CACHE_KEY: Final = "litellm:memory_v2:configured"
+MEMORY_CONFIG_PARAM: Final = "memory_v2"
+
+
+async def memory_settings(prisma_client: object) -> MemorySettings:
+    row: Final = await ConfigRepository(memory_primary_client(prisma_client)).get_param(MEMORY_CONFIG_PARAM)
+    return MemorySettings.model_validate(row.param_value) if row is not None else MemorySettings()
 
 
 async def gateway_memory_is_configured(prisma_client: object, cache: DualCache) -> bool:
-    """Avoid database work on ordinary requests when memory is not configured.
-
-    This is only a presence hint. Authorization is always checked against the
-    primary before memory is used. The short TTL also covers separate workers
-    without shared Redis when an administrator first enables memory.
-    """
     cached: Final = await cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
     if cached is True:
         return True
     redis_cache: Final = cache.redis_cache or coordination_redis_cache()
-    # An empty local view reads shared Redis through DualCache's existing
-    # circuit-breaker/error handling, falling back to the primary on a miss.
     shared_cache: Final = DualCache(redis_cache=redis_cache) if redis_cache is not None else None
     if cached is False:
         if shared_cache is None:
             return False
-        # A backend mutation evicts Redis, but another worker can still hold
-        # a negative local hint (Redis Cluster may not support pub/sub).
         shared: Final = await shared_cache.async_get_cache(key=_CONFIGURED_CACHE_KEY)
         if shared is False:
             return False
-    rows: Final = await MemoryPolicyRepository(memory_primary_client(prisma_client)).table.find_many(take=1)
-    configured: Final = bool(rows)
+    configured: Final = (await memory_settings(prisma_client)).enabled
     await cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
     if shared_cache is not None and cache.redis_cache is None:
         await shared_cache.async_set_cache(key=_CONFIGURED_CACHE_KEY, value=configured, ttl=30)
@@ -58,12 +55,9 @@ async def invalidate_memory_configuration() -> None:
 
 
 def memory_primary_client(prisma_client: object) -> WriterPinnedClient:
-    """Memory authorization and read-after-write must never use a lagging replica."""
     db: Final = getattr(prisma_client, "db", None)
     if db is None:
         raise RuntimeError("Memory requires a connected Prisma database")
-    # Pin the actual writer even while unavailable: memory must fail closed
-    # instead of authorizing storage or recall from stale policy rows.
     return WriterPinnedClient(db.writer if isinstance(db, RoutingPrismaWrapper) else db)
 
 
@@ -79,126 +73,139 @@ class MemoryIdentity:
     project_id: str | None
     organization_id: str | None
     read_only: bool
+    role: str | None = None
+    dashboard: bool = False
 
     @classmethod
     def from_auth(cls, auth: UserAPIKeyAuth) -> "MemoryIdentity":
         token: Final = auth.token or auth.api_key
+        dashboard: Final = auth.is_session_token or auth.team_id == UI_TEAM_ID
         key_id: Final = (
             token
-            if token
-            and len(token) == 64
-            and all(c in "0123456789abcdef" for c in token)
-            and not auth.is_session_token
-            and auth.team_id != UI_TEAM_ID
+            if token and len(token) == 64 and all(c in "0123456789abcdef" for c in token) and not dashboard
             else None
         )
         return cls(
             key_id=key_id,
             user_id=auth.user_id,
-            team_id=auth.team_id,
+            team_id=None if dashboard else auth.team_id,
             project_id=auth.project_id,
             organization_id=auth.org_id,
             read_only=auth.user_role
-            in (
-                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-                LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            ),
+            in (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+            role=auth.user_role,
+            dashboard=dashboard,
         )
 
     @property
-    def preference_subject(self) -> str:
-        if self.user_id:
-            return memory_digest("user", self.user_id)
-        if self.key_id:
-            return memory_digest("key", self.key_id)
-        raise HTTPException(status_code=403, detail="Memory requires an authenticated user or virtual key")
-
-    @property
-    def policy_targets(self) -> tuple[tuple[str, str], ...]:
-        return tuple(
-            (kind, value)
-            for kind, value in (
-                ("key", self.key_id),
-                ("user", self.user_id),
-                ("project", self.project_id),
-                ("team", self.team_id),
-                ("organization", self.organization_id),
-                ("gateway", "*"),
-            )
-            if value
+    def namespace(self) -> str:
+        return "v2:" + memory_digest(
+            self.organization_id, self.team_id, self.user_id, None if self.user_id else self.key_id
         )
-
-    def namespace(self, scope: MemoryScope) -> str | None:
-        if scope == "key":
-            return (
-                memory_digest(scope, self.organization_id, self.team_id, self.project_id, self.key_id)
-                if self.key_id
-                else None
-            )
-        if scope == "user":
-            return memory_digest(scope, self.organization_id, self.user_id) if self.user_id else None
-        if scope == "team":
-            return memory_digest(scope, self.organization_id, self.team_id) if self.team_id else None
-        if scope == "project":
-            return (
-                memory_digest(scope, self.organization_id, self.team_id, self.project_id) if self.project_id else None
-            )
-        return memory_digest(scope, self.organization_id) if self.organization_id else None
 
 
 @dataclass(frozen=True)
 class MemoryAccess:
     identity: MemoryIdentity
-    policy: MemoryPolicy | None
-    opted_in: bool
+    settings: MemorySettings
+    team_ids: tuple[str, ...] = ()
+    admin_view: bool = False
+    permission_revision: str = ""
 
     @property
-    def namespace(self) -> str | None:
-        return self.identity.namespace(self.policy.scope) if self.policy else None
+    def namespace(self) -> str:
+        return self.identity.namespace
 
     @property
     def active(self) -> bool:
         return bool(
-            self.namespace
-            and self.policy
-            and (self.policy.activation == "automatic" or self.policy.activation == "opt_in" and self.opted_in)
+            self.settings.enabled
+            and (self.identity.user_id or self.identity.key_id)
+            and (self.settings.everyone or self.identity.user_id in self.settings.user_ids)
         )
 
     @property
     def status(self) -> MemoryStatus:
         return MemoryStatus(
             active=self.active,
-            activation=self.policy.activation if self.policy else "disabled",
-            scope=self.policy.scope if self.policy and self.namespace else None,
-            opted_in=self.opted_in,
-            policy_id=self.policy.policy_id if self.policy else None,
             user_id=self.identity.user_id,
+            enabled=self.settings.enabled,
+            team_ids=self.team_ids,
+            admin_view=self.admin_view,
         )
+
+    def visible_rows(self, *, write: bool = False) -> Mapping[str, object]:
+        if self.admin_view:
+            return {"namespace": {"not": None}}  # mutable-ok: Prisma requires native query JSON.
+        owner: Final = (
+            {"user_id": self.identity.user_id}  # mutable-ok: Prisma requires native query JSON.
+            if self.identity.user_id
+            else {  # mutable-ok: Prisma requires native JSON.
+                "owner_key_id": self.identity.key_id,
+                "user_id": None,
+            }  # mutable-ok: Prisma requires native query JSON.
+            if self.identity.key_id
+            else {"memory_id": "__no_match__"}  # mutable-ok: Prisma requires native query JSON.
+        )
+        return {  # mutable-ok: Prisma requires native query JSON.
+            "namespace": {"startswith": "v2:"},  # mutable-ok: Prisma requires native query JSON.
+            **(
+                {"organization_id": self.identity.organization_id}  # mutable-ok: Prisma requires native query JSON.
+                if not self.identity.dashboard
+                else {}  # mutable-ok: Prisma requires native JSON.
+            ),
+            "OR": [  # mutable-ok: Prisma requires native JSON.
+                owner,
+                *(
+                    [{"team_id": {"in": list(self.team_ids)}}] if self.team_ids and not write else []
+                ),  # mutable-ok: Prisma requires native JSON.
+            ],  # mutable-ok: Prisma requires native JSON.
+        }
 
 
 async def resolve_memory_access(prisma_client: object, identity: MemoryIdentity) -> MemoryAccess:
     primary: Final = memory_primary_client(prisma_client)
-    rows: Final = await MemoryPolicyRepository(primary).table.find_many(
-        where={  # mutable-ok: Prisma serializes these as native JSON containers.
-            "OR": [  # mutable-ok: Prisma serializes these as native JSON containers.
-                {  # mutable-ok: Prisma serializes these as native JSON containers.
-                    "target_type": kind,
-                    "target_id": target,
-                }
-                for kind, target in identity.policy_targets
-            ]
-        },
-        take=len(identity.policy_targets),
+    settings: Final = await memory_settings(primary)
+    user: Final = await UserRepository(primary).find_by_id(identity.user_id) if identity.user_id else None
+    # Global roles come from normal authentication, including JWT and master-key grants.
+    role: Final = identity.role
+    admin_view: Final = role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    ids: Final = tuple(user.teams or ()) if user else ()
+    team_ids: Final = tuple(dict.fromkeys((*ids, *((identity.team_id,) if identity.team_id else ()))))
+    rows: Final = (
+        await TeamRepository(primary).table.find_many(
+            where={"team_id": {"in": list(team_ids)}},  # mutable-ok: Prisma requires native query JSON.
+            take=len(team_ids),
+        )
+        if team_ids
+        else ()
     )
-    policies: Final = {  # mutable-ok: Prisma serializes these as native JSON containers.
-        (row.target_type, row.target_id): MemoryPolicy.model_validate(row, from_attributes=True) for row in rows
-    }
-    policy: Final = next((policies[target] for target in identity.policy_targets if target in policies), None)
-    if not identity.user_id and not identity.key_id:
-        return MemoryAccess(identity=identity, policy=None, opted_in=False)
-    preference: Final = await MemoryPreferenceRepository(primary).table.find_unique(
-        where={  # mutable-ok: Prisma serializes these as native JSON containers.
-            "subject": identity.preference_subject
-        }
+    teams: Final = tuple(LiteLLM_TeamTable.model_validate(row.model_dump()) for row in rows)
+    context_team: Final = next((team for team in teams if team.team_id == identity.team_id), None)
+    current: Final = replace(
+        identity,
+        organization_id=identity.organization_id or (context_team.organization_id if context_team else None),
+        read_only=identity.read_only
+        or role in (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
     )
-    return MemoryAccess(identity=identity, policy=policy, opted_in=preference.enabled if preference else False)
+    eligible: Final = tuple(
+        team for team in teams if current.dashboard or admin_view or team.organization_id == current.organization_id
+    )
+    auth: Final = UserAPIKeyAuth(user_id=current.user_id, user_role=role)
+    permitted: Final = permitted_record_teams(auth, eligible, KeyManagementRoutes.MEMORY_READ)
+    return MemoryAccess(
+        identity=current,
+        settings=settings,
+        team_ids=permitted,
+        admin_view=admin_view,
+        permission_revision=memory_digest(
+            current.namespace,
+            role,
+            str(admin_view),
+            *(
+                f"{team.team_id}:{team.organization_id}"
+                for team in sorted(eligible, key=lambda item: item.team_id)
+                if team.team_id in permitted
+            ),
+        ),
+    )

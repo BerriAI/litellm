@@ -2,12 +2,8 @@ import re
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
-from typing_extensions import Self
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-MemoryTarget: TypeAlias = Literal["gateway", "organization", "team", "project", "user", "key"]
-MemoryScope: TypeAlias = Literal["key", "user", "team", "project", "organization"]
-MemoryActivation: TypeAlias = Literal["disabled", "opt_in", "automatic"]
 MemoryKind: TypeAlias = Literal["workflow", "decision", "correction", "learning", "context", "disagreement"]
 MemoryCertainty: TypeAlias = Literal["user_stated", "observed", "inferred"]
 
@@ -23,47 +19,23 @@ MemoryQuery: TypeAlias = Annotated[
 ]
 
 
-class MemoryPolicyInput(BaseModel):
+class MemorySettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    target_type: MemoryTarget
-    target_id: str = Field(min_length=1, max_length=256)
-    activation: MemoryActivation
-    scope: MemoryScope = "user"
-
-    @model_validator(mode="after")
-    def validate_target(self) -> Self:
-        if self.target_type == "gateway" and self.target_id != "*":
-            raise ValueError("The gateway target_id must be '*'")
-        if self.target_type == "key" and (
-            len(self.target_id) != 64 or any(c not in "0123456789abcdef" for c in self.target_id)
-        ):
-            raise ValueError("Use the key's hash, never its secret value")
-        return self
-
-
-class MemoryPolicy(MemoryPolicyInput):
-    policy_id: str
-    updated_at: datetime
-    updated_by: str
-
-
-class MemoryPreference(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    enabled: bool
+    enabled: bool = False
+    everyone: bool = True
+    user_ids: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=10000)
 
 
 class MemoryStatus(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     active: bool
-    activation: MemoryActivation
-    scope: MemoryScope | None
-    opted_in: bool
-    policy_id: str | None
     user_id: str | None = None
     user_name: str | None = None
+    enabled: bool = False
+    team_ids: tuple[str, ...] = ()
+    admin_view: bool = False
 
 
 class MemoryCapture(BaseModel):
@@ -93,6 +65,10 @@ class MemoryEntry(BaseModel):
     created_at: datetime | None = None
     actor: str | None = None
     actor_name: str | None = None
+    user_id: str | None = None
+    team_id: str | None = None
+    team_name: str | None = None
+    can_edit: bool = False
     when_to_use: str = ""
     scope: str = ""
     kind: MemoryKind = "context"
@@ -105,7 +81,7 @@ class MemorySearch(BaseModel):
 
     query: MemoryQuery = Field(default="", max_length=500)
     limit: int = Field(default=8, ge=1, le=20)
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=10000)
 
 
 class MemoryRead(BaseModel):

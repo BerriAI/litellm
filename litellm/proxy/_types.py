@@ -300,6 +300,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
     SPEND_LOGS_V2 = "/spend/logs/v2"
+    MEMORY_READ = "/v2/memory/entries"
 
 
 class LiteLLMRoutes(enum.Enum):
@@ -647,6 +648,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
+        KeyManagementRoutes.MEMORY_READ.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
@@ -836,9 +838,7 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
-        "/v2/memory/policies",
-        "/v2/memory/policies/{policy_id}",
-        "/v2/memory/preference",
+        "/v2/memory/settings",
         "/v2/memory/status",
         "/v2/memory/entries",
         "/v2/memory/entries/{memory_id}",
@@ -929,8 +929,7 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
-            "/v2/memory/policies",
-            "/v2/memory/preference",
+            "/v2/memory/settings",
             "/v2/memory/status",
             "/v2/memory/entries",
             "/user/list",

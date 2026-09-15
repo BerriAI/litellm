@@ -1308,34 +1308,33 @@ class ReadinessDetailsResponse(ReadinessResponse):
     success_callbacks: list[str] = []
 
 
-class MemoryPolicyBody(BaseModel):
-    target_type: Literal["gateway", "organization", "team", "project", "user", "key"]
-    target_id: str
-    activation: Literal["disabled", "opt_in", "automatic"]
-    scope: Literal["key", "user", "team", "project", "organization"] = "key"
-
-
-class MemoryPolicyData(MemoryPolicyBody):
-    policy_id: str
-
-
-class MemoryPreferenceBody(BaseModel):
-    enabled: bool
+class MemorySettingsBody(BaseModel):
+    enabled: bool = False
+    everyone: bool = True
+    user_ids: list[str] = []
 
 
 class MemoryStatusData(BaseModel):
     active: bool
-    activation: str
-    scope: str | None
-    opted_in: bool
-    policy_id: str | None
+    enabled: bool
+    user_id: str | None = None
+    team_ids: list[str] = []
+    admin_view: bool = False
 
 
 class MemoryEntryParams(BaseModel):
     query: str = ""
     limit: int = 20
-    key_id: str | None = None
+    user_id: str | None = None
+    team_id: str | None = None
     offset: int = 0
+    before_updated_at: str | None = None
+    before_memory_id: str | None = None
+
+
+class MemoryTeamPermissionBody(BaseModel):
+    team_id: str
+    team_member_permissions: list[str]
 
 
 class MemoryCaptureBody(BaseModel):
@@ -1347,6 +1346,10 @@ class MemoryCaptureBody(BaseModel):
 
 
 class MemoryEntryData(BaseModel):
+    user_id: str | None = None
+    team_id: str | None = None
+    can_edit: bool = False
+    actor: str | None = None
     memory_id: str
     key: str
     title: str

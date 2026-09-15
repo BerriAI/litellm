@@ -21,30 +21,23 @@ from litellm.litellm_core_utils.prompt_templates.server_tool_responses import (
 from litellm.proxy.memory.continuation import MemoryContinuation, MemoryContinuations, prefix_hashes
 from litellm.proxy.memory.gateway import GatewayMemoryLoop
 from litellm.proxy.memory.knowledge import MEMORY_TOOL_NAMES, execute_memory_tool
-from litellm.proxy.memory.policy import MemoryAccess, MemoryIdentity, resolve_memory_access
+from litellm.proxy.memory.policy import MemoryAccess, MemoryIdentity, memory_digest, resolve_memory_access
 from litellm.proxy.memory.responses import serve_memory_response
 from litellm.proxy.memory.store import MemoryStore
-from litellm.types.memory_v2 import MemoryCapture, MemoryPolicy, MemorySearch
+from litellm.types.memory_v2 import MemoryCapture, MemorySearch, MemorySettings
 
 _NOW: Final = datetime(2026, 9, 12, tzinfo=timezone.utc)
 _IDENTITY: Final = MemoryIdentity("a" * 64, "owner", "team", "project", "org", False)
-_POLICY: Final = MemoryPolicy(
-    policy_id="policy",
-    target_type="team",
-    target_id="team",
-    activation="automatic",
-    scope="key",
-    updated_at=_NOW,
-    updated_by="admin",
-)
+_SETTINGS: Final = MemorySettings(enabled=True)
 _CAPTURE: Final = MemoryCapture(key="demo", title="Demo", content="Use port 8347", evidence="User selected this port")
 
 
 @pytest.fixture
 def prisma_edge() -> MagicMock:
     client = MagicMock()
-    client.db.litellm_memorypolicy.find_many = AsyncMock(return_value=[_POLICY])
-    client.db.litellm_memorypreference.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=SimpleNamespace(param_value=_SETTINGS.model_dump()))
+    client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
     table = client.db.litellm_memorytable
     table.find_unique = AsyncMock(return_value=None)
     table.find_first = AsyncMock(return_value=None)
@@ -66,15 +59,25 @@ def prisma_edge() -> MagicMock:
 
 
 def store(client: MagicMock, identity: MemoryIdentity = _IDENTITY) -> MemoryStore:
-    return MemoryStore(client, MemoryAccess(identity, _POLICY, False))
+    return MemoryStore(client, access_for(identity))
+
+
+def access_for(identity: MemoryIdentity = _IDENTITY) -> MemoryAccess:
+    return MemoryAccess(
+        identity, _SETTINGS, permission_revision=memory_digest(identity.namespace, identity.role, "False")
+    )
 
 
 def row(**changes: object) -> LiteLLM_MemoryTable:
     return LiteLLM_MemoryTable.model_validate(
         {
             "memory_id": "entry",
-            "key": f"memory-v2:{_IDENTITY.namespace('key')}:demo",
-            "namespace": _IDENTITY.namespace("key"),
+            "key": f"memory-v2:{_IDENTITY.namespace}:demo",
+            "namespace": _IDENTITY.namespace,
+            "user_id": "owner",
+            "team_id": "team",
+            "organization_id": "org",
+            "owner_key_id": "a" * 64,
             "value": _CAPTURE.content,
             "metadata": json.dumps({"title": _CAPTURE.title, "evidence": _CAPTURE.evidence}),
             "created_at": _NOW,
@@ -101,6 +104,7 @@ async def test_saved_response_reads_are_scoped_and_never_return_internal_input(
     prisma_edge: MagicMock, operation: str
 ) -> None:
     patch = MemoryContinuation(
+        permission_revision=access_for().permission_revision,
         replaces=1,
         response={"id": "resp_litellm_memory_test", "output": [{"type": "message", "content": []}]},
         upstream_ids=("native=one",),
@@ -122,7 +126,7 @@ async def test_saved_response_reads_are_scoped_and_never_return_internal_input(
             await serve_memory_response("resp_litellm_memory_test", request, route, store(prisma_edge), app)
         assert exc.value.status_code == (404 if operation == "missing" else 501)
     where = prisma_edge.db.litellm_memorycontinuation.find_first.call_args.kwargs["where"]
-    assert where["namespace"] == _IDENTITY.namespace("key") and where["key_id"] == _IDENTITY.key_id
+    assert where["namespace"] == _IDENTITY.namespace and where["key_id"] == _IDENTITY.key_id
     assert where["expires_at"]["gt"] <= datetime.now(timezone.utc)
 
 
@@ -130,6 +134,7 @@ async def test_saved_response_reads_are_scoped_and_never_return_internal_input(
 @pytest.mark.parametrize("outcome", ["success", "already_missing", "upstream_error", "readonly"])
 async def test_response_deletion_preserves_auth_paths_and_retry_state(prisma_edge: MagicMock, outcome: str) -> None:
     patch = MemoryContinuation(
+        permission_revision=access_for().permission_revision,
         replaces=1,
         response={"id": "resp_litellm_memory_test"},
         upstream_ids=("native=one", "native=two"),
@@ -181,36 +186,33 @@ async def test_response_deletion_preserves_auth_paths_and_retry_state(prisma_edg
 
 
 @pytest.mark.asyncio
-async def test_policy_precedence_and_opt_in_are_resolved_from_database(prisma_edge: MagicMock) -> None:
-    team = _POLICY.model_copy(update={"activation": "opt_in"})
-    key = _POLICY.model_copy(update={"target_type": "key", "target_id": "a" * 64, "activation": "disabled"})
-    policies = prisma_edge.db.litellm_memorypolicy.find_many
-    policies.return_value = [team, key]
-    prisma_edge.db.litellm_memorypreference.find_unique.return_value = SimpleNamespace(enabled=True)
-    access = await resolve_memory_access(prisma_edge, _IDENTITY)
-    assert access.policy == key and not access.active and access.opted_in
-    policies.return_value = [team]
-    assert (await resolve_memory_access(prisma_edge, _IDENTITY)).active
-    prisma_edge.db.litellm_memorypreference.find_unique.return_value = None
+async def test_flat_enrollment_follows_the_user_across_keys(prisma_edge: MagicMock) -> None:
+    config = prisma_edge.db.litellm_config.find_unique
+    config.return_value = None
     assert not (await resolve_memory_access(prisma_edge, _IDENTITY)).active
-    policies.return_value = []
-    assert (await resolve_memory_access(prisma_edge, _IDENTITY)).namespace is None
+    config.return_value = SimpleNamespace(
+        param_value=MemorySettings(enabled=True, everyone=False, user_ids=("owner",)).model_dump()
+    )
+    assert (await resolve_memory_access(prisma_edge, _IDENTITY)).active
+    sibling = MemoryIdentity("b" * 64, "owner", "team", "project", "org", False)
+    assert (await resolve_memory_access(prisma_edge, sibling)).active
+    config.return_value = SimpleNamespace(
+        param_value=MemorySettings(enabled=True, everyone=False, user_ids=("other",)).model_dump()
+    )
+    assert not (await resolve_memory_access(prisma_edge, _IDENTITY)).active
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["disabled", "scope", "missing", "readonly"])
-async def test_store_rechecks_policy_before_writing(prisma_edge: MagicMock, change: str) -> None:
+@pytest.mark.parametrize("change", ["disabled", "unenrolled", "missing", "readonly"])
+async def test_store_rechecks_access_before_writing(prisma_edge: MagicMock, change: str) -> None:
     identity = _IDENTITY
-    if change == "disabled":
-        prisma_edge.db.litellm_memorypolicy.find_many.return_value = [
-            _POLICY.model_copy(update={"activation": "disabled"})
-        ]
-    elif change == "scope":
-        prisma_edge.db.litellm_memorypolicy.find_many.return_value = [_POLICY.model_copy(update={"scope": "team"})]
-    elif change == "missing":
-        prisma_edge.db.litellm_memorypolicy.find_many.return_value = []
-    else:
+    if change == "missing":
+        prisma_edge.db.litellm_config.find_unique.return_value = None
+    elif change == "readonly":
         identity = MemoryIdentity("a" * 64, "owner", "team", "project", "org", True)
+    else:
+        config = MemorySettings(enabled=change != "disabled", everyone=False, user_ids=("other",))
+        prisma_edge.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=config.model_dump())
     with pytest.raises(HTTPException) as exc:
         await store(prisma_edge, identity).capture(_CAPTURE)
     assert exc.value.status_code == 403
@@ -227,8 +229,8 @@ async def test_search_applies_fuzzy_ranking_before_pagination_with_namespace_bou
     entries = await store(prisma_edge).search(MemorySearch(query="prto demo", limit=1, offset=1))
     assert [entry.memory_id for entry in entries] == ["second"]
     query = prisma_edge.db.litellm_memorytable.find_many.call_args.kwargs
-    assert query["where"]["namespace"] == _IDENTITY.namespace("key")
-    assert query["take"] == 1000
+    assert query["where"]["AND"][0]["AND"][0]["namespace"] == {"startswith": "v2:"}
+    assert query["take"] == 128
 
 
 @pytest.mark.asyncio
@@ -238,14 +240,12 @@ async def test_read_and_delete_cannot_address_another_namespace(prisma_edge: Mag
         await memory.read("foreign-entry")
     assert exc.value.status_code == 404
     assert prisma_edge.db.litellm_memorytable.find_first.call_args.kwargs["where"] == {
-        "namespace": _IDENTITY.namespace("key"),
-        "memory_id": "foreign-entry",
+        "AND": [access_for().visible_rows(), {"memory_id": "foreign-entry"}],
     }
-    prisma_edge.db.litellm_memorypolicy.find_many.return_value = [_POLICY.model_copy(update={"activation": "disabled"})]
+    prisma_edge.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=MemorySettings().model_dump())
     assert await memory.delete("entry")
     assert prisma_edge.db.litellm_memorytable.delete_many.call_args.kwargs["where"] == {
-        "namespace": _IDENTITY.namespace("key"),
-        "memory_id": "entry",
+        "AND": [access_for().visible_rows(write=True), {"memory_id": "entry"}],
     }
     with pytest.raises(HTTPException) as inactive:
         await memory.read("entry")
@@ -258,14 +258,12 @@ async def test_identical_capture_is_idempotent_and_new_capture_has_scoped_identi
 
     table = prisma_edge.db.litellm_memorytable
     table.create.return_value = row()
-    wrapped: Final = MemoryStore(
-        SimpleNamespace(db=PrismaWrapper(prisma_edge.db)), MemoryAccess(_IDENTITY, _POLICY, False)
-    )
+    wrapped: Final = MemoryStore(SimpleNamespace(db=PrismaWrapper(prisma_edge.db)), access_for())
     saved = await wrapped.capture(_CAPTURE)
     assert saved.content == _CAPTURE.content
     data = table.create.call_args.kwargs["data"]
-    assert data["namespace"] == _IDENTITY.namespace("key") and data["user_id"] == "owner" and data["team_id"] == "team"
-    assert data["key"].startswith("memory-v2:" + _IDENTITY.namespace("key") + ":")
+    assert data["namespace"] == _IDENTITY.namespace and data["user_id"] == "owner" and data["team_id"] == "team"
+    assert data["key"].startswith("memory-v2:" + _IDENTITY.namespace + ":")
     table.find_unique.return_value = row()
     assert await wrapped.capture(_CAPTURE) == saved
     table.create.assert_awaited_once()
@@ -276,18 +274,19 @@ async def test_identical_capture_is_idempotent_and_new_capture_has_scoped_identi
 @pytest.mark.parametrize("revoked", [False, True])
 async def test_capture_rechecks_policy_on_its_transaction_connection(prisma_edge: MagicMock, revoked: bool) -> None:
     prisma_edge.db.litellm_memorytable.create.return_value = row()
-    prisma_edge.db.litellm_memorypolicy.find_many.side_effect = [
-        [_POLICY],
+    prisma_edge.db.litellm_config.find_unique.side_effect = [
+        SimpleNamespace(param_value=_SETTINGS.model_dump()),
         RuntimeError("The only pooled connection belongs to the active transaction"),
     ]
     transaction = SimpleNamespace(
         litellm_memorytable=prisma_edge.db.litellm_memorytable,
-        litellm_memorypolicy=SimpleNamespace(
-            find_many=AsyncMock(
-                return_value=[_POLICY.model_copy(update={"activation": "disabled"})] if revoked else [_POLICY]
+        litellm_config=SimpleNamespace(
+            find_unique=AsyncMock(
+                return_value=SimpleNamespace(param_value=MemorySettings(enabled=not revoked).model_dump())
             )
         ),
-        litellm_memorypreference=prisma_edge.db.litellm_memorypreference,
+        litellm_usertable=prisma_edge.db.litellm_usertable,
+        litellm_teamtable=prisma_edge.db.litellm_teamtable,
         execute_raw=AsyncMock(),
     )
     prisma_edge.db.tx.return_value.__aenter__.return_value = transaction
@@ -304,7 +303,7 @@ async def test_capture_rechecks_policy_on_its_transaction_connection(prisma_edge
 async def test_capture_rejects_stale_or_conflicting_replacements(prisma_edge: MagicMock, race: str) -> None:
     table = prisma_edge.db.litellm_memorytable
     table.find_unique.return_value = (
-        None if race == "missing" else row(namespace="foreign" if race == "foreign" else _IDENTITY.namespace("key"))
+        None if race == "missing" else row(namespace="foreign" if race == "foreign" else _IDENTITY.namespace)
     )
     table.update_many.return_value = 0 if race == "concurrent" else 1
     correction = _CAPTURE.model_copy(
@@ -320,7 +319,7 @@ async def test_capture_rejects_stale_or_conflicting_replacements(prisma_edge: Ma
     if race == "concurrent":
         where = table.update_many.call_args.kwargs["where"]
         assert (
-            where["namespace"] == _IDENTITY.namespace("key")
+            where["namespace"] == _IDENTITY.namespace
             and where["updated_at"] == _NOW
             and where["value"] == _CAPTURE.content
         )
@@ -353,7 +352,7 @@ async def test_tool_argument_errors_and_revocation_return_receipts_without_writi
     assert missing.output == {"error": "Memory not found", "status": 404}
     unknown = await execute_memory_tool(memory, {"id": "a", "name": "other_tool", "arguments": {}}, "checkpoint")
     assert unknown.output == {"error": "Unknown memory tool"}
-    prisma_edge.db.litellm_memorypolicy.find_many.return_value = []
+    prisma_edge.db.litellm_config.find_unique.return_value = None
     revoked = await execute_memory_tool(
         memory, {"id": "a", "name": "litellm_memory_capture", "arguments": {"observations": []}}, "checkpoint"
     )
@@ -457,7 +456,9 @@ async def test_restore_preserves_hidden_memory_tool_results_and_client_cache_mar
     prisma_edge.db.litellm_memorycontinuation.find_many.return_value = [
         SimpleNamespace(
             id=continuations.identifier(anchor),
-            payload=MemoryContinuation(replaces=1, replacement=replacement).model_dump(),
+            payload=MemoryContinuation(
+                replaces=1, replacement=replacement, permission_revision=access_for().permission_revision
+            ).model_dump(),
         )
     ]
     restored: Final = await continuations.restore(items)
@@ -666,7 +667,9 @@ async def test_duplicate_directives_preserve_each_current_cache_breakpoint(prism
     items = (first, second, assistant)
     continuations = MemoryContinuations(store(prisma_edge), "anthropic_messages")
     patch = MemoryContinuation(
-        replaces=3, replacement=({"role": "user", "content": "Memory reference"}, second, first, assistant)
+        permission_revision=access_for().permission_revision,
+        replaces=3,
+        replacement=({"role": "user", "content": "Memory reference"}, second, first, assistant),
     )
     prisma_edge.db.litellm_memorycontinuation.find_many.return_value = [
         SimpleNamespace(
@@ -713,11 +716,12 @@ async def test_replica_lag_cannot_authorize_memory_after_primary_revocation(
 
     writer = MagicMock(spec=PrismaWrapper)
     reader = MagicMock(spec=PrismaWrapper)
-    writer.litellm_memorypolicy = SimpleNamespace(
-        find_many=AsyncMock(return_value=[_POLICY.model_copy(update={"activation": "disabled"})])
+    writer.litellm_config = SimpleNamespace(find_unique=AsyncMock(return_value=None))
+    reader.litellm_config = SimpleNamespace(
+        find_unique=AsyncMock(return_value=SimpleNamespace(param_value=_SETTINGS.model_dump()))
     )
-    reader.litellm_memorypolicy = SimpleNamespace(find_many=AsyncMock(return_value=[_POLICY]))
-    writer.litellm_memorypreference = SimpleNamespace(find_unique=AsyncMock(return_value=None))
+    writer.litellm_usertable = prisma_edge.db.litellm_usertable
+    writer.litellm_teamtable = prisma_edge.db.litellm_teamtable
     writer.litellm_memorytable = prisma_edge.db.litellm_memorytable
     writer.is_connected = MagicMock(return_value=False)
     reader.is_connected = MagicMock(return_value=False)
@@ -729,9 +733,9 @@ async def test_replica_lag_cannot_authorize_memory_after_primary_revocation(
     client = SimpleNamespace(db=routed)
     access = await resolve_memory_access(client, _IDENTITY)
     assert not access.active
-    reader.litellm_memorypolicy.find_many.assert_not_awaited()
+    reader.litellm_config.find_unique.assert_not_awaited()
     with pytest.raises(HTTPException) as exc:
-        await MemoryStore(client, MemoryAccess(_IDENTITY, _POLICY, False)).capture(_CAPTURE)
+        await MemoryStore(client, access_for()).capture(_CAPTURE)
     assert exc.value.status_code == 403
     writer.litellm_memorytable.create.assert_not_awaited()
 
@@ -742,16 +746,16 @@ async def test_unconfigured_gate_caches_presence_without_caching_authorization(p
     from litellm.proxy.memory.policy import gateway_memory_is_configured
 
     cache = DualCache()
-    policies = prisma_edge.db.litellm_memorypolicy.find_many
-    policies.return_value = []
+    config = prisma_edge.db.litellm_config.find_unique
+    config.return_value = None
     assert not await gateway_memory_is_configured(prisma_edge, cache)
     assert not await gateway_memory_is_configured(prisma_edge, cache)
-    policies.assert_awaited_once()
-    assert policies.call_args.kwargs == {"take": 1}
+    config.assert_awaited_once()
+    assert config.call_args.kwargs == {"where": {"param_name": "memory_v2"}}
     enabled_cache = DualCache()
-    policies.return_value = [_POLICY]
+    config.return_value = SimpleNamespace(param_value=_SETTINGS.model_dump())
     assert await gateway_memory_is_configured(prisma_edge, enabled_cache)
-    policies.return_value = [_POLICY.model_copy(update={"activation": "disabled"})]
+    config.return_value = None
     assert await gateway_memory_is_configured(prisma_edge, enabled_cache)
     assert not (await resolve_memory_access(prisma_edge, _IDENTITY)).active
 
@@ -996,18 +1000,18 @@ async def test_backend_activation_invalidates_a_gateway_negative_hint_without_pu
     )
     gateway_cache = DualCache(redis_cache=redis if share_auth_cache else None)
     backend_cache = DualCache(redis_cache=redis if share_auth_cache else None)
-    policies = prisma_edge.db.litellm_memorypolicy.find_many
+    config = prisma_edge.db.litellm_config.find_unique
     with patch.multiple(  # test-quality-ok: Inject external worker caches and Redis; run real invalidation.
         "litellm.proxy.proxy_server", user_api_key_cache=backend_cache, redis_usage_cache=redis
     ):
-        policies.return_value = []
+        config.return_value = None
         assert not await gateway_memory_is_configured(prisma_edge, gateway_cache)
         assert not await gateway_memory_is_configured(prisma_edge, gateway_cache)
-        policies.assert_awaited_once()
-        policies.return_value = [_POLICY]
+        config.assert_awaited_once()
+        config.return_value = SimpleNamespace(param_value=_SETTINGS.model_dump())
         await invalidate_memory_configuration()
         assert await gateway_memory_is_configured(prisma_edge, gateway_cache)
-        assert policies.await_count == 2
+        assert config.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -1024,15 +1028,15 @@ async def test_redis_circuit_breaker_falls_back_to_primary_configuration(prisma_
         async_delete_cache=AsyncMock(side_effect=RedisCircuitBreakerOpenError("open")),
     )
     cache = DualCache()
-    prisma_edge.db.litellm_memorypolicy.find_many.return_value = []
+    prisma_edge.db.litellm_config.find_unique.return_value = None
     with patch.multiple(  # test-quality-ok: Inject external Redis failure and local worker cache; exercise real fallback.
         "litellm.proxy.proxy_server", user_api_key_cache=cache, redis_usage_cache=redis
     ):
         assert not await gateway_memory_is_configured(prisma_edge, cache)
-        prisma_edge.db.litellm_memorypolicy.find_many.return_value = [_POLICY]
+        prisma_edge.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=_SETTINGS.model_dump())
         assert await gateway_memory_is_configured(prisma_edge, cache)
         await invalidate_memory_configuration()
-    assert prisma_edge.db.litellm_memorypolicy.find_many.await_count == 2
+    assert prisma_edge.db.litellm_config.find_unique.await_count == 2
     redis.async_get_cache.assert_awaited_once()
 
 
@@ -1044,7 +1048,7 @@ async def test_full_scope_blocks_creation_but_permits_correction_and_reclaimed_c
         await store(prisma_edge).capture(_CAPTURE)
     assert full.value.status_code == 429
     table.create.assert_not_awaited()
-    assert table.count.call_args.kwargs["where"] == {"namespace": _IDENTITY.namespace("key")}
+    assert table.count.call_args.kwargs["where"] == {"namespace": _IDENTITY.namespace}
     prisma_edge.db.execute_raw.assert_awaited_once()
     assert "pg_advisory_xact_lock" in prisma_edge.db.execute_raw.call_args.args[0]
     table.find_unique.side_effect = [row(), row(value="Corrected", updated_at=_NOW + timedelta(seconds=1))]
@@ -1078,20 +1082,41 @@ async def test_continuation_quota_rejects_excess_without_writing(
 async def test_continuation_quota_shares_namespace_lock_across_keys_and_allows_replacements(
     prisma_edge: MagicMock,
 ) -> None:
-    user_policy = _POLICY.model_copy(update={"scope": "user"})
-    prisma_edge.db.litellm_memorypolicy.find_many.return_value = [user_policy]
     prisma_edge.db.query_raw.return_value = [{"key_count": 255, "bytes": 32 * 1024 * 1024}]
     other_key = MemoryIdentity("b" * 64, "owner", "team", "project", "org", False)
     for identity in (_IDENTITY, other_key):
-        continuations = MemoryContinuations(
-            MemoryStore(prisma_edge, MemoryAccess(identity, user_policy, False)), "aresponses"
-        )
+        continuations = MemoryContinuations(MemoryStore(prisma_edge, access_for(identity)), "aresponses")
         await continuations.save("response", MemoryContinuation(replaces=1, response={"text": "é漢字"}))
         query = prisma_edge.db.query_raw.call_args.args
-        assert query[1:4] == (identity.namespace("user"), identity.key_id, [continuations.identifier("response")])
+        assert query[1:4] == (identity.namespace, identity.key_id, [continuations.identifier("response")])
         assert json.loads(query[4])[0]["response"]["text"] == "é漢字"
     locks = prisma_edge.db.execute_raw.call_args_list
     assert locks[0] == locks[1]
     cleanup = prisma_edge.db.litellm_memorycontinuation.delete_many.call_args.kwargs["where"]
-    assert cleanup["namespace"] == _IDENTITY.namespace("user") and "key_id" not in cleanup
+    assert cleanup["namespace"] == _IDENTITY.namespace and "key_id" not in cleanup
     assert prisma_edge.db.litellm_memorycontinuation.upsert.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_memory_lookup_failure_leaves_inference_unchanged_but_never_leaks_owned_response_ids(
+    prisma_edge: MagicMock,
+) -> None:
+    from unittest.mock import patch
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.memory.gateway import process_gateway_memory
+
+    prisma_edge.db.litellm_config.find_unique.side_effect = RuntimeError("database unavailable")
+    caller = UserAPIKeyAuth(user_id="owner", token="a" * 64)
+    with patch.multiple(  # test-quality-ok: Inject unavailable external DB and an empty worker cache.
+        "litellm.proxy.proxy_server", prisma_client=prisma_edge, user_api_key_cache=DualCache()
+    ):
+        assert await process_gateway_memory({"messages": []}, request(), caller, "acompletion") is None
+        with pytest.raises(HTTPException) as exc:
+            await process_gateway_memory(
+                {"previous_response_id": "resp_litellm_memory_private"}, request(), caller, "aresponses"
+            )
+        assert exc.value.status_code == 404
+    prisma_edge.db.litellm_memorytable.find_many.assert_not_awaited()
+    prisma_edge.db.litellm_memorytable.create.assert_not_awaited()

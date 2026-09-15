@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.server_tool_responses import (
     executable_server_calls,
     object_value,
@@ -342,6 +343,20 @@ class GatewayMemoryLoop:
                 yield chunk
 
 
+def validate_memory_request(data: Mapping[str, object], request: Request) -> None:
+    if request.url.path.startswith("/cursor/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Gateway memory requires a standard /v1/chat/completions, /v1/messages, or /v1/responses endpoint",
+        )
+    if data.get("functions") is not None or data.get("function_call") is not None:
+        raise HTTPException(
+            status_code=400, detail="Gateway memory requires tools and tool_choice instead of legacy functions"
+        )
+    if data.get("background") is True or data.get("n", 1) != 1:
+        raise HTTPException(status_code=400, detail="Gateway memory requires a foreground request with one completion")
+
+
 async def process_gateway_memory(
     data: Mapping[str, object], request: Request, auth: UserAPIKeyAuth, route: str
 ) -> Response | None:
@@ -355,18 +370,11 @@ async def process_gateway_memory(
         return None
     store: Final = await gateway_memory_store(auth)
     if store is None:
+        previous: Final = data.get("previous_response_id")
+        if isinstance(previous, str) and previous.startswith("resp_litellm_memory_"):
+            raise HTTPException(status_code=404, detail="Memory response not found or expired")
         return None
-    if request.url.path.startswith("/cursor/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Gateway memory requires a standard /v1/chat/completions, /v1/messages, or /v1/responses endpoint",
-        )
-    if data.get("functions") is not None or data.get("function_call") is not None:
-        raise HTTPException(
-            status_code=400, detail="Gateway memory requires tools and tool_choice instead of legacy functions"
-        )
-    if data.get("background") is True or data.get("n", 1) != 1:
-        raise HTTPException(status_code=400, detail="Gateway memory requires a foreground request with one completion")
+    validate_memory_request(data, request)
     from litellm.proxy.proxy_server import app, llm_router
 
     loop: Final = GatewayMemoryLoop(app, request, data, route, store)
@@ -422,7 +430,11 @@ async def gateway_memory_store(auth: UserAPIKeyAuth) -> MemoryStore | None:
     identity: Final = MemoryIdentity.from_auth(auth)
     if not identity.user_id and not identity.key_id:
         return None
-    if not await gateway_memory_is_configured(prisma_client, user_api_key_cache):
+    try:
+        if not await gateway_memory_is_configured(prisma_client, user_api_key_cache):
+            return None
+        access: Final = await resolve_memory_access(prisma_client, identity)
+        return MemoryStore(prisma_client, access) if access.active else None
+    except Exception:
+        verbose_proxy_logger.warning("Memory access is unavailable; continuing without automatic memory")
         return None
-    access: Final = await resolve_memory_access(prisma_client, identity)
-    return MemoryStore(prisma_client, access) if access.active else None

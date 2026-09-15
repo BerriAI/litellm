@@ -43,6 +43,7 @@ class MemoryContinuation(BaseModel):
     upstream_ids: tuple[str, ...] = ()
     pending_results: tuple[Mapping[str, object], ...] = ()
     transcript_anchor: str | None = None
+    permission_revision: str | None = None
 
 
 def _empty_array(value: object) -> bool:
@@ -143,6 +144,12 @@ class MemoryContinuations:
         self.route: Final[ServerToolRoute] = route
         self.table = MemoryContinuationRepository(store.prisma_client).table
 
+    def validate_patch(self, payload: object) -> MemoryContinuation:
+        patch: Final = MemoryContinuation.model_validate(payload)
+        if patch.permission_revision != self.store.access.permission_revision:
+            raise HTTPException(status_code=403, detail="Memory permissions changed; start a new conversation")
+        return patch
+
     def identifier(self, anchor: str) -> str:
         return memory_digest(
             self.store.access.namespace,
@@ -168,7 +175,7 @@ class MemoryContinuations:
                 },
             }
         )
-        patches: Final = MappingProxyType({row.id: MemoryContinuation.model_validate(row.payload) for row in rows})
+        patches: Final = MappingProxyType({row.id: self.validate_patch(row.payload) for row in rows})
 
         def apply(result: tuple[Mapping[str, object], ...], index: int) -> tuple[Mapping[str, object], ...]:
             patch: Final = patches.get(self.identifier(anchors[index]))
@@ -207,14 +214,22 @@ class MemoryContinuations:
                 },
             }
         )
-        return MemoryContinuation.model_validate(row.payload) if row is not None else None
+        return self.validate_patch(row.payload) if row is not None else None
 
     async def save(self, anchor: str, patch: MemoryContinuation) -> None:
         await self.save_many(((anchor, patch),))
 
     async def save_many(self, patches: tuple[tuple[str, MemoryContinuation], ...]) -> None:
         namespace: Final = await self.store.authorize_namespace()
-        payloads: Final = tuple((self.identifier(anchor), patch.model_dump_json()) for anchor, patch in patches)
+        payloads: Final = tuple(
+            (
+                self.identifier(anchor),
+                patch.model_copy(
+                    update=MappingProxyType({"permission_revision": self.store.access.permission_revision})
+                ).model_dump_json(),
+            )
+            for anchor, patch in patches
+        )
         if any(len(payload.encode()) > _MAX_PATCH_BYTES for _, payload in payloads):
             raise HTTPException(status_code=413, detail="Memory continuation exceeds one megabyte")
         key_id: Final = self.store.access.identity.key_id or self.store.access.identity.user_id or ""

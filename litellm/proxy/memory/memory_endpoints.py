@@ -220,7 +220,11 @@ async def is_memory_team_admin(prisma_client: "PrismaClient", user_api_key_dict:
     try:
         team_obj: Final = await TeamRepository(prisma_client).find_by_id(team_id, id_field="team_id")
     except Exception as e:
-        verbose_proxy_logger.exception("Error loading team for write-auth check (team_id=%s): %s", team_id, e)
+        verbose_proxy_logger.error(
+            "Error loading team for write-auth check (team_id=%s): %s",
+            team_id.replace("\r", "").replace("\n", ""),
+            str(e).replace("\r", "").replace("\n", ""),
+        )
         return False
     if team_obj is None:
         return False
@@ -236,7 +240,11 @@ async def is_memory_team_admin(prisma_client: "PrismaClient", user_api_key_dict:
         if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             return True
     except Exception as e:
-        verbose_proxy_logger.debug("Org-admin check skipped during write-auth (team_id=%s): %s", team_id, e)
+        verbose_proxy_logger.debug(
+            "Org-admin check skipped during write-auth (team_id=%s): %s",
+            team_id.replace("\r", "").replace("\n", ""),
+            str(e).replace("\r", "").replace("\n", ""),
+        )
     return False
 
 

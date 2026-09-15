@@ -1436,6 +1436,8 @@ model LiteLLM_MemoryTable {
   metadata    Json?
   user_id     String?
   team_id     String?
+  organization_id String?
+  owner_key_id String?
   created_at  DateTime @default(now())
   created_by  String?
   updated_at  DateTime @default(now()) @updatedAt
@@ -1444,6 +1446,9 @@ model LiteLLM_MemoryTable {
   @@index([user_id])
   @@index([team_id])
   @@index([namespace, updated_at])
+  @@index([organization_id, user_id, updated_at])
+  @@index([team_id, updated_at])
+  @@index([owner_key_id])
 }
 
 model LiteLLM_MemoryPolicy {
@@ -1452,6 +1457,7 @@ model LiteLLM_MemoryPolicy {
   target_id   String
   activation  String
   scope       String
+  paused      Boolean  @default(false)
   created_at  DateTime @default(now())
   updated_at  DateTime @default(now()) @updatedAt
   updated_by  String

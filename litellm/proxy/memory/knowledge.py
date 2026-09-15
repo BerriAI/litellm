@@ -1,13 +1,13 @@
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException
 from pydantic import ValidationError
 
 from litellm.litellm_core_utils.prompt_templates.factory import NormalizedToolCall
-from litellm.proxy.memory.content import fuzzy_memories, redact_memory
+from litellm.proxy.memory.content import redact_memory
 from litellm.proxy.memory.policy import memory_digest
 from litellm.proxy.memory.store import MemoryStore
 from litellm.types.memory_v2 import (
@@ -79,6 +79,8 @@ def _preview(entry: MemoryEntry) -> Mapping[str, object]:
         "title": entry.title,
         "when_to_use": entry.when_to_use,
         "scope": entry.scope,
+        "contributed_by": entry.actor,
+        "team_id": entry.team_id,
     }
 
 
@@ -87,14 +89,14 @@ def _revision(entries: tuple[MemoryEntry, ...]) -> str:
 
 
 async def memory_catalog(store: MemoryStore, request: MemoryCatalogRequest) -> Mapping[str, object]:
-    entries: Final = await store.entries()
+    entries, total, revision = await store.catalog(request)
     end: Final = request.offset + request.limit
     return {  # mutable-ok: Tool results are JSON objects.
-        "revision": _revision(entries),
-        "total": len(entries),
-        "next_offset": end if end < len(entries) else None,
+        "revision": revision,
+        "total": total,
+        "next_offset": end if end < total else None,
         "observations": [  # mutable-ok: Native provider JSON containers.
-            _preview(entry) for entry in entries[request.offset : end]
+            _preview(entry) for entry in entries
         ],  # mutable-ok: Tool results are JSON.
     }
 
@@ -108,17 +110,11 @@ async def execute_memory_tool(store: MemoryStore, call: NormalizedToolCall, chec
                 )
             case "litellm_memory_search":
                 query: Final = MemoryRecallRequest.model_validate(call["arguments"])
-                entries: Final = await store.entries()
-                candidates: Final = tuple(
-                    entry
-                    for entry in entries
-                    if query.scope is None or query.scope.casefold() in entry.scope.casefold()
-                )
-                ranked: Final = await asyncio.to_thread(fuzzy_memories, query.query, candidates)
+                ranked, total_matches = await store.recall(query)
                 return MemoryToolResult(
                     {  # mutable-ok: Tool results are JSON objects.
-                        "revision": _revision(entries),
-                        "total_matches": len(ranked),
+                        "revision": _revision(tuple(entry for entry, _, _ in ranked)),
+                        "total_matches": total_matches,
                         "results": [  # mutable-ok: Tool results are JSON arrays.
                             {  # mutable-ok: Tool results are JSON objects.
                                 **_preview(entry),
@@ -181,11 +177,7 @@ async def execute_memory_tool(store: MemoryStore, call: NormalizedToolCall, chec
                     reflected=batch.checkpoint == checkpoint,
                 )
             case _:
-                return MemoryToolResult(
-                    {  # mutable-ok: Native provider JSON containers.
-                        "error": "Unknown memory tool"
-                    }
-                )
+                pass
     except ValidationError:
         return MemoryToolResult(
             {  # mutable-ok: Native provider JSON containers.
@@ -199,3 +191,12 @@ async def execute_memory_tool(store: MemoryStore, call: NormalizedToolCall, chec
                 "status": exc.status_code,
             }
         )
+    except Exception:
+        return MemoryToolResult(
+            MappingProxyType({"error": "Memory is temporarily unavailable. Continue the task without memory."})
+        )
+    return MemoryToolResult(
+        {  # mutable-ok: Native provider JSON containers.
+            "error": "Unknown memory tool"
+        }
+    )

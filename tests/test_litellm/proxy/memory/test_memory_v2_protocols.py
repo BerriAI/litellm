@@ -138,8 +138,8 @@ def test_private_namespaces_follow_authenticated_key_and_organization() -> None:
     elsewhere: Final = MemoryIdentity.from_auth(
         UserAPIKeyAuth(token="a" * 64, user_id="owner", team_id="team", org_id="other")
     )
-    assert owner.namespace("key") != sibling.namespace("key")
-    assert owner.namespace("key") != elsewhere.namespace("key")
-    assert owner.namespace("user") == sibling.namespace("user")
-    assert owner.namespace("user") != elsewhere.namespace("user")
-    assert owner.namespace("team") == sibling.namespace("team")
+    assert owner.namespace == sibling.namespace
+    assert owner.namespace != elsewhere.namespace
+    service = MemoryIdentity.from_auth(UserAPIKeyAuth(token="a" * 64, team_id="team", org_id="org"))
+    other_service = MemoryIdentity.from_auth(UserAPIKeyAuth(token="b" * 64, team_id="team", org_id="org"))
+    assert service.namespace != other_service.namespace

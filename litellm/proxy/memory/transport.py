@@ -155,7 +155,7 @@ class GatewayRound:
             if not self.task.done():
                 self.task.cancel()
             with suppress(asyncio.CancelledError):
-                await self.task
+                await asyncio.gather(self.task)
         await self.reader.aclose()
 
 

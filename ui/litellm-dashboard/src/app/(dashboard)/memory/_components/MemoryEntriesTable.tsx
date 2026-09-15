@@ -22,6 +22,7 @@ function contributor(entry: Entry) {
 function memoryDetails(entry: Entry) {
   const details = {
     "Contributed by": contributor(entry),
+    Team: entry.team_name ?? entry.team_id,
     Evidence: entry.evidence,
     "When to use": entry.when_to_use,
     Source: entry.source,
@@ -101,6 +102,12 @@ export function MemoryEntriesTable({
       ),
     },
     {
+      id: "team",
+      header: "Team",
+      size: 150,
+      cell: ({ row }) => <span className="text-sm">{row.original.team_name ?? row.original.team_id ?? "No team"}</span>,
+    },
+    {
       id: "details",
       header: () => <span className="sr-only">Details</span>,
       size: 36,
@@ -127,6 +134,7 @@ export function MemoryEntriesTable({
               <Input
                 aria-label="Search memories"
                 placeholder="Search memories"
+                maxLength={500}
                 className="h-8 pl-8"
                 value={query}
                 onChange={(event) => onQueryChange(event.target.value)}
@@ -161,7 +169,7 @@ export function MemoryEntriesTable({
                   </dl>
                 </CollapsibleContent>
               </Collapsible>
-              {!readOnly && (
+              {!readOnly && selected.can_edit && (
                 <div className="flex gap-2 border-t pt-4">
                   <Button variant="outline" size="sm" disabled={busy || !canEdit} onClick={() => onEdit(selected)}>
                     Edit memory

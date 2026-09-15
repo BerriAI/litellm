@@ -54,7 +54,7 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
     """Return a list of (event_type, parsed_data_dict) from raw SSE bytes."""
     text: Final = raw.decode("utf-8", errors="replace")
     lines: Final = text.split("\n")
-    events: Final[list[tuple]] = []
+    events: Final[list[tuple]] = []  # mutable-ok: Provider requires native JSON.
     current_event_type: str | None = None
 
     for line in lines:
@@ -76,11 +76,11 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
 
 
 def _handle_message_start(data: dict, response: dict) -> None:
-    msg: Final = data.get("message", {})
+    msg: Final = data.get("message", {})  # mutable-ok: Provider requires native JSON.
     response["id"] = msg.get("id", response["id"])
     response["model"] = msg.get("model", response["model"])
     response["role"] = msg.get("role", response["role"])
-    usage: Final = msg.get("usage", {})
+    usage: Final = msg.get("usage", {})  # mutable-ok: Provider requires native JSON.
     if usage:
         response["usage"]["input_tokens"] = usage.get("input_tokens", 0)
         for key in ("cache_creation_input_tokens", "cache_read_input_tokens"):
@@ -90,38 +90,41 @@ def _handle_message_start(data: dict, response: dict) -> None:
 
 def _handle_content_block_start(data: dict, content_blocks: dict[int, dict]) -> None:
     idx: Final = data.get("index", len(content_blocks))
-    block: Final = data.get("content_block", {})
+    block: Final = data.get("content_block", {})  # mutable-ok: Provider requires native JSON.
     block_type: Final = block.get("type", "text")
 
-    _BLOCK_TEMPLATES: Final[dict[str, dict]] = {
-        "text": {"type": "text", "text": block.get("text", "")},
-        "thinking": {
+    _BLOCK_TEMPLATES: Final[dict[str, dict]] = {  # mutable-ok: Provider requires native JSON.
+        "text": {  # mutable-ok: Provider requires native JSON.
+            "type": "text",
+            "text": block.get("text", ""),
+        },  # mutable-ok: Accumulate Anthropic stream deltas.
+        "thinking": {  # mutable-ok: Accumulate Anthropic stream deltas.
             "type": "thinking",
             "thinking": block.get("thinking", ""),
             "signature": block.get("signature", ""),
         },
-        "redacted_thinking": {
+        "redacted_thinking": {  # mutable-ok: Provider requires native JSON.
             "type": "redacted_thinking",
             "data": block.get("data", ""),
         },
     }
     if block_type == "tool_use":
-        content_blocks[idx] = {
+        content_blocks[idx] = {  # mutable-ok: Accumulate Anthropic stream deltas.
             "type": "tool_use",
             "id": block.get("id", ""),
             "name": block.get("name", ""),
-            "input": block.get("input", {}),
+            "input": block.get("input", {}),  # mutable-ok: Provider requires native JSON.
             "_partial_json": "",
         }
     elif block_type in _BLOCK_TEMPLATES:
-        content_blocks[idx] = dict(_BLOCK_TEMPLATES[block_type])
+        content_blocks[idx] = dict(_BLOCK_TEMPLATES[block_type])  # mutable-ok: Provider requires native JSON.
     else:
-        content_blocks[idx] = dict(block)
+        content_blocks[idx] = dict(block)  # mutable-ok: Provider requires native JSON.
 
 
 def _handle_content_block_delta(data: dict, content_blocks: dict[int, dict]) -> None:
     idx: Final = data.get("index", 0)
-    delta: Final = data.get("delta", {})
+    delta: Final = data.get("delta", {})  # mutable-ok: Provider requires native JSON.
     delta_type: Final = delta.get("type", "")
     block: Final = content_blocks.get(idx)
     if block is None:
@@ -146,16 +149,16 @@ def _handle_content_block_stop(data: dict, content_blocks: dict[int, dict]) -> N
             try:
                 block["input"] = json.loads(partial)
             except (json.JSONDecodeError, ValueError):
-                block["input"] = {"_raw": partial}
+                block["input"] = {"_raw": partial}  # mutable-ok: Provider requires native JSON.
 
 
 def _handle_message_delta(data: dict, response: dict) -> None:
-    delta: Final = data.get("delta", {})
+    delta: Final = data.get("delta", {})  # mutable-ok: Provider requires native JSON.
     if "stop_reason" in delta:
         response["stop_reason"] = delta["stop_reason"]
     if "stop_sequence" in delta:
         response["stop_sequence"] = delta["stop_sequence"]
-    usage: Final = data.get("usage", {})
+    usage: Final = data.get("usage", {})  # mutable-ok: Provider requires native JSON.
     if usage.get("output_tokens") is not None:
         response["usage"]["output_tokens"] = usage["output_tokens"]
     for key in (
@@ -208,7 +211,7 @@ class AgenticAnthropicStreamingIterator:
         self._server_fulfilled_tool_names = server_fulfilled_tool_names
         self._ping_interval_seconds = ping_interval_seconds
 
-        self._collected_bytes: list[bytes] = []
+        self._collected_bytes: list[bytes] = []  # mutable-ok: Provider requires native JSON.
         self._stream_exhausted = False
         self._hook_processing_done = False
         self._follow_up_iterator: AsyncIterator | None = None
@@ -420,17 +423,17 @@ class AgenticAnthropicStreamingIterator:
         """
         events: Final = _parse_sse_events(b"".join(raw_bytes))
 
-        response: Final[dict[str, Any]] = {
+        response: Final[dict[str, Any]] = {  # mutable-ok: Provider requires native JSON.
             "id": "",
             "type": "message",
             "role": "assistant",
             "model": "",
-            "content": [],
+            "content": [],  # mutable-ok: Provider requires native JSON.
             "stop_reason": None,
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {"input_tokens": 0, "output_tokens": 0},  # mutable-ok: Provider requires native JSON.
         }
-        content_blocks: Final[dict[int, dict[str, Any]]] = {}
+        content_blocks: Final[dict[int, dict[str, Any]]] = {}  # mutable-ok: Provider requires native JSON.
         saw_message_start = False
 
         for event_type, data in events:

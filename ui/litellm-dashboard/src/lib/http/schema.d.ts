@@ -21280,8 +21280,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
+        /** Read Entry */
+        get: operations["read_entry_v2_memory_entries__memory_id__get"];
+        /** Update Entry */
+        put: operations["update_entry_v2_memory_entries__memory_id__put"];
         post?: never;
         /** Delete Entry */
         delete: operations["delete_entry_v2_memory_entries__memory_id__delete"];
@@ -21290,52 +21292,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/memory/policies": {
+    "/v2/memory/settings": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Policies */
-        get: operations["list_policies_v2_memory_policies_get"];
-        /** Set Policy */
-        put: operations["set_policy_v2_memory_policies_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/memory/policies/{policy_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete Policy */
-        delete: operations["delete_policy_v2_memory_policies__policy_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/memory/preference": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Preference */
-        get: operations["get_preference_v2_memory_preference_get"];
-        /** Set Preference */
-        put: operations["set_preference_v2_memory_preference_put"];
+        /** Get Settings */
+        get: operations["get_settings_v2_memory_settings_get"];
+        /** Set Settings */
+        put: operations["set_settings_v2_memory_settings_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -28551,7 +28518,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2" | "/v2/memory/entries";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -32093,6 +32060,11 @@ export interface components {
             /** Actor Name */
             actor_name?: string | null;
             /**
+             * Can Edit
+             * @default false
+             */
+            can_edit: boolean;
+            /**
              * Certainty
              * @default observed
              * @enum {string}
@@ -32124,6 +32096,10 @@ export interface components {
              * @default
              */
             source: string;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Name */
+            team_name?: string | null;
             /** Title */
             title: string;
             /**
@@ -32131,6 +32107,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** User Id */
+            user_id?: string | null;
             /**
              * When To Use
              * @default
@@ -32144,77 +32122,43 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** MemoryPolicy */
-        MemoryPolicy: {
+        /** MemorySettings */
+        MemorySettings: {
             /**
-             * Activation
-             * @enum {string}
+             * Enabled
+             * @default false
              */
-            activation: "disabled" | "opt_in" | "automatic";
-            /** Policy Id */
-            policy_id: string;
-            /**
-             * Scope
-             * @default user
-             * @enum {string}
-             */
-            scope: "key" | "user" | "team" | "project" | "organization";
-            /** Target Id */
-            target_id: string;
-            /**
-             * Target Type
-             * @enum {string}
-             */
-            target_type: "gateway" | "organization" | "team" | "project" | "user" | "key";
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Updated By */
-            updated_by: string;
-        };
-        /** MemoryPolicyInput */
-        MemoryPolicyInput: {
-            /**
-             * Activation
-             * @enum {string}
-             */
-            activation: "disabled" | "opt_in" | "automatic";
-            /**
-             * Scope
-             * @default user
-             * @enum {string}
-             */
-            scope: "key" | "user" | "team" | "project" | "organization";
-            /** Target Id */
-            target_id: string;
-            /**
-             * Target Type
-             * @enum {string}
-             */
-            target_type: "gateway" | "organization" | "team" | "project" | "user" | "key";
-        };
-        /** MemoryPreference */
-        MemoryPreference: {
-            /** Enabled */
             enabled: boolean;
+            /**
+             * Everyone
+             * @default true
+             */
+            everyone: boolean;
+            /**
+             * User Ids
+             * @default []
+             */
+            user_ids: string[];
         };
         /** MemoryStatus */
         MemoryStatus: {
-            /**
-             * Activation
-             * @enum {string}
-             */
-            activation: "disabled" | "opt_in" | "automatic";
             /** Active */
             active: boolean;
-            /** Opted In */
-            opted_in: boolean;
-            /** Policy Id */
-            policy_id: string | null;
-            /** Scope */
-            scope: ("key" | "user" | "team" | "project" | "organization") | null;
+            /**
+             * Admin View
+             * @default false
+             */
+            admin_view: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Team Ids
+             * @default []
+             */
+            team_ids: string[];
             /** User Id */
             user_id?: string | null;
             /** User Name */
@@ -67492,9 +67436,10 @@ export interface operations {
                 query?: string;
                 limit?: number;
                 offset?: number;
-                key_id?: string | null;
                 before_updated_at?: string | null;
                 before_memory_id?: string | null;
+                team_id?: string | null;
+                user_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -67524,9 +67469,7 @@ export interface operations {
     };
     capture_entry_v2_memory_entries_post: {
         parameters: {
-            query?: {
-                key_id?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -67557,11 +67500,75 @@ export interface operations {
             };
         };
     };
+    read_entry_v2_memory_entries__memory_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryEntry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_entry_v2_memory_entries__memory_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryCapture"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryEntry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_entry_v2_memory_entries__memory_id__delete: {
         parameters: {
-            query?: {
-                key_id?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 memory_id: string;
@@ -67588,13 +67595,9 @@ export interface operations {
             };
         };
     };
-    list_policies_v2_memory_policies_get: {
+    get_settings_v2_memory_settings_get: {
         parameters: {
-            query?: {
-                target_type?: ("gateway" | "organization" | "team" | "project" | "user" | "key") | null;
-                target_id?: string | null;
-                offset?: number;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -67607,21 +67610,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MemoryPolicy"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["MemorySettings"];
                 };
             };
         };
     };
-    set_policy_v2_memory_policies_put: {
+    set_settings_v2_memory_settings_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -67630,7 +67624,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MemoryPolicyInput"];
+                "application/json": components["schemas"]["MemorySettings"];
             };
         };
         responses: {
@@ -67640,102 +67634,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MemoryPolicy"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_policy_v2_memory_policies__policy_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                policy_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_preference_v2_memory_preference_get: {
-        parameters: {
-            query?: {
-                key_id?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryPreference"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_preference_v2_memory_preference_put: {
-        parameters: {
-            query?: {
-                key_id?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MemoryPreference"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryPreference"];
+                    "application/json": components["schemas"]["MemorySettings"];
                 };
             };
             /** @description Validation Error */
@@ -67751,9 +67650,7 @@ export interface operations {
     };
     get_status_v2_memory_status_get: {
         parameters: {
-            query?: {
-                key_id?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -67767,15 +67664,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
