@@ -46,6 +46,7 @@ from litellm.proxy.auth.master_key_policy import (
     InsecureMasterKeyReason,
     alternative_auth_enabled,
     insecure_master_key_reason,
+    stored_credentials_present,
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1732,6 +1733,7 @@ async def _get_health_readiness_details(
         show_no_redis_warning: Final = await _show_no_redis_warning()
         show_env_credential_login_warning: Final = _show_env_credential_login_warning()
         insecure_master_key_reason: Final = _insecure_master_key_reason()
+        stored_credentials_locked: Final = insecure_master_key_reason is not None and stored_credentials_present()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1761,6 +1763,7 @@ async def _get_health_readiness_details(
                 "show_no_redis_warning": show_no_redis_warning,
                 "show_env_credential_login_warning": show_env_credential_login_warning,
                 "insecure_master_key_reason": insecure_master_key_reason,
+                "stored_credentials_locked": stored_credentials_locked,
             }
         else:
             return {
@@ -1775,6 +1778,7 @@ async def _get_health_readiness_details(
                 "show_no_redis_warning": show_no_redis_warning,
                 "show_env_credential_login_warning": show_env_credential_login_warning,
                 "insecure_master_key_reason": insecure_master_key_reason,
+                "stored_credentials_locked": stored_credentials_locked,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")

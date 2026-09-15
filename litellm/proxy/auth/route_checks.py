@@ -487,6 +487,10 @@ class RouteChecks:
         return False
 
     @staticmethod
+    def route_matches_pattern(route: str, pattern: str) -> bool:
+        return RouteChecks._route_matches_pattern(route=route, pattern=pattern)
+
+    @staticmethod
     def _route_matches_pattern(route: str, pattern: str) -> bool:
         """
         Check if route matches the pattern placed in proxy/_types.py

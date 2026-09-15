@@ -7628,3 +7628,109 @@ async def test_claude_view_never_reinterprets_explicit_names(monkeypatch, layer)
     assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
     await _normalize_claude_model(data, token, request, "/v1/messages")
     assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
+@pytest.fixture
+def stored_credential():
+    import litellm
+    from litellm.models.credentials import CredentialItem
+
+    litellm.credential_list = [
+        CredentialItem(credential_name="test-cred", credential_info={}, credential_values={"api_key": "sk-upstream"})
+    ]
+    yield
+    litellm.credential_list = []
+
+
+def _proxy_server_attrs_for_lockout(master_key: str | None):
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    return {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": master_key,
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_insecure_master_key_locks_out_key_management_with_stored_credentials(stored_credential):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = _proxy_server_attrs_for_lockout(master_key="sk-1234")
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http", "method": "POST"})
+        request._url = URL(url="/key/generate")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-1234",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert exc_info.value.code == "403"
+        assert "unavailable until the master key has been set" in exc_info.value.message
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
+async def test_strong_master_key_passes_auth_on_key_management(stored_credential):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = _proxy_server_attrs_for_lockout(master_key="sk-strong-random-key")
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http", "method": "POST"})
+        request._url = URL(url="/key/generate")
+
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key="Bearer sk-strong-random-key",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)

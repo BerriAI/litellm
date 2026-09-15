@@ -1417,17 +1417,20 @@ def test_health_readiness_details_reports_env_credential_login_warning(monkeypat
 
 
 @pytest.mark.parametrize(
-    "master_key, general_settings, expected_reason",
+    "master_key, general_settings, has_stored_credentials, expected_reason, expected_locked",
     [
-        ("sk-1234", {}, "example_key"),
-        (None, {}, "missing"),
-        ("", {}, "missing"),
-        (None, {"enable_jwt_auth": True}, None),
-        ("sk-strong-random-key", {}, None),
+        ("sk-1234", {}, True, "example_key", True),
+        ("sk-1234", {}, False, "example_key", False),
+        (None, {}, True, "missing", True),
+        (None, {}, False, "missing", False),
+        ("", {}, False, "missing", False),
+        (None, {"enable_jwt_auth": True}, True, None, False),
+        ("sk-strong-random-key", {}, True, None, False),
+        ("sk-strong-random-key", {}, False, None, False),
     ],
 )
 def test_health_readiness_details_reports_insecure_master_key_reason(
-    monkeypatch, master_key, general_settings, expected_reason
+    monkeypatch, master_key, general_settings, has_stored_credentials, expected_reason, expected_locked
 ):
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
@@ -1437,11 +1440,20 @@ def test_health_readiness_details_reports_insecure_master_key_reason(
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="test-cred", credential_info={}, credential_values={"api_key": "sk-x"})]
+        if has_stored_credentials
+        else [],
+    )
 
     response = client.get("/health/readiness/details")
 
     assert response.status_code == 200, response.text
     assert response.json()["insecure_master_key_reason"] == expected_reason
+    assert response.json()["stored_credentials_locked"] is expected_locked
 
 
 def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):

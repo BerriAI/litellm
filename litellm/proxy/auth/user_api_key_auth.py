@@ -79,6 +79,13 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.auth.master_key_policy import (
+    alternative_auth_enabled,
+    insecure_master_key_reason,
+    master_key_lockout_action,
+    master_key_lockout_exception,
+    stored_credentials_present,
+)
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
@@ -1344,6 +1351,18 @@ async def _user_api_key_auth_builder(
     custom_auth_api_key: bool = False
 
     try:
+        _lockout_reason: Final = insecure_master_key_reason(
+            master_key, alternative_auth_enabled=alternative_auth_enabled(general_settings)
+        )
+        if _lockout_reason is not None:
+            _lockout_action: Final = master_key_lockout_action(
+                route=route,
+                method=request.method,
+                reason=_lockout_reason,
+                stored_credentials_present=stored_credentials_present(),
+            )
+            if _lockout_action is not None:
+                raise master_key_lockout_exception(_lockout_action)
         with tracer.trace("litellm.proxy.auth.pre_db_read_auth_checks"):
             await pre_db_read_auth_checks(
                 request_data=request_data,

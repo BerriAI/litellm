@@ -19,15 +19,29 @@ describe("InsecureMasterKeyWarningBanner", () => {
     mockDetails({ status: "healthy", insecure_master_key_reason: "example_key" });
     renderWithProviders(<InsecureMasterKeyWarningBanner accessToken="token" />);
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.getByText("The master key is the docs example key sk-1234")).toBeInTheDocument();
+    expect(screen.getByText("The master key has not been set")).toBeInTheDocument();
+    expect(screen.getByText(/docs example value sk-1234/)).toBeInTheDocument();
+    expect(screen.getByText(/store or use upstream credentials or manage virtual keys/)).toBeInTheDocument();
   });
 
   it("should warn when the proxy reports no master key", () => {
     mockDetails({ status: "healthy", insecure_master_key_reason: "missing" });
     renderWithProviders(<InsecureMasterKeyWarningBanner accessToken="token" />);
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.getByText("No master key is set")).toBeInTheDocument();
-    expect(screen.getByText(/accepted without authentication/)).toBeInTheDocument();
+    expect(screen.getByText("The master key has not been set")).toBeInTheDocument();
+    expect(screen.getByText(/store or use upstream credentials or manage virtual keys/)).toBeInTheDocument();
+  });
+
+  it("should note stored credentials are locked when the proxy reports them", () => {
+    mockDetails({ status: "healthy", insecure_master_key_reason: "example_key", stored_credentials_locked: true });
+    renderWithProviders(<InsecureMasterKeyWarningBanner accessToken="token" />);
+    expect(screen.getByText(/Credentials already stored on this proxy/)).toBeInTheDocument();
+  });
+
+  it("should not mention stored credentials when none are locked", () => {
+    mockDetails({ status: "healthy", insecure_master_key_reason: "missing", stored_credentials_locked: false });
+    renderWithProviders(<InsecureMasterKeyWarningBanner accessToken="token" />);
+    expect(screen.queryByText(/Credentials already stored on this proxy/)).not.toBeInTheDocument();
   });
 
   it("should render nothing when the configured key is strong", () => {
