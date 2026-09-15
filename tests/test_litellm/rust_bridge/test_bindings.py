@@ -33,3 +33,13 @@ def test_binding_validates_native_attribute(
     binding: Final = bindings.NativeBinding("route", validate=lambda item: item if isinstance(item, int) else None)
 
     assert binding.load() == expected
+
+
+def test_binding_loads_through_the_injected_loader() -> None:
+    export: Final = object()
+    binding: Final = bindings.NativeBinding(
+        "route", validate=lambda value: value, loader=lambda: SimpleNamespace(route=export)
+    )
+
+    assert binding.load() is export
+    assert bindings.NativeBinding("route", validate=lambda value: value, loader=lambda: None).load() is None
