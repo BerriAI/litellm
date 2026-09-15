@@ -26,6 +26,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
@@ -124,6 +125,7 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -235,11 +237,54 @@ async def _normalize_claude_model(
         request.scope[_CLAUDE_MODEL_NORMALIZED] = True
     if source is None:
         return
-    request_data["model"] = source
+    _rewrite_request_model(request_data, request, source)
+
+
+def _rewrite_request_model(
+    request_data: dict,  # mutable-ok: the request body is rewritten in place for every downstream reader
+    request: Request | None,
+    model: str,
+) -> None:
+    request_data["model"] = model
     _safe_set_request_parsed_body(request=request, parsed_body=request_data)
     if request is not None:
         request._json = request_data
         request._body = orjson.dumps(request_data)
+
+
+_MODEL_GROUP_ALIAS_RESOLVED: Final = "litellm.model_group_alias_resolved"
+
+
+async def _resolve_router_settings_model_group_alias(
+    request_data: dict,  # mutable-ok: the request body is rewritten in place for every downstream reader
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> None:
+    """Rewrite the requested model through the key's or team's ``router_settings.model_group_alias``
+    before the allowlist checks, so they authorize the model group the request is routed to.
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    if request is None or llm_router is None or not RouteChecks.is_llm_api_route(route=route):
+        return
+    if request.scope.get(_MODEL_GROUP_ALIAS_RESOLVED) is True:
+        return
+    request.scope[_MODEL_GROUP_ALIAS_RESOLVED] = True
+    requested: Final = request_data.get("model")
+    if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
+        return
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    if not isinstance(settings, Mapping):
+        return
+    target: Final = resolve_model_group_alias(settings.get("model_group_alias"), requested)
+    if target is None or target == requested:
+        return
+    verbose_proxy_logger.debug("router_settings.model_group_alias resolved %s -> %s before auth", requested, target)
+    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
+    _rewrite_request_model(request_data, request, target)
 
 
 def _get_model_names_for_budget_checks(
@@ -2926,6 +2971,7 @@ async def _authorize_authenticated_request(
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -3312,6 +3358,7 @@ async def _enforce_key_and_fallback_model_access(
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
     await _normalize_claude_model(request_data, valid_token, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:

@@ -34,6 +34,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import TeamNotFoundError, UserNotFoundError, get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
     _ensure_litellm_received_at_on_request_state,
@@ -8137,3 +8138,99 @@ async def test_auth_flow_enters_virtual_key_mapping_when_only_an_issuer_configur
     assert resolve_mock.await_args.kwargs["jwt_claims"][JWTHandler.LITELLM_JWT_ISSUER_CLAIM] == ISSUER_TWO
     assert result.api_key == "hashed-mapped-key"
     assert result.team_id == "svc-team"
+
+
+def _alias_router() -> litellm.Router:
+    return litellm.Router(model_list=[{"model_name": name, "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}} for name in ("claude-haiku", "claude-sonnet")])
+
+
+def _alias_request(route: str, data: dict, content_type: str = "application/json"):
+    """A request as auth sees it: the body already read once and cached alongside its parsed form."""
+    from starlette.requests import Request
+
+    headers = [(b"content-type", content_type.encode())]
+    request = Request({"type": "http", "method": "POST", "path": route, "headers": headers, "query_string": b"", "parsed_body": (tuple(data), data)})
+    request._body = json.dumps(data).encode()
+    return request
+
+
+def _alias_token(monkeypatch, level: str, alias: dict, models: list) -> UserAPIKeyAuth:
+    """A key whose ``router_settings.model_group_alias`` lives on the key itself or on its cached team row."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    if level == "key":
+        return UserAPIKeyAuth(models=models, router_settings={"model_group_alias": alias})
+    cache = UserApiKeyCache()
+    cache.set_cache(key="team_id:team-alias", value=LiteLLM_TeamTableCachedObj(team_id="team-alias", models=models, router_settings={"model_group_alias": alias}))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
+    return UserAPIKeyAuth(team_id="team-alias", models=models)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ["key", "team"])
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/messages", "/v1/embeddings"])
+async def test_router_settings_model_group_alias_authorizes_target_for_key(monkeypatch, level, route):
+    """LIT-3054: a key allowed only the alias target must be able to call the alias, and a key not
+    allowed the target must still be denied even when the alias itself is what it requested."""
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    router = _alias_router()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    data = {"model": "AgentX-LLM", "messages": [{"role": "user", "content": "hi"}]}
+    request = _alias_request(route, data)
+    token = _alias_token(monkeypatch, level, {"AgentX-LLM": "claude-haiku"}, ["claude-haiku"])
+    await _enforce_key_and_fallback_model_access(valid_token=token, request_data=data, route=route, request=request, llm_model_list=router.model_list, llm_router=router)
+    assert data["model"] == "claude-haiku"
+    assert (await request.json())["model"] == "claude-haiku"
+    assert json.loads(await request.body())["model"] == "claude-haiku"
+    assert request.scope["parsed_body"][1]["model"] == "claude-haiku"
+    assert get_client_requested_model(request) == "AgentX-LLM"
+
+    denied = _alias_token(monkeypatch, level, {"AgentX-LLM": "claude-sonnet"}, ["claude-haiku"])
+    denied_data = {"model": "AgentX-LLM"}
+    with pytest.raises(ProxyException) as exc:
+        await _enforce_key_and_fallback_model_access(valid_token=denied, request_data=denied_data, route=route, request=_alias_request(route, denied_data), llm_model_list=router.model_list, llm_router=router)
+    assert "claude-sonnet" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_router_settings_model_group_alias_leaves_form_bodies_alone(monkeypatch):
+    """LIT-3054: a multipart body cannot be re-serialized as JSON, so auth must not rewrite it."""
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    router = _alias_router()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    data = {"model": "AgentX-LLM"}
+    request = _alias_request("/v1/audio/transcriptions", data, content_type="multipart/form-data; boundary=x")
+    token = _alias_token(monkeypatch, "key", {"AgentX-LLM": "claude-haiku"}, ["claude-haiku", "AgentX-LLM"])
+    await _enforce_key_and_fallback_model_access(valid_token=token, request_data=data, route="/v1/audio/transcriptions", request=request, llm_model_list=router.model_list, llm_router=router)
+    assert data["model"] == "AgentX-LLM"
+    assert get_client_requested_model(request) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target, expect_denied", [("claude-haiku", False), ("claude-sonnet", True)])
+async def test_router_settings_model_group_alias_authorizes_target_for_team(monkeypatch, target, expect_denied):
+    """LIT-3054: the team allowlist check in common_checks must judge the alias target, not the alias."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    router = _alias_router()
+    logging_obj = MagicMock(post_call_failure_hook=AsyncMock(return_value=None))
+    attrs = {**_proxy_attrs_for_centralized_checks(), "llm_router": router, "proxy_logging_obj": logging_obj}
+    for k, v in attrs.items():
+        monkeypatch.setattr(_proxy_server_mod, k, v)
+    token = _alias_token(monkeypatch, "team", {"AgentX-LLM": target}, ["claude-haiku"])
+    token.team_models = ["claude-haiku"]
+    data = {"model": "AgentX-LLM", "messages": [{"role": "user", "content": "hi"}]}
+    request = _alias_request("/v1/chat/completions", data)
+    if expect_denied:
+        with pytest.raises(ProxyException) as exc:
+            await _authorize_authenticated_request(user_api_key_auth_obj=token, request=request, request_data=data, route="/v1/chat/completions", api_key="sk-test")
+        assert exc.value.type == ProxyErrorTypes.team_model_access_denied
+        assert target in exc.value.message
+        return
+    await _authorize_authenticated_request(user_api_key_auth_obj=token, request=request, request_data=data, route="/v1/chat/completions", api_key="sk-test")
+    assert (await request.json())["model"] == target
+    assert get_client_requested_model(request) == "AgentX-LLM"

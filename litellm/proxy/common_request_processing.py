@@ -56,6 +56,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -622,9 +623,9 @@ async def _resolve_per_request_model_group_alias(
     holds the global config map and is shared across requests, so a per-request
     map has to be applied here instead of being forwarded to the Router.
 
-    Model access was authorized against the requested group, so the target is
-    authorized in its own right before the rewrite; a key that may not call the
-    target gets the usual 403 rather than being quietly served it.
+    Auth already rewrote the body through this map for LLM API routes, so this is
+    a fallback for callers that skipped it; the target is authorized in its own
+    right before the rewrite, so a key that may not call it gets the usual 403.
 
     Returns the target model group, or None when no alias applies.
     """
@@ -2338,9 +2339,8 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        requested_model_from_client: Final[str | None] = (
-            self.data.get("model") if isinstance(self.data.get("model"), str) else None
-        )
+        client_model: Final = get_client_requested_model(request) or self.data.get("model")
+        requested_model_from_client: Final[str | None] = client_model if isinstance(client_model, str) else None
         self._debug_log_request_payload()
 
         if skip_pre_call_logic:
