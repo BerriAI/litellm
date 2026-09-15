@@ -289,7 +289,6 @@ profile = "release"
 editable-profile = "dev"
 include = [
     "litellm/proxy/_experimental/out/**",
-    "litellm/rust_bridge/_native.pyi",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
 ]
 exclude = [
