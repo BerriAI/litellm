@@ -4,9 +4,11 @@ Anthropic CountTokens API handler.
 Uses httpx for HTTP requests instead of the Anthropic SDK.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +17,8 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+_COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
@@ -27,13 +31,14 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, JsonValue]],
         api_key: str,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
-    ) -> dict[str, Any]:
+        tools: list[dict[str, JsonValue]] | None = None,
+        system: JsonValue = None,
+        optional_params: Mapping[str, JsonValue] | None = None,
+    ) -> dict[str, JsonValue]:
         """
         Handle a CountTokens request using httpx.
 
@@ -52,7 +57,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         """
         try:
             # Validate the request
-            self.validate_request(model, messages)
+            self.validate_request(model, messages, system=system, tools=tools)
 
             verbose_logger.debug("Processing Anthropic CountTokens request for model: %s", model)
 
@@ -62,6 +67,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 messages=messages,
                 tools=tools,
                 system=system,
+                optional_params=optional_params,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
@@ -97,7 +103,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                     message=error_text,
                 )
 
-            anthropic_response: Final = response.json()
+            anthropic_response: Final = _COUNT_RESPONSE.validate_json(response.content)
 
             verbose_logger.debug("Anthropic response: %s", anthropic_response)
 
