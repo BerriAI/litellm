@@ -2104,6 +2104,9 @@ class Logging(LiteLLMLoggingBaseClass):
             logging_result = LiteLLMRealtimeStreamLoggingObject(
                 usage=combined_ws_usage,
                 results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                service_tier=ResponsesWebSocketTokenUsageProcessor.collect_service_tier_from_responses_ws_results(
+                    results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                ),
             )
 
         elif (

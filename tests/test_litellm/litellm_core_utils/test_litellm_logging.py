@@ -6611,6 +6611,70 @@ def test_normalize_logging_result_extracts_usage_for_responses_websocket(monkeyp
     assert ws_cost == http_cost
 
 
+@pytest.mark.parametrize("tier", ["default", "priority"])
+def test_normalize_logging_result_carries_service_tier_for_responses_websocket(tier):
+    """LIT-7828: response.completed events carry response.service_tier, and a WebSocket
+    session turn must cost the same as the identical response over HTTP /v1/responses,
+    including priority-tier rates."""
+    response = {
+        "id": "resp-7828",
+        "created_at": 1700000000,
+        "model": "gpt-5.4",
+        "status": "completed",
+        "output": [],
+        "service_tier": tier,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 40,
+            "total_tokens": 140,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 10},
+        },
+    }
+
+    normalized = _responses_ws_logging_obj().normalize_logging_result(
+        result=[{"type": "response.completed", "response": response}]
+    )
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.service_tier == tier
+
+    ws_cost = litellm.completion_cost(
+        completion_response=normalized,
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+    )
+    http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(**response),
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+    assert ws_cost > 0
+    assert ws_cost == http_cost
+
+
+def test_normalize_logging_result_mixed_service_tiers_fall_back_to_none_for_responses_websocket():
+    """LIT-7828: billable events disagreeing on service_tier cannot map to one rate, so the
+    session carries no tier and falls back to default pricing rather than guessing."""
+    events = [
+        {
+            "type": "response.completed",
+            "response": {
+                "service_tier": tier,
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            },
+        }
+        for tier in ("default", "priority")
+    ]
+
+    normalized = _responses_ws_logging_obj().normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.service_tier is None
+
+
 def test_normalize_logging_result_bills_incomplete_responses_websocket_turns():
     """LIT-6512: a turn cut short by max_output_tokens ends in response.incomplete, which
     OpenAI bills, so its usage counts toward the session like a completed turn."""

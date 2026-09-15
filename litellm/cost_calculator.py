@@ -2558,6 +2558,7 @@ _RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "re
 
 class _ResponsesWsEventResponse(BaseModel):
     usage: Mapping[str, object] | None = None
+    service_tier: str | None = None
 
 
 class _ResponsesWsEvent(BaseModel):
@@ -2565,12 +2566,16 @@ class _ResponsesWsEvent(BaseModel):
     response: _ResponsesWsEventResponse | None = None
 
 
+def _validate_responses_ws_events(results: Sequence[Mapping[str, object]]) -> tuple[_ResponsesWsEvent, ...]:
+    return tuple(_ResponsesWsEvent.model_validate(result) for result in results)
+
+
 class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
     @staticmethod
     def collect_usage_from_responses_ws_results(
         results: Sequence[Mapping[str, object]],
     ) -> tuple[Usage, ...]:
-        events: Final = tuple(_ResponsesWsEvent.model_validate(result) for result in results)
+        events: Final = _validate_responses_ws_events(results)
         return tuple(
             ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the realtime processor uses
                 event.response.usage
@@ -2580,6 +2585,20 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
             and event.response is not None
             and event.response.usage is not None
         )
+
+    @staticmethod
+    def collect_service_tier_from_responses_ws_results(
+        results: Sequence[Mapping[str, object]],
+    ) -> str | None:
+        events: Final = _validate_responses_ws_events(results)
+        tiers: Final = frozenset(
+            event.response.service_tier
+            for event in events
+            if event.type in _RESPONSES_WS_BILLABLE_EVENT_TYPES
+            and event.response is not None
+            and event.response.service_tier is not None
+        )
+        return next(iter(tiers)) if len(tiers) == 1 else None
 
     @staticmethod
     def collect_and_combine_usage_from_responses_ws_results(
