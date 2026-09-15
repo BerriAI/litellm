@@ -37,7 +37,7 @@ fn prepare_chat_completions(
         run_chat_completions(ChatCompletionsRequest {
             model: &model,
             messages: Value::Array(messages),
-            optional_params,
+            optional_params: optional_params.into(),
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
             custom_llm_provider: custom_llm_provider.as_deref(),
@@ -56,7 +56,7 @@ fn chat_completions_decline(
     #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
     custom_llm_provider: Option<String>,
 ) -> PyResult<Option<String>> {
-    let optional_params = object_or_empty("optional_params", optional_params)?;
+    let optional_params = object_or_empty("optional_params", optional_params)?.into();
     Ok(chat_completions_decline_reason(
         &model,
         custom_llm_provider.as_deref(),

@@ -11,6 +11,7 @@ use crate::chat_completions::types::{
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
 use crate::error::Error;
+use crate::params::OpaqueParams;
 use crate::providers::anthropic::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
 };
@@ -77,7 +78,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
-        _optional_params: &Map<String, Value>,
+        _optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
@@ -87,7 +88,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         api_key: Option<&str>,
         _model: &str,
-        _optional_params: &Map<String, Value>,
+        _optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ChatCompletionsAuth, Error> {
         Ok(ChatCompletionsAuth::Header {
@@ -124,7 +125,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
     ) -> Option<Unsupported> {
         unsupported_param(self.supported_openai_params(), &[], optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
@@ -141,10 +142,14 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         model: &str,
         messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
+        optional_params: OpaqueParams,
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
-            body: anthropic_body(model, &build_conversation(&messages), optional_params),
+            body: anthropic_body(
+                model,
+                &build_conversation(&messages),
+                optional_params.into_inner(),
+            ),
         })
     }
 

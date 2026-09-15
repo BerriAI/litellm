@@ -229,6 +229,10 @@ pub(crate) struct VertexAIDeepSeekOCRConfig;
 impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
     type ProviderResponse = DeepSeekOcrResponse;
 
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &["stream", "temperature", "max_tokens", "top_p", "n", "stop"]
+    }
+
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,

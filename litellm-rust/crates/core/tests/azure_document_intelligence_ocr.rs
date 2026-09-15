@@ -63,7 +63,7 @@ async fn rejects_invalid_pages_features_and_format() {
             api_base: Some("http://127.0.0.1:1".into()),
             custom_llm_provider: None,
             extra_headers: None,
-            optional_params: options.as_object().unwrap().clone(),
+            optional_params: options.as_object().unwrap().clone().into(),
             input_sources: Default::default(),
             timeout_seconds: None,
         });

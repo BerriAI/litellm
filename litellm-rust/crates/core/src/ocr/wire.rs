@@ -6,6 +6,7 @@ use std::time::Duration;
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
 use crate::Error;
 use crate::auth::InputSource;
+use crate::params::OpaqueParams;
 use serde::{
     Deserialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -13,26 +14,6 @@ use serde::{
 use serde_json::{Map, Value};
 
 const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body", "max_response_bytes"];
-const MISTRAL_OPTION_FIELDS: &[&str] = &[
-    "pages",
-    "include_image_base64",
-    "image_limit",
-    "image_min_size",
-    "bbox_annotation_format",
-    "document_annotation_format",
-    "document_annotation_prompt",
-    "extract_header",
-    "extract_footer",
-    "table_format",
-    "confidence_scores_granularity",
-    "include_blocks",
-    "id",
-];
-const DEEPSEEK_OPTION_FIELDS: &[&str] =
-    &["stream", "temperature", "max_tokens", "top_p", "n", "stop"];
-const DOCUMENT_INTELLIGENCE_OPTION_FIELDS: &[&str] = &["pages", "features"];
-const REDUCTO_V3_OPTION_FIELDS: &[&str] = &["formatting", "retrieval", "settings"];
-const REDUCTO_LEGACY_OPTION_FIELDS: &[&str] = &["enhance"];
 const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
     "azure_ad_token",
     "tenant_id",
@@ -76,7 +57,7 @@ pub struct OcrWireRequest {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     #[serde(default)]
-    pub optional_params: Map<String, Value>,
+    pub optional_params: OpaqueParams,
     #[serde(default)]
     pub input_sources: BTreeMap<String, InputSource>,
     pub timeout_seconds: Option<f64>,
@@ -92,17 +73,9 @@ pub fn consumed_optional_param_names(
 ) -> Result<Vec<&'static str>, Error> {
     use super::provider_config::OcrConfigKind;
 
-    let (_, config) = super::provider_config::resolve_provider_config(model, custom_llm_provider)?;
-    let provider_fields: &[&str] = match config {
-        OcrConfigKind::Cohere | OcrConfigKind::AzureCohere => &["output_format"],
-        OcrConfigKind::Mistral | OcrConfigKind::AzureAi | OcrConfigKind::VertexAi => {
-            MISTRAL_OPTION_FIELDS
-        }
-        OcrConfigKind::AzureDocumentIntelligence => DOCUMENT_INTELLIGENCE_OPTION_FIELDS,
-        OcrConfigKind::ReductoV3 => REDUCTO_V3_OPTION_FIELDS,
-        OcrConfigKind::ReductoLegacy => REDUCTO_LEGACY_OPTION_FIELDS,
-        OcrConfigKind::VertexDeepSeek => DEEPSEEK_OPTION_FIELDS,
-    };
+    let (provider_model, config) =
+        super::provider_config::resolve_provider_config(model, custom_llm_provider)?;
+    let provider_fields = config.get_supported_ocr_params(&provider_model);
     let auth_fields: &[&str] = match config {
         OcrConfigKind::AzureAi
         | OcrConfigKind::AzureDocumentIntelligence

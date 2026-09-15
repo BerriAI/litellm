@@ -16,8 +16,9 @@ pub mod response_utils;
 pub mod transformation;
 pub mod types;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
+use crate::params::OpaqueParams;
 use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
@@ -38,7 +39,7 @@ pub fn chat_completions_decline_reason(
     model: &str,
     custom_llm_provider: Option<&str>,
     messages: Value,
-    optional_params: &Map<String, Value>,
+    optional_params: &OpaqueParams,
 ) -> Option<&'static str> {
     let Ok((_, config)) = resolve_provider_config(model, custom_llm_provider) else {
         return Some("provider is not on the rust chat completions path");

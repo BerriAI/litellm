@@ -10,6 +10,7 @@ pub(crate) mod llms;
 mod media;
 pub mod messages;
 pub mod ocr;
+pub mod params;
 pub mod providers;
 pub mod responses;
 mod url_utils;

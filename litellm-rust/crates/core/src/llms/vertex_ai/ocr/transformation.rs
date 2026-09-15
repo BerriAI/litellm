@@ -2,14 +2,12 @@ use super::common_utils::validate_destination;
 use crate::Error;
 use crate::auth::vertex::{self, VertexConfig};
 use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
-use crate::llms::mistral::ocr::{MistralOcrParams, MistralOcrResponse};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
-use crate::ocr::prepare::{
-    _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
-};
+use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
 const DEFAULT_LOCATION: &str = "us-central1";
@@ -20,16 +18,17 @@ pub(crate) struct VertexAIOCRConfig;
 impl BaseOcrConfig for VertexAIOCRConfig {
     type ProviderResponse = MistralOcrResponse;
 
+    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
+        MistralOCRConfig.get_supported_ocr_params(model)
+    }
+
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
         validate_destination(&request.connection)?;
-        let ParsedProviderParams {
-            known: params,
-            extra_params: _extra_params,
-        } = _prepare_ocr_request::<MistralOcrParams>(request)?;
+        let params = self.map_ocr_params(&request.model, &request.optional_params);
         let config = VertexConfig::from_sourced_optional_params(
             &request.optional_params,
             &request.input_sources,

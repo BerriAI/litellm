@@ -7,6 +7,7 @@ use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
 use crate::error::{Error, json_type_name};
+use crate::params::OpaqueParams;
 
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
 use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
@@ -54,7 +55,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         &self,
         _model: &str,
         audio: Value,
-        optional_params: Map<String, Value>,
+        optional_params: OpaqueParams,
     ) -> Result<AudioTranscriptionRequestData, Error> {
         let (data, format) = audio_fields(audio)?;
         let mut instruction = "Transcribe the audio. Respond with only the transcript.".to_string();
@@ -109,7 +110,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
@@ -131,7 +132,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
     fn auth_strategy(
         &self,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<AudioTranscriptionAuth, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
@@ -152,12 +153,12 @@ mod tests {
 
     #[test]
     fn request_matches_python_shape() {
-        let params = Map::from_iter([
+        let params = OpaqueParams::from(Map::from_iter([
             ("language".to_string(), json!("en")),
             ("prompt".to_string(), json!("Speaker names")),
             ("temperature".to_string(), json!(0)),
             ("timestamp_granularities".to_string(), json!(["word"])),
-        ]);
+        ]));
         let params = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.map_transcription_params(&params);
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .transform_transcription_request(
@@ -199,14 +200,17 @@ mod tests {
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.transform_transcription_request(
             "model",
             json!({"data": "AQI="}),
-            Map::new(),
+            OpaqueParams::default(),
         );
         assert!(result.is_err());
     }
 
     #[test]
     fn region_and_url_precedence_match_python() {
-        let params = Map::from_iter([("aws_region_name".to_string(), json!("eu-west-1"))]);
+        let params = OpaqueParams::from(Map::from_iter([(
+            "aws_region_name".to_string(),
+            json!("eu-west-1"),
+        )]));
         let url = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .complete_url(
                 None,

@@ -18,13 +18,17 @@ pub(crate) struct AzureAICohereParseConfig;
 impl BaseOcrConfig for AzureAICohereParseConfig {
     type ProviderResponse = CohereResponse;
 
+    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
+        CohereParseConfig.get_supported_ocr_params(model)
+    }
+
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
         let params = crate::ocr::wire::decode_request_value::<CohereParams>(
-            serde_json::Value::Object(request.optional_params.clone()),
+            serde_json::Value::Object(request.optional_params.clone().into()),
             "optional_params",
         )?;
         let config = AzureAuthInputs {

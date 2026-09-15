@@ -27,7 +27,8 @@ fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
         optional_params: json!({"extract_header":true,"unknown":42})
             .as_object()
             .unwrap()
-            .clone(),
+            .clone()
+            .into(),
         input_sources: Default::default(),
         timeout_seconds: None,
     };
@@ -40,7 +41,7 @@ fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
             api_base: None,
             custom_llm_provider: Some("unknown".into()),
             extra_headers: None,
-            optional_params: serde_json::Map::new(),
+            optional_params: Default::default(),
             input_sources: Default::default(),
             timeout_seconds: None,
         })

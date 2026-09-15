@@ -446,6 +446,10 @@ mod legacy {
     impl BaseOcrConfig for ReductoParseLegacyConfig {
         type ProviderResponse = ReductoResponse;
 
+        fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+            &["enhance"]
+        }
+
         async fn prepare_request(
             &self,
             request: &LiteLLMOcrRequest,
@@ -498,6 +502,10 @@ mod v3 {
 
     impl BaseOcrConfig for ReductoParseV3Config {
         type ProviderResponse = ReductoResponse;
+
+        fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+            &["formatting", "retrieval", "settings"]
+        }
 
         async fn prepare_request(
             &self,

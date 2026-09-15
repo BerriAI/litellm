@@ -6,9 +6,9 @@ fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")
 }
 
-fn params(value: Value) -> Map<String, Value> {
+fn params(value: Value) -> OpaqueParams {
     match value {
-        Value::Object(map) => map,
+        Value::Object(map) => map.into(),
         other => panic!("params must be an object, got {other}"),
     }
 }
@@ -225,9 +225,12 @@ fn builds_the_converse_url_from_the_region_in_the_model_id() {
     let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
         config
-            .complete_url(None, "us-east-1/anthropic.claude-v2", &Map::new(), &|_| {
-                None
-            })
+            .complete_url(
+                None,
+                "us-east-1/anthropic.claude-v2",
+                &OpaqueParams::default(),
+                &|_| { None }
+            )
             .expect("url builds"),
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
@@ -239,13 +242,23 @@ fn falls_back_to_the_region_env_then_the_default_region() {
     let with_env = |key: &str| (key == "AWS_REGION_NAME").then(|| "eu-west-1".to_string());
     assert_eq!(
         config
-            .complete_url(None, "anthropic.claude-v2", &Map::new(), &with_env)
+            .complete_url(
+                None,
+                "anthropic.claude-v2",
+                &OpaqueParams::default(),
+                &with_env
+            )
             .expect("url builds"),
         "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
     assert_eq!(
         config
-            .complete_url(None, "anthropic.claude-v2", &Map::new(), &|_| None)
+            .complete_url(
+                None,
+                "anthropic.claude-v2",
+                &OpaqueParams::default(),
+                &|_| None
+            )
             .expect("url builds"),
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-v2/converse"
     );
@@ -276,7 +289,7 @@ fn signs_with_sigv4_in_the_resolved_region() {
             .auth(
                 None,
                 "eu-central-1/anthropic.claude-v2",
-                &Map::new(),
+                &OpaqueParams::default(),
                 &|_| None
             )
             .expect("auth resolves"),
@@ -300,7 +313,7 @@ fn a_bearer_token_outranks_sigv4_the_way_python_resolves_it() {
             .auth(
                 api_key,
                 "eu-central-1/anthropic.claude-v2",
-                &Map::new(),
+                &OpaqueParams::default(),
                 env,
             )
             .expect("auth resolves")
@@ -542,7 +555,7 @@ fn leaves_a_complete_converse_url_untouched() {
             .complete_url(
                 Some(already_built),
                 "anthropic.claude-v2",
-                &Map::new(),
+                &OpaqueParams::default(),
                 &|_| None
             )
             .expect("url builds"),

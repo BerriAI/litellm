@@ -40,7 +40,7 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         api_base: Some(&api_base),
         custom_llm_provider: Some("bedrock"),
         extra_headers: None,
-        optional_params,
+        optional_params: optional_params.into(),
         timeout: None,
     })
     .await

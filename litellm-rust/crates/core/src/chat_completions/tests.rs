@@ -22,7 +22,7 @@ fn request<'a>(
         model,
         messages,
         optional_params: match optional_params {
-            Value::Object(map) => map,
+            Value::Object(map) => map.into(),
             other => panic!("params must be an object, got {other}"),
         },
         api_key: Some("sk-test"),
@@ -489,7 +489,7 @@ fn decline_reason(
     params: Value,
 ) -> Option<&'static str> {
     let params = match params {
-        Value::Object(map) => map,
+        Value::Object(map) => map.into(),
         other => panic!("params must be an object, got {other}"),
     };
     super::chat_completions_decline_reason(model, provider, messages, &params)
@@ -663,7 +663,7 @@ mod round_trip {
             model: "anthropic/claude-sonnet-4-5",
             messages,
             optional_params: match params {
-                Value::Object(map) => map,
+                Value::Object(map) => map.into(),
                 other => panic!("params must be an object, got {other}"),
             },
             api_key: Some("sk-test"),

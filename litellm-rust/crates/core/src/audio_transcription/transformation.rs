@@ -1,7 +1,8 @@
 use crate::Error;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData};
+use crate::params::OpaqueParams;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioTranscriptionAuth {
@@ -15,22 +16,16 @@ pub enum AudioTranscriptionAuth {
 pub trait AudioTranscriptionProviderConfig: Sync {
     fn supported_transcription_params(&self) -> &'static [&'static str];
 
-    fn map_transcription_params(&self, params: &Map<String, Value>) -> Map<String, Value> {
-        params
-            .iter()
-            .filter(|(key, _)| {
-                self.supported_transcription_params()
-                    .contains(&key.as_str())
-            })
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn map_transcription_params(&self, params: &OpaqueParams) -> OpaqueParams {
+        params.retain_supported(self.supported_transcription_params())
     }
 
     fn transform_transcription_request(
         &self,
         model: &str,
         audio: Value,
-        optional_params: Map<String, Value>,
+        optional_params: OpaqueParams,
     ) -> Result<AudioTranscriptionRequestData, Error>;
 
     fn transform_transcription_response(
@@ -43,14 +38,14 @@ pub trait AudioTranscriptionProviderConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
     fn auth_strategy(
         &self,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<AudioTranscriptionAuth, Error>;
 }

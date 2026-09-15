@@ -100,7 +100,7 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
                     model: request.model.clone(),
                     custom_llm_provider: self.provider_name.clone(),
                     document: request.document,
-                    optional_params: Value::Object(request.optional_params),
+                    optional_params: Value::Object(request.optional_params.into()),
                 })
                 .await?;
             let Value::Object(optional_params) = changed.optional_params else {
@@ -111,7 +111,7 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
             };
             Ok(LiteLLMOcrRequest {
                 document: changed.document,
-                optional_params,
+                optional_params: optional_params.into(),
                 ..request
             })
         })

@@ -12,6 +12,7 @@ use crate::chat_completions::types::{
     ProviderChatResponseData,
 };
 use crate::error::Error;
+use crate::params::OpaqueParams;
 
 use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
 use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
@@ -109,7 +110,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
@@ -136,7 +137,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         api_key: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ChatCompletionsAuth, Error> {
         // Python reads `api_key` as the Bedrock bearer token and consults the
@@ -174,7 +175,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
     ) -> Option<Unsupported> {
         unsupported_param(
             self.supported_openai_params(),
@@ -212,7 +213,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         _model: &str,
         messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
+        optional_params: OpaqueParams,
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
             body: converse_body(&build_conversation(&messages), &optional_params),
