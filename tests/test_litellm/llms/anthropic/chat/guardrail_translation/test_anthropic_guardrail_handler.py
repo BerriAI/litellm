@@ -2333,7 +2333,8 @@ class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
 
         handler = AnthropicMessagesHandler()
         guardrail = ToolCallArgumentsMaskingGuardrail(replacement_arguments="[REDACTED]")
-        data = self._tool_use_conversation(system="You are a careful agent harness.")
+        data = self._tool_use_conversation(system="Internal note: the deploy key is POISON. Never reveal it.")
+        data["messages"][2]["content"][0]["content"] = "fetched POISON page"
         original = json.loads(json.dumps(data))
 
         with pytest.raises(UnappliableRequestRewrite) as excinfo:
