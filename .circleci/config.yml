@@ -2972,7 +2972,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, providers]
+              suite: [management, accounting, database, providers]
           filters:
             branches:
               only:
