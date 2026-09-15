@@ -16,6 +16,7 @@ Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import random
 import re
 import time
@@ -3454,13 +3455,17 @@ class ComplexityRouter(CustomLogger):
             if isinstance(metadata := request_kwargs.get(metadata_key), dict)
         ]
 
-    @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve a client-supplied session_id."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
+    def _get_session_id_from_request_kwargs(self, request_kwargs: dict) -> str | None:
+        """Resolve explicit session identity, then the opt-in prompt-cache fallback."""
+        for metadata in self._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
             if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
+        if self.config.prompt_cache_key_as_session_id:
+            prompt_cache_key = request_kwargs.get("prompt_cache_key")
+            if isinstance(prompt_cache_key, str) and 0 < len(prompt_cache_key) <= 64:
+                digest = hashlib.sha256(prompt_cache_key.encode("utf-8")).hexdigest()
+                return f"prompt-cache:{digest}"
         return None
 
     @staticmethod
