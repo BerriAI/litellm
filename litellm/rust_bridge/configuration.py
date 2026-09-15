@@ -131,8 +131,7 @@ def resolve_capability(
             if environment_override is False or process_override is False:
                 return ExecutionDecision.PYTHON
             return ExecutionDecision.RUST_WITH_FALLBACK
-        case _:
-            assert_never(capability.rollout)
+    return assert_never(capability.rollout)
 
 
 def capability_decision(spec: CapabilitySpec, *, context: CapabilityContext) -> ExecutionDecision:
