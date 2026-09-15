@@ -2918,14 +2918,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _key_owns_model_tpm_limit_from_request_metadata(
         self,
-        request_metadata: dict[str, Any],
+        request_metadata: Mapping[str, object],
         model_group: str | None,
     ) -> bool:
         if model_group is None:
             return False
-        key_view: Final = UserAPIKeyAuth(
-            metadata=request_metadata.get("user_api_key_metadata") or {},
-            model_max_budget=request_metadata.get("user_api_key_model_max_budget") or {},
+        key_view: Final = UserAPIKeyAuth.model_validate(
+            {
+                "metadata": request_metadata.get("user_api_key_metadata") or {},
+                "model_max_budget": request_metadata.get("user_api_key_model_max_budget") or {},
+            }
         )
         return self._key_owns_model_limit(key_view, model_group, "model_tpm_limit")
 
