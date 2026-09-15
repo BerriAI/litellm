@@ -52,6 +52,23 @@ describe("fetchAvailableModels", () => {
     ]);
   });
 
+  it("carries only explicitly supported Fast capabilities, not accepted speed parameters", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "fast", supports_fast_mode: true },
+        { model_group: "blocked", supports_fast_mode: false },
+        { model_group: "missing", supports_speed: true },
+        { model_group: "unknown", supports_fast_mode: null },
+      ],
+    });
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "blocked" },
+      { model_group: "fast", supports_fast_mode: true },
+      { model_group: "missing" },
+      { model_group: "unknown" },
+    ]);
+  });
+
   it("preserves absent, unknown, empty, and explicit effort capability states", async () => {
     modelHubCallMock.mockResolvedValue({
       data: [
