@@ -10860,6 +10860,72 @@ def test_validate_max_ui_session_budget_empty_restores_default(empty_value):
     assert _validate_general_settings_ui_litellm_value("max_ui_session_budget", empty_value) == 1.0
 
 
+@pytest.mark.asyncio
+async def test_update_config_field_model_access_denied_message_sets_live_value(monkeypatch):
+    """LIT-5283: the client-facing model access denial message is editable from the Admin UI
+    General tab as a String field, applies live via setattr, and persists under litellm_settings."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import ConfigFieldUpdate, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "model_access_denied_message", None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="model_access_denied_message",
+            field_value="Model `{model}` is unavailable for this key.",
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    assert litellm.model_access_denied_message == "Model `{model}` is unavailable for this key."
+    assert saved["litellm_settings"]["model_access_denied_message"] == "Model `{model}` is unavailable for this key."
+
+
+@pytest.mark.parametrize("bad_value", [True, 3, 1.5, ["x"], {"a": "b"}])
+def test_validate_model_access_denied_message_rejects_non_strings(bad_value):
+    from fastapi import HTTPException
+
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_general_settings_ui_litellm_value("model_access_denied_message", bad_value)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("empty_value", [None, ""])
+def test_validate_model_access_denied_message_empty_restores_detailed_default(empty_value):
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    assert _validate_general_settings_ui_litellm_value("model_access_denied_message", empty_value) is None
+
+
+@pytest.mark.parametrize("empty_value", [None, ""])
+def test_validate_expose_router_debug_in_errors_empty_restores_true_default(empty_value):
+    """Clearing the field from the Admin UI must restore the historical default (debug details
+    exposed), not the generic Boolean fallback of False."""
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    assert _validate_general_settings_ui_litellm_value("expose_router_debug_in_errors", empty_value) is True
+    assert _validate_general_settings_ui_litellm_value("expose_router_debug_in_errors", False) is False
+
+
 def test_general_settings_ui_defaults_unchanged_for_existing_fields():
     """The spec-default mechanism added for max_ui_session_budget must not change what
     clearing the pre-existing fields restores (None for Float/Select, False for Boolean)."""

@@ -17435,11 +17435,13 @@ GeneralSettingsUILiteLLMValue = float | bool | str | None
 
 
 class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
-    type: Literal["Float", "Dollar", "Boolean", "Select"]
+    type: Literal["Float", "Dollar", "Boolean", "Select", "String"]
     description: str
     options: NotRequired[tuple[str, ...]]
     tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
-    default: NotRequired[float]  # reset/clear restores this instead of None; fields whose None means fail-open set it
+    default: NotRequired[
+        float | bool
+    ]  # reset/clear restores this instead of None; fields whose None means fail-open set it
 
 
 _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFieldSpec]] = {
@@ -17479,6 +17481,24 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
             "USD spend cap for each dashboard login session; covers LLM calls made from the dashboard "
             "such as the playground and auto router Test Connection. Each login starts a fresh session "
             "with this budget. Clearing restores the $1 default."
+        ),
+    },
+    "model_access_denied_message": {
+        "type": "String",
+        "description": (
+            "Client-facing error message returned when a key, team, user, org or project is not allowed "
+            "to call the requested model. {model} is replaced with the requested model name. The full "
+            "denial reason (allowed models and access groups) is still written to the proxy logs. "
+            "Leave empty to return the detailed message to clients."
+        ),
+    },
+    "expose_router_debug_in_errors": {
+        "type": "Boolean",
+        "default": True,
+        "description": (
+            "Append router debug details (model group, configured fallbacks, fallback errors, cooldown "
+            "info) to error messages returned to clients. Turn off to keep those details in the proxy "
+            "logs only."
         ),
     },
 }
@@ -17528,6 +17548,13 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: object) 
                     detail={"error": f"{field_name} must be a positive dollar amount or empty"},
                 )
             return float(value)
+        case "String":
+            if not isinstance(value, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be a string or empty"},
+                )
+            return value
         case _:
             assert_never(field_type)
 

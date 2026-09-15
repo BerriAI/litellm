@@ -39,6 +39,8 @@ export interface generalSettingsItem {
 const NUMERIC_INPUT_WIDTH = "w-36";
 
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
+const toStringValue = (raw: string): string | null => (raw === "" ? null : raw);
+const RESETS_WHEN_CLEARED = new Set(["Select", "String"]);
 
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
@@ -105,6 +107,16 @@ const SettingValueEditor: React.FC<{
           ))}
         </SelectContent>
       </Select>
+    );
+  }
+  if (setting.field_type === "String") {
+    return (
+      <Input
+        type="text"
+        className="w-96"
+        value={setting.field_value ?? ""}
+        onChange={(event) => onChange(setting.field_name, toStringValue(event.target.value))}
+      />
     );
   }
   return null;
@@ -210,7 +222,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (setting?.field_type === "Select") handleResetField(fieldName);
+      if (setting && RESETS_WHEN_CLEARED.has(setting.field_type)) handleResetField(fieldName);
       return;
     }
     try {
