@@ -73,6 +73,7 @@ interface AllModelsTableProps {
   availableModelAccessGroups: string[];
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   onModelIdClick: (modelId: string) => void;
   onTeamIdClick: (teamId: string) => void;
   onDeleteClick: (modelId: string) => void;
@@ -120,6 +121,7 @@ export function AllModelsTable({
   availableModelAccessGroups,
   userRole,
   userID,
+  isViewOnly,
   onModelIdClick,
   onTeamIdClick,
   onDeleteClick,
@@ -132,6 +134,7 @@ export function AllModelsTable({
     const columnDeps = {
       userRole,
       userID,
+      isViewOnly,
       onModelIdClick,
       onTeamIdClick,
       onDeleteClick,
@@ -139,7 +142,7 @@ export function AllModelsTable({
       pausingModelId,
     };
     return getModelsTableColumns(columnDeps);
-  }, [userRole, userID, onModelIdClick, onTeamIdClick, onDeleteClick, onTogglePauseClick, pausingModelId]);
+  }, [userRole, userID, isViewOnly, onModelIdClick, onTeamIdClick, onDeleteClick, onTogglePauseClick, pausingModelId]);
 
   const modelGroupOptions = useMemo(
     () => [

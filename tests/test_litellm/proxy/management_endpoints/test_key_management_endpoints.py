@@ -1,5 +1,6 @@
 from typing import Final
 import asyncio
+from types import SimpleNamespace
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -31,6 +32,7 @@ from litellm.proxy._types import (
     Member,
     ProxyException,
     ResetSpendRequest,
+    RegenerateKeyRequest,
     UpdateKeyRequest,
 )
 from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_cache_key
@@ -6619,6 +6621,9 @@ async def test_generate_key_with_router_settings(monkeypatch):
         return_value=[]
     )
     mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[
+        SimpleNamespace(model_id="weighted-id", model_name="gpt-4", model_info={})
+    ])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -6634,6 +6639,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
         "routing_strategy": "usage-based",
         "num_retries": 3,
         "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
+        "weights": {"gpt-4": {"weighted-id": 1}},
     }
 
     request_data = GenerateKeyRequest(
@@ -6683,20 +6689,36 @@ async def test_generate_key_with_router_settings(monkeypatch):
 
     # Verify router_settings matches input (regardless of serialization state)
     assert actual_settings == router_settings_data
+    mock_prisma_client.insert_data.reset_mock()
+    with pytest.raises(ProxyException, match="Unknown deployment ID"):
+        await generate_key_fn(
+            data=GenerateKeyRequest(router_settings={"weights": {"gpt-4": {"unknown-id": 1}}}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="user-router-1"),
+        )
+    mock_prisma_client.insert_data.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_update_key_with_router_settings(monkeypatch):
+@pytest.mark.parametrize("request_type", [UpdateKeyRequest, RegenerateKeyRequest])
+@pytest.mark.parametrize("target_team", ["new-team", None])
+async def test_update_key_with_router_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[UpdateKeyRequest | RegenerateKeyRequest], target_team: str | None,
+) -> None:
     """
     Test that /key/update correctly handles router_settings by:
     1. Accepting router_settings as a dict parameter
     2. Serializing router_settings to JSON when updating database
     3. Updating router_settings in the key record
     """
-    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
+
+    model = SimpleNamespace(model_id="weighted-id", model_name="gpt-4", model_info={})
+    table = SimpleNamespace(find_many=AsyncMock(return_value=[model]))
+    db = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table))
 
     # Mock existing key
     existing_key = LiteLLM_VerificationToken(
@@ -6714,14 +6736,16 @@ async def test_update_key_with_router_settings(monkeypatch):
     router_settings_data = {
         "routing_strategy": "latency-based",
         "num_retries": 2,
+        "weights": {"gpt-4": {"weighted-id": 1}},
     }
 
-    update_request = UpdateKeyRequest(
+    update_request = request_type(
         key="test-token-router", router_settings=router_settings_data
     )
 
     result = await prepare_key_update_data(
-        data=update_request, existing_key_row=existing_key
+        data=update_request, existing_key_row=existing_key,
+        prisma_client=db, llm_router=None,
     )
 
     # Verify router_settings is serialized to JSON string
@@ -6731,6 +6755,28 @@ async def test_update_key_with_router_settings(monkeypatch):
     # Verify router_settings can be deserialized and matches input
     deserialized_settings = json.loads(result["router_settings"])
     assert deserialized_settings == router_settings_data
+
+    with pytest.raises(HTTPException, match="Unknown deployment ID"):
+        await prepare_key_update_data(
+            request_type(key=existing_key.token, router_settings={"weights": {"gpt-4": {"unknown-id": 1}}}),
+            existing_key,
+            prisma_client=db, llm_router=None,
+        )
+    existing_key.team_id = "old-team"
+    existing_key.router_settings = router_settings_data
+    move = request_type(key=existing_key.token, team_id=target_team)
+    retained = await prepare_key_update_data(move, existing_key, prisma_client=db, llm_router=None)
+    assert retained["team_id"] == target_team
+    assert "router_settings" not in retained
+    model.model_info = {"team_id": "old-team"}
+    with pytest.raises(HTTPException, match="Unknown deployment ID"):
+        await prepare_key_update_data(move, existing_key, prisma_client=db, llm_router=None)
+    cleared = await prepare_key_update_data(
+        request_type(key=existing_key.token, team_id=target_team, router_settings={}), existing_key,
+        prisma_client=db, llm_router=None,
+    )
+    assert cleared["team_id"] == target_team
+    assert json.loads(cleared["router_settings"]) == {}
 
 
 @pytest.mark.asyncio
