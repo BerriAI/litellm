@@ -4251,6 +4251,99 @@ async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
+def _proxy_admin_world(user_row: LiteLLM_UserTable):
+    """The proxy globals the centralized gate reads, with ``user_row`` already in the
+    user cache so get_user_object resolves it without a DB round trip."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    key_cache = UserApiKeyCache()
+    key_cache.set_cache(key=user_row.user_id, value=user_row)
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": key_cache,
+        "spend_counter_cache": DualCache(),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+
+    @contextmanager
+    def _world():
+        originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+        try:
+            for k, v in attrs.items():
+                setattr(_proxy_server_mod, k, v)
+            yield
+        finally:
+            for k, v in originals.items():
+                setattr(_proxy_server_mod, k, v)
+
+    return _world()
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_enforce_personal_budget_for_proxy_admin_token():
+    """GH#41226: a proxy admin stays subject to their own personal budget.
+
+    common_checks reads the admin role off user_object rather than off the token, so the
+    gate substitutes an admin user_object whenever the token says PROXY_ADMIN. Rebuilding
+    that object from scratch dropped max_budget, and the personal-budget check returns
+    early on a None budget, so an admin holding an external JWT kept getting completions
+    after their personal budget was spent.
+    """
+    admin_row = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        spend=25.0,
+        max_budget=10.0,
+    )
+    token = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with _proxy_admin_world(admin_row):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+            )
+
+    assert exc_info.value.max_budget == 10.0
+    assert exc_info.value.current_cost == 25.0
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_keep_admin_role_when_the_db_row_is_not_admin():
+    """The other half of GH#41226: forcing the budget back must not stop the token from
+    forcing the admin role. A JWT or master-key admin whose DB row carries a non-admin
+    user_role still has to reach common_checks as PROXY_ADMIN, or admin-only routes would
+    start rejecting them."""
+    demoted_row = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        spend=1.0,
+        max_budget=500.0,
+    )
+    token = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with _proxy_admin_world(demoted_row):
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+            )
+
+    seen_user_object = mock_checks.await_args.kwargs["user_object"]
+    assert seen_user_object.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert seen_user_object.max_budget == 500.0
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
     """Custom-auth deployments that opt in via custom_auth_run_common_checks
