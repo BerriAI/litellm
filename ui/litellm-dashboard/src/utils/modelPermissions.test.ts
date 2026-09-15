@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Team } from "@/components/networking";
-import { canCreateModels, canModifyModel, modelCreationScope } from "./modelPermissions";
+import { canCreateModels, canEditAutoRouter, canModifyModel, modelCreationScope } from "./modelPermissions";
 
 const teamWhere = (userId: string, role: string, teamId = "team-1"): Team[] =>
   [{ team_id: teamId, members_with_roles: [{ user_id: userId, user_email: "t@test.com", role }] }] as unknown as Team[];
@@ -109,5 +109,34 @@ describe("canModifyModel", () => {
   // team-scoped carve-out runs, so team-admin membership changes nothing here either.
   it("refuses a view-only user even when they admin the owning team", () => {
     expect(canModifyModel(VIEW_ONLY_ADMIN, teamWhere("u-viewer", "admin"), teamRow)).toBe(false);
+  });
+});
+
+describe("team member auto routers", () => {
+  const team = { ...teamWhere("u-member", "user")[0], team_member_permissions: ["/auto_router/manage"] };
+  const ownRouter = {
+    teamId: "team-1",
+    isDbModel: true,
+    createdBy: "u-member",
+    model: "auto_router/complexity_router",
+  };
+
+  const revokedTeam: Team = { ...team, team_member_permissions: [] };
+  const removedMemberTeam: Team = { ...team, members_with_roles: [] };
+
+  it.each([
+    ["creator", MEMBER, team, ownRouter, true],
+    ["peer", MEMBER, team, { ...ownRouter, createdBy: "peer" }, false],
+    ["foreign team", MEMBER, team, { ...ownRouter, teamId: "other-team" }, false],
+    ["missing creator", MEMBER, team, { ...ownRouter, createdBy: null }, false],
+    ["config deployment", MEMBER, team, { ...ownRouter, isDbModel: false }, false],
+    ["ordinary model", MEMBER, team, { ...ownRouter, model: "openai/gpt-5" }, false],
+    ["revoked permission", MEMBER, revokedTeam, ownRouter, false],
+    ["removed member", MEMBER, removedMemberTeam, ownRouter, false],
+    ["blocked team", MEMBER, { ...team, blocked: true }, ownRouter, false],
+    ["viewer", { ...MEMBER, isViewOnly: true }, team, ownRouter, false],
+  ] as const)("allows own configuration edits only: %s", (...args) => {
+    const [, actor, eligibleTeam, origin, expected] = args;
+    expect(canEditAutoRouter(actor, [eligibleTeam], origin)).toBe(expected);
   });
 });

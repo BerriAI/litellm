@@ -13,13 +13,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
-import { modelAvailableCall, validateAutoRouterConfig } from "../networking";
+import { modelAvailableCall, validateAutoRouterConfig, type Team } from "../networking";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { all_admin_roles } from "@/utils/roles";
-import { type ModelWriteScope } from "@/utils/modelPermissions";
+import { canCreateAutoRouterForTeam, canModifyModel, type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
+import { fetchAutoRouterModels, fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
@@ -84,6 +84,7 @@ interface AddAutoRouterTabProps {
    * their submit is a guaranteed 403.
    */
   createScope?: ModelWriteScope;
+  teams?: Team[] | null;
 }
 
 type PresetAvailability =
@@ -187,11 +188,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   userRole,
   userId,
   createScope = "unscoped-ok",
+  teams = null,
 }) => {
   const requiresTeamScope = createScope === "team-required";
   const form = useZodForm(autoRouterSchema(requiresTeamScope), { defaultValues: EMPTY_FORM_VALUES });
   const watchedName = useWatch({ control: form.control, name: "auto_router_name" });
   const watchedTeamId = useWatch({ control: form.control, name: "team_id" });
+  const actor = { userRole, userID: userId ?? null, isViewOnly: false };
+  const isMemberManaged =
+    requiresTeamScope &&
+    !canModifyModel(actor, teams, {
+      teamId: watchedTeamId,
+      isDbModel: true,
+    });
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
@@ -235,9 +244,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     isError: modelsError,
     refetch: refetchModels,
   } = useQuery({
-    queryKey: ["availableModels", "autoRouter", accessToken],
-    queryFn: () => fetchAvailableModels(accessToken),
-    enabled: Boolean(accessToken),
+    queryKey: ["availableModels", "autoRouter", accessToken, ...(isMemberManaged ? [watchedTeamId] : [])],
+    queryFn: () =>
+      isMemberManaged ? fetchAutoRouterModels(accessToken, watchedTeamId) : fetchAvailableModels(accessToken),
+    enabled: Boolean(accessToken && (!isMemberManaged || watchedTeamId)),
   });
   const { data: deployments, isLoading: deploymentsLoading } = useQuery({
     queryKey: autoRouterListKey(userId ?? "", userRole),
@@ -476,8 +486,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       auto_router_default_model: defaultModel,
       model_type: "complexity_router",
       complexity_router_config: complexityRouterConfigPayload,
-      model_access_group: form.getValues("model_access_group"),
-      ...buildAutoRouterCompressionParams(autoRouterCompression),
+      ...(isMemberManaged
+        ? {}
+        : {
+            model_access_group: form.getValues("model_access_group"),
+            ...buildAutoRouterCompressionParams(autoRouterCompression),
+          }),
     };
 
     await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
@@ -633,7 +647,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
                   )}
                 >
-                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+                  {({ id, value, onChange }) => (
+                    <TeamDropdown
+                      id={id}
+                      value={value}
+                      onChange={onChange}
+                      filterTeam={(team) => canCreateAutoRouterForTeam(actor, team)}
+                    />
+                  )}
                 </FormField>
               )}
 
@@ -683,7 +704,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       escalationKeywords={escalationKeywords}
                       onEscalationKeywordsChange={setEscalationKeywords}
                       autoRouterCompression={autoRouterCompression}
-                      onAutoRouterCompressionChange={setAutoRouterCompression}
+                      onAutoRouterCompressionChange={isMemberManaged ? undefined : setAutoRouterCompression}
                       showValidationErrors={showValidationErrors}
                     />
                   </div>

@@ -19,6 +19,7 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -2247,7 +2248,7 @@ class CustomStreamWrapper:
         if self.sent_last_chunk is True:
             # log the final chunk with accurate streaming values
             try:
-                complete_streaming_response = litellm.stream_chunk_builder(
+                complete_streaming_response = await asyncify(litellm.stream_chunk_builder)(
                     chunks=self.chunks,
                     messages=self.messages,
                     logging_obj=self.logging_obj,

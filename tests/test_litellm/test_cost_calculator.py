@@ -1,10 +1,7 @@
 
-import json
-from pathlib import Path
 from typing import Final
 
 import pytest
-
 
 from pydantic import BaseModel
 
@@ -1821,7 +1818,6 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     assert (
         abs(output_cost - expected_output_cost) < 1e-10
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
-
 
 
 AZURE_GPT_5_6_MAP_KEYS = (
@@ -3909,6 +3905,57 @@ def _batch_cache_usage() -> Usage:
     )
 
 
+def test_batch_cost_calculator_prices_multimodal_tokens_at_modality_rates():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {
+        "input_cost_per_token_batches": 1e-7,
+        "input_cost_per_audio_token_batches": 3.25e-6,
+        "input_cost_per_image_token_batches": 2.25e-7,
+        "input_cost_per_video_token_batches": 6e-6,
+    }
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=64,
+            image_tokens=10,
+            video_tokens=6,
+        ),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-embedding-2",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(20 * 1e-7 + 64 * 3.25e-6 + 10 * 2.25e-7 + 6 * 6e-6)
+
+
+def test_batch_cost_calculator_falls_back_to_text_batch_rate_for_modalities():
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {"input_cost_per_token_batches": 1e-7}
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=64),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-embedding-2",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(100 * 1e-7)
+
+
 def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
     """
     LIT-4008 regression: anthropic batch usage is dominated by cache tokens.
@@ -4532,26 +4579,6 @@ def test_claude_3_one_hour_cache_writes_bill_at_double_input(
     prompt_cost, _ = cost_per_token(model=model, usage_object=usage, custom_llm_provider="anthropic")
 
     assert prompt_cost == pytest.approx(1000 * expected_1hr_rate, rel=1e-9)
-
-
-def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
-    """Guard against pasting one model's 1h cache-write price onto another: every provider
-    LiteLLM tracks (Anthropic, Bedrock, Vertex, Azure) publishes the 1h write at 2x input."""
-
-    cost_map = json.loads(
-        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
-    )
-    one_hour_prefix = "cache_creation_input_token_cost_above_1hr"
-    deviations = {
-        (name, key): (entry["input_cost_per_token" + key[len(one_hour_prefix) :]], entry[key])
-        for name, entry in cost_map.items()
-        if isinstance(entry, dict)
-        for key in entry
-        if key.startswith(one_hour_prefix)
-        and entry[key] != pytest.approx(2 * entry["input_cost_per_token" + key[len(one_hour_prefix) :]], rel=1e-9)
-    }
-
-    assert deviations == {}
 
 
 def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) -> None:

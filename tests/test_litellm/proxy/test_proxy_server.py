@@ -12796,6 +12796,45 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
 
 
 @pytest.mark.asyncio
+async def test_moderations_response_carries_litellm_call_id_header():
+    from fastapi import Response
+
+    from litellm.types.utils import ModerationCreateResponse
+
+    call_id = "moderation-call-id-123"
+    moderation_response = ModerationCreateResponse(id="modr-1", model="omni-moderation-latest", results=[])
+    moderation_response._hidden_params = {"litellm_call_id": call_id, "model_id": "mod-deployment-1"}
+
+    async def fake_llm_call():
+        return moderation_response
+
+    async def passthrough_add_litellm_data(data, **kwargs):
+        return {**data, "litellm_call_id": call_id}
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fastapi_response = Response()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", spend=0.0)
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "route_request", new=AsyncMock(return_value=fake_llm_call())),  # test-quality-ok: fakes the provider call so the response headers assembled by the real route are observable
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global, no injection point
+    ):
+        mock_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        mock_logging.update_request_status = AsyncMock()
+        result = await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert result is moderation_response
+    assert fastapi_response.headers["x-litellm-call-id"] == call_id
+    assert fastapi_response.headers["x-litellm-model-id"] == "mod-deployment-1"
+
+
+@pytest.mark.asyncio
 async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(monkeypatch):
     from litellm.proxy.agent_endpoints.agent_registry import (
         AGENT_RECONCILE_LOCK,
@@ -13482,3 +13521,54 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     assert response.tokenizer_type == "huggingface_tokenizer"
     assert response.total_tokens > 0
     assert_loop_stayed_free(took, lags)
+
+
+async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
+    from tokenizers import Tokenizer
+
+    from litellm import Router
+    from litellm.types.router import DeploymentTypedDict
+
+    claude_tokenizer: Final[Tokenizer] = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    from_pretrained: Final = MagicMock(return_value=claude_tokenizer)
+
+    def deployment(model_name: str, revision: str, auth_token: str | None) -> DeploymentTypedDict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
+            "model_info": {
+                "custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": revision, "auth_token": auth_token}
+            },
+        }
+
+    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                deployment("self-hosted", "main", None),
+                deployment("self-hosted-pinned", "v2", None),
+                deployment("self-hosted-private", "main", "hf_test_token"),
+            ]
+        ),
+    )
+    litellm.utils._select_custom_tokenizer_helper.cache_clear()
+    try:
+        responses: Final = [
+            await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            for _ in range(3)
+        ]
+        assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
+        assert all(response.tokenizer_type == "huggingface_tokenizer" for response in responses)
+        assert len({response.total_tokens for response in responses}) == 1
+        assert responses[0].total_tokens > 0
+
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        assert from_pretrained.call_args_list == [
+            mock.call("my-org/tokenizer", revision="main", token=None),
+            mock.call("my-org/tokenizer", revision="v2", token=None),
+            mock.call("my-org/tokenizer", revision="main", token="hf_test_token"),
+        ]
+    finally:
+        litellm.utils._select_custom_tokenizer_helper.cache_clear()

@@ -114,6 +114,7 @@ export function AutoRoutersPanel({
             userRole={userRole}
             userId={userID}
             createScope={createScope}
+            teams={teams}
           />
         </DialogContent>
       </Dialog>
