@@ -13,11 +13,7 @@ const REMEDIATION = (
 );
 
 const BANNER_BODIES = {
-  example_key: (
-    <>
-      The master key is set to the docs example value sk-1234, which does not count as set. {REMEDIATION}
-    </>
-  ),
+  example_key: <>The master key is set to the docs example value sk-1234, which does not count as set. {REMEDIATION}</>,
   missing: REMEDIATION,
 } as const;
 

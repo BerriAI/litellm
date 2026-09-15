@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 from pydantic import TypeAdapter
-from typing_extensions import TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -31,11 +31,11 @@ _STORE_CREDENTIAL_ROUTES: Final = (
 
 
 class _ModelInfoMarker(TypedDict, total=False):
-    db_model: bool
+    db_model: ReadOnly[bool]
 
 
 class _DeploymentMarker(TypedDict, total=False):
-    model_info: _ModelInfoMarker
+    model_info: ReadOnly[_ModelInfoMarker]
 
 
 _DEPLOYMENT_MARKERS: Final = TypeAdapter(list[_DeploymentMarker])
