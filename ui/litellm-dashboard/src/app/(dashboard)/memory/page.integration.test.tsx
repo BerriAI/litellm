@@ -126,7 +126,7 @@ describe("Memory dashboard", () => {
     await waitFor(() => expect(settings.enabled).toBe(true));
     expect(settings.everyone).toBe(true);
     await waitFor(() => expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument());
-    expect(screen.getByRole("link", { name: "Manage team permissions" })).toHaveAttribute("href", "/teams");
+    expect(screen.getByRole("link", { name: "Manage team permissions" })).toHaveAttribute("href", "/ui/teams");
     await user.click(screen.getByRole("tab", { name: "Memories" }));
     expect(await screen.findByText("On · Managed by your admin")).toBeVisible();
     expect(calls.some(({ path }) => path.includes("policies") || path.includes("preference"))).toBe(false);

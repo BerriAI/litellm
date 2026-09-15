@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { toast } from "@/lib/toast";
+import { uiHref } from "@/utils/uiHref";
 import { MemoryUserPicker } from "./MemoryTargetPicker";
 
 type Settings = components["schemas"]["MemorySettings"];
@@ -150,7 +151,7 @@ export function MemoryAdministration({
           all. To give ordinary members access to their team&apos;s memories, allow “Read team memories” in Member
           Permissions.
         </p>
-        <Link className="inline-block text-sm underline underline-offset-4" href="/teams">
+        <Link className="inline-block text-sm underline underline-offset-4" href={uiHref("teams")}>
           Manage team permissions
         </Link>
       </div>

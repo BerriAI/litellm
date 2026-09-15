@@ -11,7 +11,8 @@ from litellm.litellm_core_utils.prompt_templates.server_tool_responses import (
     object_value,
     response_has_client_tools,
 )
-from litellm.litellm_core_utils.prompt_templates.server_tool_stream import ServerToolStream
+from litellm.litellm_core_utils.prompt_templates.server_tool_stream import ServerToolStream, ServerToolStreamError
+from litellm.litellm_core_utils.prompt_templates.server_tools import ServerToolRoute
 
 _MEMORY: Final = frozenset(("litellm_memory_search",))
 
@@ -37,6 +38,28 @@ def test_usage_sums_nested_token_counts_and_preserves_provider_metadata() -> Non
 
 def _event(stream: ServerToolStream, data: Mapping[str, object]) -> bytes:
     return b"".join(stream.feed(ServerSentEvent(data=json.dumps(data))))
+
+
+@pytest.mark.parametrize("route", ("acompletion", "aresponses", "anthropic_messages"))
+@pytest.mark.parametrize(
+    "error",
+    (
+        {"error": {"code": "429", "message": "private upstream account details"}},
+        {"type": "error", "code": "rate_limit_exceeded", "message": "private upstream account details"},
+        {"type": "error", "error": {"type": "rate_limit_error", "message": "private upstream account details"}},
+    ),
+)
+def test_upstream_stream_rate_limit_retains_classification_without_provider_details(
+    route: ServerToolRoute, error: Mapping[str, object]
+) -> None:
+    stream: Final = ServerToolStream(route, _MEMORY)
+    with pytest.raises(ServerToolStreamError) as failure:
+        _event(stream, error)
+    assert failure.value.status_code == 429
+    output: Final = stream.error(str(failure.value), failure.value.status_code)
+    assert b"rate_limit" in output
+    assert b"private upstream" not in output
+    assert b"response.completed" not in output
 
 
 def test_anthropic_stream_hides_memory_keeps_client_tool_ids_and_streams_text_before_completion() -> None:

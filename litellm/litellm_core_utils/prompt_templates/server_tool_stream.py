@@ -27,6 +27,26 @@ def sse_bytes(value: Mapping[str, object], event: str | None = None) -> bytes:
     return ((f"event: {event}\n" if event else "") + "data: " + json.dumps(value) + "\n\n").encode()
 
 
+class ServerToolStreamError(ValueError):
+    def __init__(self, data: Mapping[str, object]) -> None:
+        error: Final = object_value(data.get("error") or object_value(data.get("response")).get("error") or data)
+        code: Final = str(error.get("code", ""))
+        self.status_code = (
+            int(code)
+            if code.isascii() and code.isdecimal() and len(code) == 3 and 400 <= int(code) < 600
+            else 429
+            if (error.get("type") or code) in ("rate_limit_error", "rate_limit_exceeded", "insufficient_quota")
+            else 503
+            if error.get("type") == "overloaded_error"
+            else 502
+        )
+        super().__init__(
+            "The upstream model reached its rate or capacity limit"
+            if self.status_code == 429
+            else "The authenticated gateway model stream failed"
+        )
+
+
 class ServerToolStream:
     def __init__(
         self, route: ServerToolRoute, server_names: frozenset[str], request: Mapping[str, object] | None = None
@@ -114,7 +134,7 @@ class ServerToolStream:
         self.frames.append(frame)
         self.objects.append(data)
         if data.get("error") or data.get("type") in ("error", "response.failed"):
-            raise ValueError("The model stream failed during gateway tool execution")
+            raise ServerToolStreamError(data)
         emitted: Final = (
             self._anthropic(data)
             if self.route == "anthropic_messages"
@@ -424,12 +444,13 @@ class ServerToolStream:
             b"data: [DONE]\n\n",
         )
 
-    def error(self, message: str) -> bytes:
+    def error(self, message: str, status_code: int = 502) -> bytes:
+        code: Final = "rate_limit_exceeded" if status_code == 429 else "server_error"
         if self.route == "aresponses":
             return self._emit(
                 {  # mutable-ok: Native provider JSON containers.
                     "type": "error",
-                    "code": "server_error",
+                    "code": code,
                     "message": message,
                     "param": None,
                 },
@@ -440,7 +461,7 @@ class ServerToolStream:
                 {  # mutable-ok: Native provider JSON containers.
                     "type": "error",
                     "error": {  # mutable-ok: Native provider JSON containers.
-                        "type": "api_error",
+                        "type": "rate_limit_error" if status_code == 429 else "api_error",
                         "message": message,
                     },
                 },
@@ -449,9 +470,9 @@ class ServerToolStream:
         return sse_bytes(
             {  # mutable-ok: Native provider JSON containers.
                 "error": {  # mutable-ok: Native provider JSON containers.
-                    "type": "server_error",
+                    "type": code,
                     "message": message,
-                    "code": "server_error",
+                    "code": str(status_code),
                 }
             }
         )

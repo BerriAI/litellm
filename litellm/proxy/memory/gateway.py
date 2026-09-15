@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.server_tool_responses import (
     response_has_client_tools,
     response_messages,
 )
-from litellm.litellm_core_utils.prompt_templates.server_tool_stream import ServerToolStream
+from litellm.litellm_core_utils.prompt_templates.server_tool_stream import ServerToolStream, ServerToolStreamError
 from litellm.litellm_core_utils.prompt_templates.server_tools import (
     ServerToolRoute,
     append_server_reference,
@@ -387,6 +387,8 @@ async def process_gateway_memory(
         first: Final = await anext(iterator)
     except StopAsyncIteration as exc:
         raise HTTPException(status_code=502, detail="The gateway memory stream was empty") from exc
+    except ServerToolStreamError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail="The gateway model stream was invalid or incomplete") from exc
 
@@ -396,8 +398,15 @@ async def process_gateway_memory(
             async for chunk in iterator:
                 yield chunk
         except Exception as exc:
-            message: Final = str(exc.detail) if isinstance(exc, HTTPException) else "Gateway memory execution failed"
-            yield loop.stream.error(message)
+            message: Final = (
+                str(exc.detail)
+                if isinstance(exc, HTTPException)
+                else str(exc)
+                if isinstance(exc, ServerToolStreamError)
+                else "Gateway memory execution failed"
+            )
+            status: Final = exc.status_code if isinstance(exc, (HTTPException, ServerToolStreamError)) else 502
+            yield loop.stream.error(message, status)
         finally:
             await iterator.aclose()
 
