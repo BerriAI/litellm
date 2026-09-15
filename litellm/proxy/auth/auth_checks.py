@@ -857,7 +857,7 @@ MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/
 MCP_TOOL_CALL_ROUTES: Final = frozenset({"/mcp/tools/call", "/mcp-rest/tools/call"})
 
 
-def is_mcp_discovery_request(route: str, request_body: dict) -> bool:
+def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> bool:
     if route in MCP_DISCOVERY_ROUTES:
         return True
     if route in MCP_TOOL_CALL_ROUTES or not (route == "/mcp" or route.startswith("/mcp/")):
