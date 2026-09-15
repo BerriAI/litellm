@@ -45,6 +45,14 @@ pub async fn http_request(
     request.send().await
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+pub async fn execute_http_request(
+    client: &reqwest::Client,
+    request: reqwest::Request,
+) -> Result<reqwest::Response, reqwest::Error> {
+    client.execute(request).await
+}
+
 pub fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= UPSTREAM_ERROR_BODY_MAX_CHARS {
         return body.to_string();

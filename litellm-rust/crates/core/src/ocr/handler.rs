@@ -104,12 +104,10 @@ impl PreparedOcrCall {
     pub(crate) async fn execute(self) -> Result<OcrProviderResponse, Error> {
         let url = self.http.url().to_string();
         let headers = request_headers(&self.http)?;
-        let response = crate::http_utils::http_request(reqwest::RequestBuilder::from_parts(
-            self.client.provider_http().clone(),
-            self.http,
-        ))
-        .await
-        .map_err(super::client::transport_error)?;
+        let response =
+            crate::http_utils::execute_http_request(self.client.provider_http(), self.http)
+                .await
+                .map_err(super::client::transport_error)?;
         let data = match self.request.config {
             OcrConfigKind::Cohere => OcrProviderData::Cohere(
                 CohereParseConfig
