@@ -7,28 +7,29 @@ import {
   autorouterOf,
   cachingOf,
   compressionOf,
+  gatewayAttributedCachingOf,
+  SAVINGS_DRIVERS,
   savedTokensOf,
+  sumOverDays,
   usd,
 } from "@/app/(dashboard)/cost-optimization/_components/costOptimizationUtils";
 import { DailyData } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
-// Exported because the by-driver donut has to slice the same numbers the tiles print, and two
-// totalling paths over the same rows is how a chart and the tile above it end up disagreeing.
-export const useSavingsTotals = (results: DailyData[]) =>
-  useMemo(() => {
-    const sumOf = (of: (metrics: DailyData["metrics"]) => number) => results.reduce((sum, d) => sum + of(d.metrics), 0);
-    const compression = sumOf(compressionOf);
-    const caching = sumOf(cachingOf);
-    const autorouter = sumOf(autorouterOf);
-    return {
-      compression,
-      caching,
-      autorouter,
-      savedTokens: sumOf(savedTokensOf),
-      total: compression + caching + autorouter,
-    };
-  }, [results]);
+// The total sums SAVINGS_DRIVERS, so it is by construction the sum of what the
+// charts plot; the donut and timelines derive from the same list in costOptimizationUtils.
+const useSavingsTotals = (results: DailyData[]) =>
+  useMemo(
+    () => ({
+      compression: sumOverDays(results, compressionOf),
+      caching: sumOverDays(results, cachingOf),
+      autorouter: sumOverDays(results, autorouterOf),
+      gatewayAttributedCaching: sumOverDays(results, gatewayAttributedCachingOf),
+      savedTokens: sumOverDays(results, savedTokensOf),
+      total: SAVINGS_DRIVERS.reduce((sum, { of }) => sum + sumOverDays(results, of), 0),
+    }),
+    [results],
+  );
 
 const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading: boolean }) => {
   const totals = useSavingsTotals(results);
@@ -39,6 +40,7 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
         label="Total saved"
         value={usd(totals.total)}
         hint={isLoading ? "Loading..." : "Compression + prompt caching + auto-router"}
+        info="The sum of the three tiles beside it. Its caching term is the LiteLLM-injected share, so this total is what the gateway itself delivered; caching that clients or providers brought on their own appears only in the caching tile's Total figure."
       />
       <SummaryCard
         label="Compression savings"
@@ -48,9 +50,10 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
       />
       <SummaryCard
         label="Prompt caching savings"
-        value={usd(totals.caching)}
-        hint="Cache reads, net of write premium"
-        info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. Can be negative on traffic that writes more cache than it reuses."
+        value={usd(totals.gatewayAttributedCaching)}
+        hint="LiteLLM injected"
+        secondary={{ label: "Total", value: usd(totals.caching) }}
+        info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. The headline figure is the share LiteLLM earned by inserting the breakpoints itself, through configured injection points or auto prompt caching. The total beside it also counts requests that arrived with their own cache_control and providers that cache implicitly. Either can be negative on traffic that writes more cache than it reuses, which is why the headline is not always the smaller of the two."
       />
       <SummaryCard
         label="Auto-router savings"

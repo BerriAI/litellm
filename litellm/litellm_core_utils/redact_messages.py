@@ -10,11 +10,13 @@
 import asyncio
 import copy
 import inspect
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
@@ -97,16 +99,18 @@ def _redact_function_call(function_call) -> None:
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, litellm.Choices):
-        choice.message.content = REDACTED_BY_LITELLM
-        if hasattr(choice.message, "reasoning_content"):
+        if choice.message.content is not None:
+            choice.message.content = REDACTED_BY_LITELLM
+        if getattr(choice.message, "reasoning_content", None) is not None:
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
     elif isinstance(choice, litellm.utils.StreamingChoices):
-        choice.delta.content = REDACTED_BY_LITELLM
-        if hasattr(choice.delta, "reasoning_content"):
+        if choice.delta.content is not None:
+            choice.delta.content = REDACTED_BY_LITELLM
+        if getattr(choice.delta, "reasoning_content", None) is not None:
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
@@ -117,19 +121,19 @@ def _redact_choice_content(choice):
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
-        if hasattr(output_item, "text"):
+        if getattr(output_item, "text", None) is not None:
             output_item.text = REDACTED_BY_LITELLM
 
         if hasattr(output_item, "content") and isinstance(output_item.content, list):
             for content_part in output_item.content:
-                if hasattr(content_part, "text"):
+                if getattr(content_part, "text", None) is not None:
                     content_part.text = REDACTED_BY_LITELLM
 
         # Redact reasoning items in output array
         if hasattr(output_item, "type") and output_item.type == "reasoning":
             if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
                 for summary_item in output_item.summary:
-                    if hasattr(summary_item, "text"):
+                    if getattr(summary_item, "text", None) is not None:
                         summary_item.text = REDACTED_BY_LITELLM
 
         if hasattr(output_item, "type") and output_item.type == "function_call" and hasattr(output_item, "arguments"):
@@ -142,29 +146,36 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
         if not isinstance(output_item, dict):
             continue
 
-        if "text" in output_item:
+        if output_item.get("text") is not None:
             output_item["text"] = redacted_str
 
         if isinstance(output_item.get("content"), list):
             for content_item in output_item["content"]:
-                if isinstance(content_item, dict) and "text" in content_item:
+                if isinstance(content_item, dict) and content_item.get("text") is not None:
                     content_item["text"] = redacted_str
 
         if output_item.get("type") == "reasoning" and isinstance(output_item.get("summary"), list):
             for summary_item in output_item["summary"]:
-                if isinstance(summary_item, dict) and "text" in summary_item:
+                if isinstance(summary_item, dict) and summary_item.get("text") is not None:
                     summary_item["text"] = redacted_str
 
         if output_item.get("type") == "function_call" and "arguments" in output_item:
             output_item["arguments"] = redacted_str
 
 
-def _redact_standard_logging_object(model_call_details: dict):
-    """Redact messages and response inside standard_logging_object if present."""
-    standard_logging_object: Final = model_call_details.get("standard_logging_object")
-    if standard_logging_object is None:
-        return
+def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Return a copy of a ``StandardLoggingPayload`` with its messages and response redacted.
 
+    The success path redacts through ``perform_redaction`` before a callback ever sees the
+    payload, but the failure path does not, so a callback that batches both has to redact
+    the ones it is handed.
+    """
+    return _redact_standard_logging_object(payload)
+
+
+def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, object]:
+    standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
 
     if standard_logging_object.get("messages") is not None:
@@ -187,42 +198,45 @@ def _redact_standard_logging_object(model_call_details: dict):
         else:
             # For other formats (empty dict, None, etc.), use simple text format
             standard_logging_object["response"] = {"text": redacted_str}
+    return standard_logging_object
 
 
-def _redact_tool_calls_dict(message: dict, redacted_str: str) -> None:
+def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
     """Redact tool call / function_call arguments in a dict-form message or delta."""
     tool_calls: Final = message.get("tool_calls")
     if isinstance(tool_calls, list):
         for tool_call in tool_calls:
             if isinstance(tool_call, dict) and isinstance(tool_call.get("function"), dict):
-                tool_call["function"]["arguments"] = redacted_str
+                tool_call["function"]["arguments"] = REDACTED_BY_LITELLM
 
     function_call: Final = message.get("function_call")
     if isinstance(function_call, dict) and "arguments" in function_call:
-        function_call["arguments"] = redacted_str
+        function_call["arguments"] = REDACTED_BY_LITELLM
 
 
 def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
             if "message" in choice and isinstance(choice["message"], dict):
-                choice["message"]["content"] = redacted_str
-                if "reasoning_content" in choice["message"]:
+                if choice["message"].get("content") is not None:
+                    choice["message"]["content"] = redacted_str
+                if choice["message"].get("reasoning_content") is not None:
                     choice["message"]["reasoning_content"] = redacted_str
                 if "thinking_blocks" in choice["message"]:
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
-                _redact_tool_calls_dict(choice["message"], redacted_str)
+                _redact_tool_calls_dict(choice["message"])
             elif "delta" in choice and isinstance(choice["delta"], dict):
-                choice["delta"]["content"] = redacted_str
-                if "reasoning_content" in choice["delta"]:
+                if choice["delta"].get("content") is not None:
+                    choice["delta"]["content"] = redacted_str
+                if choice["delta"].get("reasoning_content") is not None:
                     choice["delta"]["reasoning_content"] = redacted_str
                 if "thinking_blocks" in choice["delta"]:
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
-                _redact_tool_calls_dict(choice["delta"], redacted_str)
+                _redact_tool_calls_dict(choice["delta"])
         else:
             _redact_choice_content(choice)
 
@@ -236,10 +250,16 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     copy via redact_streaming_responses_for_custom_logger instead.
     """
     # Redact model_call_details
+    params: Final = model_call_details.get("litellm_params")
+    request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
+    if isinstance(params, dict) and isinstance(request, Mapping):
+        model_call_details["litellm_params"] = {**params, "proxy_server_request": without_classifier_audit(request)}
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
-    _redact_standard_logging_object(model_call_details)
+    standard_logging_object: Final = model_call_details.get("standard_logging_object")
+    if isinstance(standard_logging_object, Mapping):
+        model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
@@ -263,7 +283,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             isinstance(result, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse))
             or (isinstance(result, dict) and ("choices" in result or "output" in result))
         ):
-            return {"text": "redacted-by-litellm"}
+            return {"text": REDACTED_BY_LITELLM}
 
         _result: Final = copy.deepcopy(result)
         if isinstance(_result, litellm.ModelResponse):

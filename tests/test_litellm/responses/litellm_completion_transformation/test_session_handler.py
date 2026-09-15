@@ -9,8 +9,10 @@ import litellm
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    _normalize_redacted_tool_call_arguments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.utils import Message
 
 
 @pytest.mark.asyncio
@@ -638,3 +640,81 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
 
     assert spend_logs == []
     assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+
+
+def test_normalize_redacted_arguments_skips_custom_tool_calls():
+    """Custom tool calls have no .function; the normalizer must skip them, not crash (session replay path)."""
+    message = Message(
+        content=None,
+        tool_calls=[
+            {"id": "call_c", "type": "custom", "custom": {"name": "run_code", "input": "print(1)"}},
+            {"id": "call_f", "type": "function", "function": {"name": "get_weather", "arguments": "redacted-by-litellm"}},
+        ],
+    )
+
+    _normalize_redacted_tool_call_arguments(message)
+
+    assert message.tool_calls[0].custom.input == "print(1)"
+    assert message.tool_calls[1].function.arguments == "{}"
+
+
+@pytest.mark.asyncio
+async def test_message_history_normalizes_redacted_tool_call_arguments():
+    """Sessions stored with turn_off_message_logging hold the bare sentinel
+    in tool-call arguments; replay must normalize it to valid JSON."""
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-redacted-1",
+            "call_type": "aresponses",
+            "session_id": "sess-redacted",
+            "proxy_server_request": {
+                "input": "what is the weather in sf",
+                "model": "gpt-4o",
+            },
+            "response": {
+                "id": "chatcmpl-redacted-1",
+                "model": "gpt-4o",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "redacted-by-litellm",
+                                    },
+                                }
+                            ],
+                            "function_call": None,
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "created": 1748575031,
+                "usage": {"total_tokens": 10, "prompt_tokens": 5, "completion_tokens": 5},
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(  # test-quality-ok: the handler has no DI seam for the spend-log fetch; every test in this file stubs this same boundary
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-redacted-1"
+        )
+
+    assistant_message = result["messages"][-1]
+    tool_call = assistant_message.tool_calls[0]
+    assert tool_call.function.arguments == "{}"
+    assert json.loads(tool_call.function.arguments) == {}

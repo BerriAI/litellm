@@ -65,7 +65,10 @@ const createSearchToolShape = {
     .string()
     .min(1, "Please enter a search tool name")
     .regex(/^[a-zA-Z0-9_-]+$/, "Name can only contain letters, numbers, hyphens, and underscores"),
-  search_provider: z.string().min(1, "Please select a search provider"),
+  search_provider: z
+    .string()
+    .nullable()
+    .pipe(z.string({ error: "Please select a search provider" }).min(1, "Please select a search provider")),
   api_key: z.string().optional(),
   description: z.string().optional(),
 };
@@ -74,7 +77,7 @@ const createSearchToolSchema = z.object(createSearchToolShape);
 
 type CreateSearchToolFormValues = z.infer<typeof createSearchToolSchema>;
 
-const EMPTY_VALUES: CreateSearchToolFormValues = { search_tool_name: "", search_provider: "" };
+const EMPTY_VALUES: z.input<typeof createSearchToolSchema> = { search_tool_name: "", search_provider: null };
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -216,8 +219,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                     <Combobox
                       items={providerNames}
                       itemToStringLabel={providerLabel}
-                      value={value === "" ? null : value}
-                      onValueChange={(provider: string | null) => onChange(provider ?? "")}
+                      value={value}
+                      onValueChange={onChange}
                     >
                       <ComboboxInput
                         id={id}
@@ -226,7 +229,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                         placeholder="Select a search provider"
                         className="h-10 w-full rounded-lg"
                         disabled={isLoadingProviders}
-                        showClear={value !== ""}
+                        showClear={value != null && value !== ""}
                       />
                       <ComboboxContent>
                         <ComboboxEmpty>No matching search providers</ComboboxEmpty>
@@ -326,7 +329,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               <SearchConnectionTest
                 key={connectionTestId}
                 litellmParams={{
-                  search_provider: watchedProvider,
+                  search_provider: watchedProvider ?? undefined,
                   api_key: watchedApiKey,
                   api_base: undefined,
                 }}
@@ -345,7 +348,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               >
                 Close
               </Button>
-              , ]
             </DialogFooter>
           </DialogContent>
         </Dialog>

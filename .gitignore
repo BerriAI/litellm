@@ -3,6 +3,8 @@
 tests/e2e/.fixtures/
 .venv-typecheck
 .venv_policy_test
+.venv-mutmut
+mutants/
 .env
 .claude
 CLAUDE.local.md
@@ -145,3 +147,6 @@ crash.*.log
 
 ui/litellm-dashboard/out/
 litellm.log
+
+.coverage-rust
+coverage-rust.xml

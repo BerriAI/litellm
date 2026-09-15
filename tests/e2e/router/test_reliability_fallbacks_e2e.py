@@ -3,9 +3,19 @@ healthy one.
 
 Each test registers a primary deployment that fails (an unreachable base URL, or
 a 1ms deadline) and calls it with a `router_settings_override` mapping it to the
-real `gpt-5.5`. The proof the fallback fired is twofold: the response is a real
-completion from `gpt-5.5` (a non-empty content string), and the proxy reports at
-least one attempted fallback in the x-litellm-attempted-fallbacks header.
+real `gpt-5.5`. The proof the fallback fired is twofold: the response is a
+completion from `gpt-5.5`, and the proxy reports at least one attempted fallback
+in the x-litellm-attempted-fallbacks header. Empty content is accepted only when
+`finish_reason == "length"` and the response billed completion tokens, since
+gpt-5.5 counts reasoning against max_tokens and can consume the whole budget
+before emitting any text; a fallback that produced nothing at all still fails.
+
+The context-window and content-policy cases are different reroutes from a plain
+failure: the provider refuses the prompt itself, on length or on policy, and
+`context_window_fallbacks` / `content_policy_fallbacks` are the settings that
+reroute those, not `fallbacks`. The policy refusal is a real one, from an Azure
+OpenAI content filter rejecting a jailbreak prompt, and a control call first
+proves the refusal reaches the customer as a 400 when no reroute is configured.
 """
 
 from __future__ import annotations
@@ -18,10 +28,17 @@ from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
 from models import RouterSettingsOverride
 from reliability_support import (
+    CONTENT_POLICY_PROMPT,
     chat_override,
+    completion_tokens_of,
     content_of,
     create_bad_base_deployment,
+    create_content_filtered_deployment,
+    create_small_context_deployment,
     create_timeout_deployment,
+    finish_reason_of,
+    oversized_prompt,
+    reasoning_tokens_of,
 )
 
 pytestmark = pytest.mark.e2e
@@ -30,8 +47,16 @@ pytestmark = pytest.mark.e2e
 def _assert_served_by_fallback(resp: StreamingResponse) -> None:
     assert resp.status_code == 200, f"expected 200 after fallback, got {resp.status_code}: {resp.body[:300]}"
     content = content_of(resp)
-    assert isinstance(content, str) and content, (
-        f"the gpt-5.5 fallback should have returned a real completion, got content {content!r} "
+    finish_reason = finish_reason_of(resp)
+    completion_tokens = completion_tokens_of(resp) or 0
+    reasoning_tokens = reasoning_tokens_of(resp) or 0
+    assert isinstance(content, str), (
+        f"the gpt-5.5 fallback should have returned a completion body, got content {content!r} (body={resp.body[:300]})"
+    )
+    assert content or (finish_reason == "length" and completion_tokens > 0), (
+        f"the gpt-5.5 fallback returned empty content with finish_reason={finish_reason!r}, "
+        f"completion_tokens={completion_tokens}, reasoning_tokens={reasoning_tokens}; empty "
+        f"content is only acceptable when the budget was spent on non-visible reasoning "
         f"(body={resp.body[:300]})"
     )
     attempted = resp.headers.get("x-litellm-attempted-fallbacks")
@@ -49,7 +74,10 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, f"say hi {unique_marker()}",
+            client.proxy,
+            scoped_key,
+            primary,
+            f"say hi {unique_marker()}",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)
@@ -63,7 +91,50 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, f"say hi {unique_marker()}",
+            client.proxy,
+            scoped_key,
+            primary,
+            f"say hi {unique_marker()}",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
+        )
+        _assert_served_by_fallback(resp)
+
+    @pytest.mark.covers("reliability.fallback.context_window.routes_to_fallback")
+    def test_context_window_routes_to_fallback(
+        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        primary = f"reliability-ctxfail-{unique_marker()}"
+        model_id = create_small_context_deployment(client.proxy, primary)
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        resp = chat_override(
+            client.proxy,
+            scoped_key,
+            primary,
+            oversized_prompt(unique_marker()),
+            override=RouterSettingsOverride(context_window_fallbacks=[{primary: ["gpt-5.5"]}]),
+        )
+        _assert_served_by_fallback(resp)
+
+    @pytest.mark.covers("reliability.fallback.content_policy.routes_to_fallback")
+    def test_content_policy_routes_to_fallback(
+        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        primary = f"reliability-policyfail-{unique_marker()}"
+        model_id = create_content_filtered_deployment(client.proxy, primary)
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        refused = chat_override(client.proxy, scoped_key, primary, f"{CONTENT_POLICY_PROMPT} {unique_marker()}")
+        assert refused.status_code == 400, (
+            f"the content filter should have refused the jailbreak prompt with a 400, got {refused.status_code}: "
+            f"{refused.body[:300]}"
+        )
+
+        resp = chat_override(
+            client.proxy,
+            scoped_key,
+            primary,
+            f"{CONTENT_POLICY_PROMPT} {unique_marker()}",
+            override=RouterSettingsOverride(content_policy_fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)

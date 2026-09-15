@@ -2,21 +2,26 @@ import asyncio
 import base64
 import os
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
+import httpx
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_with_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -24,8 +29,36 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
+_SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
+_SANITIZE_FILE_QUEUED_STATUSES: Final = frozenset({"created", "in progress"})
+_PROTECT_ROLES: Final = frozenset({"system", "user", "assistant"})
+
+
 class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
+
+
+def _inputs_with_structured_messages(
+    inputs: GenericGuardrailAPIInputs, rewritten_messages: Sequence[AllMessageValues] | None
+) -> GenericGuardrailAPIInputs:
+    if rewritten_messages is None:
+        return inputs
+    patched: Final[GenericGuardrailAPIInputs] = {
+        **inputs,
+        "structured_messages": list(rewritten_messages),  # mutable-ok: the TypedDict field is declared as a list
+    }
+    return patched
+
+
+def _inputs_with_modifications(
+    inputs: GenericGuardrailAPIInputs,
+    modified_texts: list[str],
+    rewritten_messages: Sequence[AllMessageValues] | None,
+) -> GenericGuardrailAPIInputs:
+    if not modified_texts:
+        return _inputs_with_structured_messages(inputs, rewritten_messages)
+    with_texts: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": modified_texts}
+    return _inputs_with_structured_messages(with_texts, rewritten_messages)
 
 
 class _ProtectVerdict(TypedDict, total=False):
@@ -63,6 +96,13 @@ class _SanitizeStatusResponse(TypedDict, total=False):
     metadata: ReadOnly[_SanitizeMetadata]
 
 
+class _SanitizeResult(TypedDict):
+    action: ReadOnly[str]
+    content: ReadOnly[str | None]
+    metadata: ReadOnly[_SanitizeMetadata]
+    violations: ReadOnly[Sequence[str]]
+
+
 class PromptSecurityGuardrail(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -79,6 +119,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         user: str | None = None,
         system_prompt: str | None = None,
         check_tool_results: bool | None = None,
+        file_sanitization_timeout: float = _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS,
+        file_sanitization_fail_open: bool | None = None,
+        block_on_file_modify: bool | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -108,6 +151,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         # Configuration for file sanitization
         self.max_poll_attempts = 30  # Maximum number of polling attempts
         self.poll_interval = 2  # Seconds between polling attempts
+        self.file_sanitization_timeout = file_sanitization_timeout
+        self.file_sanitization_fail_open = file_sanitization_fail_open is not False
+        self.block_on_file_modify = block_on_file_modify is not False
 
         super().__init__(**kwargs)
 
@@ -257,13 +303,38 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
             )
         elif action == "modify":
-            # Extract modified texts from modified_messages
             modified_messages: Final = result.get("modified_messages", [])
-            modified_texts: Final = self._extract_texts_from_messages(modified_messages)
-            if modified_texts:
-                inputs["texts"] = modified_texts
+            return _inputs_with_modifications(
+                inputs,
+                self._extract_texts_from_messages(modified_messages),
+                self._structured_messages_with_modifications(structured_messages, modified_messages),
+            )
 
         return inputs
+
+    def _is_sent_to_protect(self, message: Mapping[str, object]) -> bool:
+        return self.check_tool_results or message.get("role") in _PROTECT_ROLES
+
+    def _structured_messages_with_modifications(
+        self,
+        structured_messages: Sequence[AllMessageValues],
+        modified_messages: Sequence[Mapping[str, object]],
+    ) -> tuple[AllMessageValues, ...] | None:
+        sent_indices: Final = tuple(
+            index for index, message in enumerate(structured_messages) if self._is_sent_to_protect(message)
+        )
+        if not sent_indices or len(sent_indices) != len(modified_messages):
+            return None
+        rewritten: Final = tuple(
+            message_with_slot_texts(structured_messages[index], self._extract_texts_from_messages((modified,)))
+            for index, modified in zip(sent_indices, modified_messages)
+        )
+        replacements: Final = MappingProxyType(
+            {index: message for index, message in zip(sent_indices, rewritten) if message is not None}
+        )
+        if len(replacements) != len(sent_indices):
+            return None
+        return tuple(replacements.get(index, message) for index, message in enumerate(structured_messages))
 
     async def _apply_guardrail_on_response(
         self,
@@ -328,19 +399,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         return inputs
 
     def _extract_texts_from_messages(self, messages: Sequence[Mapping[str, object]]) -> list[str]:
-        """Extract text content from messages."""
-        texts: Final = []
-        for message in messages:
-            content = message.get("content")
-            if isinstance(content, str):
-                texts.append(content)
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        text = item.get("text")
-                        if text:
-                            texts.append(text)
-        return texts
+        return [text for message in messages for text in message_slot_texts(message)]
 
     async def _process_standalone_images(self, images: list[str], user_api_key_alias: str | None) -> None:
         """Process standalone images from inputs (data URLs)."""
@@ -356,13 +415,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     result = await self.sanitize_file_content(
                         file_data, filename, user_api_key_alias=user_api_key_alias
                     )
-
-                    if result.get("action") == "block":
-                        violations = result.get("violations", [])
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Image blocked by Prompt Security. Violations: {', '.join(violations)}",
-                        )
+                    self._raise_if_file_blocked(result, "Image")
                 except HTTPException:
                     raise
                 except Exception as e:
@@ -392,11 +445,44 @@ class PromptSecurityGuardrail(CustomGuardrail):
         file_data: bytes,
         filename: str,
         user_api_key_alias: str | None = None,
-    ) -> dict:
+    ) -> _SanitizeResult:
         """
         Sanitize file content using Prompt Security API.
         Returns: dict with keys 'action', 'content', 'metadata'
         """
+        try:
+            return await asyncio.wait_for(
+                self._sanitize_file_content(file_data, filename, user_api_key_alias),
+                timeout=self.file_sanitization_timeout,
+            )
+        except (asyncio.TimeoutError, httpx.TimeoutException, LiteLLMTimeout) as exc:
+            if not self.file_sanitization_fail_open:
+                verbose_proxy_logger.error(
+                    "Prompt Security Guardrail: file sanitization for %s timed out with %s; failing closed",
+                    filename,
+                    type(exc).__name__,
+                )
+                raise HTTPException(status_code=408, detail="File sanitization timeout") from exc
+
+            verbose_proxy_logger.error(
+                "Prompt Security Guardrail: file sanitization for %s timed out with %s; failing open",
+                filename,
+                type(exc).__name__,
+            )
+            fail_open_result: Final[_SanitizeResult] = {
+                "action": "allow",
+                "content": None,
+                "metadata": {},
+                "violations": (),
+            }
+            return fail_open_result
+
+    async def _sanitize_file_content(
+        self,
+        file_data: bytes,
+        filename: str,
+        user_api_key_alias: str | None,
+    ) -> _SanitizeResult:
         headers: Final = {"APP-ID": self.api_key}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
@@ -467,17 +553,30 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     "metadata": result.get("metadata", {}),
                     "violations": result.get("metadata", {}).get("violations", []),
                 }
-            elif status == "in progress":
-                verbose_proxy_logger.debug(
-                    "Prompt Security Guardrail: File sanitization in progress (attempt %d/%d)",
-                    attempt + 1,
-                    self.max_poll_attempts,
-                )
-                continue
-            else:
+
+            if status not in _SANITIZE_FILE_QUEUED_STATUSES:
                 raise HTTPException(status_code=500, detail=f"Unexpected sanitization status: {status}")
 
+            verbose_proxy_logger.debug(
+                "Prompt Security Guardrail: File sanitization status=%s for jobId=%s (attempt %d/%d)",
+                status,
+                job_id,
+                attempt + 1,
+                self.max_poll_attempts,
+            )
+
         raise HTTPException(status_code=408, detail="File sanitization timeout")
+
+    def _raise_if_file_blocked(self, sanitization_result: _SanitizeResult, resource_name: str) -> None:
+        action: Final = sanitization_result.get("action")
+        if action != "block" and not (action == "modify" and self.block_on_file_modify):
+            return
+
+        violations: Final = sanitization_result.get("violations", ())
+        raise HTTPException(
+            status_code=400,
+            detail=f"{resource_name} blocked by Prompt Security. Violations: {', '.join(violations)}",
+        )
 
     async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict:
         """Process and sanitize image_url items."""
@@ -498,13 +597,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 file_data, filename, user_api_key_alias=user_api_key_alias
             )
             action: Final = sanitization_result.get("action")
-
-            if action == "block":
-                violations: Final = sanitization_result.get("violations", [])
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"File blocked by Prompt Security. Violations: {', '.join(violations)}",
-                )
+            self._raise_if_file_blocked(sanitization_result, "File")
 
             if action == "modify":
                 sanitized_content: Final = sanitization_result.get("content", "")
@@ -566,13 +659,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 file_data, filename, user_api_key_alias=user_api_key_alias
             )
             action: Final = sanitization_result.get("action")
-
-            if action == "block":
-                violations: Final = sanitization_result.get("violations", [])
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Document blocked by Prompt Security. Violations: {', '.join(violations)}",
-                )
+            self._raise_if_file_blocked(sanitization_result, "Document")
 
             if action == "modify":
                 sanitized_content: Final = sanitization_result.get("content", "")
@@ -634,14 +721,13 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         This allows checking tool results for indirect prompt injection when enabled.
         """
-        supported_roles: Final = ["system", "user", "assistant"]
         filtered_messages: Final = []
         transformed_count = 0
         filtered_count = 0
 
         for message in messages:
             role = message.get("role", "")
-            if role in supported_roles:
+            if role in _PROTECT_ROLES:
                 filtered_messages.append(message)
             else:
                 if self.check_tool_results:

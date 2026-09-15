@@ -29,6 +29,7 @@ added to this layer raises instead of silently passing - the inventory of seams
 cannot drift without a test failure.
 """
 
+import base64
 import json
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -987,6 +988,67 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     await call_create(harness)
 
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
+
+
+def install_managed_files_hook(harness: Harness) -> AsyncMock:
+    prisma_client = AsyncMock()
+    managed_files = _PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
+    harness.logging.post_call_success_hook = AsyncMock(side_effect=managed_files.async_post_call_success_hook)
+    harness.router.model_list = []
+    return prisma_client
+
+
+TEAM_A_KEY = UserAPIKeyAuth(api_key="sk-team-a", user_id="user_a", team_id="team_a")
+
+
+def assert_ownership_registered_for_team_a(prisma_client: AsyncMock, batch_id: str) -> None:
+    upsert = prisma_client.db.litellm_managedobjecttable.upsert
+    upsert.assert_awaited_once()
+    assert upsert.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    created = upsert.await_args.kwargs["data"]["create"]
+    assert created["created_by"] == "user_a"
+    assert created["team_id"] == "team_a"
+    prisma_client.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input_file_id": AZURE_FILE_ID},
+        {"input_file_id": "file-plain", "model": "vertex-model"},
+        {"input_file_id": "file-plain"},
+    ],
+    ids=["model_encoded_file_id", "model_param", "provider_fallback"],
+)
+async def test_create__registers_ownership_for_creator(harness, openai_env_creds, body):
+    set_body(harness, {**body, "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    prisma_client = install_managed_files_hook(harness)
+
+    resp = await call_create(harness, user=TEAM_A_KEY)
+
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_registers_ownership_for_creator(harness):
+    unified_input_file_id = base64.urlsafe_b64encode(
+        b"litellm_proxy:application/octet-stream;unified_id,input-uuid;target_model_names,gpt-4o-mini"
+    ).decode()
+    set_body(
+        harness,
+        {
+            "input_file_id": unified_input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    prisma_client = install_managed_files_hook(harness)
+
+    resp = await call_create(harness, user=TEAM_A_KEY)
+
+    assert harness.router_acreate.call_count == 1
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
 
 
 @pytest.mark.asyncio

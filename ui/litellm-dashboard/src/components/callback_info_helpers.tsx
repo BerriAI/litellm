@@ -9,6 +9,7 @@ import langsmithLogo from "../../public/assets/logos/langsmith.png";
 import newrelicLogo from "../../public/assets/logos/newrelic.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
+import pointfiveLogo from "../../public/assets/logos/pointfive.png";
 
 interface CallbackConfig {
   id: string;
@@ -109,6 +110,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
     },
     description: "Langfuse v2 Logging Integration",
   },
@@ -121,6 +123,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },
@@ -156,8 +159,20 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       otel_endpoint: "text",
       otel_headers: "text",
+      otel_exporter_otlp_protocol: "select",
     },
     description: "OpenTelemetry Logging Integration",
+  },
+  {
+    id: "pointfive",
+    displayName: "PointFive",
+    logo: pointfiveLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      POINTFIVE_API_KEY: "password",
+      POINTFIVE_API_URL: "text",
+    },
+    description: "PointFive Logging Integration",
   },
   {
     id: "s3",

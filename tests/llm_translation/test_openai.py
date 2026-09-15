@@ -292,15 +292,21 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
+        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    )
     litellm.set_verbose = True
     response = litellm.completion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         max_retries=0,
+        api_key="fake-key",
     )
 
     mock_get_openai_client.assert_called_once()
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
+    assert response.choices[0].message.content == "Hello"
 
 
 @patch("litellm.main.openai_chat_completions._get_openai_client")

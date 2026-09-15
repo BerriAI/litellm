@@ -3,9 +3,9 @@ Team repository for database operations on LiteLLM_TeamTable.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -15,9 +15,30 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
+from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma import models as prisma_models
+
+
+class _TeamArrays(Protocol):
+    """The string array columns of a team row, which the domain model leaves untyped."""
+
+    @property
+    def members(self) -> Sequence[str]: ...
+
+    @property
+    def admins(self) -> Sequence[str]: ...
+
+    @property
+    def models(self) -> Sequence[str]: ...
+
+
+def _team_arrays(team: LiteLLM_TeamTable) -> _TeamArrays:
+    """View a team's untyped list columns as sequences of ids."""
+    return team
+
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
 _JSON_ENCODED_TEAM_FIELDS: Final = (
@@ -34,11 +55,11 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
     @property
-    def table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
+    def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
         return self.prisma_client.db.litellm_teamtable
 
     @property
-    def deleted_table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
+    def deleted_table(self) -> TableActions["prisma_models.LiteLLM_DeletedTeamTable"]:
         return self.prisma_client.db.litellm_deletedteamtable
 
     @property
@@ -58,25 +79,28 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         return LiteLLM_TeamTable.model_validate(data)
 
     async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> list[Member] | None:
-        """Return the team's members_with_roles, locking the row FOR UPDATE.
+        """Return the team's members_with_roles. The caller must already hold
+        ``TEAM_ADVISORY_LOCK_SQL`` for this team_id on ``tx`` before calling this.
 
-        ``None`` when the team row is gone, which a caller holding the lock can
-        only see if a delete committed under it, as opposed to ``[]`` for a team
-        that simply has no members.
+        ``None`` when the team row is gone, which is only possible under that lock if
+        a delete committed before this read, as opposed to ``[]`` for a team that
+        simply has no members.
 
-        Must be called inside a transaction so the row lock is held until
-        commit. This serializes concurrent membership writers on the team row
-        so the losing writer appends onto the winner's committed result instead
-        of overwriting it from a stale snapshot.
+        A plain read is enough here because the advisory lock, not a row lock, is what
+        serializes this against a concurrent writer: ``SELECT ... FOR UPDATE`` would
+        additionally take a row lock on ``LiteLLM_TeamTable``, and the access-group
+        endpoints lock an access group and then a team row, so a team-row-first lock
+        here can deadlock with them. The advisory lock cannot, since those endpoints
+        never take it.
         """
         rows: Final = await tx.query_raw(
-            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1',
             team_id,
         )
         if not rows:
             return None
-        raw_value: Final = rows[0]["members_with_roles"]
-        parsed: Final = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        raw_value: Final[object] = rows[0]["members_with_roles"]
+        parsed: Final[object] = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []
         return _MEMBERS_WITH_ROLES_ADAPTER.validate_python(parsed)
@@ -310,7 +334,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if team is None:
             return None
 
-        members: Final = [m for m in team.members if m != user_id]
+        members: Final = [m for m in _team_arrays(team).members if m != user_id]
         return await self.update(team_id, {"members": members}, id_field="team_id")
 
     async def add_admin(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
@@ -335,7 +359,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if team is None:
             return None
 
-        admins: Final = [a for a in team.admins if a != user_id]
+        admins: Final = [a for a in _team_arrays(team).admins if a != user_id]
         return await self.update(team_id, {"admins": admins}, id_field="team_id")
 
     async def add_models(self, team_id: str, models: list[str]) -> LiteLLM_TeamTable | None:
@@ -360,5 +384,5 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         if team is None:
             return None
 
-        current_models: Final = [m for m in team.models if m not in models]
+        current_models: Final = [m for m in _team_arrays(team).models if m not in models]
         return await self.update(team_id, {"models": current_models}, id_field="team_id")

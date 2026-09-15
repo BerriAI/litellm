@@ -342,7 +342,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                   <SelectTrigger id="vector-store-provider" className="w-full">
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
+                  <SelectContent>
                     {providerItems.map((item) => (
                       <SelectItem key={item.value} value={item.value}>
                         <Logo src={vectorStoreProviderLogoMap[item.label]} label={item.label} className="w-5 h-5" />

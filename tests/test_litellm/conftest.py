@@ -7,9 +7,12 @@
 # 4. Added proper cleanup in fixtures
 # 5. Added worker-specific isolation for parallel execution
 
+import base64
 import importlib
 import os
 from pathlib import Path
+from types import SimpleNamespace
+import httpx
 import pytest
 
 import asyncio
@@ -375,6 +378,9 @@ def isolate_litellm_state():
         litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     _reset_module_level_aws_auth_caches()
+    # litellm.get_model_info() memoizes ModelInfo built from litellm.model_cost, so a
+    # test that rebinds the cost map leaves later tests pricing against the old map.
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     # Clear all callback lists to prevent cross-test contamination
     if hasattr(litellm, "callbacks"):
@@ -418,6 +424,7 @@ def isolate_litellm_state():
 
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     for _router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(_router)
@@ -591,3 +598,43 @@ def pytest_sessionfinish(session, exitstatus):
     _close_handler_if_needed(getattr(litellm, "aclient", None))
     _close_handler_if_needed(getattr(litellm, "client", None))
     _run_coroutine_if_needed(close_litellm_async_clients())
+
+
+ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.fixture
+def async_only_image_fetch(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import factory, image_handling
+    from litellm.llms.gemini.chat import transformation as gemini_chat_transformation
+
+    fetch = SimpleNamespace(
+        fetched=[],
+        base64_png=base64.b64encode(ONE_PIXEL_PNG).decode(),
+        data_url="data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode(),
+    )
+
+    def forbid_sync_fetch(client, url, **kwargs):
+        raise litellm.ImageFetchError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve_png(client, url, **kwargs):
+        fetch.fetched.append(url)
+        return httpx.Response(
+            200,
+            content=ONE_PIXEL_PNG,
+            headers={"content-type": "image/png"},
+            request=httpx.Request("GET", url),
+        )
+
+    def forbid_sync_convert(url, *args, **kwargs):
+        if url.startswith(("http://", "https://")):
+            raise litellm.ImageFetchError(f"sync convert_url_to_base64 ran on the request path: {url}")
+        return url
+
+    monkeypatch.setattr(image_handling, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_png)
+    for module in (image_handling, factory, gemini_chat_transformation):
+        monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
+    return fetch

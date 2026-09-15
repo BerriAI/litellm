@@ -31,13 +31,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
-from pydantic import TypeAdapter
-
 from e2e_http import RawResponse, StreamChunk, forward
-from fixture_canonical import canonicalize
 from fixture_bundle import (
     BundleRecorder,
     Interaction,
@@ -49,6 +47,7 @@ from fixture_bundle import (
     prepare_bundle,
     slug_for_test,
 )
+from fixture_canonical import canonicalize
 from fixture_mode import current_test_key
 from provider_edge import (
     REPLAY_MISS_STATUS,
@@ -56,15 +55,18 @@ from provider_edge import (
     EdgeReply,
     EdgeStream,
     ProviderEdge,
+    ProviderRequestObservation,
     RecordEdge,
     ReplayEdge,
     ReplaySource,
     edge_request,
     handle_edge_request,
+    observed_provider_edge,
     provider_edge_api_base,
     replay_leftover_error,
     start_provider_edge,
 )
+from pydantic import TypeAdapter
 
 CHAT_PATH = "/openai/v1/chat/completions"
 UPLOAD_PATH = "/openai/v1/files"
@@ -80,9 +82,14 @@ def json_object(body: bytes) -> dict[str, object]:
 class _FakeProvider(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, bind: tuple[str, int]) -> None:
+    def __init__(self, bind: tuple[str, int], *, echo_request: bool = True) -> None:
         super().__init__(bind, _FakeProviderHandler)
         self.hits: list[str] = []
+        self.echo_request = echo_request
+        self.requests: tuple[tuple[Mapping[str, str], bytes], ...] = ()
+
+    def capture_request(self, headers: Mapping[str, str], body: bytes) -> None:
+        self.requests = (*self.requests, (MappingProxyType(dict(headers)), body))
 
 
 class _FakeProviderHandler(BaseHTTPRequestHandler):
@@ -100,8 +107,11 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length") or "0")
         body = self.rfile.read(length) if length else b""
         provider.hits.append(f"{self.command} {self.path}")
-        payload = json.dumps(
+        provider.capture_request(dict(self.headers.items()), body)
+        payload: Final = json.dumps(
             {"echo": body.decode("utf-8"), "path": self.path, "hit": len(provider.hits)}
+            if provider.echo_request
+            else {"ok": True}
         ).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
@@ -116,8 +126,8 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def fake_provider() -> Generator[_FakeProvider]:
-    server = _FakeProvider(("127.0.0.1", 0))
+def fake_provider(*, echo_request: bool = True) -> Generator[_FakeProvider]:
+    server = _FakeProvider(("127.0.0.1", 0), echo_request=echo_request)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -1290,3 +1300,62 @@ class TestApiBaseSeam:
         assert second.endswith("/anthropic")
         assert first.rsplit("/", 1)[0] == second.rsplit("/", 1)[0]
         assert (root / "manifest.json").is_file()
+
+
+class TestProviderRequestObservation:
+    def test_live_counts_repeated_marker_calls_without_recording(self, tmp_path: Path) -> None:
+        observation: Final = ProviderRequestObservation("observed-lantern")
+        with fake_provider() as provider:
+            with observed_provider_edge(
+                observation, mode_raw="live", bundle_dir=tmp_path / "unused",
+                bind_host="127.0.0.1", advertise_host="127.0.0.1",
+                mounts={"openai": provider_url(provider)},
+            ) as edge:
+                assert observation.count == 0
+                unrelated: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("other-lantern"))
+                assert unrelated.status_code == 200
+                assert observation.count == 0
+                first: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern"))
+                assert first.status_code == 200
+                assert json_object(first.body)["echo"] == chat_body("observed-lantern").decode()
+                assert observation.count == 1
+                second: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern"))
+                assert second.status_code == 200
+                assert observation.count == 2
+            assert len(provider.hits) == 3
+        assert not (tmp_path / "unused").exists()
+
+    def test_record_and_replay_count_each_matching_call(self, tmp_path: Path) -> None:
+        with fake_provider() as provider:
+            for mode, observation in (
+                ("record", ProviderRequestObservation("observed-lantern")),
+                ("replay", ProviderRequestObservation("observed-lantern")),
+            ):
+                with observed_provider_edge(
+                    observation, mode_raw=mode, bundle_dir=tmp_path / "bundle",
+                    bind_host="127.0.0.1", advertise_host="127.0.0.1",
+                    mounts={"openai": provider_url(provider)},
+                ) as edge:
+                    assert observation.count == 0
+                    for expected, response in (
+                        (index, call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern")))
+                        for index in (1, 2)
+                    ):
+                        assert response.status_code == 200
+                        assert json_object(response.body)["hit"] == expected
+                        assert observation.count == expected
+                assert len(provider.hits) == 2
+        assert replay_leftover_error(
+            mode_raw="replay", bundle_dir=tmp_path / "bundle", test_key=current_test_key()
+        ) is None
+
+    def test_failed_provider_attempt_is_counted(self, tmp_path: Path) -> None:
+        observation: Final = ProviderRequestObservation("observed-lantern")
+        with observed_provider_edge(
+            observation, mode_raw="live", bundle_dir=tmp_path / "unused",
+            bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            mounts={"openai": "http://127.0.0.1:9"},
+        ) as edge:
+            response: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern"))
+            assert response.status_code == 502
+            assert observation.count == 1
