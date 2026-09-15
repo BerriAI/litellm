@@ -7081,9 +7081,16 @@ class ProxyConfig:
         ## PASS-THROUGH ENDPOINTS ##
         if "pass_through_endpoints" in _general_settings:
             db_pass_through_endpoints: Final = _general_settings["pass_through_endpoints"]
+            db_pass_through_paths: Final = frozenset(
+                endpoint.get("path") for endpoint in db_pass_through_endpoints if isinstance(endpoint, dict)
+            )
             general_settings["pass_through_endpoints"] = [
                 *db_pass_through_endpoints,
-                *(config_passthrough_endpoints or []),
+                *(
+                    endpoint
+                    for endpoint in config_passthrough_endpoints or ()
+                    if endpoint.get("path") not in db_pass_through_paths
+                ),
             ]
             await initialize_pass_through_endpoints(pass_through_endpoints=db_pass_through_endpoints)
 
