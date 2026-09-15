@@ -36,7 +36,10 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_router_model_in_endpoint
+from litellm.llms.nvidia_nim.passthrough.transformation import (
+    nvidia_nim_model_groups,
+    nvidia_nim_router_model_in_endpoint,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
@@ -1635,17 +1638,34 @@ async def nvidia_nim_proxy_route(
     """
     from litellm.proxy.proxy_server import llm_router
 
+    return await relay_nvidia_nim_request(
+        llm_router=llm_router,
+        endpoint=endpoint,
+        request=request,
+        request_body=await get_request_body(request),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+async def relay_nvidia_nim_request(
+    llm_router: litellm.Router | None,
+    endpoint: str,
+    request: Request,
+    request_body: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Response:
     model_group: Final = (
-        nvidia_nim_router_model_in_endpoint(endpoint, llm_router.get_model_names()) if llm_router else None
+        nvidia_nim_router_model_in_endpoint(endpoint, nvidia_nim_model_groups(llm_router.get_model_list()))
+        if llm_router
+        else None
     )
     if llm_router is None or model_group is None:
         rejection: Final[RelayRejection] = {
-            "error": "no LiteLLM model group in the path; call /nvidia_nim/{model_group}/v1/infer with a model "
+            "error": "no NVIDIA NIM model group in the path; call /nvidia_nim/{model_group}/v1/infer with a model "
             "from your `model_list` whose `model` starts with `nvidia_nim/`"
         }
         raise HTTPException(status_code=400, detail=rejection)
 
-    request_body: Final = await get_request_body(request)
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     return await open_sse_before_first_byte(
         _relay_router_model(
