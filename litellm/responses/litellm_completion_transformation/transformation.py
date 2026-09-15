@@ -2715,6 +2715,7 @@ class LiteLLMCompletionResponsesConfig:
                     ],
                 )
                 if reasoning_text:
+                    # type: ignore[reportGeneralTypeIssues]  # extra='allow' model, attribute name is fixed
                     setattr(message_item, "reasoning_content", reasoning_text)
                 message_output_items.append(message_item)
         return message_output_items
