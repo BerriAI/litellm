@@ -1920,9 +1920,11 @@ class TestNoScannableContentRecordsNotRun:
         assert entries[0]["guardrail_response"] == "no scannable content after message scoping"
 
     @pytest.mark.asyncio
-    async def test_empty_content_without_scoping_does_not_blame_scoping(self):
+    @pytest.mark.parametrize("skip_system", [False, True])
+    async def test_empty_content_does_not_blame_scoping(self, skip_system: bool):
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockGuardrail(guardrail_name="unscoped-guardrail")
+        guardrail.skip_system_message_in_guardrail = skip_system
         data = {"messages": [{"role": "user", "content": None}]}
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
