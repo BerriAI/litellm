@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
+from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -139,6 +141,7 @@ async def test_repeated_token_counting_never_touches_a_tiny_budget(
 
 
 HOOK_TAG: Final = "hook-added-tag"
+SECOND_HOOK_TAG: Final = "second-hook-added-tag"
 BODY_TAG: Final = "body-tag"
 CHAT_BODY: Final[dict[str, object]] = {
     "model": "gpt-4o",
@@ -176,11 +179,14 @@ def _budgeted_tag_prisma(tag_names: tuple[str, ...], max_budget: float) -> Magic
 
 
 async def _reserve_added_tags(
-    route: str, prisma: MagicMock, tags: tuple[str, ...] = (HOOK_TAG,)
+    route: str,
+    prisma: MagicMock,
+    tags: tuple[str, ...] = (HOOK_TAG,),
+    request_body: Mapping[str, object] = CHAT_BODY,
 ) -> dict[str, object] | None:
     return await reserve_budget_for_added_tags(
         tags=tags,
-        request_body=dict(CHAT_BODY),
+        request_body=dict(request_body),
         route=route,
         llm_router=None,
         valid_token=UserAPIKeyAuth(token="hashed-hook-tag-key", max_budget=100.0, spend=0.0),
@@ -231,9 +237,61 @@ async def test_reserve_budget_for_added_tags_skips_routes_auth_never_reserves(sp
     assert spend_counter_cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") is None
 
 
+class _ParkingIncrementCache(DualCache):
+    """A spend-counter cache whose increment of ``parked_key`` never returns, so a test can cancel mid-reservation."""
+
+    def __init__(self, parked_key: str) -> None:
+        super().__init__()
+        self.parked_key: Final = parked_key
+        self.parked: Final = asyncio.Event()
+
+    async def async_increment_cache(self, key: str, value: float, **kwargs: object) -> float | None:
+        if key == self.parked_key:
+            self.parked.set()
+            await asyncio.Event().wait()
+        return await super().async_increment_cache(key=key, value=value, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_reserve_budget_for_added_tags_releases_the_reserved_tag_when_cancelled_mid_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A client disconnect under SSE keepalives cancels the request while the second tag is being reserved;
+    the first tag's counter must not stay charged for a request that never reached the provider."""
+    cache: Final = _ParkingIncrementCache(parked_key=f"spend:tag:{SECOND_HOOK_TAG}")
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    prisma: Final = _budgeted_tag_prisma((HOOK_TAG, SECOND_HOOK_TAG), max_budget=1.0)
+
+    reserving: Final = asyncio.create_task(
+        _reserve_added_tags("/v1/chat/completions", prisma, tags=(HOOK_TAG, SECOND_HOOK_TAG))
+    )
+    await cache.parked.wait()
+    assert cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") > 0
+    reserving.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await reserving
+
+    assert cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") == pytest.approx(0.0)
+
+
 @pytest.mark.asyncio
 async def test_reserve_budget_for_added_tags_ignores_tags_without_a_budget(spend_counter_cache: DualCache):
     assert await _reserve_added_tags("/v1/chat/completions", _budgeted_tag_prisma((), max_budget=1.0)) is None
+
+
+@pytest.mark.asyncio
+async def test_reserve_budget_for_added_tags_skips_a_request_with_no_model_to_price(spend_counter_cache: DualCache):
+    """Without a model there is no estimate to reserve, same as the auth-time reservation."""
+    body: Final = MappingProxyType({key: value for key, value in CHAT_BODY.items() if key != "model"})
+
+    assert (
+        await _reserve_added_tags(
+            "/v1/chat/completions", _budgeted_tag_prisma((HOOK_TAG,), max_budget=1.0), request_body=body
+        )
+        is None
+    )
+    assert spend_counter_cache.in_memory_cache.get_cache(key=f"spend:tag:{HOOK_TAG}") is None
 
 
 BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"

@@ -2482,27 +2482,60 @@ def test_route_skips_budget_checks_matches_auth_scope(route, expected):
 
 
 @pytest.mark.parametrize(
-    ("general_settings", "master_key", "custom_auth_configured", "expected"),
+    ("route", "general_settings", "master_key", "custom_auth_configured", "expected"),
     [
-        ({}, None, False, True),
-        ({"enable_jwt_auth": True}, None, False, False),
-        ({"enable_oauth2_auth": True}, None, False, False),
-        ({"enable_oauth2_proxy_auth": True}, None, False, False),
-        ({}, "sk-master", False, False),
-        ({}, "sk-master", True, True),
-        ({"custom_auth_run_common_checks": True}, "sk-master", True, False),
-        ({"custom_auth_run_common_checks": False}, "sk-master", True, True),
+        ("/v1/chat/completions", {}, None, False, True),
+        ("/v1/chat/completions", {"enable_jwt_auth": True}, None, False, False),
+        ("/v1/chat/completions", {"enable_oauth2_auth": True}, None, False, False),
+        ("/v1/chat/completions", {"enable_oauth2_proxy_auth": True}, None, False, False),
+        ("/v1/chat/completions", {}, "sk-master", False, False),
+        ("/v1/chat/completions", {}, "sk-master", True, True),
+        ("/v1/chat/completions", {"custom_auth_run_common_checks": True}, "sk-master", True, False),
+        ("/v1/chat/completions", {"custom_auth_run_common_checks": False}, "sk-master", True, True),
+        ("/health/liveliness", {}, "sk-master", False, True),
+        ("/v1/chat/completions", {"public_routes": ["/v1/chat/completions"]}, "sk-master", False, True),
+        ("/v1/chat/completions", {"public_routes": ["/v1/embeddings"]}, "sk-master", False, False),
+        ("/bria", {"pass_through_endpoints": [{"path": "/bria", "target": "https://x"}]}, "sk-master", False, True),
+        (
+            "/bria",
+            {"pass_through_endpoints": [{"path": "/bria", "target": "https://x", "auth": False}]},
+            "sk-master",
+            False,
+            True,
+        ),
+        (
+            "/bria",
+            {"pass_through_endpoints": [{"path": "/bria", "target": "https://x", "auth": True}]},
+            "sk-master",
+            False,
+            False,
+        ),
+        (
+            "/other",
+            {"pass_through_endpoints": [{"path": "/bria", "target": "https://x", "auth": False}]},
+            "sk-master",
+            False,
+            False,
+        ),
     ],
 )
-def test_auth_skips_common_checks_names_the_deployments_that_never_run_them(
-    general_settings, master_key, custom_auth_configured, expected
+def test_auth_skips_common_checks_names_the_requests_that_never_run_them(
+    monkeypatch, route, general_settings, master_key, custom_auth_configured, expected
 ):
-    """No-auth dev mode and a custom auth hook without the opt-in run no common_checks, so no budget checks."""
+    """Public routes, pass-through endpoints without auth, no-auth dev mode and a custom auth hook without
+    the opt-in run no common_checks, so no budget checks."""
+    from litellm.proxy import proxy_server
     from litellm.proxy.auth.auth_checks import auth_skips_common_checks
+
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
 
     assert (
         auth_skips_common_checks(
-            general_settings=general_settings, master_key=master_key, custom_auth_configured=custom_auth_configured
+            route=route,
+            general_settings=general_settings,
+            master_key=master_key,
+            custom_auth_configured=custom_auth_configured,
         )
         is expected
     )

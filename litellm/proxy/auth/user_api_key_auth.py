@@ -2521,27 +2521,11 @@ async def _run_centralized_common_checks(
         user_custom_auth,
     )
 
-    # Public routes (e.g. /health/liveness) are exempt from
-    # auth in the builder — the wrapper must not retroactively apply
-    # authz on top, or k8s readiness probes and other unauthenticated
-    # callers get 401.
-    if route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route):
-        return
-
-    # User-configured pass-through endpoints with ``auth: false`` are
-    # explicitly unauthenticated — the builder returns an empty
-    # UserAPIKeyAuth() and the request is forwarded as-is. Running
-    # common_checks on the empty token would reject the request as
-    # admin-only. The "auth" flag on the endpoint config is the
-    # contract; honor it.
-    pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
-    if pass_through_endpoints is not None:
-        for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
-                return
-
     if auth_skips_common_checks(
-        general_settings=general_settings, master_key=master_key, custom_auth_configured=user_custom_auth is not None
+        route=route,
+        general_settings=general_settings,
+        master_key=master_key,
+        custom_auth_configured=user_custom_auth is not None,
     ):
         return
 

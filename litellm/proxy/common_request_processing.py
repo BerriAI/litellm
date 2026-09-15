@@ -695,7 +695,10 @@ async def _enforce_tag_budgets_for_added_tags(
     from litellm.proxy.proxy_server import master_key, prisma_client, user_api_key_cache, user_custom_auth
 
     if auth_skips_common_checks(
-        general_settings=general_settings, master_key=master_key, custom_auth_configured=user_custom_auth is not None
+        route=route,
+        general_settings=general_settings,
+        master_key=master_key,
+        custom_auth_configured=user_custom_auth is not None,
     ):
         return ()
     await tag_max_budget_check_for_tags(

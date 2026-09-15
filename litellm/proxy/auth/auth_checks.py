@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -133,7 +133,7 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template
+from .auth_utils import get_model_from_request, get_request_route_template, route_in_additonal_public_routes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -863,22 +863,52 @@ def route_skips_budget_checks(route: str) -> bool:
 _AUTHN_FLAGS: Final = ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
 
 
+class _PassThroughEndpointAuth(BaseModel):
+    """The two fields of a ``pass_through_endpoints`` entry that decide whether auth runs on it."""
+
+    path: str = ""
+    auth: bool | str | None = None
+
+
+_PASS_THROUGH_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[_PassThroughEndpointAuth, ...])
+
+
+def _is_unauthenticated_pass_through(route: str, general_settings: Mapping[str, object]) -> bool:
+    configured: Final = general_settings.get("pass_through_endpoints")
+    if configured is None:
+        return False
+    try:
+        endpoints: Final = _PASS_THROUGH_ENDPOINTS_ADAPTER.validate_python(configured)
+    except ValidationError:
+        return False
+    return any(endpoint.path == route and endpoint.auth is not True for endpoint in endpoints)
+
+
 def auth_skips_common_checks(
-    general_settings: Mapping[str, object], master_key: str | None, custom_auth_configured: bool
+    route: str, general_settings: Mapping[str, object], master_key: str | None, custom_auth_configured: bool
 ) -> bool:
     """
-    Whether ``user_api_key_auth`` runs no ``common_checks`` at all for this deployment.
+    Whether ``user_api_key_auth`` runs no ``common_checks`` at all for this request.
 
-    That is the case in no-auth dev mode (no master key and no JWT or OAuth2
-    auth configured, so the proxy is unauthenticated by configuration) and behind
-    a custom auth hook that did not opt in with ``custom_auth_run_common_checks``.
+    That is the case on a public route, on a user-configured pass-through endpoint
+    that did not ask for auth, in no-auth dev mode (no master key and no JWT or
+    OAuth2 auth configured, so the proxy is unauthenticated by configuration) and
+    behind a custom auth hook that did not opt in with ``custom_auth_run_common_checks``.
     Post-auth checks that mirror ``common_checks`` skip themselves on the same terms.
     """
+    public_route: Final = route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(
+        current_route=route
+    )
     no_auth_mode: Final = master_key is None and not any(general_settings.get(flag, False) for flag in _AUTHN_FLAGS)
     custom_auth_opted_out: Final = custom_auth_configured and not general_settings.get(
         "custom_auth_run_common_checks", False
     )
-    return no_auth_mode or custom_auth_opted_out
+    return (
+        public_route
+        or _is_unauthenticated_pass_through(route=route, general_settings=general_settings)
+        or no_auth_mode
+        or custom_auth_opted_out
+    )
 
 
 async def common_checks(

@@ -360,10 +360,9 @@ async def _reserve_counters(
                         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
                     )
                     continue
-    except Exception:
-        await _release_applied_entries_best_effort(
-            entries=applied_entries,
-            default_reserved_cost=reservation_cost,
+    except BaseException:
+        await asyncio.shield(
+            _release_applied_entries_best_effort(entries=applied_entries, default_reserved_cost=reservation_cost)
         )
         raise
 

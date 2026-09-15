@@ -621,13 +621,15 @@ class TestProxyBaseLLMRequestProcessing:
             ("sk-master", object(), {}, False),
             ("sk-master", object(), {"custom_auth_run_common_checks": True}, True),
             ("sk-master", None, {}, True),
+            ("sk-master", None, {"public_routes": ["/v1/chat/completions"]}, False),
+            ("sk-master", None, {"public_routes": ["/v1/embeddings"]}, True),
         ],
     )
     async def test_common_processing_pre_call_logic_enforces_hook_added_tags_only_where_auth_runs_common_checks(
         self, monkeypatch, master_key, user_custom_auth, general_settings, checked
     ):
-        """A deployment whose auth wrapper skips common_checks (no-auth dev mode, custom auth without opt-in)
-        never budget-checked tags before, so a hook-added tag must not start 429ing it."""
+        """A request whose auth wrapper skips common_checks (a public route, no-auth dev mode, custom auth
+        without opt-in) never budget-checked tags before, so a hook-added tag must not start 429ing it."""
         processing_obj = ProxyBaseLLMRequestProcessing(data={})
 
         async def mock_pre_call_hook(user_api_key_dict, data, call_type):
@@ -639,6 +641,8 @@ class TestProxyBaseLLMRequestProcessing:
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
         monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", user_custom_auth)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
 
         await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
