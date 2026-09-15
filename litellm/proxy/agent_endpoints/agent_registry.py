@@ -130,9 +130,7 @@ def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
 
 _AGENT_PARAMS_MASKER: Final = SensitiveDataMasker()
 _REDACT_AGENT_PARAMS_MAX_DEPTH: Final = 10
-_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
-    dict[str, object]
-)  # mutable-ok: safe_dumps() and AgentResponse.litellm_params both require a real dict, not a Mapping
+_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _AGENT_PARAMS_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -184,7 +182,7 @@ def _redact_agent_params_tree(value: object, _depth: int) -> object:
             else _redact_agent_params_tree(nested_value, _depth + 1)
         )
         for key, nested_value in typed_params.items()
-    }  # mutable-ok: consumed by json.dumps()/AgentResponse.litellm_params, both of which require a real dict
+    }
 
 
 def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
@@ -307,7 +305,7 @@ def _restore_redacted_litellm_params(
         key: value
         for key in all_keys
         if (value := _resolved_agent_param_value(key, incoming, existing, _depth)) is not _MISSING_AGENT_PARAM
-    }  # mutable-ok: fed to safe_dumps() for JSON-column storage, which requires a real dict
+    }
 
 
 class GrantMigrationResult(NamedTuple):
@@ -678,9 +676,7 @@ class AgentRegistry:
             # existing row is read up front to restore any sensitive key the
             # caller echoed back redacted (or omitted) rather than persisting
             # the marker -- or nothing -- over the real stored credential.
-            existing_row: Final = await agents_table(prisma_client).find_unique(
-                where={"agent_id": agent_id}  # mutable-ok: prisma's query builder rejects a Mapping/MappingProxyType
-            )
+            existing_row: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
             existing_litellm_params: Final = parse_agent_litellm_params(
                 existing_row.litellm_params if existing_row is not None else None
             )

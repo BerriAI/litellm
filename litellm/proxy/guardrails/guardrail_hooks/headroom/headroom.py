@@ -880,7 +880,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         kwargs: dict[str, Any],
         call_type: CallTypes | None,
-    ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
+    ) -> dict[str, Any] | None:
         base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
         effective: Final = base_result if base_result is not None else kwargs
         if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:
@@ -889,7 +889,7 @@ class HeadroomGuardrail(CustomGuardrail):
             return base_result
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
-        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
+        return {
             **effective,
             "stream": False,
             HEADROOM_CONVERTED_STREAM_KEY: True,

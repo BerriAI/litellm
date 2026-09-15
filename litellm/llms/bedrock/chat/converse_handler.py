@@ -407,7 +407,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         # resolved so both paths sign as the same principal. Bearer-token auth
         # resolves no SigV4 principal at all, and each path reads that token
         # itself.
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
+        rust_optional_params: Final = {
             **optional_params,
             **_sigv4_principal(credentials),
             "aws_region_name": aws_region_name,
@@ -421,8 +421,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             stream=stream,
         )
         if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
+            rust_logging_args: Final = {
+                "complete_input_dict": {
                     "messages": messages,
                     **optional_params,
                 },

@@ -89,9 +89,9 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         headers: Mapping[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:  # mutable-ok: BaseInteractionsAPIConfig declares plain-dict headers
+    ) -> dict:
         access_token, _ = self._mint(litellm_params or GenericLiteLLMParams())
-        return {  # mutable-ok: BaseInteractionsAPIConfig declares plain-dict headers
+        return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
             **headers,
@@ -117,9 +117,9 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         url_suffix: str = "",
-    ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
+    ) -> tuple[str, dict]:
         target: Final = self._target(api_base or None, litellm_params)
-        return f"{target.interaction_url(interaction_id)}{url_suffix}", {}  # mutable-ok: same base contract
+        return f"{target.interaction_url(interaction_id)}{url_suffix}", {}
 
     def transform_get_interaction_request(
         self,
@@ -127,7 +127,7 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
-    ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
+    ) -> tuple[str, dict]:
         return self._interaction_by_id_request(interaction_id, api_base, litellm_params)
 
     def transform_delete_interaction_request(
@@ -136,7 +136,7 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
-    ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
+    ) -> tuple[str, dict]:
         return self._interaction_by_id_request(interaction_id, api_base, litellm_params)
 
     def transform_cancel_interaction_request(
@@ -145,5 +145,5 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
-    ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
+    ) -> tuple[str, dict]:
         return self._interaction_by_id_request(interaction_id, api_base, litellm_params, url_suffix=":cancel")

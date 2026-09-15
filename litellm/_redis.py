@@ -203,7 +203,7 @@ def _str_to_bool(value: str) -> bool:
 def _coerce_redis_kwargs_types(
     redis_kwargs: Mapping[str, object],
     client: type | tuple[type, ...] = redis.Redis,
-) -> dict[str, object]:  # mutable-ok: a caller mutates the returned kwargs before constructing its client
+) -> dict[str, object]:
     """Coerces string values to the numeric/boolean type ``client``'s constructor
     declares for that parameter. ``client`` may be a tuple of client classes; a
     parameter's type is taken from the first signature that declares it, which
@@ -233,7 +233,7 @@ def _coerce_redis_kwargs_types(
             "socket_keepalive": bool,
         }
     )
-    result: Final = dict(redis_kwargs)  # mutable-ok: per-key try/except coercion below needs to drop individual keys
+    result: Final = dict(redis_kwargs)
     for key, value in redis_kwargs.items():
         if not isinstance(value, str):
             continue
@@ -803,7 +803,7 @@ def _async_auth_kwargs(redis_kwargs: dict) -> dict:
 
     superseded: Final = frozenset({"redis_connect_func", "username", "password"})
     kept: Final = ((k, v) for k, v in redis_kwargs.items() if k not in superseded)
-    return dict(kept, credential_provider=credential_provider)  # mutable-ok: the branches below mutate these kwargs
+    return dict(kept, credential_provider=credential_provider)
 
 
 def get_redis_client(**env_overrides):

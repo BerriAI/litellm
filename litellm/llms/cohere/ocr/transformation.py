@@ -139,13 +139,13 @@ class CohereParseConfig(BaseOCRConfig):
     """Cohere Parse, an image-only document understanding endpoint returning markdown or blocks."""
 
     def get_supported_ocr_params(self, model: str) -> list[str]:  # mutable-ok: BaseOCRConfig signature
-        return list(COHERE_PARSE_SUPPORTED_PARAMS)  # mutable-ok: BaseOCRConfig signature
+        return list(COHERE_PARSE_SUPPORTED_PARAMS)
 
     def get_api_key_env_var(self) -> str | None:
         return COHERE_API_KEY_ENV_VAR
 
     def get_health_check_document(self) -> DocumentType:
-        return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
+        return {
             "type": "image_url",
             "image_url": COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI,
         }
@@ -158,7 +158,7 @@ class CohereParseConfig(BaseOCRConfig):
         non_default_params: Mapping[str, object],
         optional_params: Mapping[str, object],
         model: str,
-    ) -> dict[str, object]:  # mutable-ok: BaseOCRConfig signature
+    ) -> dict[str, object]:
         output_format: Final = non_default_params.get(COHERE_PARSE_OUTPUT_FORMAT_PARAM)
         if output_format is not None and output_format not in COHERE_PARSE_OUTPUT_FORMATS:
             raise UnsupportedParamsError(
@@ -179,7 +179,7 @@ class CohereParseConfig(BaseOCRConfig):
             )
             if value is not None
         )
-        return {**optional_params, **dict(overrides)}  # mutable-ok: BaseOCRConfig signature
+        return {**optional_params, **dict(overrides)}
 
     def validate_environment(
         self,
@@ -189,14 +189,14 @@ class CohereParseConfig(BaseOCRConfig):
         api_base: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         **kwargs: object,  # kwargs-ok: BaseOCRConfig.validate_environment signature
-    ) -> dict[str, str]:  # mutable-ok: BaseOCRConfig signature
+    ) -> dict[str, str]:
         resolved_key: Final = api_key or get_secret_str(COHERE_API_KEY_ENV_VAR)
         if resolved_key is None:
             raise ValueError(
                 f"Missing {COHERE_API_KEY_ENV_VAR} - set it in the environment or pass api_key to "
                 "litellm.ocr()/litellm.aocr()"
             )
-        return {  # mutable-ok: BaseOCRConfig signature
+        return {
             "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
             **headers,
@@ -242,7 +242,7 @@ class CohereParseConfig(BaseOCRConfig):
                 optional_params.get(COHERE_PARSE_OUTPUT_FORMAT_PARAM, COHERE_PARSE_DEFAULT_OUTPUT_FORMAT)
             ),
         }
-        return OCRRequestData(data=dict(body), files=None)  # mutable-ok: OCRRequestData.data is a dict
+        return OCRRequestData(data=dict(body), files=None)
 
     def transform_ocr_request(
         self,
@@ -276,9 +276,7 @@ class CohereParseConfig(BaseOCRConfig):
     ) -> OCRResponse:
         native: Final = _NATIVE_RESPONSE_ADAPTER.validate_python(raw_response.json())
         parsed: Final = _CohereParseResponse.model_validate(native)
-        pages: Final = [  # mutable-ok: OCRResponse.pages is a list
-            _normalize_page(page, position) for position, page in enumerate(parsed.pages)
-        ]
+        pages: Final = [_normalize_page(page, position) for position, page in enumerate(parsed.pages)]
         billed_pages: Final = _billed_pages(parsed)
         response: Final = OCRResponse(
             pages=pages,

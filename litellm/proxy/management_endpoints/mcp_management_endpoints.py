@@ -1682,7 +1682,7 @@ if MCP_AVAILABLE:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                detail={
                     "error": "User does not have permission to import mcp servers. You can only import mcp servers if you are a PROXY_ADMIN."
                 },
             )
@@ -1745,9 +1745,7 @@ if MCP_AVAILABLE:
 
         classified: Final = tuple(_classify(index, conversion) for index, conversion in enumerate(conversions))
         outcomes: Final = tuple(
-            [
-                await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified
-            ]  # mutable-ok: await is illegal in a generator expression here
+            [await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified]
         )
 
         imported: Final = tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportResult))
@@ -2289,7 +2287,7 @@ if MCP_AVAILABLE:
         if binding is not None and binding.mode == "enforce":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={  # mutable-ok: FastAPI exception detail requires a JSON-serializable dictionary
+                detail={
                     "error": "oauth_identity_binding_enforced",
                     "error_description": (
                         "Direct credential storage is disabled for this server: its OAuth identity "
@@ -2752,7 +2750,7 @@ if MCP_AVAILABLE:
             if not relay_eligible:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                    detail={
                         "error": (
                             "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
                             "authorization_code and without delegate_auth_to_upstream."

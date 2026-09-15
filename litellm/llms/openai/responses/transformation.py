@@ -313,7 +313,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         is left alone because the API accepts both."""
         if tools is None:
             return None
-        decoded: Final = [  # mutable-ok: request tools are a JSON list
+        decoded: Final = [
             self._tool_with_object_parameters(model=model, index=index, tool=tool) for index, tool in enumerate(tools)
         ]
         return cast("Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", decoded)  # cast-ok: dict spread keeps each tool's shape
@@ -326,7 +326,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return tool
         decoded: Final = safe_json_loads(parameters) if isinstance(parameters, str) else None
         if isinstance(decoded, dict):
-            return {**tool, "parameters": decoded}  # mutable-ok: request tools are JSON dicts
+            return {**tool, "parameters": decoded}
         raise litellm.BadRequestError(
             message=(
                 f"Invalid type for 'tools[{index}].parameters': expected an object, "
@@ -383,7 +383,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         genuine_prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type) if isinstance(item_type, str) else None
         if genuine_prefix is None or not isinstance(item_id, str) or item_id.startswith(genuine_prefix):
             return item
-        return {key: value for key, value in item.items() if key != "id"}  # mutable-ok: outgoing JSON request item
+        return {key: value for key, value in item.items() if key != "id"}
 
     def _sanitized_tool_schemas_for_openai(
         self,
@@ -452,14 +452,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if not parameters_update and not tools_update:
             return entry
-        return {**entry, **parameters_update, **tools_update}  # mutable-ok: request tools are JSON dicts
+        return {**entry, **parameters_update, **tools_update}
 
     @staticmethod
     def _sanitized_tools(
         tools: Sequence[object],
         sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
     ) -> Sequence[object]:
-        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+        sanitized: Final = [
             OpenAIResponsesAPIConfig._sanitized_tool_entry(item, sanitize) if isinstance(item, dict) else item
             for item in tools
         ]

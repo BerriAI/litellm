@@ -118,20 +118,20 @@ class AnthropicResponsesStreamWrapper:
         if block_idx < 0:
             redacted_idx: Final = self._open_block(
                 item_id,
-                {"type": "redacted_thinking", "data": signature},  # mutable-ok: API message payload
+                {"type": "redacted_thinking", "data": signature},
             )
-            stop: Final = {"type": "content_block_stop", "index": redacted_idx}  # mutable-ok: API message payload
+            stop: Final = {"type": "content_block_stop", "index": redacted_idx}
             self._chunk_queue.append(stop)
             return
         if signature is not None:
             self._chunk_queue.append(
-                {  # mutable-ok: API message payload
+                {
                     "type": "content_block_delta",
                     "index": block_idx,
-                    "delta": {"type": "signature_delta", "signature": signature},  # mutable-ok: API message payload
+                    "delta": {"type": "signature_delta", "signature": signature},
                 }
             )
-        self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})  # mutable-ok: API message payload
+        self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
@@ -223,10 +223,10 @@ class AnthropicResponsesStreamWrapper:
             if part_block_idx < 0 or not isinstance(summary_index, int) or summary_index == 0:
                 return
             self._chunk_queue.append(
-                {  # mutable-ok: API message payload
+                {
                     "type": "content_block_delta",
                     "index": part_block_idx,
-                    "delta": {  # mutable-ok: API message payload
+                    "delta": {
                         "type": "thinking_delta",
                         "thinking": REASONING_SUMMARY_PART_SEPARATOR,
                     },
@@ -244,7 +244,7 @@ class AnthropicResponsesStreamWrapper:
                     return
                 block_idx = self._open_block(
                     item_id,
-                    {"type": "thinking", "thinking": "", "signature": ""},  # mutable-ok: API message payload
+                    {"type": "thinking", "thinking": "", "signature": ""},
                 )
             self._chunk_queue.append(
                 {
@@ -327,16 +327,10 @@ class AnthropicResponsesStreamWrapper:
                 else AnthropicUsage(input_tokens=0, output_tokens=0)
             )
 
-            message_delta_payload: Final = {  # mutable-ok: fresh message_delta payload built per chunk
+            message_delta_payload: Final = {
                 "stop_reason": stop_reason,
                 "stop_sequence": None,
-                **(
-                    {  # mutable-ok: fresh message_delta stop_details entry built per chunk
-                        "stop_details": refusal_stop_details(refusal_text)
-                    }
-                    if stop_reason == "refusal"
-                    else {}  # mutable-ok: empty spread placeholder for non-refusal stop
-                ),
+                **({"stop_details": refusal_stop_details(refusal_text)} if stop_reason == "refusal" else {}),
             }
 
             self._chunk_queue.append(

@@ -54,7 +54,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
     )
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a plain list
-        return ["voice", "response_format"]  # mutable-ok: base class contract returns a plain list
+        return ["voice", "response_format"]
 
     def _map_openai_voice(self, voice_id: str) -> str:
         return self.OPENAI_VOICE_ALIASES.get(voice_id.lower(), voice_id)
@@ -78,12 +78,12 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         voice: object = None,
         drop_params: bool = False,
         kwargs: Mapping[str, object] | None = None,
-    ) -> tuple[str | None, dict]:  # mutable-ok: base class contract returns a plain dict
+    ) -> tuple[str | None, dict]:
         response_format: Final = optional_params.get("response_format")
         ref_audio: Final = kwargs.get("ref_audio") if kwargs else None
         voice_id_kwarg: Final = kwargs.get("voice_id") if kwargs else None
         mapped_voice: Final = self._resolve_voice_id(voice) or self._resolve_voice_id(voice_id_kwarg)
-        mapped_params: Final = {  # mutable-ok: base class contract returns a plain dict
+        mapped_params: Final = {
             key: value
             for key, value in (("response_format", response_format), ("ref_audio", ref_audio))
             if isinstance(value, str)
@@ -96,14 +96,14 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns a plain dict
+    ) -> dict:
         resolved_key: Final = api_key or get_secret_str("MISTRAL_API_KEY")
         if resolved_key is None:
             raise MistralTextToSpeechException(
                 status_code=401,
                 message="Mistral API key is required. Set MISTRAL_API_KEY or pass api_key.",
             )
-        return {  # mutable-ok: base class contract returns a plain dict
+        return {
             **headers,
             "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
@@ -201,7 +201,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: BaseLLMException takes a plain dict or httpx.Headers
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         return MistralTextToSpeechException(
             message=error_message,

@@ -109,4 +109,4 @@ class FireworksAIMixin:
 
     def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
         pinned: Final = with_fireworks_session_affinity(headers, litellm_params)
-        return dict(pinned)  # mutable-ok: the HTTP handler updates the returned headers in place
+        return dict(pinned)

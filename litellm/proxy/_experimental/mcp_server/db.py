@@ -631,7 +631,6 @@ async def get_all_mcp_servers(
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = (
         {"approval_status": approval_status}
         if approval_status is not None
-        # mutable-ok: prisma where-inputs must be plain dicts, and both `NOT` and `not` drop
         # NULL rows (measured), so the OR is the only NULL-preserving way to exclude drafts
         else {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]}
     )

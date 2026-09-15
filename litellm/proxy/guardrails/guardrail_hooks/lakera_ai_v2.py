@@ -115,7 +115,7 @@ def _pre_masking_scope_indices(
 
 def _apply_redacted_messages_back_preserving_fields(
     guardrail: "LakeraAIGuardrail",
-    data: dict[str, object],  # mutable-ok: writes the redacted result back into the caller's request dict in place
+    data: dict[str, object],
     redacted_messages: Sequence[AllMessageValues],
 ) -> None:
     """Write masked content back to ``data["messages"]`` without losing fields
@@ -126,12 +126,12 @@ def _apply_redacted_messages_back_preserving_fields(
     Responses-API ``input`` string, with no chat messages to merge into)."""
     original_messages: Final = data.get("messages")
     if not isinstance(original_messages, list):
-        redacted_list: Final = list(redacted_messages)  # mutable-ok: apply_redacted_messages_back requires a list
+        redacted_list: Final = list(redacted_messages)
         apply_redacted_messages_back(data, redacted_list)
         return
     scope_indices: Final = _pre_masking_scope_indices(guardrail, original_messages)
     guardrailed_scoped: Final = tuple(
-        {  # mutable-ok: fresh dict per iteration, not stored beyond this comprehension
+        {
             **original_messages[original_idx],
             "content": redacted["content"],
         }
@@ -225,13 +225,11 @@ def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Ma
     would have silently mishandled a PII/redaction hit found there."""
     instructions: Final = data.get("instructions")
     leading: Final[Sequence[Mapping[str, str]]] = (
-        [{"role": "system", "content": instructions}]  # mutable-ok: fresh list/dict, not stored
-        if isinstance(instructions, str) and instructions
-        else []  # mutable-ok: fresh empty list, not stored
+        [{"role": "system", "content": instructions}] if isinstance(instructions, str) and instructions else []
     )
-    return [  # mutable-ok: fresh list, not stored
+    return [
         *leading,
-        *build_inspection_messages(dict(data)),  # mutable-ok: fresh shallow copy for the dict[str, Any] param
+        *build_inspection_messages(dict(data)),
     ]
 
 
@@ -494,7 +492,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     def _mask_unwritable_instructions_pii_in_place(
         self,
-        data: dict[str, object],  # mutable-ok: writes the redacted result back into the caller's request dict in place
+        data: dict[str, object],
         inspected_messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
         masked_entity_count: dict[str, int],
@@ -777,7 +775,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 choice_indices.append(i)
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
-        post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages  # mutable-ok: needs list
+        post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
 
         # Call Lakera guardrail
         lakera_guardrail_response, _ = await self.call_v2_guard(

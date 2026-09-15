@@ -39,7 +39,7 @@ class AzureAICohereParseConfig(CohereParseConfig):
         api_base: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         **kwargs: object,  # kwargs-ok: BaseOCRConfig.validate_environment signature
-    ) -> dict[str, str]:  # mutable-ok: BaseOCRConfig signature
+    ) -> dict[str, str]:
         resolved_base: Final = api_base or get_secret_str(AZURE_AI_API_BASE_ENV_VAR)
         if resolved_base is None:
             raise ValueError(
@@ -47,7 +47,7 @@ class AzureAICohereParseConfig(CohereParseConfig):
                 "or pass api_base parameter"
             )
         resolved_key: Final = api_key or get_secret_str(AZURE_AI_API_KEY_ENV_VAR)
-        return {  # mutable-ok: BaseOCRConfig signature
+        return {
             **get_azure_ai_auth_headers(api_key=resolved_key, litellm_params=litellm_params),
             "Content-Type": "application/json",
             **headers,

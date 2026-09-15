@@ -792,10 +792,10 @@ class MCPRequestHandler:
         requested_name: str,
         authorization_value: str,
         litellm_api_key: str,
-        mcp_server_auth_headers: dict[str, dict[str, str]] | None,  # mutable-ok: existing MCP sink shape
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         request: Request,
         route: str,
-    ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:  # mutable-ok: existing MCP sink shape
+    ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:
         if is_bridge_envelope_shaped(authorization_value):
             return await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=server,

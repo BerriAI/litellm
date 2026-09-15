@@ -224,7 +224,7 @@ def create_prometheus_admission_metrics() -> AdmissionControlMetrics | None:
                 "litellm_admission_queued_requests",
                 "Number of requests queued by this worker",
             ),
-            rejected_counter=Counter(  # mutable-ok: Prometheus requires runtime Counter construction
+            rejected_counter=Counter(
                 "litellm_admission_rejected_requests_total",
                 "Number of requests rejected by this worker",
                 labelnames=("reason",),
@@ -296,9 +296,9 @@ def _overloaded_response(state: AdmissionControlState) -> JSONResponse:
     stats: Final = state.get_stats()
     return JSONResponse(
         status_code=503,
-        headers={"retry-after": "1"},  # mutable-ok: Starlette expects a plain headers mapping
-        content={  # mutable-ok: Starlette serializes a plain response mapping
-            "error": {  # mutable-ok: nested response mapping
+        headers={"retry-after": "1"},
+        content={
+            "error": {
                 "message": (
                     f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
                 ),

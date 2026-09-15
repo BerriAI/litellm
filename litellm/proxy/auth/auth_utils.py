@@ -1256,7 +1256,7 @@ def enforce_batch_enqueued_token_limit_is_admin_only(
         return
     raise HTTPException(
         status_code=403,
-        detail={  # mutable-ok: HTTPException.detail has no immutable form
+        detail={
             "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
             "It replaces the standard rate limit checks for batch submissions."
         },

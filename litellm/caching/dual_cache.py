@@ -222,9 +222,7 @@ class DualCache(BaseCache):
                     if value is not None:
                         self.in_memory_cache.set_cache(key, value, **self._backfill_kwargs(kwargs))
 
-            return list(  # mutable-ok: public list contract
-                redis_result.get(key) if value is None else value for key, value in zip(keys, result)
-            )
+            return list(redis_result.get(key) if value is None else value for key, value in zip(keys, result))
         except Exception as e:
             log_redis_failure(
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in batch_get_cache", e, with_traceback=True

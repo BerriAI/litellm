@@ -259,7 +259,7 @@ class TokenCounter(Protocol):
 def _count_objects(
     values: Sequence[Mapping[str, JsonValue]],
 ) -> list[dict[str, JsonValue]]:  # mutable-ok: the existing provider count API requires JSON lists/dicts
-    return [dict(value) for value in values]  # mutable-ok: serialize read-only inputs at the provider API boundary
+    return [dict(value) for value in values]
 
 
 async def count_prompt_tokens(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:

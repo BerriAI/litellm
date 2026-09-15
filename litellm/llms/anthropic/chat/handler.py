@@ -371,7 +371,7 @@ class AnthropicChatCompletion(BaseLLM):
 
         transform_params: Final = {**optional_params, "is_vertex_request": is_vertex_request}
 
-        def finish_request(request_data: dict) -> tuple[dict, dict]:  # mutable-ok: rewritten in place downstream
+        def finish_request(request_data: dict) -> tuple[dict, dict]:
             """Filter beta headers and emit pre_call, returning `(headers, data)`.
 
             The pair stays mutable because the streaming path rewrites it in
@@ -460,7 +460,7 @@ class AnthropicChatCompletion(BaseLLM):
         # before transforming: whichever path runs emits pre_call exactly once.
         # `get_config` merges the class-level defaults (Anthropic's required
         # `max_tokens` among them) that `transform_request` would have applied.
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
+        rust_optional_params: Final = {
             **AnthropicConfig.get_config(model=model),
             **optional_params,
         }
@@ -473,8 +473,8 @@ class AnthropicChatCompletion(BaseLLM):
             stream=stream,
         )
         if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
+            rust_logging_args: Final = {
+                "complete_input_dict": {
                     "model": model,
                     "messages": messages,
                     **rust_optional_params,
@@ -650,7 +650,7 @@ class ModelResponseIterator:
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: list[dict[str, object]] = []
-        self._web_search_calls: dict[str, object] = {}  # mutable-ok: provider call state by id
+        self._web_search_calls: dict[str, object] = {}
 
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: list[dict[str, object]] = []
@@ -825,7 +825,7 @@ class ModelResponseIterator:
         return content_block_start
 
     def _web_search_call_snapshot(self) -> dict[str, object]:
-        return dict(self._web_search_calls)  # mutable-ok: stream payload snapshot
+        return dict(self._web_search_calls)
 
     def _complete_web_search_call(self, result: dict[str, object]) -> None:
         tool_use_id: Final = result.get("tool_use_id")
@@ -833,7 +833,7 @@ class ModelResponseIterator:
             return
         self._web_search_calls[tool_use_id] = build_web_search_call(
             tool_id=tool_use_id,
-            tool_input=self._server_tool_inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+            tool_input=self._server_tool_inputs.get(tool_use_id, {}),
             result=result,
         )
 
@@ -942,7 +942,7 @@ class ModelResponseIterator:
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,
-                                {"content": []},  # mutable-ok: no provider result yet
+                                {"content": []},
                                 status="in_progress",
                             )
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()

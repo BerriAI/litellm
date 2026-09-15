@@ -1594,7 +1594,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         user_api_key_metadata: Final[StandardLoggingUserAPIKeyMetadata] = (
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_auth)
         )
-        return {  # mutable-ok: litellm's metadata channel is a plain dict its logging path reads and enriches
+        return {
             **user_api_key_metadata,
             "model_group": search_tool_name,
             "user_api_key": user_api_key_auth.api_key,

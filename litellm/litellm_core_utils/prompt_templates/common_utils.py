@@ -1217,7 +1217,7 @@ def _mergeable_branch(
     branch: object,
     seen_refs: frozenset[str],
     depth: int,
-    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+    expanded_refs: dict[str, Mapping[str, object] | None],
 ) -> Mapping[str, object] | None:
     if not isinstance(branch, dict) or depth > _MAX_SCHEMA_FLATTEN_DEPTH:
         return None
@@ -1250,7 +1250,7 @@ def _flatten_schema_against_root(
     root: Mapping[str, object],
     seen_refs: frozenset[str],
     depth: int,
-    expanded_refs: dict[str, Mapping[str, object] | None],  # mutable-ok: per-call memo bounding repeated $ref work
+    expanded_refs: dict[str, Mapping[str, object] | None],
 ) -> Mapping[str, object]:
     raw_branch_groups: Final = tuple(
         (
@@ -1282,7 +1282,7 @@ def _flatten_schema_against_root(
     if not is_object_schema:
         return schema
 
-    merged_properties: Final = {  # mutable-ok: tool parameters are JSON dicts
+    merged_properties: Final = {
         name: value for source in (*reversed(branches), schema) for name, value in _schema_properties(source).items()
     }
     required_names: Final = _schema_required_names(schema).union(
@@ -1290,7 +1290,7 @@ def _flatten_schema_against_root(
     )
     kept: Final = MappingProxyType({key: value for key, value in schema.items() if key not in dropped})
     required_update: Final = MappingProxyType({"required": sorted(required_names)}) if required_names else _EMPTY_SCHEMA
-    return {  # mutable-ok: tool parameters are JSON dicts
+    return {
         **kept,
         "type": "object",
         "properties": merged_properties,
@@ -1317,7 +1317,7 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     OpenAI's own validation still applies. Non-object schemas pass through
     unchanged and the input is never mutated.
     """
-    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
+    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})
 
 
 _SUBSCHEMA_KEYWORDS: Final = frozenset(
@@ -1362,7 +1362,7 @@ def drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
     at more schema levels than a JSON parser admits, so a cyclic schema built in
     code cannot spin it.
     """
-    rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
+    rebuilt: dict[int, Mapping[str, object]] = {}
     for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
         rebuilt.update(
             (id(node), rewritten)
@@ -1392,7 +1392,7 @@ def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
 def _node_without_non_python_regex(
     node: Mapping[str, object], rebuilt: Mapping[int, Mapping[str, object]]
 ) -> Mapping[str, object]:
-    kept: Final = {  # mutable-ok: tool parameters are JSON dicts
+    kept: Final = {
         key: _keyword_value_rebuilt(key, value, rebuilt)
         for key, value in node.items()
         if key != "pattern" or not isinstance(value, str) or _is_python_regex(value)
@@ -1402,14 +1402,14 @@ def _node_without_non_python_regex(
 
 def _keyword_value_rebuilt(key: str, value: object, rebuilt: Mapping[int, Mapping[str, object]]) -> object:
     if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
-        kept: Final = {  # mutable-ok: tool parameters are JSON dicts
+        kept: Final = {
             name: rebuilt.get(id(sub), sub)
             for name, sub in value.items()
             if key != "patternProperties" or not isinstance(name, str) or _is_python_regex(name)
         }
         return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
     if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
-        items: Final = [rebuilt.get(id(sub), sub) for sub in value]  # mutable-ok: tool parameters are JSON lists
+        items: Final = [rebuilt.get(id(sub), sub) for sub in value]
         return value if all(new is old for new, old in zip(items, value, strict=True)) else items
     if key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
         return rebuilt.get(id(value), value)
@@ -1441,7 +1441,7 @@ def tool_with_sanitized_parameters(
     sanitized: Final = sanitize(parameters)
     if sanitized is parameters:
         return tool
-    return {**tool, "function": {**function, "parameters": sanitized}}  # mutable-ok: request tools are JSON dicts
+    return {**tool, "function": {**function, "parameters": sanitized}}
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:
@@ -1700,7 +1700,7 @@ _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
     if marker is None:
         return target
-    marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
+    marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
@@ -1714,9 +1714,7 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
         return message
     return cast(  # cast-ok: same TypedDict minus internal keys
         AllMessageValues,
-        {  # mutable-ok: provider transforms mutate message dicts in place downstream
-            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS
-        },
+        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
     )
 
 
@@ -2166,11 +2164,9 @@ def _split_images_from_tool_message(
     )
     if not image_parts:
         return message, ()
-    remaining_parts = [  # mutable-ok: tool message content must stay a json list
-        part for part in content if not _is_image_url_part(part)
-    ]
+    remaining_parts = [part for part in content if not _is_image_url_part(part)]
     new_content = remaining_parts if remaining_parts else TOOL_RESULT_IMAGE_PLACEHOLDER
-    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    rewritten = {**message, "content": new_content}
     return cast(AllMessageValues, rewritten), image_parts  # cast-ok: dict spread keeps keys like cache_control
 
 
@@ -2178,14 +2174,12 @@ def _hoist_images_in_tool_message_run(
     run: Iterable[AllMessageValues],
 ) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
     split_results = tuple(_split_images_from_tool_message(message) for message in run)
-    hoisted_images = [  # mutable-ok: user message content must be a json list
-        image for _, images in split_results for image in images
-    ]
-    rewritten_messages = [message for message, _ in split_results]  # mutable-ok: pipelines mutate message lists
+    hoisted_images = [image for _, images in split_results for image in images]
+    rewritten_messages = [message for message, _ in split_results]
     if not hoisted_images:
         return rewritten_messages
     boundary_part = ChatCompletionTextObject(type="text", text=TOOL_RESULT_IMAGE_BOUNDARY)
-    hoisted_content = [boundary_part, *hoisted_images]  # mutable-ok: user message content must be a json list
+    hoisted_content = [boundary_part, *hoisted_images]
     rewritten_messages.append(ChatCompletionUserMessage(role="user", content=hoisted_content))
     return rewritten_messages
 
@@ -2209,7 +2203,7 @@ def hoist_images_from_tool_messages(
     """
     if not any(_tool_message_carries_image(message) for message in messages):
         return messages
-    return [  # mutable-ok: pipelines mutate message lists
+    return [
         rewritten_message
         for is_tool_run, run in groupby(messages, key=lambda message: message.get("role") == "tool")
         for rewritten_message in (_hoist_images_in_tool_message_run(run) if is_tool_run else run)
@@ -2231,11 +2225,9 @@ def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
     if not _tool_message_carries_tool_reference(message):
         return message
     content = cast(list, message.get("content"))  # cast-ok: shape checked by _tool_message_carries_tool_reference
-    remaining_parts = [  # mutable-ok: tool message content must stay a json list
-        part for part in content if not _is_tool_reference_part(part)
-    ]
+    remaining_parts = [part for part in content if not _is_tool_reference_part(part)]
     new_content = remaining_parts if remaining_parts else ""
-    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    rewritten = {**message, "content": new_content}
     return cast(AllMessageValues, rewritten)  # cast-ok: dict spread keeps keys like cache_control
 
 
@@ -2253,7 +2245,7 @@ def drop_tool_reference_parts_from_tool_messages(
     """
     if not any(_tool_message_carries_tool_reference(message) for message in messages):
         return messages
-    return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
+    return [_drop_tool_reference_parts(message) for message in messages]
 
 
 def _attempt_json_repair(s: str) -> object | None:

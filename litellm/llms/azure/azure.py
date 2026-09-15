@@ -1407,7 +1407,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },
@@ -1451,7 +1451,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },

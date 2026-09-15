@@ -2587,9 +2587,7 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
         collected_usage_objects: Final = ResponsesWebSocketTokenUsageProcessor.collect_usage_from_responses_ws_results(
             results
         )
-        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(
-            list(collected_usage_objects)  # mutable-ok: combine_usage_objects requires a list parameter
-        )
+        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(list(collected_usage_objects))
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"

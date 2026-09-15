@@ -97,7 +97,7 @@ def _capacity_request_data(
 ) -> Mapping[str, object]:
     # The parsed-body cache retains only original top-level keys. Replay the
     # shared idempotent tag merges on limiter-only data when auth added metadata.
-    data: Final = dict(request_data)  # mutable-ok: the existing tag merge owners accept a dictionary out-param
+    data: Final = dict(request_data)
     LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(http_request, data, caller)  # pyright: ignore[reportUnknownMemberType]  # legacy tag owner takes the validated capacity dictionary
     LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(data, caller)  # pyright: ignore[reportUnknownMemberType]  # legacy tag owner merges trusted key tags into capacity metadata
     return MappingProxyType(data)
@@ -174,7 +174,7 @@ async def predict_arm(
 
 @router.post(
     "/cost/predict-cache",
-    tags=["Cost Tracking"],  # mutable-ok: FastAPI requires a list for OpenAPI tags
+    tags=["Cost Tracking"],
     response_model=CachePredictionResponse,
 )
 async def predict_cache_cost(

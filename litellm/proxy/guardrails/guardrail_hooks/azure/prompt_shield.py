@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 # Per-invocation billing counters. A ContextVar rather than request metadata: the
 # decorator can swap out ``request_data``, metadata is client-forgeable, and
 # concurrent guardrails run in separate tasks with their own context copy.
-_billing_usage_stash: Final[ContextVar[dict[str, int] | None]] = ContextVar(  # mutable-ok: task-local stash
+_billing_usage_stash: Final[ContextVar[dict[str, int] | None]] = ContextVar(
     "azure_prompt_shield_billing_usage", default=None
 )
 
@@ -61,7 +61,7 @@ def _resolved_secret_value(value: object) -> object:
     return value
 
 
-def _updated_param(litellm_params: "LitellmParams | dict", key: str) -> object:  # mutable-ok: DB dict
+def _updated_param(litellm_params: "LitellmParams | dict", key: str) -> object:
     """Read one param from a Mapping or a pydantic object, including pydantic
     extras (cost_tier / price_per_1000_text_records live there), which the base
     class ``vars()`` loop never sees."""
@@ -157,7 +157,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     async def async_make_request(
         self,
         user_prompt: str,
-        usage_accumulator: MutableMapping[str, int],  # mutable-ok: callee-filled accumulator
+        usage_accumulator: MutableMapping[str, int],
     ) -> "AzurePromptShieldGuardrailResponse":
         """
         Make a request to the Azure Prompt Shield API.
@@ -223,7 +223,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         _billing_usage_stash.set(None)
-        usage: Final[dict[str, int]] = {}  # mutable-ok: per-invocation billing accumulator
+        usage: Final[dict[str, int]] = {}
         try:
             for text in inputs.get("texts") or ():
                 if text:
@@ -258,7 +258,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
         if user_prompt:
             verbose_proxy_logger.debug("Azure Prompt Shield: User prompt: %s", user_prompt)
-            usage: Final[dict[str, int]] = {}  # mutable-ok: per-invocation billing accumulator
+            usage: Final[dict[str, int]] = {}
             try:
                 await self.async_make_request(
                     user_prompt=user_prompt,
@@ -270,7 +270,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             verbose_proxy_logger.warning("Azure Prompt Shield: No user prompt found")
         return None
 
-    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | dict") -> None:  # mutable-ok: DB dict
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | dict") -> None:
         """Apply updated params in place, re-resolving billing and credentials.
 
         Pricing is read via ``_updated_param`` (the values are pydantic extras, and
@@ -281,7 +281,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         """
         cost_tier: Final = _resolved_cost_tier(_updated_param(litellm_params, "cost_tier"))
         price: Final = _resolved_price(_updated_param(litellm_params, "price_per_1000_text_records"), cost_tier)
-        resolved_credentials: dict[str, object] = {}  # mutable-ok: staged before mutation
+        resolved_credentials: dict[str, object] = {}
         for cred_key in ("api_key", "api_base"):
             cred_value = _updated_param(litellm_params, cred_key)
             if isinstance(cred_value, str) and cred_value.startswith("os.environ/"):
@@ -299,7 +299,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     def _record_billing_usage(self, usage: Mapping[str, int]) -> None:
         """Stash this invocation's usage counters for the ``_process_*`` call the
         decorator runs next in the same asyncio task; overwrites any leftover."""
-        _billing_usage_stash.set(dict(usage) if usage else None)  # mutable-ok: fresh snapshot, popped by _process_*
+        _billing_usage_stash.set(dict(usage) if usage else None)
 
     def _pop_billing_tracing_detail(self) -> GuardrailTracingDetail | None:
         """Build the billing tracing detail from the stashed usage counters, priced
@@ -326,14 +326,14 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
     def _process_response(
         self,
-        response: dict | None,  # mutable-ok: matches CustomGuardrail._process_response signature
-        request_data: dict,  # mutable-ok: matches CustomGuardrail._process_response signature
+        response: dict | None,
+        request_data: dict,
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
-        original_inputs: dict | None = None,  # mutable-ok: matches CustomGuardrail._process_response signature
-    ) -> dict | None:  # mutable-ok: matches CustomGuardrail._process_response return
+        original_inputs: dict | None = None,
+    ) -> dict | None:
         """Override to attach the Azure billing tracing detail (usage counters and
         estimated cost) and the ``azure`` provider label to the recorded guardrail
         information. Follows the OpenAI moderation override pattern
@@ -359,7 +359,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     def _process_error(
         self,
         e: Exception,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail._process_error signature
+        request_data: dict,
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,

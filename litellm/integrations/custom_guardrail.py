@@ -310,7 +310,7 @@ class CustomGuardrail(CustomLogger):
 
     def inject_advisory_message(
         self,
-        data: dict[str, Any],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
+        data: dict[str, Any],
         message: str,
     ) -> bool:
         """
@@ -340,7 +340,7 @@ class CustomGuardrail(CustomLogger):
             land and degrade to blocking instead of silently letting the
             flagged request through unmodified.
         """
-        advisory_message: Final = {"role": "system", "content": message}  # mutable-ok: plain dict for live request
+        advisory_message: Final = {"role": "system", "content": message}
         existing_messages: Final = data.get("messages")
         existing_input: Final = data.get("input")
         existing_instructions: Final = data.get("instructions")
@@ -351,7 +351,7 @@ class CustomGuardrail(CustomLogger):
             # model to disregard a trailing warning. Prefer it over "input"
             # whenever present.
             if isinstance(existing_messages, list):
-                messages_with_instructions_note: Final = [  # mutable-ok: fresh list
+                messages_with_instructions_note: Final = [
                     *existing_messages,
                     advisory_message,
                 ]
@@ -363,7 +363,7 @@ class CustomGuardrail(CustomLogger):
             # real, read field (e.g. a chat-completions call carrying a stray
             # "input"), so write to both when both are present.
             if isinstance(existing_messages, list):
-                messages_with_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+                messages_with_input_note: Final = [*existing_messages, advisory_message]
                 data["messages"] = messages_with_input_note  # rebind-ok: mutates caller's dict by design
             # The Responses API reads "input", not "messages" -- appending only to
             # "messages" would leave the advisory unreachable for that endpoint.
@@ -377,10 +377,10 @@ class CustomGuardrail(CustomLogger):
             # non-delivery so the caller degrades to blocking.
             return False
         if isinstance(existing_messages, list):
-            messages_without_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+            messages_without_input_note: Final = [*existing_messages, advisory_message]
             data["messages"] = messages_without_input_note  # rebind-ok: mutates caller's dict by design
             return True
-        sole_message: Final = [advisory_message]  # mutable-ok: plain list for the live JSON request
+        sole_message: Final = [advisory_message]
         data["messages"] = sole_message  # rebind-ok: mutates caller's dict by design
         return True
 
@@ -877,10 +877,10 @@ class CustomGuardrail(CustomLogger):
 
     async def async_logging_hook(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict,
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+    ) -> tuple[dict, object]:
         """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
         from litellm.llms import get_guardrail_translation_mapping
 
@@ -930,11 +930,11 @@ class CustomGuardrail(CustomLogger):
 
     async def _scan_logged_call(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict,
         response: object | None,
         translation: "BaseTranslation",
         output_translation: "BaseTranslation",
-        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+        scratch_metadata: dict,
     ) -> None:
         optional_params: Final = kwargs.get("optional_params") or {}
         scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
@@ -1497,7 +1497,7 @@ def _original_inputs_for(
     kwargs: Mapping[str, object],
     request_data: Mapping[str, object],
     event_type: GuardrailEventHooks | None,
-) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
+) -> dict | None:
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
     Hooks may edit their argument in place and return it, so the baseline is always a deep

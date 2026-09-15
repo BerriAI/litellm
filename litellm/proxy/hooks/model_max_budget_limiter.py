@@ -212,7 +212,7 @@ async def build_model_max_budget_usage(
 
 async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
     """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
-    keys: Final = list(spend_keys)  # mutable-ok: both batch readers annotate their key argument as list
+    keys: Final = list(spend_keys)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
         shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)

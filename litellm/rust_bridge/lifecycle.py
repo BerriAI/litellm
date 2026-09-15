@@ -81,7 +81,7 @@ def setup(
     from litellm import utils
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-    arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
+    arguments: Final = {
         "litellm_call_id": str(uuid.uuid4()),
         **kwargs,
     }

@@ -64,10 +64,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: matches the base chat transform signature
-        optional_params: dict,  # mutable-ok: matches the base chat transform signature
-        litellm_params: dict,  # mutable-ok: matches the base chat transform signature
-        headers: dict,  # mutable-ok: matches the base chat transform signature
-    ) -> dict:  # mutable-ok: the handler sends this body straight to httpx
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         request: Final = super().transform_request(
             model=model,
             messages=messages,

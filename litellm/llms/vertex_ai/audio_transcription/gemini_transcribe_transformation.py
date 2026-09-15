@@ -62,7 +62,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict[str, object]:
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         mapped: Final = {
             **optional_params,
@@ -86,7 +86,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         self,
         error_message: str,
         status_code: int,
-        headers: dict | Headers,  # mutable-ok: base signature and VertexAIError take dict | Headers
+        headers: dict | Headers,
     ) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
@@ -99,7 +99,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict[str, str]:
         vertex_params: Final = dict(litellm_params)
         access_token, project_id = self._ensure_access_token(
             credentials=self.safe_get_vertex_ai_credentials(vertex_params),

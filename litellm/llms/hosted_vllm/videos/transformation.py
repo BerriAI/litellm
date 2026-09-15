@@ -135,7 +135,7 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseVideoConfig contract
-        return [  # mutable-ok: BaseVideoConfig returns list
+        return [
             *super().get_supported_openai_params(model),
             *_VLLM_OMNI_VIDEO_PARAMS,
         ]
@@ -145,31 +145,29 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: BaseVideoConfig contract; extra_body merge mutates this dict
-        return {  # mutable-ok: VideoGenerationRequestUtils.update/pop extra_body onto this mapping
-            key: value for key, value in video_create_optional_params.items() if value is not None
-        }
+    ) -> dict:
+        return {key: value for key, value in video_create_optional_params.items() if value is not None}
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseVideoConfig contract
+        headers: dict,
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:  # mutable-ok: BaseVideoConfig contract
+    ) -> dict:
         resolved_key: Final = (
             (litellm_params.api_key if litellm_params is not None else None)
             or api_key
             or get_secret_str("HOSTED_VLLM_API_KEY")
             or "fake-api-key"
         )
-        return {**headers, "Authorization": f"Bearer {resolved_key}"}  # mutable-ok: httpx headers are a dict
+        return {**headers, "Authorization": f"Bearer {resolved_key}"}
 
     def get_complete_url(
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: BaseVideoConfig contract
+        litellm_params: dict,
     ) -> str:
         resolved_api_base: Final = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         if resolved_api_base is None:
@@ -187,14 +185,14 @@ class HostedVLLMVideoConfig(OpenAIVideoConfig):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,  # mutable-ok: BaseVideoConfig contract
+        video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: BaseVideoConfig contract
-    ) -> tuple[dict, RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
-        data: Final = {  # mutable-ok: BaseVideoConfig contract returns a data dict
+        headers: dict,
+    ) -> tuple[dict, RequestFiles, str]:
+        data: Final = {
             "model": model,
             "prompt": prompt,
-            **{  # mutable-ok: spread remaining Omni form fields into that data dict
+            **{
                 key: _form_value(key, value)
                 for key, value in video_create_optional_request_params.items()
                 if key not in _EXCLUDED_FORM_KEYS and value is not None

@@ -1041,9 +1041,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         return cast(  # cast-ok: rebuilt dict matches the message_delta TypedDict shape for this branch
             ContentBlockDelta | MessageBlockDelta,
-            {  # mutable-ok: fresh translation payload; never mutated after construction
+            {
                 **processed_chunk,
-                "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
+                "delta": {
                     **delta,
                     "stop_reason": "refusal",
                     "stop_details": refusal_stop_details(self._refusal_text),

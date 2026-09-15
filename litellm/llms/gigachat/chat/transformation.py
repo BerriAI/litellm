@@ -104,14 +104,14 @@ class GigaChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: mutates in place per GigaChat OAuth setup
+        headers: dict,
         model: str,
         messages: Sequence[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict:
         """
         Set up headers with OAuth token.
         """
@@ -129,7 +129,7 @@ class GigaChatConfig(BaseConfig):
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns list
         """Return list of supported OpenAI parameters."""
-        return [  # mutable-ok: base class contract returns list
+        return [
             "stream",
             "temperature",
             "top_p",
@@ -146,10 +146,10 @@ class GigaChatConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,  # mutable-ok: mutated in place per GigaChat mapping
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: base class contract returns dict
+    ) -> dict:
         """Map OpenAI parameters to GigaChat parameters."""
         for param, value in non_default_params.items():
             if param == "stream":
@@ -188,7 +188,7 @@ class GigaChatConfig(BaseConfig):
                     schema_name = json_schema.get("name", "structured_output")
                     schema = json_schema.get("schema", {})
 
-                    function_def = {  # mutable-ok: request payload for httpx
+                    function_def = {
                         "name": schema_name,
                         "description": f"Output structured response: {schema_name}",
                         "parameters": schema,
@@ -203,7 +203,7 @@ class GigaChatConfig(BaseConfig):
                         ),
                         function_def,
                     ]
-                    optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
+                    optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
 
         return optional_params
@@ -321,7 +321,7 @@ class GigaChatConfig(BaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:  # mutable-ok: request payload sent to httpx
+    ) -> dict:
         """Transform OpenAI request to GigaChat format."""
         giga_messages: Final = self._transform_messages(messages)
 

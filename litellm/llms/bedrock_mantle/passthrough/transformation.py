@@ -55,7 +55,7 @@ class BedrockMantlePassthroughConfig(BedrockPassthroughConfig):
         model: str,
         custom_llm_provider: str,
         httpx_response: Response,
-        request_data: dict,  # mutable-ok: mirrors the inherited BedrockPassthroughConfig signature
+        request_data: dict,
         logging_obj: Logging,
         endpoint: str,
     ) -> Optional["CostResponseTypes"]:

@@ -190,7 +190,7 @@ class MockTestingParamsDisabledError(HTTPException):
     def __init__(self, params: tuple[str, ...]):
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+            detail={
                 "error": (
                     f"Mock testing request params are disabled on this proxy: {', '.join(params)}. "
                     f"An admin can enable them by setting `general_settings.{MOCK_TESTING_CONFIG_KEY}: true` "
@@ -461,7 +461,7 @@ async def route_request(
 
 
 async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed
-    data: dict,  # mutable-ok: request body is the proxy-wide mutable dict contract shared with route_request
+    data: dict,
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: RouteType,

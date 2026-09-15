@@ -7647,11 +7647,11 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
-        moderation_request: Final = {"input": input, "model": model}  # mutable-ok: logged as the raw request body
+        moderation_request: Final = {"input": input, "model": model}
         litellm_logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": moderation_request,
                 "api_base": str(_openai_client.base_url),
             },
@@ -8715,8 +8715,8 @@ def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional
 
 def _joined_streamed_citations(streamed_citations: "tuple[object, ...]") -> "list[object]":
     if all(isinstance(citation, list) for citation in streamed_citations):
-        return list(streamed_citations)  # mutable-ok: JSON list field
-    return [list(streamed_citations)]  # mutable-ok: JSON list field
+        return list(streamed_citations)
+    return [list(streamed_citations)]
 
 
 def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
@@ -8982,11 +8982,9 @@ def stream_chunk_builder(
                 fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
             )
             citation_fields: Final = (
-                {"citations": _joined_streamed_citations(streamed_citations)}  # mutable-ok: JSON dict field
-                if streamed_citations
-                else {}  # mutable-ok: JSON dict field
+                {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
             )
-            combined_provider_fields: Final = {  # mutable-ok: Message.provider_specific_fields is a plain dict field
+            combined_provider_fields: Final = {
                 key: value
                 for fields in (citation_fields, *provider_field_dicts)
                 for key, value in fields.items()

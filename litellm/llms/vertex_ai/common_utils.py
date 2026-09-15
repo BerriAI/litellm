@@ -1257,11 +1257,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
 
             resolved_contents: Final = (
-                contents
-                if contents is not None
-                else _gemini_convert_messages_with_history(
-                    messages=messages or []  # mutable-ok: fallback for None messages; helper signature requires list
-                )
+                contents if contents is not None else _gemini_convert_messages_with_history(messages=messages or [])
             )
 
             count_tokens_params: Final = {

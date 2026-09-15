@@ -109,7 +109,7 @@ def merge_bedrock_aws_request_params(
     server. Requests may still provide AWS credentials when the deployment has
     no static credentials configured.
     """
-    request_params: Final = {**optional_params, **litellm_params}  # mutable-ok: AWS helpers require a plain dict
+    request_params: Final = {**optional_params, **litellm_params}
     has_static_deployment_credentials: Final = all(
         isinstance(litellm_params.get(key), str) and bool(litellm_params.get(key))
         for key in ("aws_access_key_id", "aws_secret_access_key", "aws_region_name")
@@ -231,7 +231,7 @@ def _bedrock_model_supports(model: str, key: str) -> bool:
 
 def apply_bedrock_invoke_structured_output(
     model: str,
-    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    request_body: dict[str, object],
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -256,7 +256,7 @@ def apply_bedrock_invoke_structured_output(
         if isinstance(existing_output_config, dict):
             existing_output_config["format"] = schema_format
         else:
-            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param  # mutable-ok: json
+            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param
         return
 
     verbose_logger.warning(
@@ -273,7 +273,7 @@ def apply_bedrock_invoke_structured_output(
 
 def strip_unsupported_bedrock_invoke_output_config_keys(
     model: str,
-    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    request_body: dict[str, object],
 ) -> None:
     """
     Drop ``output_config`` keys the Bedrock model does not accept.
@@ -309,7 +309,7 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
     if preserved_format is None:
         request_body.pop("output_config", None)
     else:
-        request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param  # mutable-ok: json
+        request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param
 
 
 def normalize_custom_field_on_tools(request_body: dict) -> None:

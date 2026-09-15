@@ -187,7 +187,7 @@ class _ParsedRecord:
 
 
 def _rejected(message: str) -> HTTPException:
-    return HTTPException(status_code=400, detail={"error": message})  # mutable-ok: FastAPI detail shape
+    return HTTPException(status_code=400, detail={"error": message})
 
 
 def raise_public(failure: BatchScanFailure) -> NoReturn:
@@ -355,9 +355,7 @@ def build_scan_metadata(request_metadata: Mapping[str, object]) -> Mapping[str, 
     Passing the whole thing through would carry values that cannot be copied, such as the parent
     OTel span, and would hand every record proxy state it has no business seeing.
     """
-    return MappingProxyType(
-        {key: value for key, value in request_metadata.items() if key in _SCAN_METADATA_KEYS}
-    )  # mutable-ok: MappingProxyType freezes the comprehension
+    return MappingProxyType({key: value for key, value in request_metadata.items() if key in _SCAN_METADATA_KEYS})
 
 
 async def _scan_record(
@@ -380,7 +378,7 @@ async def _scan_record(
             url=url if isinstance(url, str) else None,
         )
 
-    scan_input: Final[dict[str, object]] = copy.deepcopy(body)  # mutable-ok: pre_call_hook mutates the dict it is given
+    scan_input: Final[dict[str, object]] = copy.deepcopy(body)
     own_injected: Final = MappingProxyType({key: body[key] for key in _INJECTED_KEYS if key in body})
     for injected in _INJECTED_KEYS:
         scan_input.pop(injected, None)
@@ -390,12 +388,12 @@ async def _scan_record(
     # and `tags` are nested containers otherwise shared with the upload request and with every
     # other record in the window. The narrowing above already removed what cannot be copied.
     for injected in _SCAN_METADATA_BAGS:
-        scan_input[injected] = copy.deepcopy(dict(scan_metadata))  # mutable-ok: guardrails write here
+        scan_input[injected] = copy.deepcopy(dict(scan_metadata))
 
     try:
         # The chain hands back the body it produced, which may be a replacement for the dict it was
         # given rather than that same dict mutated, so this is what gets compared.
-        scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(  # mutable-ok: the guardrails' own dict
+        scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=scan_input,
             call_type=call_type,
@@ -423,7 +421,7 @@ async def _scan_record(
     return _Redaction(
         line_number=record.line_number,
         custom_id=custom_id,
-        text=json.dumps({**record.payload, "body": scanned}),  # mutable-ok: json.dumps needs a plain dict
+        text=json.dumps({**record.payload, "body": scanned}),
     )
 
 
@@ -546,7 +544,7 @@ def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> 
     """
     redacted: Final = MappingProxyType(
         {change.line_number: change for change in result.changes if isinstance(change, RecordRedacted)}
-    )  # mutable-ok: MappingProxyType freezes the lookup table
+    )
     dropped: Final = frozenset(change.line_number for change in result.changes if isinstance(change, RecordDropped))
 
     output: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the caller uploads this handle

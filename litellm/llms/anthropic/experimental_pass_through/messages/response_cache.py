@@ -42,7 +42,7 @@ class AnthropicMessagesStreamCacheWriter:
         self.caching_handler = caching_handler
         self.collected_chunks: list[bytes] = []  # mutable-ok: rebuilding a tuple per SSE chunk is quadratic
         self.persisted = False
-        self._hidden_params: dict[str, object] = dict(  # mutable-ok: callers stamp cache_key in here
+        self._hidden_params: dict[str, object] = dict(
             stream._hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
         )
 
@@ -88,9 +88,7 @@ class AnthropicMessagesStreamCacheWriter:
 
         try:
             events: Final = _split_sse_events(collected_stream.decode("utf-8"))
-            cached_payload: Final = {
-                CACHED_STREAM_EVENTS_KEY: events
-            }  # mutable-ok: cache backends serialize plain dicts
+            cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}
             await litellm.cache.async_add_cache(
                 cached_payload,
                 dynamic_cache_object=self.caching_handler.dual_cache,
@@ -107,12 +105,12 @@ class CachedAnthropicMessagesStreamIterator(BaseAnthropicMessagesStreamingIterat
         litellm_logging_obj: "LiteLLMLoggingObj",
         request_body: Mapping[str, object],
     ) -> None:
-        body: Final = dict(request_body)  # mutable-ok: the base iterator takes a plain dict
+        body: Final = dict(request_body)
         super().__init__(litellm_logging_obj=litellm_logging_obj, request_body=body)
         self.chunks: Final[tuple[bytes, ...]] = tuple(event.encode("utf-8") for event in events)
         self.current_index = 0
         self.logged = False
-        self._hidden_params: dict[str, object] = {"cache_hit": True}  # mutable-ok: callers stamp cache_key in here
+        self._hidden_params: dict[str, object] = {"cache_hit": True}
         litellm_logging_obj.model_call_details["cache_hit"] = True
 
     def __aiter__(self) -> "CachedAnthropicMessagesStreamIterator":
@@ -122,7 +120,7 @@ class CachedAnthropicMessagesStreamIterator(BaseAnthropicMessagesStreamingIterat
         if self.current_index >= len(self.chunks):
             if not self.logged:
                 self.logged = True
-                chunks: Final = list(self.chunks)  # mutable-ok: the logging handler takes a list
+                chunks: Final = list(self.chunks)
                 await self._handle_streaming_logging(chunks)
             raise StopAsyncIteration
         chunk: Final = self.chunks[self.current_index]

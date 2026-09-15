@@ -1143,7 +1143,7 @@ def _parse_session_affinity_pin(value: object) -> _SessionAffinityPin | None:
 
 def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
     tier_value: Final = _tier_name(tier) if tier is not None else None
-    return {"model": model, "tier": tier_value}  # mutable-ok: cache requires JSON mapping
+    return {"model": model, "tier": tier_value}
 
 
 class ComplexityRouter(CustomLogger):
@@ -1736,7 +1736,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, Any] | None,
         messages: Sequence[Mapping[str, object]] | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier call when the scorer did not confidently
@@ -1769,7 +1769,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, Any] | None,
         messages: Sequence[Mapping[str, object]] | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier when the score sits near a tier boundary.
@@ -1824,7 +1824,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, Any] | None,
         messages: Sequence[Mapping[str, object]] | None,
         scored: ClassificationOutcome | None = None,
     ) -> ClassificationOutcome:
@@ -1902,7 +1902,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        request_kwargs: dict[str, Any] | None,
         raw_messages: list[dict[str, Any]] | None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
@@ -2056,7 +2056,7 @@ class ComplexityRouter(CustomLogger):
         )
 
         request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
-        metadata: Final = {  # mutable-ok: SDK metadata kwarg is enriched by the request pipeline
+        metadata: Final = {
             **forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
             INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
         }
@@ -2064,7 +2064,7 @@ class ComplexityRouter(CustomLogger):
 
         image_parts: Final = self._classifier_image_parts(messages)
         user_content: Final[str | Sequence[ChatCompletionTextObject | ChatCompletionImageObject]] = (
-            [  # mutable-ok: SDK request payload content list is built once
+            [
                 {"type": "text", "text": user_payload},
                 *image_parts,
             ]
@@ -2905,7 +2905,7 @@ class ComplexityRouter(CustomLogger):
         response: PreRoutingHookResponse,
         messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict,
         context_fit: _RequestContextFit | None = None,
     ) -> PreRoutingHookResponse:
         """Replace a routed model that cannot accept this request's image input.
@@ -2948,7 +2948,7 @@ class ComplexityRouter(CustomLogger):
         )
         if capable is not None:
             new_tier: ComplexityTier | str | None = capable if self.config.has_custom_tiers else ComplexityTier(capable)
-            repick_messages: Final = list(resolved_messages)  # mutable-ok: the pick's param is list-typed
+            repick_messages: Final = list(resolved_messages)
             new_model = await self._pick_model_for_tier(
                 new_tier,
                 messages,
@@ -3038,7 +3038,7 @@ class ComplexityRouter(CustomLogger):
         model_name: str,
         messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict,
     ) -> bool:
         """Whether the router would find a deployment for this group ON THIS REQUEST.
 
@@ -3067,7 +3067,7 @@ class ComplexityRouter(CustomLogger):
         from litellm.exceptions import BadRequestError
         from litellm.types.router import RouterErrors, RouterRateLimitError, RouterRateLimitErrorBasic
 
-        probe_kwargs: Final = dict(request_kwargs)  # mutable-ok: the owner pops routing keys off the dict it is handed
+        probe_kwargs: Final = dict(request_kwargs)
         try:
             deployments: Final = await self.litellm_router_instance.async_get_healthy_deployments(
                 model=model_name,
@@ -3096,7 +3096,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict,
         context_fit: _RequestContextFit | None = None,
     ) -> PreRoutingHookResponse:
         """Try compatible tier recovery before the default, preserving request policy and fit."""
@@ -3145,9 +3145,7 @@ class ComplexityRouter(CustomLogger):
             )
             live: Final = tuple(peer for peer, can_serve in zip(candidates, servable) if can_serve)
             if live:
-                repick_messages: Final = (
-                    list(resolved_messages) if resolved_messages else None  # mutable-ok: the pick's param is list-typed
-                )
+                repick_messages: Final = list(resolved_messages) if resolved_messages else None
                 try:
                     new_model: Final = await self._pick_model_for_tier(
                         candidate_tier if self.config.has_custom_tiers else ComplexityTier(candidate_tier),
@@ -3183,7 +3181,7 @@ class ComplexityRouter(CustomLogger):
                         context_escalation_original_tier=decision.get("context_escalation_original_tier"),
                     )
                     return response.model_copy(
-                        update={  # mutable-ok: model_copy types update as a plain dict
+                        update={
                             "model": new_model,
                             "litellm_params": self._litellm_params_for_model(candidate_tier, new_model),
                             "routing_decision": new_decision,
@@ -3227,7 +3225,7 @@ class ComplexityRouter(CustomLogger):
             context_escalation_original_tier=decision.get("context_escalation_original_tier"),
         )
         return response.model_copy(
-            update={  # mutable-ok: model_copy types update as a plain dict
+            update={
                 "model": default_model,
                 "litellm_params": self._litellm_params_for_model(None, default_model),
                 "routing_decision": default_decision,
@@ -3502,11 +3500,7 @@ class ComplexityRouter(CustomLogger):
     ) -> PreRoutingHookResponse | None:
         if response is None or not self._uses_deployment_pin:
             return response
-        return response.model_copy(
-            update={  # mutable-ok: model_copy types update as a plain dict
-                "session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds
-            }
-        )
+        return response.model_copy(update={"session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds})
 
     async def async_pre_routing_hook(
         self,

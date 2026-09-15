@@ -364,7 +364,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             else None
         )
         if rows_to_write_back is not None:
-            return_inputs["structured_messages"] = list(rows_to_write_back)  # mutable-ok: guardrail inputs take a list
+            return_inputs["structured_messages"] = list(rows_to_write_back)
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs

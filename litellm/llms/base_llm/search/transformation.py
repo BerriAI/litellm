@@ -185,12 +185,12 @@ class BaseSearchConfig:
 
     def sign_request(
         self,
-        headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
-        optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
+        headers: dict[str, str],
+        optional_params: dict[str, object],
         request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
+    ) -> tuple[dict[str, str], bytes | None]:
         """
         OPTIONAL
 
@@ -268,7 +268,7 @@ class BaseSearchConfig:
         return self.get_error_class(
             error_message=error.response.text,
             status_code=error.response.status_code,
-            headers=dict(error.response.headers),  # mutable-ok: provider error factories require dict headers
+            headers=dict(error.response.headers),
         )
 
     def get_error_class(

@@ -45,7 +45,7 @@ def _inputs_with_structured_messages(
         return inputs
     patched: Final[GenericGuardrailAPIInputs] = {
         **inputs,
-        "structured_messages": list(rewritten_messages),  # mutable-ok: the TypedDict field is declared as a list
+        "structured_messages": list(rewritten_messages),
     }
     return patched
 

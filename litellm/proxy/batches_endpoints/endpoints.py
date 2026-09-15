@@ -533,7 +533,7 @@ async def retrieve_batch(
         if poller_owns_accounting:
             litellm_metadata = data.get("litellm_metadata")
             if not isinstance(litellm_metadata, dict):
-                litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
+                litellm_metadata = {}
                 data["litellm_metadata"] = litellm_metadata
             litellm_metadata["batch_ignore_default_logging"] = True
 

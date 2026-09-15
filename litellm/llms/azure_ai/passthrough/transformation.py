@@ -147,13 +147,13 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict[str, str]:
         auth_headers: Final = get_azure_ai_auth_headers(
             api_key=api_key,
             litellm_params=litellm_params,
             api_key_header=api_key_header_for_base(api_base),
         )
-        return {**headers, **auth_headers}  # mutable-ok: base class contract returns dict for httpx
+        return {**headers, **auth_headers}
 
     def logging_non_streaming_response(
         self,
@@ -170,7 +170,7 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
             model=model,
             custom_llm_provider=custom_llm_provider,
             httpx_response=httpx_response,
-            request_data=dict(request_data),  # mutable-ok: AzurePassthroughConfig wants a dict
+            request_data=dict(request_data),
             logging_obj=logging_obj,
             endpoint=endpoint,
         )
@@ -196,7 +196,7 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
             ocr_config.get_complete_url(
                 api_base=relayed_origin,
                 model=model,
-                optional_params={},  # mutable-ok: BaseOCRConfig wants a dict
+                optional_params={},
             )
         )
         known_prefixes: Final = (model, model_group_from(logging_obj.litellm_params))

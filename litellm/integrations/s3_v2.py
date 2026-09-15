@@ -239,7 +239,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     def _sign_put(
         self, credentials: "Credentials", url: str, json_string: str, headers: Mapping[str, str]
-    ) -> dict[str, str]:  # mutable-ok: [LIT001] AsyncHTTPHandler.put/HTTPHandler.put only accept dict headers
+    ) -> dict[str, str]:
         """
         ``RefreshableCredentials`` (IMDS roles) may refresh between the access key, secret and token
         reads SigV4 performs, producing a mixed-generation signature that S3 rejects with 403.

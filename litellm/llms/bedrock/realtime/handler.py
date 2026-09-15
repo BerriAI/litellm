@@ -85,7 +85,7 @@ def _should_log_event(openai_message: Mapping[str, object]) -> bool:
 class RealtimeClientWebSocket(Protocol):
     """The client-facing websocket surface the realtime bridge talks to."""
 
-    scope: MutableMapping[str, object]  # mutable-ok: the ASGI scope is the per-connection state store
+    scope: MutableMapping[str, object]
 
     async def receive_text(self) -> str: ...
 
@@ -343,7 +343,7 @@ class BedrockRealtime(BaseAWSLLM):
         if logged_events:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 logging_obj.dispatch_success_handlers(
-                    list(logged_events),  # mutable-ok: realtime spend logging requires a list result
+                    list(logged_events),
                     prefer_async_handlers=True,
                 )
             )

@@ -1853,7 +1853,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
         request: Final = Mock()
         request.method = "POST"
         request.state = SimpleNamespace()
-        request.json = AsyncMock(return_value={"retrievalQuery": {"text": "hi"}})  # mutable-ok: must be json.dumps-able
+        request.json = AsyncMock(return_value={"retrievalQuery": {"text": "hi"}})
         return request
 
     @contextlib.contextmanager

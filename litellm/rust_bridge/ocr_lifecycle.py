@@ -59,8 +59,8 @@ def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: 
             model=request.model.removeprefix(f"{request_provider}/"),
             custom_llm_provider=request_provider,
             original_exception=error,
-            completion_kwargs=dict(arguments(request)),  # mutable-ok: exception mapper requires owned kwargs
-            extra_kwargs=dict(request.kwargs),  # mutable-ok: exception mapper requires owned kwargs
+            completion_kwargs=dict(arguments(request)),
+            extra_kwargs=dict(request.kwargs),
         )
     except Exception as public_error:
         public_error.__context__ = error

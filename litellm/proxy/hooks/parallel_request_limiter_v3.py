@@ -849,8 +849,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             config_field: Final = "config" if "config" in data or "generationConfig" not in data else "generationConfig"
             config: Final = data.get(config_field)
             if config is None or isinstance(config, dict):
-                data[config_field] = {  # rebind-ok: routed request needs cap  # mutable-ok: downstream needs dict
-                    **(config or {}),  # mutable-ok: downstream native routing requires a mutable request config
+                data[config_field] = {  # rebind-ok: routed request needs cap
+                    **(config or {}),
                     "maxOutputTokens": effective_cap,
                 }
             return
@@ -1819,7 +1819,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not descriptor_groups:
             return RateLimitResponse(
                 overall_code="OK",
-                statuses=[],  # mutable-ok: response contract requires a status list
+                statuses=[],
             )
         applied: Final[list[list[AtomicCounterMeta]]] = []
         statuses: Final[list[RateLimitStatus]] = []
@@ -2018,7 +2018,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             descriptor_state.append(
-                {  # mutable-ok: local atomic-counter state is updated during pass two
+                {
                     "window_expired": window_expired,
                     "current": current_counter,
                     "window_start": str(now_int if window_expired else int(window_start)),
@@ -2093,7 +2093,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             for d in descriptors
             if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
-            and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None  # mutable-ok: optional descriptor
+            and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
         ]
         if not tpm_descriptors:
             return RateLimitResponse(overall_code="OK", statuses=[])
@@ -2169,23 +2169,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         configured, or if the reservation failed), for the caller to stash
         for post-call reconciliation.
         """
-        itpm_descriptors: Final = [  # mutable-ok: atomic limiter API requires lists
-            d for d in descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
-        ]
-        otpm_descriptors: Final = [  # mutable-ok: atomic limiter API requires lists
-            d for d in descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
-        ]
+        itpm_descriptors: Final = [d for d in descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY]
+        otpm_descriptors: Final = [d for d in descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY]
 
         if not itpm_descriptors and not otpm_descriptors:
-            return RateLimitResponse(overall_code="OK", statuses=[]), 0, 0  # mutable-ok: response contract uses a list
+            return RateLimitResponse(overall_code="OK", statuses=[]), 0, 0
 
         itpm_response: Final = (
             await self.atomic_check_and_increment_by_n(
                 descriptors=itpm_descriptors,
-                increments=[  # mutable-ok: atomic limiter API requires mutable increment records
-                    {"tokens": estimated_input_tokens}  # mutable-ok: atomic limiter increment record
-                    for _ in itpm_descriptors
-                ],
+                increments=[{"tokens": estimated_input_tokens} for _ in itpm_descriptors],
                 parent_otel_span=parent_otel_span,
             )
             if itpm_descriptors
@@ -2198,25 +2191,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if otpm_descriptors:
             otpm_response: Final = await self.atomic_check_and_increment_by_n(
                 descriptors=otpm_descriptors,
-                increments=[  # mutable-ok: atomic limiter API requires mutable increment records
-                    {"tokens": estimated_output_tokens}  # mutable-ok: atomic limiter increment record
-                    for _ in otpm_descriptors
-                ],
+                increments=[{"tokens": estimated_output_tokens} for _ in otpm_descriptors],
                 parent_otel_span=parent_otel_span,
             )
             if otpm_response["overall_code"] == "OVER_LIMIT":
                 if itpm_reserved > 0:
                     await self._refund_reserved_tokens(
-                        scopes=[  # mutable-ok: reservation rollback accepts collected scopes
-                            (d["key"], d["value"]) for d in itpm_descriptors
-                        ],
+                        scopes=[(d["key"], d["value"]) for d in itpm_descriptors],
                         amount=itpm_reserved,
                         reservation_windows=itpm_response.get("reservation_windows", frozenset()),
                         parent_otel_span=parent_otel_span,
                     )
                 return otpm_response, 0, 0
             statuses: Final = (
-                [  # mutable-ok: response contract uses a list
+                [
                     *itpm_response["statuses"],
                     *otpm_response["statuses"],
                 ]
@@ -2974,12 +2962,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
 
         itpm_limit_for_project_model: Final = (
-            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_itpm_limit")
-            or {}  # mutable-ok: metadata helper returns an optional mapping
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_itpm_limit") or {}
         )
         otpm_limit_for_project_model: Final = (
-            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_otpm_limit")
-            or {}  # mutable-ok: metadata helper returns an optional mapping
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_otpm_limit") or {}
         )
 
         model_itpm_limit: Final = itpm_limit_for_project_model.get(requested_model)
@@ -2994,7 +2980,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 RateLimitDescriptor(
                     key=PROJECT_ITPM_DESCRIPTOR_KEY,
                     value=descriptor_value,
-                    rate_limit={  # mutable-ok: descriptor TypedDict requires a runtime dict
+                    rate_limit={
                         "requests_per_unit": None,
                         "tokens_per_unit": model_itpm_limit,
                         "window_size": self.window_size,
@@ -3006,7 +2992,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 RateLimitDescriptor(
                     key=PROJECT_OTPM_DESCRIPTOR_KEY,
                     value=descriptor_value,
-                    rate_limit={  # mutable-ok: descriptor TypedDict requires a runtime dict
+                    rate_limit={
                         "requests_per_unit": None,
                         "tokens_per_unit": model_otpm_limit,
                         "window_size": self.window_size,
@@ -3120,12 +3106,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if not isinstance(content, list):
                 sanitized.append(message)
                 continue
-            filtered_content = [  # mutable-ok: token_counter requires list content blocks
+            filtered_content = [
                 block for block in content if not (isinstance(block, dict) and block.get("type") == "input_audio")
             ]
-            sanitized.append(  # mutable-ok: token_counter requires mutable message dicts
-                {**message, "content": filtered_content}  # mutable-ok: token_counter requires message dicts
-            )
+            sanitized.append({**message, "content": filtered_content})
         return sanitized
 
     @staticmethod
@@ -3283,21 +3267,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not isinstance(data, dict):
             return
         stash: Final = claim_request_stash_for_data(data)
-        io_token_descriptors: Final = [  # mutable-ok: reservation API requires descriptor lists
+        io_token_descriptors: Final = [
             d for d in descriptors if d["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
         ]
         if not io_token_descriptors:
             return
 
-        configured_otpm_limits: Final = [  # mutable-ok: min calculation materializes validated limits
+        configured_otpm_limits: Final = [
             int(v)
             for d in io_token_descriptors
             if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
-            for v in [  # mutable-ok: comprehension binds the optional descriptor value
-                (d.get("rate_limit") or {}).get(  # mutable-ok: optional descriptor fallback
-                    "tokens_per_unit"
-                )
-            ]
+            for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
             if v is not None
         ]
         min_configured_otpm_limit: Final = min(configured_otpm_limits) if configured_otpm_limits else None
@@ -3419,7 +3399,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         descriptors: Final = self._create_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # legacy helper reads a dictionary with validated keys
             user_api_key_dict=user_api_key_dict,
-            data=dict(data),  # mutable-ok: legacy descriptor helpers accept a request dictionary
+            data=dict(data),
             rpm_limit_type=rpm_limit_type,
             tpm_limit_type=tpm_limit_type,
             model_has_failures=model_has_failures,
@@ -3435,7 +3415,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model,
             descriptors=descriptors,
         )
-        return [  # mutable-ok: the shared generation reservation helpers require a list
+        return [
             *descriptors,
             *self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model),
         ]
@@ -3463,7 +3443,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
         acquisition: Final = ParallelSlotAcquisition(
             slot_id=uuid.uuid4().hex,
-            counter_keys=[  # mutable-ok: the shared slot-release contract requires a list
+            counter_keys=[
                 self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
                 for d in descriptors
                 if d["rate_limit"] is not None and d["rate_limit"].get("max_parallel_requests") is not None
@@ -3690,10 +3670,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         (d["key"], d["value"])
                         for d in descriptors
                         if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
-                        and (d.get("rate_limit") or {}).get(  # mutable-ok: optional descriptor fallback
-                            "tokens_per_unit"
-                        )
-                        is not None
+                        and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
                     )
                     tpm_reservation_scopes = tuple(  # rebind-ok: record successful reservation scopes
                         stash.reserved_scopes
@@ -3968,11 +3945,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if self.window_guarded_token_increment_script is not None:
                 try:
                     await self.window_guarded_token_increment_script(
-                        keys=[  # mutable-ok: Redis script interface requires a key list
+                        keys=[
                             window_key,
                             operation["key"],
                         ],
-                        args=[  # mutable-ok: Redis script interface requires an argument list
+                        args=[
                             expected_window_start,
                             operation["increment_value"],
                             operation["ttl"] or 0,

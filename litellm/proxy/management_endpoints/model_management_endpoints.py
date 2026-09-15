@@ -2550,7 +2550,7 @@ async def update_useful_links(
 
 
 def _validated_labeled_tiers(
-    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
+    tier_labels: dict[ComplexityTier, str],
 ) -> tuple[tuple[ComplexityTier, str], ...]:
     """Validate tier labels once for both prompt-preview transports."""
     try:
@@ -2585,7 +2585,7 @@ class AutoRouterClassifierPromptPreviewRequest(BaseModel):
     which must not reach access logs through a URL."""
 
     tier_definitions: tuple[TierDefinition, ...] | None = None
-    tier_labels: dict[ComplexityTier, str] | None = None  # mutable-ok: FastAPI parses JSON object fields into dicts
+    tier_labels: dict[ComplexityTier, str] | None = None
     classification_rubric: ClassificationRubric | None = None
     context_window_size: Annotated[int, Field(ge=0)] = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
     classification_prompt: str | None = None
@@ -2598,8 +2598,8 @@ class AutoRouterClassifierPromptPreviewRequest(BaseModel):
 @router.post(
     "/auto_router/classifier/default_prompt",
     description="Get the system prompt an auto-router's LLM classifier sends for an edited tier set",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def preview_auto_router_classifier_prompt(
     request: AutoRouterClassifierPromptPreviewRequest,
@@ -2610,7 +2610,7 @@ async def preview_auto_router_classifier_prompt(
     Built by the same function the live classifier uses, so the preview cannot drift from what the
     router sends. Payload validity beyond a renderable definition stays the dry-run's job.
     """
-    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})  # mutable-ok: Pydantic field default
+    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})
     system_prompt: Final = (
         custom_tier_classification_prompt(
             request.tier_definitions,
@@ -2633,8 +2633,8 @@ async def preview_auto_router_classifier_prompt(
 @router.get(
     "/auto_router/classifier/default_prompt",
     description="Get the built-in system prompt used by an auto-router's LLM classifier",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,

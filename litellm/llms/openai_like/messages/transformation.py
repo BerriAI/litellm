@@ -69,10 +69,10 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         model: str,
         messages: list[dict],  # mutable-ok: matches dict-typed base signature
-        anthropic_messages_optional_request_params: dict,  # mutable-ok: matches dict-typed base signature
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: matches dict-typed base signature
-    ) -> dict:  # mutable-ok: matches dict-typed base signature
+        headers: dict,
+    ) -> dict:
         """
         Anthropic ignores prompt-caching hints it cannot honor, but strict
         non-Anthropic implementations of the Messages API 400 the whole request

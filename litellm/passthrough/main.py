@@ -82,7 +82,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         self._spend = _SpendCollection(provider_config, litellm_logging_obj)
         self._flush_scheduled = False
         self._background_tasks: set[asyncio.Task] = set()  # mutable-ok: instance set for background task tracking
-        self._hidden_params: dict[str, object] = {}  # mutable-ok: router attaches response headers here in place
+        self._hidden_params: dict[str, object] = {}
 
     @property
     def status_code(self) -> int:

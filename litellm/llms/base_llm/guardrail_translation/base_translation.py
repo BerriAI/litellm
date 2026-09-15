@@ -117,7 +117,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def merge_user_api_key_metadata_into_request(
-        request_data: dict[str, Any],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
+        request_data: dict[str, Any],
         user_api_key_dict: Optional["UserAPIKeyAuth"],
     ) -> None:
         """

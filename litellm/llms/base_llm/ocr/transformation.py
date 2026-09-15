@@ -155,7 +155,7 @@ class BaseOCRConfig:
         return dynamic_api_key or api_key, dynamic_api_base or api_base
 
     def get_health_check_document(self) -> DocumentType:
-        return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
+        return {
             "type": "document_url",
             "document_url": HEALTH_CHECK_PDF_DATA_URI,
         }

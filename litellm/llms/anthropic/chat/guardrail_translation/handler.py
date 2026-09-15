@@ -199,9 +199,7 @@ def _write_back_system_block(system: object, block_idx: int, response: str) -> N
         return
     text_blocks: Final = tuple(block for block in system if isinstance(block, dict) and block.get("type") == "text")
     if block_idx < len(text_blocks):
-        text_blocks[block_idx]["text"] = (
-            response  # mutable-ok: guardrails rewrite the caller's request payload in place
-        )
+        text_blocks[block_idx]["text"] = response
 
 
 def _write_back_message_text(message: _WritableMessage, target: MessageTextTarget, response: str) -> None:
@@ -211,22 +209,16 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
     match target:
         case MessageContentTarget():
             if isinstance(content, str):
-                message["content"] = response  # mutable-ok: guardrails rewrite the caller's request payload in place
+                message["content"] = response
         case ContentBlockTextTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["text"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["text"] = response
         case ToolResultStringTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["content"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["content"] = response
         case ToolResultBlockTextTarget(content_idx=content_idx, block_idx=block_idx):
             if isinstance(content, list):
-                content[content_idx]["content"][block_idx]["text"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["content"][block_idx]["text"] = response
         case _:
             assert_never(target)
 
@@ -248,9 +240,9 @@ def _write_back_tool_use(
     block: Final = content[target.content_idx] if isinstance(content, list) else None
     if not isinstance(block, dict):
         return
-    block["input"] = rewritten_input  # mutable-ok: guardrails rewrite the caller's request payload in place
+    block["input"] = rewritten_input
     if shape.name is not None and shape.name != block.get("name"):
-        block["name"] = shape.name  # mutable-ok: guardrails rewrite the caller's request payload in place
+        block["name"] = shape.name
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +263,7 @@ def _rewritten_event(event: Mapping[str, object], rewrite_event: _SSEEventRewrit
     section: Final = None if rewrite is None else event.get(rewrite.section)
     if rewrite is None or not isinstance(section, Mapping):
         return event
-    return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}  # mutable-ok: json.dumps needs a dict
+    return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}
 
 
 def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...]:
@@ -546,9 +538,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
-        translation_source: Final = {  # mutable-ok: API message payload
-            key: value for key, value in data.items() if key != "system"
-        }
+        translation_source: Final = {key: value for key, value in data.items() if key != "system"}
         chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
 
         full_structured_messages: Final = cast(
@@ -601,14 +591,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             *top_level_system_scanned,
             *(item for one_message in extracted for item in one_message.scanned),
         )
-        texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
-        images_to_check: Final = [
-            image for one_message in extracted for image in one_message.images
-        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+        texts_to_check: Final = [item.text for item in scanned]
+        images_to_check: Final = [image for one_message in extracted for image in one_message.images]
         scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
-        tool_calls_to_check: Final = [
-            item.tool_call for item in scanned_tool_calls
-        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[ChatCompletionToolCallChunk]
+        tool_calls_to_check: Final = [item.tool_call for item in scanned_tool_calls]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -696,21 +682,19 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(
-        self, data: dict
-    ) -> AllMessageValues | None:  # mutable-ok: API message payload
+    def _hoisted_top_level_system_message(self, data: dict) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
             return None
         probe: Final = self._translate_to_openai(
-            {  # mutable-ok: API message payload
+            {
                 "model": data.get("model") or "",
-                "messages": [],  # mutable-ok: API message payload
+                "messages": [],
                 "system": system,
             }
         )
-        hoisted: Final = probe.get("messages") or []  # mutable-ok: API message payload
+        hoisted: Final = probe.get("messages") or []
         return hoisted[0] if hoisted else None
 
     @staticmethod
@@ -729,13 +713,11 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _openai_system_message_to_anthropic(
         message: Mapping[str, object],
-    ) -> dict[str, object] | None:  # mutable-ok: API message payload
+    ) -> dict[str, object] | None:
         """Convert an OpenAI system message to the client's Anthropic-shaped entry."""
         content: Final = message.get("content")
         if isinstance(content, str):
-            return (
-                {"role": "system", "content": content} if content else None  # mutable-ok: API message payload
-            )  # mutable-ok: API message payload
+            return {"role": "system", "content": content} if content else None
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
@@ -745,21 +727,19 @@ class AnthropicMessagesHandler(BaseTranslation):
             text = block.get("text")
             if not isinstance(text, str) or not text:
                 continue
-            anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
+            anthropic_block: dict[str, object] = {
                 "type": "text",
                 "text": text,
-            }  # mutable-ok: API message payload
+            }
             cache_control = block.get("cache_control")
             if cache_control:
                 anthropic_block["cache_control"] = deepcopy(cache_control)
             blocks.append(anthropic_block)
-        return (
-            {"role": "system", "content": blocks} if blocks else None  # mutable-ok: API message payload
-        )  # mutable-ok: API message payload
+        return {"role": "system", "content": blocks} if blocks else None
 
     @staticmethod
     def _fold_leading_systems_into_top_level(
-        data: dict[str, object],  # mutable-ok: API message payload
+        data: dict[str, object],
         leading_systems: Sequence[object],
         include_existing_system: bool,
     ) -> None:
@@ -840,7 +820,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(
-        data: dict,  # mutable-ok: API message payload
+        data: dict,
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
@@ -859,7 +839,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             for group in group_tool_exchanges(run):
                 converted.extend(
                     anthropic_messages_pt(
-                        messages=[run[index] for index in group],  # mutable-ok: API message payload
+                        messages=[run[index] for index in group],
                         model=model,
                         llm_provider="anthropic",
                     )
@@ -1084,7 +1064,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        data: dict[str, object],  # mutable-ok: API message payload
+        data: dict[str, object],
         responses: Sequence[str],
         scanned: tuple[ScannedText, ...],
     ) -> None:
@@ -1097,9 +1077,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             match item.target:
                 case SystemStringTarget():
                     if isinstance(data.get("system"), str):
-                        data["system"] = (
-                            guardrail_response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                        )
+                        data["system"] = guardrail_response
                 case SystemBlockTextTarget(block_idx=block_idx):
                     _write_back_system_block(data.get("system"), block_idx, guardrail_response)
                 case (

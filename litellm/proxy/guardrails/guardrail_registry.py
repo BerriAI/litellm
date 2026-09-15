@@ -477,7 +477,7 @@ class InMemoryGuardrailHandler:
         Guardrail id to CustomGuardrail object mapping
         """
 
-        self.guardrail_id_to_sibling_callbacks: dict[str, GuardrailCallbacks] = {}  # mutable-ok: per-id registry
+        self.guardrail_id_to_sibling_callbacks: dict[str, GuardrailCallbacks] = {}
 
         self._sources: dict[str, Literal["db", "config"]] = {}
         """

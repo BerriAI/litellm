@@ -177,7 +177,7 @@ def _scannable_text(content: object) -> str:
         return str(content or "")
 
     parts: Final[Sequence[object]] = content
-    text_parts: Final = [item for item in parts if not _is_image_part(item)]  # mutable-ok: sent as a list repr
+    text_parts: Final = [item for item in parts if not _is_image_part(item)]
     return str(text_parts or "")
 
 

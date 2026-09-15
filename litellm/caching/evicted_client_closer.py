@@ -236,7 +236,7 @@ class EvictedClientCloser:
         the front rather than having to be searched for.
         """
         with self._queue_lock:
-            bucket: Final = self._buckets.setdefault(_bucket_key(pending), deque())  # mutable-ok: FIFO by design
+            bucket: Final = self._buckets.setdefault(_bucket_key(pending), deque())
             while bucket and bucket[0].client_ref() is None:
                 bucket.popleft()
                 self._pending_count -= 1

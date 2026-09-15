@@ -133,7 +133,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         return BaseVectorStoreAuthCredentials()
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
-        return VectorStoreIndexEndpoints(read=[], write=[])  # mutable-ok: the TypedDict declares list fields
+        return VectorStoreIndexEndpoints(read=[], write=[])
 
     @staticmethod
     def _reject_unknown_params(litellm_params: Mapping[str, object]) -> None:
@@ -186,7 +186,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
 
     def validate_environment(
         self, headers: Mapping[str, object], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, object]:  # mutable-ok: the shared HTTP handler requires writable headers
+    ) -> dict[str, object]:
         if litellm_params is None:
             raise config_error("Configure api_base and api_key for the MongoDB BETA sidecar.")
         self._reject_unknown_params(MappingProxyType(dict(litellm_params)))
@@ -197,7 +197,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             **headers,
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-        }  # mutable-ok: writable HTTP headers
+        }
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         if not api_base:
@@ -272,7 +272,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         api_base: str,
         embedding_response: EmbeddingResponse,
         timeout: object,
-    ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
+    ) -> tuple[str, dict[str, object]]:
         if not embedding_response.data:
             raise config_error(
                 "The embedding model returned no embedding for the search query. Check litellm_embedding_model."
@@ -283,7 +283,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         limit: Final = cls._limit(optional_params)
         return (
             f"{api_base}/v1/vector_stores/{quote(vector_store_id, safe='')}/search",
-            {  # mutable-ok: JSON transport requires a dict
+            {
                 "query": query_text,
                 "query_vector": tuple(vector),
                 "mongodb_database": params.require_database(),
@@ -306,7 +306,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
-    ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
+    ) -> tuple[str, dict[str, object]]:
         params: Final = self._params(litellm_params, vector_store_search_optional_params, extra_body)
         query_text: Final = self._query_text(query)
         response: Final = (embedding_executor or self.embedding_executor).embed(
@@ -332,7 +332,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
-    ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
+    ) -> tuple[str, dict[str, object]]:
         params: Final = self._params(litellm_params, vector_store_search_optional_params, extra_body)
         query_text: Final = self._query_text(query)
         response: Final = await (embedding_executor or self.embedding_executor).aembed(

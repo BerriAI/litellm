@@ -93,7 +93,7 @@ def _rebuilt_member(member: Tool, flattened: Tool, guardrailed: Tool, namespace_
             if key not in _CHAT_TOOL_TOP_LEVEL_KEYS and flattened.get(key) != value
         }
     )
-    return {**member, **changed_extras, **changed_function}  # mutable-ok: json.dumps rejects MappingProxyType
+    return {**member, **changed_extras, **changed_function}
 
 
 def _rebuilt_flattened_members(
@@ -137,7 +137,7 @@ def _rebuilt_namespace(
     )
     if not rebuilt_members:
         return ()
-    return ({**original, "tools": list(rebuilt_members)},)  # mutable-ok: json.dumps needs a plain dict and list
+    return ({**original, "tools": list(rebuilt_members)},)
 
 
 def _merged_original(

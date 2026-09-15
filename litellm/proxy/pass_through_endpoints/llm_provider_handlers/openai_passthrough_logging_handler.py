@@ -118,10 +118,8 @@ def _content_parts(message: Mapping[str, object]) -> Sequence[object]:
 def _without_remote_high_detail_images(message: Mapping[str, object]) -> Mapping[str, object]:
     if not isinstance(message.get("content"), list):
         return message
-    kept_parts: Final = [  # mutable-ok: token_counter reads message content only when it is a list
-        part for part in _content_parts(message) if not _is_remote_high_detail_image(part)
-    ]
-    return {**message, "content": kept_parts}  # mutable-ok: token_counter rejects any message that is not a dict
+    kept_parts: Final = [part for part in _content_parts(message) if not _is_remote_high_detail_image(part)]
+    return {**message, "content": kept_parts}
 
 
 def count_relayed_prompt_tokens(model: str, messages: Sequence[Mapping[str, object]] | None) -> int:
@@ -130,9 +128,7 @@ def count_relayed_prompt_tokens(model: str, messages: Sequence[Mapping[str, obje
     remote_high_detail_images: Final = sum(
         1 for message in messages for part in _content_parts(message) if _is_remote_high_detail_image(part)
     )
-    local_messages: Final = [  # mutable-ok: token_counter takes a list of messages
-        _without_remote_high_detail_images(message) for message in messages
-    ]
+    local_messages: Final = [_without_remote_high_detail_images(message) for message in messages]
     return (
         litellm.token_counter(model=model, messages=local_messages)
         + high_detail_image_token_upper_bound() * remote_high_detail_images

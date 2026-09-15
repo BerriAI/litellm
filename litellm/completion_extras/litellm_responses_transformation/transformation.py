@@ -124,13 +124,13 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     blocks are the fallback for turns that arrived over another API surface.
     """
     items: Final = _get_reasoning_items(msg)
-    stored: Final = [_reasoning_item_to_response_input(item) for item in items]  # mutable-ok: API message payload
+    stored: Final = [_reasoning_item_to_response_input(item) for item in items]
     if stored:
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
     replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
-    return [dict(item) for item in replayed]  # mutable-ok: API message payload
+    return [dict(item) for item in replayed]
 
 
 def _build_reasoning_item(
@@ -439,7 +439,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(_reasoning_input_items(msg))
                 if content:
                     input_items.append(
-                        {  # mutable-ok: API message payload
+                        {
                             "type": "message",
                             "role": "assistant",
                             "content": self._convert_content_to_responses_format(content, "assistant"),
@@ -473,7 +473,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if role == "assistant":
                     input_items.extend(_reasoning_input_items(msg))
                 input_items.append(
-                    {  # mutable-ok: API message payload
+                    {
                         "type": "message",
                         "role": role,
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),
@@ -1311,7 +1311,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
-        self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._tool_call_index_map: dict[int, int] = {}
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1332,7 +1332,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
     @staticmethod
     def _sequential_tool_call_index(
-        tool_call_index_map: dict[int, int] | None,  # mutable-ok: per-stream state, remapped in place
+        tool_call_index_map: dict[int, int] | None,
         output_index: int,
     ) -> int:
         """Chat-completions tool_call indices must be 0-based and sequential, but
@@ -1345,13 +1345,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if tool_call_index_map is None:
             return output_index
         if output_index not in tool_call_index_map:
-            tool_call_index_map[output_index] = len(tool_call_index_map)  # mutable-ok: per-stream accumulator state
+            tool_call_index_map[output_index] = len(tool_call_index_map)
         return tool_call_index_map[output_index]
 
     @staticmethod
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
-        tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        tool_call_index_map: dict[int, int] | None = None,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -1482,7 +1482,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     # tool call; per-stream callers already received it via
                     # output_item.added and the argument delta events
                     return ModelResponseStream(
-                        choices=[  # mutable-ok: ModelResponseStream coerces only list choices
+                        choices=[
                             StreamingChoices(
                                 index=0,
                                 delta=Delta(
@@ -1587,7 +1587,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     )
                 ],
                 usage=usage,
-                provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
+                provider_specific_fields=dict(provider_metadata) or None,
             )
         else:
             pass

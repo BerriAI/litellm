@@ -171,12 +171,10 @@ class TenantTracerCache:
         # thread-pool workers concurrently with the event loop, so cache
         # updates, span counts, and retirement must be atomic.
         self._lock: Final = threading.Lock()
-        self._providers: OrderedDict[_RouteKey, TracerProvider] = (
-            OrderedDict()  # mutable-ok: bounded LRU; eviction needs in-place ordered mutation
-        )
-        self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
+        self._providers: OrderedDict[_RouteKey, TracerProvider] = OrderedDict()
+        self._open_span_counts: dict[TracerProvider, int] = {}
         # Oldest-first so an overflow of draining providers sheds the stalest.
-        self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
+        self._retired: OrderedDict[TracerProvider, None] = OrderedDict()
         # An owned exporter is routable only when its kind actually resolves to a
         # header-carrying OTLP exporter. A denylist would accept a typo'd or
         # unavailable kind, which ``_exporter_from_spec`` falls back to a
@@ -395,7 +393,7 @@ class TenantTracerCache:
             if project_headers and kind not in _GRPC_KINDS
             else base
         )
-        update: Final = {  # mutable-ok: model_copy(update=...) requires a plain dict
+        update: Final = {
             field: value
             for field, value in (("headers", routed), ("endpoint", endpoint))
             if (field == "headers" and routed != spec.headers)

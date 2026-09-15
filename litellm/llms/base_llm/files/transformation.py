@@ -164,7 +164,7 @@ class BaseFilesConfig(BaseConfig):
         self,
         raw_response: httpx.Response,
         optional_params: Mapping[str, object],
-        litellm_params: dict,  # mutable-ok: carries provider stashes from the request transform to the response one
+        litellm_params: dict,
     ) -> tuple[str, dict[str, str]] | None:
         """Request for the page after `raw_response`, or None once the listing is complete."""
         return None

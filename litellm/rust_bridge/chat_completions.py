@@ -330,9 +330,9 @@ def _build_model_response(
     model_response: ModelResponse,
 ) -> ModelResponse:
     built: Final = convert_to_model_response_object(
-        response_object=dict(rust_response),  # mutable-ok: the converter takes a real dict and rewrites it
+        response_object=dict(rust_response),
         model_response_object=model_response,
-        hidden_params={"additional_headers": {RUST_RESPONSE_HEADER: "true"}},  # mutable-ok: rewritten by the converter
+        hidden_params={"additional_headers": {RUST_RESPONSE_HEADER: "true"}},
     )
     if not isinstance(built, ModelResponse):
         raise TypeError(f"expected a ModelResponse from the rust path, got {type(built).__name__}")

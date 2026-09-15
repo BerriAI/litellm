@@ -237,7 +237,7 @@ def _validate_row(
     try:
         columns: Final = _RowValues.validate_python(row_value)
         if row in _REFRESH_STAMPED_ROWS:
-            stamped: Final = {**columns, "last_refreshed_at": refreshed_at}  # mutable-ok: validators write into it
+            stamped: Final = {**columns, "last_refreshed_at": refreshed_at}
             return model_type.model_validate(stamped)
         return model_type.model_validate(columns)
     except ValidationError as e:

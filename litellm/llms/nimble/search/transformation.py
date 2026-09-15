@@ -88,11 +88,11 @@ class NimbleSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.validate_environment signature
+        headers: dict[str, str],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment signature
-    ) -> dict[str, str]:  # mutable-ok: the http handler passes this straight to httpx as headers
+    ) -> dict[str, str]:
         """
         Validate environment and return headers.
 
@@ -108,7 +108,7 @@ class NimbleSearchConfig(BaseSearchConfig):
         )
         if not resolved_api_key:
             raise ValueError("NIMBLE_API_KEY is not set. Set `NIMBLE_API_KEY` environment variable.")
-        return {  # mutable-ok: httpx requires a plain dict of headers
+        return {
             **headers,
             "Authorization": f"Bearer {resolved_api_key}",
             "Content-Type": "application/json",
@@ -119,7 +119,7 @@ class NimbleSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig.get_complete_url signature
+        optional_params: dict[str, object],
         data: dict[str, object] | list[dict[str, object]] | None = None,  # mutable-ok: base signature
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url signature
     ) -> str:
@@ -131,9 +131,9 @@ class NimbleSearchConfig(BaseSearchConfig):
     def transform_search_request(
         self,
         query: str | list[str],  # mutable-ok: BaseSearchConfig.transform_search_request signature
-        optional_params: dict[str, object],  # mutable-ok: base signature
+        optional_params: dict[str, object],
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_request signature
-    ) -> dict[str, object]:  # mutable-ok: the http handler passes this straight to httpx as the JSON body
+    ) -> dict[str, object]:
         """
         Transform Search request to Nimble API format.
 
@@ -156,7 +156,7 @@ class NimbleSearchConfig(BaseSearchConfig):
             {param: value for param, value in optional_params.items() if param not in unified_params}
         )
 
-        return {  # mutable-ok: httpx requires a plain dict for the JSON body
+        return {
             **_domain_filters(optional_params.get("search_domain_filter")),
             **passthrough,
             "query": " ".join(query) if isinstance(query, list) else query,
@@ -188,11 +188,11 @@ class NimbleSearchConfig(BaseSearchConfig):
             raise self.get_error_class(
                 error_message=f"response does not match the documented /v2/search schema: {e}",
                 status_code=raw_response.status_code,
-                headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
+                headers=dict(raw_response.headers),
             )
 
         return SearchResponse(
-            results=[  # mutable-ok: SearchResponse.results is declared list[SearchResult]
+            results=[
                 SearchResult(
                     title=result.title or "",
                     url=result.url or "",
@@ -210,7 +210,7 @@ class NimbleSearchConfig(BaseSearchConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.get_error_class signature
+        headers: dict[str, str],
     ) -> Exception:
         detail: Final = _unwrap_error_detail(error_message).rstrip(". ")
         return BaseLLMException(

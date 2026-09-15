@@ -114,7 +114,7 @@ def _scope(caller: UserAPIKeyAuth) -> Scope:
 # budget_duration is deliberately absent from `sortable`: the column holds strings
 # like "7d" and "30d", so a lexicographic ORDER BY puts "30d" ahead of "7d".
 BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
-    {  # mutable-ok: an immutable mapping has no literal form; MappingProxyType freezes this one and it never escapes
+    {
         "budget_duration": FilterSpec(type=str, ops=frozenset(("in", "is_null"))),
         "max_budget": FilterSpec(type=float, ops=frozenset(("gte", "lte", "is_null"))),
         "created_at": FilterSpec(type=datetime, ops=frozenset(("gte", "lte"))),

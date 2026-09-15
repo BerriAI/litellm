@@ -30,7 +30,7 @@ class GigaChatModelResponseIterator:
 
     def chunk_parser(self, chunk: Mapping[str, object]) -> GenericStreamingChunk:
         """Parse a single streaming chunk from GigaChat."""
-        choices: Sequence = chunk.get("choices") or ()  # mutable-ok: tuple literal as default
+        choices: Sequence = chunk.get("choices") or ()
         if not choices:
             return GenericStreamingChunk(
                 text="",
@@ -42,7 +42,7 @@ class GigaChatModelResponseIterator:
             )
 
         choice: Final = choices[0]
-        delta: Mapping[str, object] = choice.get("delta") or {}  # mutable-ok: empty dict default for get
+        delta: Mapping[str, object] = choice.get("delta") or {}
         chunk_finish_reason: Final = choice.get("finish_reason")
 
         # Extract text content
@@ -74,7 +74,7 @@ class GigaChatModelResponseIterator:
             )
             finish_reason = "tool_calls"
 
-        usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
+        usage_data: Final = chunk.get("usage") or {}
         if usage_data and isinstance(usage_data, dict):
             validated_usage: Final = {k: int(v) for k, v in usage_data.items()}
             usage = convert_usage(validated_usage)

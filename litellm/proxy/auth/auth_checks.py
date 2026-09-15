@@ -1549,12 +1549,12 @@ _RESTRICTED_COLUMNS: Final = ("budget_id", "allowed_model_region", "default_mode
 
 def _column_is_set(column: str) -> Mapping[str, object]:
     """``column IS NOT NULL`` as a plain dict, which is the only shape prisma's builder accepts."""
-    return {column: {"not": None}}  # mutable-ok: prisma's query builder isinstance-checks for dict
+    return {column: {"not": None}}
 
 
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}  # mutable-ok: prisma needs dict/list
+    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}
 
 
 class _RegistryNotCached:
@@ -2459,7 +2459,7 @@ async def _backfill_null_user_email(
     db_row: Final = await user_repo.find_by_id(user_row.user_id)
     if db_row is None:
         return user_row
-    email_update: Final = {"user_email": db_row.user_email}  # mutable-ok: model_copy update payload is dict-shaped
+    email_update: Final = {"user_email": db_row.user_email}
     updated_row: Final = user_row.model_copy(update=email_update)
     await user_api_key_cache.async_set_cache(
         key=user_row.user_id,
@@ -2789,7 +2789,7 @@ async def invalidate_team_member_spend_state(
                     )
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={  # mutable-ok: HTTPException.detail takes a dict
+                        detail={
                             "error": "Spend was reset in the database, but Redis is unreachable and still "
                             "holds the pre-reset counter. Retry once Redis is reachable."
                         },
@@ -4465,7 +4465,7 @@ async def stamp_matched_model_access_groups(
         return ()
     if not matched:
         return ()
-    matched_groups: Final = list(matched)  # mutable-ok: the auth field is typed list[str] | None
+    matched_groups: Final = list(matched)
     valid_token.matched_model_access_groups = matched_groups  # rebind-ok: request-scoped carrier for the writer
     return matched
 

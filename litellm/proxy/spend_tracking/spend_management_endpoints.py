@@ -2954,17 +2954,17 @@ async def _fetch_session_representatives(
             ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
         ) AS session_representatives
     """
-    rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
+    rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(
         prisma_client,
         rep_query,
         *sql_params,
-        [session_key for session_key, _ in session_keys],  # mutable-ok: prisma serializes array params from a list
-        [api_key for _, api_key in session_keys],  # mutable-ok: prisma serializes array params from a list
+        [session_key for session_key, _ in session_keys],
+        [api_key for _, api_key in session_keys],
     )
-    rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(  # mutable-ok: same rows
+    rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(
         {(str(row["session_id"] or row["request_id"]), str(row["api_key"])): row for row in rep_rows}
     )
-    return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
+    return [rep_by_key[key] for key in session_keys if key in rep_by_key]
 
 
 async def _count_grouped_sessions(
@@ -3087,7 +3087,7 @@ async def _ui_session_grouped_spend_logs(
             session_keys=session_keys,
         )
         if session_keys
-        else []  # mutable-ok: downstream enrichment mutates rows in place
+        else []
     )
     _hydrate_spend_log_metadata(data)
 
@@ -3102,7 +3102,7 @@ async def _ui_session_grouped_spend_logs(
         enrich_session_counts=True,
         total_is_capped=total_is_capped,
     )
-    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}  # mutable-ok: FastAPI response body
+    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}
 
 
 class RequestResponsePayload(NamedTuple):
@@ -3424,9 +3424,7 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final[
-                dict[str, object]
-            ] = {  # mutable-ok: legacy filters are extended for optional parameters
+            filter_query: Final[dict[str, object]] = {
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
