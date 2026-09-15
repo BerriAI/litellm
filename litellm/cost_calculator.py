@@ -2278,6 +2278,19 @@ def default_video_cost_calculator(
     return 0.0
 
 
+def _batch_rate(
+    model_info: ModelInfo,
+    key: Literal[
+        "input_cost_per_audio_token_batches",
+        "input_cost_per_image_token_batches",
+        "input_cost_per_video_token_batches",
+    ],
+    fallback: float,
+) -> float:
+    rate: Final = model_info.get(key)
+    return fallback if rate is None else cast(float, rate)
+
+
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -2344,15 +2357,9 @@ def batch_cost_calculator(
             batch_details["video_tokens"],
         )
         modality_rates: Final = (
-            cast(float, model_info.get("input_cost_per_audio_token_batches"))
-            if model_info.get("input_cost_per_audio_token_batches") is not None
-            else input_cost_per_token_batches,
-            cast(float, model_info.get("input_cost_per_image_token_batches"))
-            if model_info.get("input_cost_per_image_token_batches") is not None
-            else input_cost_per_token_batches,
-            cast(float, model_info.get("input_cost_per_video_token_batches"))
-            if model_info.get("input_cost_per_video_token_batches") is not None
-            else input_cost_per_token_batches,
+            _batch_rate(model_info, "input_cost_per_audio_token_batches", input_cost_per_token_batches),
+            _batch_rate(model_info, "input_cost_per_image_token_batches", input_cost_per_token_batches),
+            _batch_rate(model_info, "input_cost_per_video_token_batches", input_cost_per_token_batches),
         )
         total_prompt_cost = sum(
             tokens * rate
