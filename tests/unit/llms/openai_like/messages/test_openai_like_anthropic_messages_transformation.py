@@ -518,3 +518,43 @@ def test_request_strips_ttl_only_where_the_messages_api_defines_cache_control(co
     assert tool_result["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert payload["messages"][1]["content"][1]["cache_control"] == {"type": "ephemeral"}
     assert payload["messages"][2] == {"role": "user", "content": "a plain string message"}
+
+
+def test_passthrough_keeps_adaptive_thinking_and_effort(config, caplog):
+    """Regression #40890: native /v1/messages passthrough must forward
+    thinking/output_config/temperature verbatim, not strip via cost-map checks."""
+    import logging
+
+    optional_params = {
+        "max_tokens": 4096,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+        "temperature": 0.5,
+    }
+    with caplog.at_level(logging.WARNING):
+        payload = config.transform_anthropic_messages_request(
+            model="my-model",
+            messages=[{"role": "user", "content": "hi"}],
+            anthropic_messages_optional_request_params=dict(optional_params),
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"] == {"effort": "high"}
+    assert payload["temperature"] == 0.5
+    assert "Dropping adaptive" not in caplog.text
+
+
+def test_passthrough_keeps_legacy_thinking_shape(config):
+    optional_params = {
+        "max_tokens": 4096,
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+    payload = config.transform_anthropic_messages_request(
+        model="my-model",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=dict(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert payload["thinking"] == {"type": "enabled", "budget_tokens": 1024}
