@@ -532,6 +532,11 @@ def _get_token_base_cost(
     `missing_cache_read_uses_input` resolves an absent cache-read rate to the resolved
     input rate instead of 0.0; an explicit 0.0 rate stays a real price either way.
 
+    An absent cache-creation rate always resolves to the resolved input rate, the way the
+    tiered table and custom deployment pricing already do, since a provider that publishes
+    no write price bills cache writes as ordinary input. An absent 1h write rate resolves
+    to the cache-creation rate. An explicit 0.0 stays a real price for both.
+
     Returns:
         Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
     """
@@ -554,10 +559,9 @@ def _get_token_base_cost(
         output_image_cost: Final = _get_cost_per_unit(model_info, "output_cost_per_image_token", None)
         if output_image_cost is not None:
             completion_base_cost = cast(float, output_image_cost)
-    cache_creation_cost = cast(float, _get_cost_per_unit(model_info, cache_creation_cost_key))
-    cache_creation_cost_above_1hr = cast(
-        float,
-        _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
+    cache_creation_cost = _get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
+    cache_creation_cost_above_1hr = _get_cost_per_unit(
+        model_info, "cache_creation_input_token_cost_above_1hr", default_value=None
     )
     cache_read_cost = _get_cost_per_unit(model_info, cache_read_cost_key, default_value=None)
 
@@ -639,22 +643,10 @@ def _get_token_base_cost(
                         else f"cache_read_input_token_cost_above_{threshold_str}_tokens"
                     )
 
-                    cache_creation_cost = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            cache_creation_tiered_key,
-                            cache_creation_cost,
-                        ),
-                    )
+                    cache_creation_cost = _get_cost_per_unit(model_info, cache_creation_tiered_key, cache_creation_cost)
 
-                    cache_creation_cost_above_1hr = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            cache_creation_1hr_tiered_key,
-                            cache_creation_cost_above_1hr,
-                        ),
+                    cache_creation_cost_above_1hr = _get_cost_per_unit(
+                        model_info, cache_creation_1hr_tiered_key, cache_creation_cost_above_1hr
                     )
 
                     cache_read_cost = _get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost)
@@ -665,16 +657,19 @@ def _get_token_base_cost(
             except Exception:
                 continue
 
+    input_rate_for_missing_cache_rates: Final = _off_peak_rate(
+        _open_off_peak_block(model_info, current_time) or MappingProxyType({}),
+        "input_cost_per_token",
+        prompt_base_cost,
+    )
     if cache_read_cost is None:
-        cache_read_cost = (
-            _off_peak_rate(
-                _open_off_peak_block(model_info, current_time) or MappingProxyType({}),
-                "input_cost_per_token",
-                prompt_base_cost,
-            )
-            if missing_cache_read_uses_input
-            else 0.0
-        )
+        cache_read_cost = input_rate_for_missing_cache_rates if missing_cache_read_uses_input else 0.0
+    resolved_cache_creation_cost: Final = (
+        input_rate_for_missing_cache_rates if cache_creation_cost is None else cache_creation_cost
+    )
+    resolved_cache_creation_cost_above_1hr: Final = (
+        resolved_cache_creation_cost if cache_creation_cost_above_1hr is None else cache_creation_cost_above_1hr
+    )
 
     return _apply_off_peak_to_base_costs(
         model_info,
@@ -682,8 +677,8 @@ def _get_token_base_cost(
         (
             prompt_base_cost,
             completion_base_cost,
-            cache_creation_cost,
-            cache_creation_cost_above_1hr,
+            resolved_cache_creation_cost,
+            resolved_cache_creation_cost_above_1hr,
             cache_read_cost,
         ),
     )
