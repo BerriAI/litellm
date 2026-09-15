@@ -8741,4 +8741,6 @@ class TestErrorLogCarriesCallId:
         finally:
             verbose_proxy_logger.propagate = False
 
-        assert call_id in caplog.records[-1].getMessage()
+        record: Final = caplog.records[-1]
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()

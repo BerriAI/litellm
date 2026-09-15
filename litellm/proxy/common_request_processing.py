@@ -1457,6 +1457,7 @@ def _log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, "
             "upstream LLM request cancelled - litellm_call_id=%s",
             litellm_call_id,
+            extra=MappingProxyType({"litellm_call_id": litellm_call_id}),
         )
         return
     log_fn: Final = (
