@@ -3984,6 +3984,7 @@ class LlmProviders(str, Enum):
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
+    VISPARK = "vispark"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
     INCEPTION = "inception"
