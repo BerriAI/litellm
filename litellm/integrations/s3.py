@@ -249,25 +249,26 @@ def get_s3_object_key(
     prefix: str,
     start_time: datetime,
     s3_file_name: str,
+    extension: str = ".json",
 ) -> str:
     sanitized_s3_file_name: Final = s3_file_name.replace("/", "_")
     configured_prefix: Final = (s3_path.rstrip("/") + "/" if s3_path else "") + prefix
     date_segment: Final = start_time.strftime("%Y-%m-%d") + "/"
     # we need the s3 key to include the time, so we log cache hits too
-    s3_object_key: Final = configured_prefix + date_segment + sanitized_s3_file_name + ".json"
+    s3_object_key: Final = configured_prefix + date_segment + sanitized_s3_file_name + extension
     if len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES:
         return s3_object_key
 
     # shorten the response id first and only trim the configured prefix if that is what does not
     # fit, so prefix scoped IAM policies and lifecycle rules keep matching
-    budget: Final = MAX_S3_OBJECT_KEY_BYTES - len(date_segment.encode("utf-8")) - len(b".json")
+    budget: Final = MAX_S3_OBJECT_KEY_BYTES - len(date_segment.encode("utf-8")) - len(extension.encode("utf-8"))
     prefix_bytes: Final = len(configured_prefix.encode("utf-8"))
     if prefix_bytes + S3_MIN_BOUNDED_FILE_NAME_BYTES <= budget:
         bounded_file_name: Final = _bounded_s3_file_name(s3_file_name, sanitized_s3_file_name, budget - prefix_bytes)
-        return configured_prefix + date_segment + bounded_file_name + ".json"
+        return configured_prefix + date_segment + bounded_file_name + extension
 
     shortest_file_name: Final = _bounded_s3_file_name(
         s3_file_name, sanitized_s3_file_name, S3_MIN_BOUNDED_FILE_NAME_BYTES
     )
     bounded_prefix: Final = _bounded_s3_prefix(configured_prefix, budget - len(shortest_file_name.encode("utf-8")))
-    return bounded_prefix + date_segment + shortest_file_name + ".json"
+    return bounded_prefix + date_segment + shortest_file_name + extension
