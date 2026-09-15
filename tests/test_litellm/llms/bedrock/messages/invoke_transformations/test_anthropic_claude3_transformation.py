@@ -3250,3 +3250,108 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     )
 
     assert result.get("output_config") == {"format": schema_format}
+
+
+def _bedrock_invoke_event_frame(payload: dict) -> bytes:
+    """Encode one Bedrock invoke event-stream frame carrying an Anthropic event."""
+    import base64
+    import struct
+    from binascii import crc32
+
+    encoded_event = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    body = json.dumps({"bytes": encoded_event}).encode()
+
+    def _str_header(name: str, value: str) -> bytes:
+        name_b = name.encode()
+        value_b = value.encode()
+        return (
+            struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+        )
+
+    headers = (
+        _str_header(":event-type", "chunk")
+        + _str_header(":content-type", "application/json")
+        + _str_header(":message-type", "event")
+    )
+    prelude = struct.pack("!II", 12 + len(headers) + len(body) + 4, len(headers))
+    prelude_crc = crc32(prelude) & 0xFFFFFFFF
+    prelude_crc_b = struct.pack("!I", prelude_crc)
+    msg_crc_b = struct.pack("!I", crc32(prelude_crc_b + headers + body, prelude_crc) & 0xFFFFFFFF)
+    return prelude + prelude_crc_b + headers + body + msg_crc_b
+
+
+_MESSAGE_START_EVENT = {
+    "type": "message_start",
+    "message": {
+        "id": "msg_bdrk_01WxYzAbCdEfGhIjKlMnOpQr",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [],
+        "stop_reason": None,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 41, "output_tokens": 1},
+    },
+}
+
+_CONTENT_BLOCK_START_EVENT = {
+    "type": "content_block_start",
+    "index": 0,
+    "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+}
+
+
+@pytest.mark.asyncio
+async def test_streaming_flushes_message_start_before_the_next_upstream_event():
+    """``message_start`` must reach the client as soon as Bedrock sends it.
+
+    Bedrock emits ``message_start`` immediately, then goes silent for the whole
+    reasoning phase (tens of seconds at high effort) before the first content
+    block. Reading the response with an ``httpx`` ``chunk_size`` stranded the
+    preamble in httpx's ByteChunker until enough further bytes accumulated, so
+    the client's first byte landed at first-content time and tripped its
+    first-byte watchdog. Regression for BerriAI/litellm#38689.
+    """
+    import httpx
+
+    message_start_frame = _bedrock_invoke_event_frame(_MESSAGE_START_EVENT)
+    # The stall only happens for a preamble smaller than the read threshold, so a
+    # frame that grew past it would make this test pass without the fix.
+    assert len(message_start_frame) < 1024
+
+    reasoning_finished = asyncio.Event()
+
+    class _ReasoningStall(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield message_start_frame
+            await reasoning_finished.wait()
+            yield _bedrock_invoke_event_frame(_CONTENT_BLOCK_START_EVENT)
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    stream = cfg.get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        httpx_response=httpx.Response(200, stream=_ReasoningStall()),
+        request_body={},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "think hard"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="test_flush_message_start",
+            function_id="test_flush_message_start",
+        ),
+    )
+
+    try:
+        # Fails by timing out while the upstream is still mid-reasoning if the
+        # preamble is being held back.
+        first_chunk = await asyncio.wait_for(stream.__anext__(), timeout=5)
+        assert b"event: message_start" in first_chunk
+
+        reasoning_finished.set()
+        second_chunk = await asyncio.wait_for(stream.__anext__(), timeout=5)
+        assert b"event: content_block_start" in second_chunk
+    finally:
+        reasoning_finished.set()
+        await stream.aclose()
