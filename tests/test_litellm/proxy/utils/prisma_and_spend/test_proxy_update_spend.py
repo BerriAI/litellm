@@ -13,8 +13,8 @@ import json
 import logging
 
 import httpx
-from collections.abc import Iterator
-from typing import Any, Dict, List
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import Any, Dict, List, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -887,28 +887,35 @@ def test_disable_spend_updates_error_when_general_settings_unavailable(
         ProxyUpdateSpend.disable_spend_updates()
 
 
+SpendLogRow: TypeAlias = dict[str, object]
+"""One LiteLLM_SpendLogs row as the flush hands it to prisma."""
+
+SpendLogRowFactory: TypeAlias = Callable[..., SpendLogRow]
+
+
 class _SpendLogsTable:
     """``LiteLLM_SpendLogs`` as the flush sees it: ``create_many`` is ``INSERT ... ON CONFLICT
     DO NOTHING`` on ``request_id`` and reports how many rows landed, and ``query_raw`` answers the
     identity read-back with the stored ``(request_id, litellm_call_id)`` pairs."""
 
-    def __init__(self, seeded: List[Dict[str, Any]] | None = None) -> None:
-        self.rows: Dict[str, Dict[str, Any]] = {row["request_id"]: dict(row) for row in seeded or []}
-        self.inserts: List[List[str]] = []
+    def __init__(self, seeded: Sequence[SpendLogRow] | None = None) -> None:
+        self.rows: dict[str, SpendLogRow] = {str(row["request_id"]): dict(row) for row in seeded or []}
+        self.inserts: list[list[str]] = []
         self.query_raw_calls = 0
 
-    async def create_many(self, *, data: Any, skip_duplicates: bool) -> int:
+    async def create_many(self, *, data: Sequence[SpendLogRow], skip_duplicates: bool) -> int:
         assert skip_duplicates is True
-        self.inserts.append([row["request_id"] for row in data])
+        self.inserts.append([str(row["request_id"]) for row in data])
         inserted = 0
         for row in data:
-            if row["request_id"] in self.rows:
+            request_id = str(row["request_id"])
+            if request_id in self.rows:
                 continue
-            self.rows[row["request_id"]] = dict(row)
+            self.rows[request_id] = dict(row)
             inserted += 1
         return inserted
 
-    async def query_raw(self, sql: str, request_ids: Any) -> List[Dict[str, Any]]:
+    async def query_raw(self, sql: str, request_ids: Sequence[str]) -> list[SpendLogRow]:
         self.query_raw_calls += 1
         assert "WHERE request_id = ANY($1::text[])" in sql
         return [
@@ -918,14 +925,16 @@ class _SpendLogsTable:
         ]
 
 
-def _wire_spend_logs_table(mock_prisma_client: Any, seeded: List[Dict[str, Any]] | None = None) -> _SpendLogsTable:
+def _wire_spend_logs_table(
+    mock_prisma_client: MagicMock, seeded: Sequence[SpendLogRow] | None = None
+) -> _SpendLogsTable:
     table = _SpendLogsTable(seeded)
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=table.create_many)
     mock_prisma_client.db.query_raw = AsyncMock(side_effect=table.query_raw)
     return table
 
 
-def _wire_routed_db(mock_prisma_client: Any, table: _SpendLogsTable) -> MagicMock:
+def _wire_routed_db(mock_prisma_client: MagicMock, table: _SpendLogsTable) -> MagicMock:
     """``prisma_client.db`` as a read-replica router: top-level reads go to the reader, which never
     sees this flush's writes, and ``writer`` is the engine the rows landed on."""
     routed = MagicMock(spec=RoutingPrismaWrapper)
@@ -939,7 +948,7 @@ def _wire_routed_db(mock_prisma_client: Any, table: _SpendLogsTable) -> MagicMoc
     return routed
 
 
-async def _flush(mock_prisma_client: Any, logs: List[Dict[str, Any]]) -> None:
+async def _flush(mock_prisma_client: MagicMock, logs: list[SpendLogRow]) -> None:
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     await ProxyUpdateSpend.update_spend_logs(
@@ -953,7 +962,7 @@ async def _flush(mock_prisma_client: Any, logs: List[Dict[str, Any]]) -> None:
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_rekeys_the_rows_a_reused_provider_response_id_would_drop(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory
 ) -> None:
     """Three requests answered with one provider id are three charged requests, so three rows
     must land: the first keeps the provider id, the other two are re-keyed on their own call id.
@@ -976,8 +985,27 @@ async def test_update_spend_logs_rekeys_the_rows_a_reused_provider_response_id_w
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type",
+    ["acompletion", "atext_completion", "aembedding", "aresponses", "aanthropic_messages", "allm_passthrough_route"],
+)
+async def test_update_spend_logs_rekeys_every_inference_call_type(
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, call_type: str
+) -> None:
+    """A self-hosted server reuses its id on every inference route it serves, not only chat."""
+    table = _wire_spend_logs_table(mock_prisma_client)
+    logs = [
+        make_spend_log_row(request_id="static-1", litellm_call_id=f"call-{i}", call_type=call_type) for i in range(2)
+    ]
+
+    await _flush(mock_prisma_client, logs)
+
+    assert list(table.rows) == ["static-1", "call-1"]
+
+
+@pytest.mark.asyncio
 async def test_update_spend_logs_reads_stored_identities_back_from_the_writer(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory
 ) -> None:
     """The read-back must see the rows this flush just landed, so it goes to the writer: with a
     read replica configured, ``db.query_raw`` is routed to the reader, and a lagging reader would
@@ -998,7 +1026,7 @@ async def test_update_spend_logs_reads_stored_identities_back_from_the_writer(
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_rekeys_only_the_colliding_rows_of_a_mixed_batch(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory
 ) -> None:
     """Two providers reusing ids and one issuing unique ids share a flush: every row of the
     unique provider keeps its key and only the later rows of each reused id are re-keyed."""
@@ -1026,7 +1054,7 @@ async def test_update_spend_logs_rekeys_only_the_colliding_rows_of_a_mixed_batch
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_rekeys_a_row_whose_provider_id_an_earlier_flush_stored(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory
 ) -> None:
     """The colliding row usually landed in an earlier flush, or from another worker."""
     table = _wire_spend_logs_table(
@@ -1049,7 +1077,7 @@ async def test_update_spend_logs_rekeys_a_row_whose_provider_id_an_earlier_flush
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_does_not_rekey_a_replay_of_a_stored_row(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory
 ) -> None:
     """A transport retry replays the whole batch; a row already stored under its own call id is
     the same request, not a collision, and must not become a second row."""
@@ -1069,14 +1097,31 @@ async def test_update_spend_logs_does_not_rekey_a_replay_of_a_stored_row(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "call_type", ["acreate_batch", "aretrieve_batch", "acreate_file", "avector_store_retrieve", "avector_store_delete"]
+    "call_type",
+    [
+        "acreate_batch",
+        "aretrieve_batch",
+        "acancel_batch",
+        "acreate_file",
+        "afile_retrieve",
+        "afile_content",
+        "afile_delete",
+        "aretrieve_fine_tuning_job",
+        "avideo_retrieve",
+        "aretrieve_container",
+        "avector_store_retrieve",
+        "avector_store_delete",
+        "aget_responses",
+        None,
+    ],
 )
 async def test_update_spend_logs_keeps_object_keyed_rows_collapsed_on_their_object_id(
-    mock_prisma_client: Any, make_spend_log_row: Any, call_type: str
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, call_type: str | None
 ) -> None:
     """Every poll of one batch shares its cost row by design, and every read of a stored object
     is keyed on that object's id, so a duplicate here is not a lost row and the identity read-back
-    is not even issued."""
+    is not even issued. Only the inference call types are re-keyed; anything else, a call type
+    this code has never heard of included, keeps collapsing."""
     table = _wire_spend_logs_table(mock_prisma_client)
     logs = [
         make_spend_log_row(request_id="batch_abc_batch_cost", litellm_call_id=f"call-{i}", call_type=call_type)
@@ -1092,7 +1137,7 @@ async def test_update_spend_logs_keeps_object_keyed_rows_collapsed_on_their_obje
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_drops_and_logs_a_row_already_keyed_on_its_call_id(
-    mock_prisma_client: Any, make_spend_log_row: Any, caplog: pytest.LogCaptureFixture
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A row whose key already is its call id (a client pinning x-litellm-call-id on a failure
     row, say) has nothing to fall back to: it stays dropped, but loudly."""
@@ -1118,7 +1163,7 @@ async def test_update_spend_logs_drops_and_logs_a_row_already_keyed_on_its_call_
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_rekey_that_collides_again_stops(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory
 ) -> None:
     """A client pinning one x-litellm-call-id against a provider reusing one response id
     collides on both keys. The stored row already keyed on that call id reads as this row's
@@ -1142,7 +1187,7 @@ async def test_update_spend_logs_rekey_that_collides_again_stops(
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_treats_a_replay_of_a_rekeyed_row_as_stored(
-    mock_prisma_client: Any, make_spend_log_row: Any, caplog: pytest.LogCaptureFixture
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A transport retry replays a whole batch, including rows an earlier attempt already re-keyed.
     Those are stored under their call id, so the read-back finds them there and nothing is re-keyed
@@ -1166,7 +1211,7 @@ async def test_update_spend_logs_treats_a_replay_of_a_rekeyed_row_as_stored(
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_leaves_rows_skipped_when_the_read_back_fails_on_its_data(
-    mock_prisma_client: Any, make_spend_log_row: Any, caplog: pytest.LogCaptureFixture
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A read-back the database rejects (not a transport fault) must not requeue the whole flush
     behind it: the skipped rows stay skipped, which is what happened before, and the failure is
@@ -1197,11 +1242,11 @@ async def test_update_spend_logs_leaves_rows_skipped_when_the_read_back_fails_on
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_retries_the_flush_when_the_read_back_hits_a_transport_fault(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: MagicMock, make_spend_log_row: SpendLogRowFactory
 ) -> None:
     """A transport fault during the read-back is the same outage as one during the insert, so
     the flush retries (and finally requeues) instead of leaving the rows behind."""
-    table = _wire_spend_logs_table(mock_prisma_client)
+    _ = _wire_spend_logs_table(mock_prisma_client)
     mock_prisma_client.db.query_raw = AsyncMock(side_effect=httpx.ReadError("network blip"))
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
