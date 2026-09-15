@@ -169,6 +169,12 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
+  const teamAlias = teams?.find((team) => team.team_id === modelData?.model_info?.team_id)?.team_alias || null;
+  const rawModelInfoEntries = Object.entries(modelData?.model_info ?? {}).flatMap((entry) =>
+    entry[0] === "team_id" && teamAlias ? [entry, ["team_alias", teamAlias]] : [entry],
+  );
+  const rawModelData = modelData && { ...modelData, model_info: Object.fromEntries(rawModelInfoEntries) };
+
   const canEditModel = canModifyModel({ userRole, userID, isViewOnly }, teams ?? null, {
     teamId: modelData?.model_info?.team_id,
     isDbModel: modelData?.model_info?.db_model === true,
@@ -765,6 +771,7 @@ export default function ModelInfoView({
                 <ModelInfoEditForm
                   localModelData={localModelData}
                   modelData={modelData}
+                  teamAlias={teamAlias}
                   accessToken={accessToken}
                   isEditing={isEditing}
                   isSaving={isSaving}
@@ -788,7 +795,9 @@ export default function ModelInfoView({
 
           <TabsContent value="raw" keepMounted>
             <Card className="block p-6">
-              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(rawModelData, null, 2)}
+              </pre>
             </Card>
           </TabsContent>
         </div>

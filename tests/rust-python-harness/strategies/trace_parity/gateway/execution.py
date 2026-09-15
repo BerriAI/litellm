@@ -13,8 +13,8 @@ from ....shared.parity.replay import replay_server
 from ....shared.tracing.native import TraceResponsePayload, native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
 from ....shared.tracing.steps import Engine, PipelineProjection, pipeline_projection
-from ..models import GatewayRouteSpec, RouteFixture, TraceExecutionFailure, TraceMode, TraceScenario
-from ..reporting import TraceComparisonArtifact
+from ..models import GatewayRouteSpec, RouteFixture, TraceEngine, TraceExecutionFailure, TraceScenario
+from ..reporting import TraceArtifact
 
 
 class _GatewayResponsePayload(BaseModel):
@@ -28,7 +28,14 @@ class _GatewayClient(Protocol):
     def post(self, url: str, *, json: object, headers: dict[str, str]) -> httpx.Response: ...
 
 
-def _collect_python(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
+_ROUTE_PATHS: Final = {
+    "messages": "/v1/messages",
+    "chat_completions": "/v1/chat/completions",
+    "responses": "/v1/responses",
+}
+
+
+def _collect_python(fixture: RouteFixture, route: GatewayRouteSpec) -> tuple[FunctionTraceEvent, ...]:
     from fastapi.testclient import TestClient
 
     import litellm
@@ -61,7 +68,7 @@ def _collect_python(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
         with profile_python(Path(litellm.__file__).parent, threads=True) as profiler:
             client: Final = cast(_GatewayClient, TestClient(proxy_server.app))
             response: Final = client.post(
-                "/v1/messages",
+                _ROUTE_PATHS[route.route],
                 json=fixture.kwargs["body"],
                 headers={"authorization": "Bearer trace-key"},
             )
@@ -76,9 +83,10 @@ def _collect_python(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
             proxy_server.app.dependency_overrides[user_api_key_auth] = old_override
 
 
-def _collect_rust(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
+def _collect_rust(fixture: RouteFixture, route: GatewayRouteSpec) -> tuple[FunctionTraceEvent, ...]:
     payload: Final = json.dumps(
         {
+            "path": _ROUTE_PATHS[route.route],
             "model_alias": fixture.kwargs["model_alias"],
             "provider_model": fixture.kwargs["provider_model"],
             "api_base": fixture.kwargs["api_base"],
@@ -130,7 +138,9 @@ def _gateway_trace_binary() -> Path:
     return rust_root / "target" / "debug" / "trace-parity-gateway"
 
 
-def _collect(scenario: TraceScenario, engine: Engine) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
+def _collect(
+    route: GatewayRouteSpec, scenario: TraceScenario, engine: Engine
+) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
     try:
         with replay_server() as provider:
             base_fixture: Final = scenario.fixture(engine, provider.url)
@@ -140,7 +150,7 @@ def _collect(scenario: TraceScenario, engine: Engine) -> tuple[FunctionTraceEven
             )
             for response in fixture.provider_responses:
                 provider.enqueue_response(response)
-            events: Final = _collect_python(fixture) if engine == "python" else _collect_rust(fixture)
+            events: Final = _collect_python(fixture, route) if engine == "python" else _collect_rust(fixture, route)
             provider.take_requests(len(fixture.provider_responses))
         return events
     except Exception as error:
@@ -150,40 +160,38 @@ def _collect(scenario: TraceScenario, engine: Engine) -> tuple[FunctionTraceEven
 def _projections(
     python_events: tuple[FunctionTraceEvent, ...],
     rust_events: tuple[FunctionTraceEvent, ...],
-    scenario: TraceScenario,
-    mode: TraceMode,
 ) -> tuple[PipelineProjection, PipelineProjection, str | None]:
-    mappings: Final = scenario.mappings_for(mode)
     try:
         return (
-            pipeline_projection("python", python_events, mappings),
-            pipeline_projection("rust", rust_events, mappings),
+            pipeline_projection("python", python_events),
+            pipeline_projection("rust", rust_events),
             None,
         )
     except ValueError as error:
         return PipelineProjection(), PipelineProjection(), f"harness: {error}"
 
 
-def execute_gateway_trace(route: GatewayRouteSpec, scenario: TraceScenario, mode: TraceMode) -> TraceComparisonArtifact:
-    mappings: Final = scenario.mappings_for(mode)
-    python_trace: Final = _collect(scenario, "python")
-    rust_trace: Final = _collect(scenario, "rust")
+def execute_gateway_trace(
+    route: GatewayRouteSpec,
+    scenario: TraceScenario,
+    engine: TraceEngine = "both",
+) -> TraceArtifact:
+    effective_engine: Final[TraceEngine] = "python" if engine == "both" and not route.rust_supported else engine
+    python_trace: Final = _collect(route, scenario, "python") if effective_engine != "rust" else ()
+    rust_trace: Final = _collect(route, scenario, "rust") if effective_engine != "python" else ()
     collection_python_error: Final = None if isinstance(python_trace, tuple) else f"python: {python_trace.message}"
     rust_error: Final = None if isinstance(rust_trace, tuple) else f"rust: {rust_trace.message}"
     python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
     rust_events: Final = rust_trace if isinstance(rust_trace, tuple) else ()
-    python, rust, projection_error = _projections(python_events, rust_events, scenario, mode)
+    python, rust, projection_error = _projections(python_events, rust_events)
     python_error: Final = projection_error or collection_python_error
-    return TraceComparisonArtifact.from_traces(
+    return TraceArtifact.from_traces(
+        engine=effective_engine,
         surface="gateway",
         sdk_function=route.route,
         scenario=scenario.name,
-        mode=mode,
-        mappings=mappings,
-        contract=scenario.contract,
         python=python.steps,
         rust=rust.steps,
-        python_unmatched=python.unmatched,
         python_error=python_error,
         rust_error=rust_error,
     )

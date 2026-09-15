@@ -91,6 +91,8 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
 )
 
+from .base import CachedTokensDetails
+
 FileContent = IO[bytes] | bytes | PathLike
 
 FileTypes = (
@@ -1288,6 +1290,7 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
     text_tokens: int | None = None
 
     model_config = {"extra": "allow"}
@@ -2254,10 +2257,17 @@ class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
     usage: NotRequired[ReadOnly[Mapping[str, object]]]
 
 
+class OpenAIRealtimeCachedTokensDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+    image_tokens: ReadOnly[int]
+
+
 class OpenAIRealtimeUsageTokenDetails(TypedDict):
     audio_tokens: ReadOnly[int]
     text_tokens: ReadOnly[int]
     cached_tokens: NotRequired[ReadOnly[int]]
+    cached_tokens_details: NotRequired[ReadOnly[OpenAIRealtimeCachedTokensDetails]]
 
 
 class OpenAIRealtimeResponseUsage(TypedDict):

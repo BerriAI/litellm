@@ -3,6 +3,7 @@ Tests verifying that default_api_key_tpm_limit and default_api_key_rpm_limit set
 litellm_params are returned by the /model/info endpoint.
 """
 
+import json
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -128,8 +129,9 @@ class TestModelInfoEndpointWithRouter:
                 litellm_model_id="some-model-id",
             )
 
-        assert len(response["data"]) == 1
-        litellm_params = response["data"][0]["litellm_params"]
+        data = json.loads(response.body)["data"]
+        assert len(data) == 1
+        litellm_params = data[0]["litellm_params"]
         assert litellm_params.get("default_api_key_tpm_limit") == 100
         assert litellm_params.get("default_api_key_rpm_limit") == 200
 
@@ -171,7 +173,8 @@ class TestModelInfoEndpointWithRouter:
                 litellm_model_id=None,
             )
 
-        assert len(response["data"]) >= 1
-        litellm_params = response["data"][0]["litellm_params"]
+        data = json.loads(response.body)["data"]
+        assert len(data) >= 1
+        litellm_params = data[0]["litellm_params"]
         assert litellm_params.get("default_api_key_tpm_limit") == 100
         assert litellm_params.get("default_api_key_rpm_limit") == 200
