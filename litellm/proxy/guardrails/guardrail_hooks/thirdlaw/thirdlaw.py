@@ -5,10 +5,8 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    ClassVar,
     Final,
     Literal,
-    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # SSE byte frames ride the ModelResponseStream-typed pipe (bedrock precedent)
 )
@@ -26,7 +24,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -47,7 +44,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.thirdlaw import (
     ThirdlawGuardrailResponse,
 )
 from litellm.types.utils import (
-    CallTypes,
     CallTypesLiteral,
     GuardrailStatus,
     LLMResponseTypes,
@@ -56,30 +52,13 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-    from litellm.types.utils import GenericGuardrailAPIInputs
 
 GUARDRAIL_NAME: Final = "thirdlaw"
 
 _ENDPOINT_PATH: Final = "/guardrails/litellm/v2"
 
 _UNREACHABLE_STATUS_CODES: Final = frozenset({502, 503, 504})
-
-_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
-
-
-def _is_responses_api_route(request_route: str | None) -> bool:
-    """Whether the call came in on a Responses API route.
-
-    Those stream events are neither chat-completions chunks nor raw Anthropic SSE, so
-    this guardrail cannot assemble them itself and hands them to the translation layer.
-    """
-    if request_route is None:
-        return False
-    call_types: Final = get_call_types_for_route(request_route)
-    return call_types is not None and any(call_type in _RESPONSES_API_CALL_TYPES for call_type in call_types)
 
 # Not part of the provider request body. ``secret_fields`` holds plaintext Authorization
 # values and ``api_key`` can carry a client-forwarded provider key, so neither may leave the proxy.
@@ -121,8 +100,6 @@ _USER_METADATA_FIELDS: Final = (
 _WireEvent: TypeAlias = Literal["pre_call", "during_call", "post_call"]
 
 _JSON_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
-
-_JSON_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 _EMPTY_MAP: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -284,31 +261,11 @@ def _decision_trace(decision: ThirdlawGuardrailResponse) -> Mapping[str, object]
     )
 
 
-class UnifiedStreamingHook(Protocol):
-    """The slice of UnifiedLLMGuardrails this guardrail delegates Responses API streams to."""
-
-    def async_post_call_streaming_iterator_hook(
-        self,
-        *,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: AsyncIterator[object],
-        request_data: dict[str, object],  # mutable-ok: proxy-shared request dict
-        guardrail_to_apply: "CustomGuardrail",
-        buffer_until_moderated_default: bool,
-    ) -> AsyncIterator[object]: ...
-
-
 class ThirdlawGuardrailMissingConfig(ValueError):
     pass
 
 
 class ThirdlawGuardrail(CustomGuardrail):
-    # Implementing apply_guardrail otherwise moves every lifecycle event onto the unified
-    # path, where this guardrail's own pre/post hooks stop running and the real provider
-    # bodies never reach the service. apply_guardrail here serves only the Responses API
-    # streams delegated to the translation layer.
-    use_native_lifecycle_hooks: ClassVar[bool] = True
-
     def __init__(
         self,
         api_base: str | None = None,
@@ -324,7 +281,6 @@ class ThirdlawGuardrail(CustomGuardrail):
         headers: Mapping[str, str] | None = None,
         extra_headers: Sequence[str] | None = None,
         async_handler: AsyncHTTPHandler | None = None,
-        unified_guardrails: "UnifiedStreamingHook | None" = None,
         **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail, which owns their types
     ) -> None:
         resolved_base: Final = api_base or get_secret_str("THIRDLAW_API_BASE")
@@ -369,7 +325,6 @@ class ThirdlawGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
             params={"timeout": self.guardrail_timeout},  # mutable-ok: one-shot client-factory argument
         )
-        self._unified_guardrails = unified_guardrails
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail base-class contract
@@ -603,96 +558,6 @@ class ThirdlawGuardrail(CustomGuardrail):
 
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-    def _unified_streaming_hook(self) -> "UnifiedStreamingHook":
-        if self._unified_guardrails is not None:
-            return self._unified_guardrails
-        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-            UnifiedLLMGuardrails,
-        )
-
-        return UnifiedLLMGuardrails()
-
-    @staticmethod
-    def _synthetic_response_body(inputs: "GenericGuardrailAPIInputs") -> Mapping[str, object]:
-        """Carry extracted texts and tool calls as a chat-completions-shaped body.
-
-        ``apply_guardrail`` only receives the extracted pieces, never the assembled
-        provider response, so this is the one path where ``response_body`` is built
-        rather than forwarded. Using the shape the service already handles keeps a
-        single wire contract instead of a second one for this endpoint.
-        """
-        tool_calls: Final = inputs.get("tool_calls") or ()
-        texts: Final = inputs.get("texts") or ()
-        first_message: Final[dict[str, object]] = {  # mutable-ok: one-shot payload fragment
-            "role": "assistant",
-            "content": texts[0] if texts else "",
-        }
-        if tool_calls:
-            first_message["tool_calls"] = [  # mutable-ok: one-shot payload fragment
-                dict(call) if isinstance(call, Mapping) else call for call in tool_calls
-            ]
-        extra: Final = tuple(
-            {"index": index, "message": {"role": "assistant", "content": text}}
-            for index, text in enumerate(texts[1:], start=1)
-        )
-        return MappingProxyType({"choices": ({"index": 0, "message": first_message}, *extra)})
-
-    @staticmethod
-    def _choice_text(choice: object) -> str | None:
-        as_choice: Final = _dict_of(choice)
-        message: Final = _dict_of(as_choice.get("message")) if as_choice is not None else None
-        content: Final = message.get("content") if message is not None else None
-        return content if isinstance(content, str) else None
-
-    @classmethod
-    def _texts_from_choices(cls, choices: object, expected: int) -> tuple[str, ...] | None:
-        """The rewritten texts, or None when the shape does not line up one-for-one."""
-        if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)):
-            return None
-        as_list: Final = _JSON_LIST_ADAPTER.validate_python(choices)
-        rewritten: Final = tuple(text for item in as_list if (text := cls._choice_text(item)) is not None)
-        return rewritten if len(rewritten) == expected else None
-
-    async def apply_guardrail(
-        self,
-        inputs: "GenericGuardrailAPIInputs",
-        request_data: dict[str, object],  # mutable-ok: proxy-shared request dict, per the CustomGuardrail contract
-        input_type: Literal["request", "response"],
-        logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> "GenericGuardrailAPIInputs":
-        """Scan extracted texts and tool calls through the same /guardrails/litellm/v2 contract.
-
-        Reached only through the guardrail translation layer, which owns the stream
-        shapes this guardrail cannot assemble itself (Responses API). Every other
-        route is served by the native lifecycle hooks with the real provider bodies.
-        """
-        if input_type == "request":
-            # The native pre_call hook already scanned the real request body; rescanning
-            # the extracted texts here would double-charge and double-log the same call.
-            return inputs
-        decision: Final = await self._run_thirdlaw(
-            event_type=GuardrailEventHooks.post_call,
-            wire_event="post_call",
-            request_data=request_data,
-            response_body=self._synthetic_response_body(inputs),
-        )
-        if decision is None:
-            return inputs
-        if decision.action == "block":
-            raise self._block_exception(decision)
-        if decision.action != "modify_response" or not decision.response_body:
-            return inputs
-        rewritten: Final = self._texts_from_choices(
-            decision.response_body.get("choices"), len(inputs.get("texts") or ())
-        )
-        if rewritten is None:
-            verbose_proxy_logger.warning(
-                "ThirdLaw guardrail: modify_response on a Responses API scan did not return one "
-                "choice per text; response left unchanged"
-            )
-            return inputs
-        return {**inputs, "texts": list(rewritten)}  # mutable-ok: the TypedDict field is a list
-
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
@@ -777,20 +642,6 @@ class ThirdlawGuardrail(CustomGuardrail):
         response: AsyncIterator[object],
         request_data: dict[str, object],  # mutable-ok: proxy-shared request dict; trace records land in it
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        # Responses API events are neither chat-completions chunks nor raw Anthropic SSE,
-        # so the assembly below cannot scan them. The guardrail translation layer can:
-        # it buffers, assembles, scans via apply_guardrail, and only then releases.
-        if _is_responses_api_route(user_api_key_dict.request_route):
-            async for translated in self._unified_streaming_hook().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,  # pyright: ignore[reportArgumentType]  # unified takes the proxy's dict
-                guardrail_to_apply=self,
-                buffer_until_moderated_default=self.streaming_buffer_until_moderated,
-            ):
-                yield cast(ModelResponseStream, translated)  # cast-ok: shares the typed stream pipe
-            return
-
         end_of_stream_only: Final = self.streaming_buffer_until_moderated or self.streaming_end_of_stream_only
         iterator: Final = (
             self._end_of_stream_moderated_stream(
