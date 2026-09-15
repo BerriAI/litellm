@@ -949,9 +949,23 @@ class CustomGuardrail(CustomLogger):
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None:
             return
-        await output_translation.process_output_response(
-            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
+        output_request: Final = (
+            scratch_request
+            if type(output_translation) is type(translation)
+            else self._chat_shaped_request(scratch_request, translation)
         )
+        await output_translation.process_output_response(
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=output_request
+        )
+
+    def _chat_shaped_request(
+        self,
+        scratch_request: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        translation: "BaseTranslation",
+    ) -> dict:  # mutable-ok: BaseTranslation.process_output_response contract
+        """The logged request in OpenAI chat shape, for an output scan whose translation differs from the input's."""
+        context: Final = translation.request_scan_context(scratch_request, self)
+        return {**scratch_request, "messages": list(context.structured_messages), "tools": list(context.tools)}
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.

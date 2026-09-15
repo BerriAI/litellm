@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
+from typing import TYPE_CHECKING, Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor
 
 from pydantic import BaseModel
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
-from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionTextObject,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+    ResponseAPIUsage,
+)
+
+if TYPE_CHECKING:
+    from litellm.types.utils import ChatCompletionMessageToolCall
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -275,6 +286,45 @@ def scoped_structured_message_indices(
             skip_tool_message=skip_tool,
             scan_only_tool_results=scan_only_tool_results,
         )
+    )
+
+
+def _assistant_tool_call(
+    tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall,
+) -> ChatCompletionAssistantToolCall:
+    function: Final = stream_item_field(tool_call, "function")
+    tool_call_id: Final = stream_item_field(tool_call, "id")
+    name: Final = stream_item_field(function, "name")
+    arguments: Final = stream_item_field(function, "arguments")
+    return ChatCompletionAssistantToolCall(
+        id=tool_call_id if isinstance(tool_call_id, str) else None,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=name if isinstance(name, str) else None,
+            arguments=arguments if isinstance(arguments, str) else "",
+        ),
+    )
+
+
+def response_assistant_turn(
+    texts: Sequence[str],
+    tool_calls: Sequence[ChatCompletionToolCallChunk] | Sequence[ChatCompletionMessageToolCall],
+) -> ChatCompletionAssistantMessage | None:
+    """The scanned reply as the assistant turn closing the request conversation."""
+    assistant_tool_calls: Final = tuple(_assistant_tool_call(tool_call) for tool_call in tool_calls)
+    if not texts and not assistant_tool_calls:
+        return None
+    content: Final = (
+        texts[0]
+        if len(texts) == 1
+        else tuple(ChatCompletionTextObject(type="text", text=text) for text in texts) or None
+    )
+    if not assistant_tool_calls:
+        return ChatCompletionAssistantMessage(role="assistant", content=content)
+    return ChatCompletionAssistantMessage(
+        role="assistant",
+        content=content,
+        tool_calls=list(assistant_tool_calls),  # mutable-ok: the assistant message type takes a list
     )
 
 

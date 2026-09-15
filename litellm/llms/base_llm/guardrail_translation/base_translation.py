@@ -3,6 +3,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+    response_assistant_turn,
+    scoped_structured_message_indices,
+)
+
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
@@ -12,7 +20,38 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+
+@dataclass(frozen=True, slots=True)
+class RequestScanContext:
+    """The scoped request turns and tool definitions a guardrail's request scan sees, in OpenAI chat shape."""
+
+    structured_messages: tuple["AllMessageValues", ...] = ()
+    tools: tuple["ChatCompletionToolParam", ...] = ()
+
+    @staticmethod
+    def scoped(
+        structured_messages: Sequence["AllMessageValues"],
+        tools: Sequence["ChatCompletionToolParam"],
+        guardrail_to_apply: "CustomGuardrail",
+        *,
+        skip_system: bool | None = None,
+    ) -> "RequestScanContext":
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
+        scoped_indices: Final = scoped_structured_message_indices(
+            structured_messages,
+            scan_only_tool_results=scan_only_tool_results,
+            skip_system=(
+                effective_skip_system_message_for_guardrail(guardrail_to_apply) if skip_system is None else skip_system
+            ),
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+        )
+        return RequestScanContext(
+            structured_messages=tuple(structured_messages[index] for index in scoped_indices),
+            tools=() if scan_only_tool_results else tuple(tools),
+        )
 
 
 @dataclass(slots=True)
@@ -252,6 +291,40 @@ class BaseTranslation(ABC):
         Returns None if no convertible content is found.
         """
         return None
+
+    def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
+        """Override wherever ``process_input_messages`` scopes or translates the request differently."""
+        return RequestScanContext.scoped(
+            self.get_structured_messages(data) or (), data.get("tools") or (), guardrail_to_apply
+        )
+
+    def with_response_context(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict | None,
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> "GenericGuardrailAPIInputs":
+        """``inputs`` plus the scoped request conversation, closed by the scanned reply, and the request tools."""
+        if request_data is None:
+            return inputs
+        context: Final = self.request_scan_context(request_data, guardrail_to_apply)
+        if not context.structured_messages:
+            return inputs
+        assistant_turn: Final = response_assistant_turn(inputs.get("texts") or (), inputs.get("tool_calls") or ())
+        contextual_inputs: Final[GenericGuardrailAPIInputs] = {
+            **inputs,
+            "structured_messages": [  # mutable-ok: GenericGuardrailAPIInputs fields are lists
+                *context.structured_messages,
+                *(() if assistant_turn is None else (assistant_turn,)),
+            ],
+        }
+        if not context.tools:
+            return contextual_inputs
+        with_tools: Final[GenericGuardrailAPIInputs] = {
+            **contextual_inputs,
+            "tools": list(context.tools),  # mutable-ok: GenericGuardrailAPIInputs fields are lists
+        }
+        return with_tools
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """
