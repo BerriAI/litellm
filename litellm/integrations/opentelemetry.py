@@ -3310,19 +3310,34 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     ) -> dict[str, str]:
         """
         Convert a string or dictionary of headers into a dictionary of headers.
+
+        A string is a comma-separated list of ``key=value`` pairs, e.g.
+        ``x-honeycomb-team=abc,x-other=def``. Blank entries are skipped and an
+        entry with no ``=`` is logged and dropped rather than crashing tracer
+        construction. The malformed entry is never logged: it may be a bare
+        ingest key, which ``redact_string`` does not scrub.
         """
-        _split_otel_headers: dict[str, str] = {}
-        if headers:
-            if isinstance(headers, str):
-                # when passed HEADERS="x-honeycomb-team=B85YgLm96******"
-                # Split only on first '=' occurrence
-                parts: Final = headers.split(",")
-                for part in parts:
-                    key, value = part.split("=", 1)
-                    _split_otel_headers[key] = value
-            elif isinstance(headers, Mapping):
-                _split_otel_headers.update(headers)
-        return _split_otel_headers
+        pairs: Final[Iterable[tuple[str, str]]] = (
+            OpenTelemetry._parse_otel_header_pairs(headers)
+            if isinstance(headers, str)
+            else headers.items() if isinstance(headers, Mapping) else ()
+        )
+        return dict(pairs)
+
+    @staticmethod
+    def _parse_otel_header_pairs(headers: str) -> "Iterable[tuple[str, str]]":
+        for raw_entry in headers.split(","):
+            entry = raw_entry.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                verbose_logger.warning(
+                    "OpenTelemetry: skipping malformed OTEL_HEADERS entry (expected key=value); "
+                    "the raw value is omitted because it may be a secret"
+                )
+                continue
+            key, value = entry.split("=", 1)
+            yield key.strip(), value.strip()
 
     async def async_management_endpoint_success_hook(
         self,

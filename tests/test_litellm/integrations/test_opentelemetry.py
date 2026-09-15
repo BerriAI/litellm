@@ -2080,6 +2080,61 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
         self.assertEqual(traces, "http://collector:4318/v1/traces")
 
 
+class TestOpenTelemetryHeaderParsing(unittest.TestCase):
+    """OTEL_HEADERS / OTEL_EXPORTER_OTLP_HEADERS string parsing robustness."""
+
+    def test_well_formed_single_pair(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("x-honeycomb-team=abc123"),
+            {"x-honeycomb-team": "abc123"},
+        )
+
+    def test_mapping_passthrough(self):
+        headers = MappingProxyType({"x-api-key": "secret", "x-other": "v"})
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary(headers),
+            {"x-api-key": "secret", "x-other": "v"},
+        )
+
+    def test_value_containing_equals_is_preserved(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("authorization=Bearer=a=b"),
+            {"authorization": "Bearer=a=b"},
+        )
+
+    def test_bare_entry_without_equals_is_dropped_not_raised(self):
+        self.assertEqual(OpenTelemetry._get_headers_dictionary("deadbeefsecret"), {})
+
+    def test_blank_entries_from_stray_commas_are_ignored(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary(",x-a=1,,x-b=2,"),
+            {"x-a": "1", "x-b": "2"},
+        )
+
+    def test_valid_and_invalid_entry_keeps_only_valid(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("x-a=1,deadbeefsecret"),
+            {"x-a": "1"},
+        )
+
+    def test_whitespace_around_entries_is_trimmed(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("  x-a = 1 , x-b = two "),
+            {"x-a": "1", "x-b": "two"},
+        )
+
+    def test_malformed_entry_value_never_appears_in_logs(self):
+        secret = "B85YgLm96superSecretIngestKey"
+        with patch("litellm._logging.verbose_logger.warning") as mock_warning:
+            result = OpenTelemetry._get_headers_dictionary(f"x-a=1,{secret}")
+        self.assertEqual(result, {"x-a": "1"})
+        mock_warning.assert_called_once()
+        logged = " ".join(
+            str(arg) for call in mock_warning.call_args_list for arg in call.args
+        )
+        self.assertNotIn(secret, logged)
+
+
 class TestOpenTelemetryProtocolSelection(unittest.TestCase):
     """Test suite for verifying correct exporter selection based on protocol"""
 
