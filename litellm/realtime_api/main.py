@@ -28,8 +28,9 @@ from litellm.types.realtime import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager, load_credentials_from_list
+from litellm.utils import ProviderConfigManager
 
+from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
@@ -57,9 +58,11 @@ _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 def _model_params_with_stored_credentials(model_params: Mapping[str, Any]) -> Mapping[str, Any]:
-    hydrated: Final = dict(model_params)
-    load_credentials_from_list(hydrated)
-    return MappingProxyType(hydrated)
+    credential_name: Final = model_params.get("litellm_credential_name")
+    credential_values: Final = (
+        CredentialAccessor.get_credential_values(credential_name) if isinstance(credential_name, str) else {}
+    )
+    return MappingProxyType({**credential_values, **model_params})
 
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
