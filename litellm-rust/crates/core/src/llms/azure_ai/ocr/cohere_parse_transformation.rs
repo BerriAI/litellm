@@ -13,9 +13,7 @@ use crate::url_utils::ApiUrl;
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 
 #[derive(Default)]
-pub(crate) struct AzureAICohereParseConfig {
-    cohere: CohereParseConfig,
-}
+pub(crate) struct AzureAICohereParseConfig;
 
 impl BaseOcrConfig for AzureAICohereParseConfig {
     type ProviderResponse = CohereResponse;
@@ -63,9 +61,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
             &request.connection,
         )
         .await?;
-        let body = self
-            .cohere
-            .transform_ocr_request(&request.model, document, params)?;
+        let body = CohereParseConfig.transform_ocr_request(&request.model, document, params)?;
         transform_request_body(
             client,
             request,
@@ -86,7 +82,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         request: &LiteLLMOcrRequest,
         response: CohereResponse,
     ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
-        self.cohere.transform_ocr_response(request, response)
+        CohereParseConfig.transform_ocr_response(request, response)
     }
 }
 

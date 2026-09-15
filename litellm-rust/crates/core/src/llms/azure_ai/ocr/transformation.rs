@@ -18,9 +18,7 @@ const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct AzureAIOCRConfig {
-    mistral: MistralOCRConfig,
-}
+pub(crate) struct AzureAIOCRConfig;
 
 impl BaseOcrConfig for AzureAIOCRConfig {
     type ProviderResponse = MistralOcrResponse;
@@ -52,9 +50,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
             &request.connection,
         )
         .await?;
-        let body = self
-            .mistral
-            .transform_ocr_request(&request.model, document, &params)?;
+        let body = MistralOCRConfig.transform_ocr_request(&request.model, document, &params)?;
         transform_request_body(
             client,
             request,
@@ -72,7 +68,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
         request: &LiteLLMOcrRequest,
         response: MistralOcrResponse,
     ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
-        self.mistral.transform_ocr_response(request, response)
+        MistralOCRConfig.transform_ocr_response(request, response)
     }
 }
 

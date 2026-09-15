@@ -15,9 +15,7 @@ use crate::url_utils::ApiUrl;
 const DEFAULT_LOCATION: &str = "us-central1";
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct VertexAIOCRConfig {
-    mistral: MistralOCRConfig,
-}
+pub(crate) struct VertexAIOCRConfig;
 
 impl BaseOcrConfig for VertexAIOCRConfig {
     type ProviderResponse = MistralOcrResponse;
@@ -63,9 +61,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
             &request.connection,
         )
         .await?;
-        let body = self
-            .mistral
-            .transform_ocr_request(&request.model, document, &params)?;
+        let body = MistralOCRConfig.transform_ocr_request(&request.model, document, &params)?;
         transform_request_body(
             client,
             request,
@@ -83,7 +79,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         request: &LiteLLMOcrRequest,
         response: MistralOcrResponse,
     ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
-        self.mistral.transform_ocr_response(request, response)
+        MistralOCRConfig.transform_ocr_response(request, response)
     }
 }
 
