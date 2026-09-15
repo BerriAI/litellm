@@ -4,13 +4,15 @@ import os
 import re
 import threading
 from base64 import b64encode
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from importlib.metadata import version
 from itertools import chain
+from time import sleep
 from types import MappingProxyType
 from typing import Final
 from weakref import WeakKeyDictionary, WeakSet
@@ -20,16 +22,20 @@ from langfuse import Langfuse, LangfuseGeneration, LangfuseSpan, propagate_attri
 from langfuse._client.resource_manager import LangfuseResourceManager
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+from requests import RequestException
+
+from litellm._logging import verbose_logger
 
 __all__ = (
     "AS_ROOT_ATTRIBUTE",
     "PUBLIC_ATTRIBUTE",
     "RELEASE_ATTRIBUTE",
     "DiscardingSpanExporter",
+    "RetryingSpanExporter",
     "acquire_langfuse_client",
     "build_isolated_tracer_provider",
     "evict_stale_langfuse_resources",
@@ -247,6 +253,38 @@ class DiscardingSpanExporter(SpanExporter):
         return True
 
 
+@dataclass(frozen=True, slots=True)
+class RetryingSpanExporter(SpanExporter):
+    """Retry a batch whose HTTP round trip raised, as the v2 ingestion consumer did.
+
+    The OTLP http exporter only retries 429 and 5xx responses; a connect or
+    read timeout propagates, and ``BatchSpanProcessor`` drops the whole batch
+    on any exception. A destination that stalls for a few seconds therefore
+    lost every observation in flight, where v2 backed off three times first.
+    """
+
+    exporter: SpanExporter
+    delays: Sequence[float] = (1.0, 2.0, 4.0)
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        for delay in chain(self.delays, (None,)):
+            try:
+                return self.exporter.export(spans)
+            except RequestException as error:
+                if delay is None:
+                    verbose_logger.error("Langfuse export failed after %d retries: %s", len(self.delays), error)
+                    return SpanExportResult.FAILURE
+                verbose_logger.warning("Langfuse export raised %s, retrying in %ss", error, delay)
+                sleep(delay)
+        return SpanExportResult.FAILURE
+
+    def shutdown(self) -> None:
+        self.exporter.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self.exporter.force_flush(timeout_millis)
+
+
 _LIVE_CLIENTS_LOCK: Final = threading.Lock()
 # litellm clients still using each SDK resource bundle; the bundle is torn down with the last one.
 # Both sides are weak so a throwaway client (a health probe, an alerting lookup) that is simply
@@ -446,17 +484,17 @@ def evict_stale_langfuse_resources(*, public_key: str | None, secret_key: str | 
     _retire_orphaned_providers()
 
 
-def _build_verified_span_exporter(*, public_key: object, secret_key: object, base_url: object) -> SpanExporter | None:
-    """Rebuild litellm's TLS material onto the export channel.
+def _build_span_exporter(*, public_key: object, secret_key: object, base_url: object) -> RetryingSpanExporter:
+    """Build the OTLP export channel with litellm's TLS material and v2's retry behaviour.
 
     v2 ingested through the injected httpx client, which carried litellm's CA
     bundle and client certificate; v4 ships every observation through its own
     OTLP exporter, so a private-CA deployment would fail TLS on every export in
     a background thread while ``auth_check`` (still on the httpx client) stays
-    green. Only built when TLS is configured away from the default (a CA bundle,
-    a client certificate, or verification switched off); endpoint and headers
-    mirror ``langfuse._client.span_processor``.
+    green. Endpoint, headers and timeout mirror ``langfuse._client.span_processor``.
     """
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
     import litellm
     from litellm.llms.custom_httpx.http_handler import get_ssl_verify
 
@@ -464,10 +502,6 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
     ca_bundle: Final = ssl_verify if isinstance(ssl_verify, str) and os.path.exists(ssl_verify) else None
     configured_certificate: Final = os.getenv("SSL_CERTIFICATE") or litellm.ssl_certificate
     client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
-    if ssl_verify is not False and ca_bundle is None and client_certificate is None:
-        return None
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH")
     endpoint: Final = f"{base_url}/{export_path}" if export_path else f"{base_url}/api/public/otel/v1/traces"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
@@ -479,12 +513,13 @@ def _build_verified_span_exporter(*, public_key: object, secret_key: object, bas
             "x-langfuse-sdk-version": version("langfuse"),
             "x-langfuse-public-key": str(public_key),
         },
+        timeout=int(os.getenv("LANGFUSE_TIMEOUT", "5")),
         certificate_file=ca_bundle,
         client_certificate_file=client_certificate,
     )
     if ssl_verify is False:
         exporter._certificate_file = False  # pyright: ignore[reportPrivateUsage]  # the ctor coerces a False certificate_file back to True
-    return exporter
+    return RetryingSpanExporter(exporter)
 
 
 def acquire_langfuse_client(
@@ -508,7 +543,7 @@ def acquire_langfuse_client(
     span_exporter: Final = (
         DiscardingSpanExporter()
         if mock_mode
-        else _build_verified_span_exporter(
+        else _build_span_exporter(
             public_key=public_key,
             secret_key=parameters.get("secret_key"),
             base_url=parameters.get("base_url"),

@@ -998,35 +998,83 @@ def test_a_sweep_overlapping_registration_and_rotation_keeps_the_live_provider()
     assert _exports(client, exporter, "after-racing-sweep")
 
 
-def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_path):
+def test_ssl_exporter_carries_litellm_tls_material(monkeypatch, tmp_path):
     """v4 exports over its own OTLP channel, so litellm's CA bundle must be rebuilt onto it."""
     import litellm
-    from litellm.integrations.langfuse.langfuse_sdk import _build_verified_span_exporter
+    from litellm.integrations.langfuse.langfuse_sdk import _build_span_exporter
 
-    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
+    for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE", "LANGFUSE_TIMEOUT"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(litellm, "ssl_verify", True)
     monkeypatch.setattr(litellm, "ssl_certificate", None)
-    assert (
-        _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example") is None
-    )
+    default = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
+    assert default._certificate_file is True
+    assert default._timeout == 5
 
     ca_path = tmp_path / "private-ca.pem"
     ca_path.write_text("dummy")
     monkeypatch.setattr(litellm, "ssl_verify", str(ca_path))
-    exporter = _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
-    assert exporter is not None
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "20")
+    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
     assert exporter._endpoint == "https://lf.internal.example/api/public/otel/v1/traces"
     assert exporter._certificate_file == str(ca_path)
+    assert exporter._timeout == 20
     assert exporter._headers["x-langfuse-public-key"] == "pk"
     assert exporter._headers["x-langfuse-sdk-version"] == installed_langfuse_version()
+
+
+def test_retrying_exporter_retries_a_raised_export_and_then_succeeds(monkeypatch):
+    """A read timeout used to drop the batch outright; v2 backed off and re-sent it."""
+    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+    from requests import ReadTimeout
+
+    from litellm.integrations.langfuse.langfuse_sdk import RetryingSpanExporter
+
+    attempts = []
+    slept = []
+
+    class Flaky(SpanExporter):
+        def export(self, spans):
+            attempts.append(spans)
+            if len(attempts) < 3:
+                raise ReadTimeout("destination stalled")
+            return SpanExportResult.SUCCESS
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
+    result = RetryingSpanExporter(Flaky(), delays=(0.5, 1.5, 2.5)).export(("span",))
+
+    assert result is SpanExportResult.SUCCESS
+    assert attempts == [("span",)] * 3
+    assert slept == [0.5, 1.5]
+
+
+def test_retrying_exporter_gives_up_after_the_last_delay(monkeypatch):
+    from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+    from requests import ConnectionError as RequestsConnectionError
+
+    from litellm.integrations.langfuse.langfuse_sdk import RetryingSpanExporter
+
+    attempts = []
+    slept = []
+
+    class Down(SpanExporter):
+        def export(self, spans):
+            attempts.append(spans)
+            raise RequestsConnectionError("refused")
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
+    result = RetryingSpanExporter(Down(), delays=(1.0, 2.0)).export(("span",))
+
+    assert result is SpanExportResult.FAILURE
+    assert len(attempts) == 3
+    assert slept == [1.0, 2.0]
 
 
 @pytest.mark.parametrize("switch", ["attribute", "env"])
 def test_ssl_exporter_disables_verification_when_litellm_does(monkeypatch, switch):
     """v2 exported through the httpx client, so ``ssl_verify=False`` reached ingestion; v4's exporter must match."""
     import litellm
-    from litellm.integrations.langfuse.langfuse_sdk import _build_verified_span_exporter
+    from litellm.integrations.langfuse.langfuse_sdk import _build_span_exporter
 
     for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
         monkeypatch.delenv(name, raising=False)
@@ -1037,8 +1085,7 @@ def test_ssl_exporter_disables_verification_when_litellm_does(monkeypatch, switc
         monkeypatch.setattr(litellm, "ssl_verify", True)
         monkeypatch.setenv("SSL_VERIFY", "False")
 
-    exporter = _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
-    assert exporter is not None
+    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
     assert exporter._certificate_file is False
     assert exporter._client_cert is None
 
@@ -1060,7 +1107,7 @@ def test_ssl_exporter_falls_back_to_default_ca_when_the_bundle_path_is_missing(
 ):
     """The httpx client ignores a CA path that does not exist; handing it to requests would fail every export."""
     import litellm
-    from litellm.integrations.langfuse.langfuse_sdk import _build_verified_span_exporter
+    from litellm.integrations.langfuse.langfuse_sdk import _build_span_exporter
 
     for name in ("SSL_CERTIFICATE", "SSL_VERIFY", "SSL_CERT_FILE"):
         monkeypatch.delenv(name, raising=False)
@@ -1070,13 +1117,9 @@ def test_ssl_exporter_falls_back_to_default_ca_when_the_bundle_path_is_missing(
     client_cert.write_text("dummy")
     monkeypatch.setattr(litellm, "ssl_certificate", str(client_cert) if with_client_certificate else None)
 
-    exporter = _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
-    if not with_client_certificate:
-        assert exporter is None
-        return
-    assert exporter is not None
+    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example").exporter
     assert exporter._certificate_file is True
-    assert exporter._client_cert == str(client_cert)
+    assert exporter._client_cert == (str(client_cert) if with_client_certificate else None)
 
 
 def test_second_client_on_the_same_key_does_not_build_another_provider():
