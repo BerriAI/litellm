@@ -6,10 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-gcp_auth.workspace = true
 litellm-auth.workspace = true
+
 moka.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+gcp_auth = "0.12.7"
