@@ -878,6 +878,7 @@ async def _auto_register_jwt_mapping(
     # the NOT NULL @id constraint. Every successful key-creation caller (e.g.
     # /key/generate) passes table_name="key" explicitly.
     key_data: Final = await generate_key_helper_fn(
+        llm_router=None,
         request_type="key",
         table_name="key",
         team_id=team_id,

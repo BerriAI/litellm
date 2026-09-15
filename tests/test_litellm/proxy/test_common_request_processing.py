@@ -6962,6 +6962,45 @@ class TestModelDeploymentsSupportStreamOptions:
         assert self._support(None, None) is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_settings, expected", [
+    (None, {"group": {"team": 100}}),
+    ({"weights": {"group": {"key": 100}}}, {"group": {"key": 100}}),
+    ({"timeout": 30}, None),
+    ({"weights": {"group": {"key": "legacy"}}}, None),
+])
+async def test_saved_weights_override_caller_input_and_preserve_key_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    key_settings: dict[str, int | dict[str, dict[str, int | str]]] | None,
+    expected: dict[str, dict[str, int]] | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "get_team_object", AsyncMock(
+        return_value=SimpleNamespace(router_settings={"weights": {"group": {"team": 100}}})
+    ))
+    forged = {"group": {"caller": 100}}
+    processor = ProxyBaseLLMRequestProcessing(data={
+        "model": "group", "weights": forged, "_router_weights": forged,
+        "router_settings_override": {"weights": forged},
+    })
+    logging = MagicMock(spec=ProxyLogging)
+    logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    data, _ = await processor.common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", team_id="team-a", router_settings=key_settings),
+        proxy_logging_obj=logging,
+        proxy_config=proxy_server.ProxyConfig(),
+        route_type="acompletion",
+        llm_router=litellm.Router(model_list=[]),
+    )
+    assert "weights" not in data
+    assert data.get("_router_weights") == expected
+    assert logging.pre_call_hook.call_args.kwargs["data"].get("_router_weights") == expected
+
+
 class TestPerRequestModelGroupAlias:
     """``router_settings.model_group_alias`` on a key or team has to be resolved
     by the proxy: the Router resolves aliases from its own shared instance

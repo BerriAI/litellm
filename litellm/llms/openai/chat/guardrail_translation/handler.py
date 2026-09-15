@@ -42,6 +42,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    unappliable_request_rewrite,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -196,6 +197,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
+                    if len(guardrailed_texts) != len(text_task_mappings):
+                        raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
                     await self._apply_guardrail_responses_to_input_texts(
                         messages=messages,
                         responses=guardrailed_texts,
@@ -210,12 +213,45 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         task_mappings=tool_call_task_mappings,
                     )
 
+        elif (
+            not images_to_check
+            and not guardrail_to_apply.records_own_guardrail_information
+            and (not_run_reason := self._not_run_reason(messages)) is not None
+        ):
+            guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=not_run_reason,
+                request_data=data,
+                guardrail_status="not_run",
+            )
+
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s",
             data.get("messages"),
         )
 
         return data
+
+    def _not_run_reason(
+        self,
+        messages: Sequence[dict[str, Any]],
+    ) -> str | None:
+        """Why nothing was scanned, or None when the only unscoped content is images, which this handler never scans."""
+        texts: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
+        images: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
+        tool_calls: Final[list[ChatCompletionToolParam]] = []  # mutable-ok: filled by _extract_inputs
+        for msg_idx, message in enumerate(messages):
+            self._extract_inputs(
+                message=message,
+                msg_idx=msg_idx,
+                texts_to_check=texts,
+                images_to_check=images,
+                tool_calls_to_check=tool_calls,
+                text_task_mappings=[],
+                tool_call_task_mappings=[],
+            )
+        if texts or tool_calls:
+            return "no scannable content after message scoping"
+        return None if images else "no scannable content"
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
