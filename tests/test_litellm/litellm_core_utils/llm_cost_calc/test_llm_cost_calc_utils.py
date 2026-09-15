@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,6 +51,26 @@ from litellm.types.utils import CacheCreationTokenDetails, Usage
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
+@pytest.mark.parametrize(
+    "duration,second_rate,expected",
+    ((2.0, 0.00016, 0.00032), (2.0, 0.0, 0.0), (2.0, None, 0.000416), (0.0, 0.00016, 0.000416)),
+)
+def test_audio_duration_and_tokens_bill_only_once(duration: float, second_rate: float | None, expected: float) -> None:
+    info: Final[ModelInfo] = {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "input_cost_per_audio_token": 6.5e-6,
+        "input_cost_per_audio_per_second": second_rate,
+    }
+    usage: Final = Usage(
+        prompt_tokens=64,
+        completion_tokens=0,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=64, audio_length_seconds=duration, text_tokens=0),
+    )
+    cost, _ = generic_cost_per_token("audio-billing-fixture", usage, "vertex_ai", model_info=info)
+    assert cost == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("prompt_tokens", [100, 200000, 200001])
