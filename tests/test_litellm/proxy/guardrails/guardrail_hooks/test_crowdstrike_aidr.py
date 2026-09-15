@@ -1820,7 +1820,7 @@ async def test_unalignable_rewrite_is_rejected_never_sent_unredacted(
     Skipping the write-back would hand the model the unredacted text, so a
     guardrail could be bypassed by adding ``instructions`` or a tool call.
     """
-    from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+    from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
     data: dict[str, object] = {"model": "gpt-4o", "input": responses_input}
     if instructions is not None:
