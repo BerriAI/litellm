@@ -19,6 +19,38 @@ from litellm.router_strategy.complexity_router.llm_v2 import (
 )
 from litellm.router_utils.auto_router_model_naming import strategy_router_dependencies
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.router_strategy.complexity_router.selective_policy import SelectiveHead, SelectivePolicy
+
+
+def test_learned_policy_overrides_raw_gap_without_rewriting_raw_probabilities() -> None:
+    config: Final = _config().llm_v2_config
+    assert config is not None
+    policy: Final = SelectivePolicy(
+        version="test-rescue",
+        feature_schema="v2-v1",
+        target="rescue",
+        threshold=0.05,
+        heads=(SelectiveHead(constant=1),),
+    )
+    trained: Final = LLMV2Config.model_validate({**config.model_dump(), "selective_policy": policy})
+    decision: Final = trained.classify(_verdict(0.9, 0.92))
+    assert not decision.use_efficient
+    assert decision.efficient == 0.9
+    assert "selective:target=rescue" in decision.signals
+
+
+def test_learned_policy_rejects_another_classifier_feature_schema() -> None:
+    config: Final = _config().llm_v2_config
+    assert config is not None
+    policy: Final = SelectivePolicy(
+        version="wrong-schema",
+        feature_schema="cap-v1",
+        target="rescue",
+        threshold=0.05,
+        heads=(SelectiveHead(constant=1),),
+    )
+    with pytest.raises(ValidationError, match="v2-v1"):
+        LLMV2Config.model_validate({**config.model_dump(), "selective_policy": policy})
 
 
 def _config(**overrides: object) -> ComplexityRouterConfig:
