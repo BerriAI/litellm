@@ -83,7 +83,7 @@ where
             .hooks
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
-                custom_llm_provider: request.adapter.provider().as_str().into(),
+                custom_llm_provider: request.config.provider().as_str().into(),
                 url: url.into(),
                 headers: headers.to_vec(),
                 body,
@@ -135,7 +135,7 @@ pub(crate) async fn guardrail_document(
         .hooks
         .during_call(OcrDuringCallRequest {
             model: request.model.clone(),
-            custom_llm_provider: request.adapter.provider().as_str().into(),
+            custom_llm_provider: request.config.provider().as_str().into(),
             url: url.into(),
             headers: headers.to_vec(),
             body: serde_json::to_value(&request.document).map_err(|_| {

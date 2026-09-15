@@ -96,10 +96,12 @@ async fn request_controlled_api_base_is_rejected_before_vertex_auth() {
 }
 
 #[tokio::test]
-async fn adapters_build_complete_requests_and_share_mistral_normalization() {
+async fn configs_build_complete_requests_and_share_mistral_normalization() {
     use std::time::Duration;
 
-    use crate::ocr::adapters::{MistralAdapter, OcrAdapter, VertexMistralAdapter};
+    use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+    use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+    use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
     use crate::ocr::test_support::ocr_client;
 
     let client = ocr_client();
@@ -116,11 +118,11 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         options.clone(),
     );
     let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
-    let direct_http = MistralAdapter
+    let direct_http = MistralOCRConfig
         .prepare_request(&direct, &client)
         .await
         .unwrap();
-    let vertex_http = VertexMistralAdapter
+    let vertex_http = VertexAIOCRConfig::default()
         .prepare_request(&vertex, &client)
         .await
         .unwrap();
@@ -146,11 +148,11 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         );
     }
     let payload = json!({"pages": [{"index": 0, "markdown": "hello"}], "extra": "preserved"});
-    let direct_response = MistralAdapter
+    let direct_response = MistralOCRConfig
         .transform_ocr_response(&direct, serde_json::from_value(payload.clone()).unwrap())
         .unwrap()
         .into_json();
-    let vertex_response = VertexMistralAdapter
+    let vertex_response = VertexAIOCRConfig::default()
         .transform_ocr_response(&vertex, serde_json::from_value(payload).unwrap())
         .unwrap()
         .into_json();
