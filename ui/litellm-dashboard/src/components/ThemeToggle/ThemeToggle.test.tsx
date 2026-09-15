@@ -11,12 +11,7 @@ const renderToggle = () =>
     </ThemeProvider>,
   );
 
-const openMenu = async () => {
-  await userEvent.click(screen.getByRole("button", { name: "Theme" }));
-  await screen.findByRole("menu");
-};
-
-const pick = async (label: string | RegExp) => userEvent.click(screen.getByRole("menuitemradio", { name: label }));
+const toggle = () => screen.getByRole("button", { name: /Switch to (light|dark) mode/ });
 
 beforeEach(() => {
   localStorage.clear();
@@ -28,50 +23,49 @@ afterAll(() => {
 });
 
 describe("ThemeToggle", () => {
-  it("starts on light rather than following the system preference", async () => {
+  it("switches to dark on a single click, with no menu in between", async () => {
     renderToggle();
-    await openMenu();
 
-    expect(screen.getByRole("menuitemradio", { name: "Light" })).toBeChecked();
-    expect(screen.getByRole("menuitemradio", { name: /^Dark/ })).not.toBeChecked();
-    expect(screen.getByRole("menuitemradio", { name: "System" })).not.toBeChecked();
-  });
+    await userEvent.click(toggle());
 
-  it("puts the dark class on the document and remembers the choice", async () => {
-    renderToggle();
-    await openMenu();
-
-    await pick(/^Dark/);
-
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(document.documentElement).toHaveClass("dark");
     expect(localStorage.getItem("theme")).toBe("dark");
   });
 
-  it("hands control back to the system preference when asked", async () => {
+  it("switches back to light on the next click", async () => {
     renderToggle();
-    await openMenu();
-    await pick(/^Dark/);
+    await userEvent.click(toggle());
 
-    await pick("System");
+    await userEvent.click(toggle());
+
+    expect(document.documentElement).not.toHaveClass("dark");
+    expect(localStorage.getItem("theme")).toBe("light");
+  });
+
+  it("names the mode the click will switch to, so the button says what it does", async () => {
+    renderToggle();
+    expect(screen.getByRole("button", { name: "Switch to dark mode (beta)" })).toBeInTheDocument();
+
+    await userEvent.click(toggle());
+
+    expect(await screen.findByRole("button", { name: "Switch to light mode" })).toBeInTheDocument();
+  });
+
+  it("leaves a stored system preference following the OS until the user clicks", () => {
+    localStorage.setItem("theme", "system");
+
+    renderToggle();
 
     expect(localStorage.getItem("theme")).toBe("system");
-    expect(document.documentElement).not.toHaveClass("dark");
   });
 
-  it("marks dark as beta in the menu, and leaves the other choices unmarked", async () => {
+  it("keeps the beta marker out of the toolbar label once dark is on", async () => {
     renderToggle();
-    await openMenu();
 
-    expect(screen.getByRole("menuitemradio", { name: /^Dark/ })).toHaveTextContent("Beta");
-    expect(screen.getByRole("menuitemradio", { name: "Light" })).not.toHaveTextContent("Beta");
-    expect(screen.getByRole("menuitemradio", { name: "System" })).not.toHaveTextContent("Beta");
-  });
+    await userEvent.click(toggle());
 
-  it("keeps the beta marker inside the menu rather than in the toolbar", async () => {
-    renderToggle();
-    await openMenu();
-    await pick(/^Dark/);
-
-    expect(screen.getByRole("button", { name: "Theme" })).not.toHaveTextContent("Beta");
+    expect(toggle()).not.toHaveTextContent("Beta");
+    expect(toggle()).toHaveAccessibleName("Switch to light mode");
   });
 });

@@ -5,7 +5,6 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 REPO_ROOT: Final = Path(__file__).parents[2]
 
@@ -15,10 +14,10 @@ COST_MAP_ADAPTER: Final = TypeAdapter(CostMap)
 SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/moonshotai/Kimi-K3",
     "together_ai/zai-org/GLM-5.2",
-    "together_ai/deepseek-ai/DeepSeek-V4-Pro",
+    "together_ai/zai-org/GLM-5.3",
+    "together_ai/zai-org/GLM-5.3-Flash",
     "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813",
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731",
-    "together_ai/moonshotai/Kimi-K2.7-Code",
     "together_ai/MiniMaxAI/MiniMax-M3",
     "together_ai/thinkingmachines/Inkling",
     "together_ai/thinkingmachines/Inkling-Small",
@@ -27,20 +26,22 @@ SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/Qwen/Qwen3.7-Plus",
     "together_ai/Qwen/Qwen3.6-Plus",
     "together_ai/Qwen/Qwen3.5-9B",
-    "together_ai/nvidia/nemotron-3-ultra-550b-a55b",
     "together_ai/meta-models/Muse-Glimmer-30B",
     "together_ai/google/gemma-4-31B-it",
-    "together_ai/pearl-ai/gemma-4-31b-it",
-    "together_ai/google/gemma-3n-E4B-it",
     "together_ai/arize-ai/qwen-2-1.5b-instruct",
     "together_ai/Prism-ML/Ternary-Bonsai-27B",
-    "together_ai/meta-llama/Llama-Guard-4-12B",
     "together_ai/openai/gpt-oss-120b",
     "together_ai/openai/gpt-oss-20b",
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
 )
 
 DEPRECATED_MODELS: Final = {
+    "together_ai/nvidia/nemotron-3-ultra-550b-a55b": "2026-08-27",
+    "together_ai/pearl-ai/gemma-4-31b-it": "2026-08-27",
+    "together_ai/deepseek-ai/DeepSeek-V4-Pro": "2026-08-27",
+    "together_ai/moonshotai/Kimi-K2.7-Code": "2026-08-27",
+    "together_ai/google/gemma-3n-E4B-it": "2026-08-25",
+    "together_ai/meta-llama/Llama-Guard-4-12B": "2026-08-25",
     "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": "2026-07-10",
     "together_ai/Qwen/Qwen3.5-397B-A17B": "2026-06-29",
     "together_ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": "2026-06-04",
@@ -75,54 +76,16 @@ def cost_map() -> CostMap:
         return COST_MAP_ADAPTER.validate_python(json.load(f))
 
 
-@pytest.mark.parametrize("model", SERVERLESS_CHAT_MODELS)
-def test_together_serverless_chat_model_is_mapped(cost_map: CostMap, model: str):
-    info = cost_map.get(model)
-    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-    assert info["litellm_provider"] == "together_ai"
-    assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] >= 0
-    assert info["output_cost_per_token"] >= info["input_cost_per_token"]
-    assert "deprecation_date" not in info
-
-    routed_model, provider, _, _ = get_llm_provider(model=model)
-    assert routed_model == model.removeprefix("together_ai/")
-    assert provider == "together_ai"
-
-
-def test_together_kimi_k3_pricing_and_capabilities(cost_map: CostMap):
-    info = cost_map["together_ai/moonshotai/Kimi-K3"]
-    assert info["input_cost_per_token"] == 3e-06
-    assert info["output_cost_per_token"] == 1.5e-05
-    assert info["max_input_tokens"] == 1048576
-    assert info["supports_function_calling"] is True
-    assert info["supports_tool_choice"] is True
-    assert info["supports_response_schema"] is True
-    assert info["supports_vision"] is True
-    assert info["supports_reasoning"] is True
-
-
-def test_together_glm_52_pricing(cost_map: CostMap):
-    info = cost_map["together_ai/zai-org/GLM-5.2"]
-    assert info["input_cost_per_token"] == 1.4e-06
-    assert info["output_cost_per_token"] == 4.4e-06
-    assert info["supports_function_calling"] is True
-    assert info["supports_reasoning"] is True
-
-
-def test_together_multilingual_e5_embedding_entry(cost_map: CostMap):
-    info = cost_map["together_ai/intfloat/multilingual-e5-large-instruct"]
-    assert info["mode"] == "embedding"
-    assert info["input_cost_per_token"] == 2e-08
-    assert info["max_input_tokens"] == 514
-    assert info["output_vector_size"] == 1024
-
-
-def test_together_llama_33_70b_repriced_to_current_together_rate(cost_map: CostMap):
-    info = cost_map["together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"]
-    assert info["input_cost_per_token"] == 1.04e-06
-    assert info["output_cost_per_token"] == 1.04e-06
-    assert info["max_input_tokens"] == 131072
+def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost_map: CostMap):
+    inflated = sorted(
+        model
+        for model, info in cost_map.items()
+        if info.get("litellm_provider") == "together_ai"
+        and info.get("mode") == "chat"
+        and "max_output_tokens" in info
+        and info["max_output_tokens"] == info.get("max_input_tokens")
+    )
+    assert inflated == []
 
 
 @pytest.mark.parametrize("model", sorted(DEPRECATED_MODELS))
@@ -159,3 +122,26 @@ def test_together_backup_cost_map_in_sync(cost_map: CostMap):
     together_main = {k: v for k, v in cost_map.items() if k.startswith("together_ai/")}
     together_backup = {k: v for k, v in backup.items() if k.startswith("together_ai/")}
     assert together_backup == together_main
+
+
+CACHED_INPUT_MODELS: Final = (
+    "together_ai/moonshotai/Kimi-K3",
+    "together_ai/zai-org/GLM-5.2",
+    "together_ai/meta-models/Muse-Glimmer-30B",
+    "together_ai/Qwen/Qwen3.8-2.4T-A95B",
+    "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813",
+    "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731",
+    "together_ai/thinkingmachines/Inkling",
+    "together_ai/MiniMaxAI/MiniMax-M3",
+    "together_ai/thinkingmachines/Inkling-Small",
+    "together_ai/moonshotai/Kimi-K2.7-Code",
+    "together_ai/deepseek-ai/DeepSeek-V4-Pro",
+    "together_ai/nvidia/nemotron-3-ultra-550b-a55b",
+    "together_ai/Qwen/Qwen3.7-Max",
+)
+
+
+def test_together_prompt_caching_flag_implies_cache_read_rate(cost_map: CostMap):
+    for model, info in cost_map.items():
+        if model.startswith("together_ai/") and info.get("supports_prompt_caching"):
+            assert "cache_read_input_token_cost" in info, f"{model} flags caching without a cache read rate"

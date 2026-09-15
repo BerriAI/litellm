@@ -2441,6 +2441,63 @@ def test_list_files_resolves_wildcard_deployment_credentials(
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+def test_list_files_by_model_returns_an_openai_page_for_a_provider_listing(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.types.llms.openai import FileListPage
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    listed_files = [
+        OpenAIFileObject(
+            id=f"file-{index}",
+            bytes=index,
+            created_at=index,
+            filename=f"{index}.jsonl",
+            object="file",
+            purpose="batch",
+            status="uploaded",
+        )
+        for index in (1, 2)
+    ]
+
+    async def _mock_afile_list(**kwargs):
+        return list(listed_files)
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files?target_model_names=gpt-3.5-turbo",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["object"] == "list"
+    assert [listed["id"] for listed in body["data"]] == ["file-1", "file-2"]
+    assert (body["first_id"], body["last_id"], body["has_more"]) == ("file-1", "file-2", False)
+    hook_response = proxy_logging_obj.post_call_success_hook.call_args.kwargs["response"]
+    assert isinstance(hook_response, FileListPage)
+    assert [listed.id for listed in hook_response.data] == ["file-1", "file-2"]
+
+
 def test_list_files_model_routing_does_not_forward_custom_llm_provider_twice(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
@@ -2920,9 +2977,9 @@ def test_unscoped_list_files_accepts_every_documented_purpose(
 def test_list_files_reports_a_bad_target_model_names_as_a_400(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
-    """The exception tail reports an HTTPException with its own status and error
-    type rather than relabelling it, so a client that branches on either keeps
-    reading the same thing off a bad request."""
+    """The exception tail answers with the OpenAI error object a client can branch on:
+    the type its 400 status stands for, and a JSON null param rather than the literal
+    string "None" no OpenAI SDK has a case for."""
     _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _permissive_afile_list)
 
     response = _get_list_files("/v1/files?target_model_names=gpt-3.5-turbo,gpt-4o")
@@ -2931,8 +2988,8 @@ def test_list_files_reports_a_bad_target_model_names_as_a_400(
     assert response.json() == {
         "error": {
             "message": "target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
-            "type": "None",
-            "param": "None",
+            "type": "invalid_request_error",
+            "param": None,
             "code": "400",
         }
     }
@@ -4476,3 +4533,589 @@ def test_scoped_list_files_still_resolves_deployment_credentials(
     provider_list.assert_awaited_once()
     assert provider_list.await_args.kwargs["custom_llm_provider"] == "openai"
     assert provider_list.await_args.kwargs["api_key"] == "openai_api_key"
+
+
+def _post_user_data_file() -> httpx.Response:
+    return client.post(
+        "/v1/files",
+        files={"file": ("labels.jsonl", b'{"label": "restricted"}', "application/json")},
+        data={"purpose": "user_data"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+
+def _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, hook):
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.files_config",
+        [{"custom_llm_provider": "openai", "api_key": "sk-test"}],
+    )
+    return respx.post("https://api.openai.com/v1/files").mock(
+        return_value=respx.MockResponse(
+            status_code=200,
+            json={
+                "id": "file-hooked",
+                "object": "file",
+                "bytes": 23,
+                "created_at": 1234567890,
+                "filename": "labels.jsonl",
+                "purpose": "user_data",
+                "status": "uploaded",
+            },
+        )
+    )
+
+
+@respx.mock
+def test_create_file_triggers_async_pre_call_hook(monkeypatch, llm_router: Router):
+    """`POST /v1/files` must run `async_pre_call_hook` so a hook can inspect the upload
+    before it reaches the provider (LIT-5916)."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    recorded: dict = {}
+
+    class RecordingHook(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            recorded["call_type"] = call_type
+            recorded["purpose"] = data.get("purpose")
+            recorded["file"] = data.get("file")
+
+    provider_route = _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, RecordingHook())
+
+    response = _post_user_data_file()
+
+    assert response.status_code == 200, response.text
+    assert recorded["call_type"] == "acreate_file"
+    assert recorded["purpose"] == "user_data"
+    assert recorded["file"]["filename"] == "labels.jsonl"
+    assert provider_route.call_count == 1
+    forwarded_body = provider_route.calls.last.request.content
+    assert b"user_data" in forwarded_body
+    assert b"labels.jsonl" in forwarded_body
+
+
+@respx.mock
+def test_create_file_async_pre_call_hook_rejection_blocks_upload(monkeypatch, llm_router: Router):
+    """A hook rejecting the upload must 400 before the file reaches the provider."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class RejectingHook(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            return "file upload not allowed"
+
+    provider_route = _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, RejectingHook())
+
+    response = _post_user_data_file()
+
+    assert response.status_code == 400, response.text
+    assert "file upload not allowed" in response.text
+    assert provider_route.call_count == 0
+
+
+def test_create_file_non_batch_over_max_file_size_mb_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    """max_file_size_mb applies to every purpose, unlike the batch-only max_batch_file_size_mb."""
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "max_file_size_mb", 1)
+
+    oversized = b"x" * (2 * 1024 * 1024)
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("labels.jsonl", oversized, "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 413, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert "max_file_size_mb" in error["message"]
+    assert "1 MB" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_non_batch_under_max_file_size_mb_forwards(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "max_file_size_mb", 1)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("labels.jsonl", b"small content", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+
+
+def test_create_file_blocked_extension_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "blocked_file_extensions", [".exe", ".sh"])
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("payload.exe", b"MZ\x90\x00", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert ".exe" in error["message"]
+    assert "blocked_file_extensions" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_blocked_extension_unset_allows_everything(monkeypatch, llm_router: Router):
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("payload.exe", b"MZ\x90\x00", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+
+
+def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    """A filename carrying a directory-traversal component must never reach storage or the provider."""
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("../../etc/passwd", b"malicious content", "text/plain")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert "traversal" in error["message"].lower()
+    assert forwarded_calls == []
+
+
+def test_list_files_target_model_names_passes_trusted_bedrock_credentials(
+    mocker: MockerFixture, monkeypatch
+):
+    """
+    GET /v1/files?target_model_names=<bedrock model> must hand the deployment's
+    immutable credential snapshot to litellm.afile_list, since Bedrock resolves
+    the S3 bucket to list from that snapshot rather than from request params.
+    """
+    from types import MappingProxyType
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+            },
+        ]
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_list(**kwargs):
+        captured_kwargs.update(kwargs)
+        return []
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files?target_model_names=bedrock-claude&purpose=batch",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs["custom_llm_provider"] == "bedrock"
+    assert captured_kwargs["purpose"] == "batch"
+    trusted_credentials = captured_kwargs["_litellm_internal_model_credentials"]
+    assert isinstance(trusted_credentials, MappingProxyType)
+    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_delete_file_answers_400_for_an_id_outside_the_configured_bucket(mocker: MockerFixture, monkeypatch):
+    from urllib.parse import quote
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+            },
+        ]
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+    foreign_file_id: Final = quote("s3://other-bucket/litellm-bedrock-files/job-123/input.jsonl", safe="")
+
+    try:
+        with respx.mock:
+            response = client.delete(
+                f"/v1/files/{foreign_file_id}?model=bedrock-claude",
+                headers={"Authorization": "Bearer test-key"},
+            )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 400, response.text
+    assert "configured storage bucket" in response.json()["error"]["message"]
+
+
+def _cloud_files_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+            },
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.8-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "us-central1",
+                    "gcs_bucket_name": "my-gcs-bucket",
+                },
+            },
+        ]
+    )
+
+
+RAW_S3_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/abc/input.jsonl.out"
+RAW_GCS_FILE_ID: Final = "gs://my-gcs-bucket/litellm-vertex-files/publishers/google/models/gemini-3.8-flash/abc123"
+
+
+@pytest.mark.parametrize(
+    ("route_prefix", "raw_file_id", "model_name"),
+    (
+        ("/bedrock/v1/files", RAW_S3_FILE_ID, "bedrock-claude"),
+        ("/v1/files", RAW_S3_FILE_ID, "bedrock-claude"),
+        ("/files", RAW_S3_FILE_ID, "bedrock-claude"),
+        ("/vertex_ai/v1/files", RAW_GCS_FILE_ID, "vertex-gemini"),
+    ),
+)
+def test_delete_file_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
+    mocker: MockerFixture, monkeypatch, route_prefix: str, raw_file_id: str, model_name: str
+):
+    from urllib.parse import quote
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = _cloud_files_router()
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    afile_delete = mocker.AsyncMock()
+    monkeypatch.setattr(litellm, "afile_delete", afile_delete)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        models=["bedrock-claude", "vertex-gemini"],
+    )
+
+    try:
+        response = client.delete(
+            f"{route_prefix}/{quote(raw_file_id, safe='')}?model={model_name}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "proxy admin" in response.json()["error"]["message"]
+    afile_delete.assert_not_called()
+
+
+def test_delete_file_forwards_a_raw_cloud_id_from_a_proxy_admin_key(mocker: MockerFixture, monkeypatch):
+    from urllib.parse import quote
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = _cloud_files_router()
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_delete(**kwargs):
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id=RAW_S3_FILE_ID,
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="input.jsonl.out",
+            purpose="batch_output",
+            status="processed",
+        )
+
+    monkeypatch.setattr(litellm, "afile_delete", _mock_afile_delete)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.delete(
+            f"/bedrock/v1/files/{quote(RAW_S3_FILE_ID, safe='')}?model=bedrock-claude",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs.get("file_id") == RAW_S3_FILE_ID
+    assert captured_kwargs.get("custom_llm_provider") == "bedrock"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def _setup_managed_file_route_answering_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    """Wire the single-file routes to a managed file store that knows no file, the way the
+    managed files hook answers once a file has been deleted or was never the caller's."""
+    import litellm.proxy.proxy_server as ps
+    from fastapi import HTTPException
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    async def _file_not_found(file_id: str, **kwargs: object) -> None:
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_retrieve = mocker.AsyncMock(side_effect=_file_not_found)
+    managed_files.afile_delete = mocker.AsyncMock(side_effect=_file_not_found)
+    managed_files.afile_content = mocker.AsyncMock(side_effect=_file_not_found)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+
+def _call_managed_file_route(method: str, path: str) -> httpx.Response:
+    try:
+        return client.request(method, path, headers={"Authorization": "Bearer test-key"})
+    finally:
+        import litellm.proxy.proxy_server as ps
+
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _missing_managed_file_error(file_id: str) -> dict[str, dict[str, str | None]]:
+    return {
+        "error": {
+            "message": f"File not found: {file_id}",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "404",
+        }
+    }
+
+
+def test_create_file_reports_a_half_specified_expires_after_as_a_400(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    """A 400 raised inside the route answers with the type a 400 stands for and a JSON null
+    param, not the literal string "None" in both fields, so a client can classify it."""
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    response = client.post(
+        "/v1/files",
+        files={"file": ("mydata.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+        data={"purpose": "batch", "target_model_names": "gpt-3.5-turbo", "expires_after[anchor]": "created_at"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert "expires_after[seconds]" in error["message"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] is None
+    assert error["code"] == "400"
+
+
+def test_get_file_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
+    file_id = _unified_managed_file_id()
+
+    response = _call_managed_file_route("GET", f"/v1/files/{file_id}")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == _missing_managed_file_error(file_id)
+
+
+def test_delete_file_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
+    file_id = _unified_managed_file_id()
+
+    response = _call_managed_file_route("DELETE", f"/v1/files/{file_id}")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == _missing_managed_file_error(file_id)
+
+
+def test_get_file_content_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
+    file_id = _unified_managed_file_id()
+
+    response = _call_managed_file_route("GET", f"/v1/files/{file_id}/content")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == _missing_managed_file_error(file_id)
+
+
+def _setup_managed_file_stored_in_an_unknown_storage_backend(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    """Wire the content route to a managed file whose row names a storage backend the
+    factory does not know, which is the one in-route ProxyException on these routes."""
+    from types import SimpleNamespace
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.prisma_client = mocker.MagicMock()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    repository = mocker.MagicMock()
+    repository.table.find_first = mocker.AsyncMock(
+        return_value=SimpleNamespace(storage_backend="ftp", storage_url="ftp://bucket/file")
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.ManagedFileRepository", lambda _prisma: repository
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+
+def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_route(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    """A ProxyException raised inside the route carries its status as the string ``code``,
+    and the tail used to rebuild it as a 500 because it only read ``status_code``."""
+    _setup_managed_file_stored_in_an_unknown_storage_backend(mocker, monkeypatch, llm_router)
+
+    response = _call_managed_file_route("GET", f"/v1/files/{_unified_managed_file_id()}/content")
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["message"].startswith("Storage backend error")
+    assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")

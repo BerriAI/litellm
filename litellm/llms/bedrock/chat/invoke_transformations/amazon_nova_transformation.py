@@ -6,7 +6,7 @@ Inherits from `AmazonConverseConfig`
 Nova + Invoke API Tutorial: https://docs.aws.amazon.com/nova/latest/userguide/using-invoke-api.html
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -17,6 +17,9 @@ from litellm.types.utils import ModelResponse
 
 from ..converse_transformation import AmazonConverseConfig
 from .base_invoke_transformation import AmazonInvokeConfig
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
@@ -70,7 +73,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

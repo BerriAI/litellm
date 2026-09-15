@@ -8,14 +8,17 @@ omits each feature's routes until the feature is warmed.
 
 import asyncio
 import importlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from starlette.routing import BaseRoute, Match
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.route_priority import hot_routes_first
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, FastAPI
@@ -161,6 +164,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/callback",
             "/register",
             "/revoke",
+            "/introspect",
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),
@@ -183,6 +187,31 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="config_overrides",
         module_path="litellm.proxy.management_endpoints.config_override_endpoints",
         path_prefixes=("/config_overrides",),
+    ),
+    LazyFeature(
+        name="llm_passthrough",
+        module_path="litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
+        path_prefixes=(
+            "/anthropic/",
+            "/assemblyai/",
+            "/azure/",
+            "/azure_ai/",
+            "/bedrock/",
+            "/cohere/",
+            "/comprehendmedical",
+            "/cursor/",
+            "/eu.assemblyai/",
+            "/gemini/",
+            "/gigachat/",
+            "/milvus/",
+            "/mistral/",
+            "/openai/",
+            "/openai_passthrough/",
+            "/vertex-ai/",
+            "/vertex_ai/",
+            "/vllm/",
+            "/watsonx/",
+        ),
     ),
     LazyFeature(
         name="realtime",
@@ -294,24 +323,86 @@ class LazyFeatureMiddleware:
         # Short-circuit once every feature has loaded.
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(self._features):
             path = scope.get("path", "")
-            # Strip SERVER_ROOT_PATH so prefix matching works under a server
-            # root path. Without this, requests like /api/v1/policies/... never
-            # match the registered prefixes (/policies/...) and lazy features
-            # stay unloaded — every endpoint under them returns 404. The
+            # Strip the request's root_path so prefix matching works under a
+            # server root path. Without this, requests like /api/v1/policies/...
+            # never match the registered prefixes (/policies/...) and lazy
+            # features stay unloaded — every endpoint under them returns 404.
+            # scope["root_path"] wins over the cached env scalar: FastAPI
+            # stamps SERVER_ROOT_PATH there, and PerRequestRootPathMiddleware
+            # resolves SERVER_ROOT_PATHS prefixes there per request. The
             # `+ "/"` boundary prevents false-positive matches (e.g. /apiv2
-            # against root /api). If the path doesn't start with the prefix
-            # (e.g. a reverse proxy already stripped it), we leave it alone.
-            if self._root_path and path.startswith(self._root_path + "/"):
-                path = path[len(self._root_path) :]
+            # against root /api); a pre-stripped path is left alone.
+            root_path: Final = str(scope.get("root_path", "")).rstrip("/") or self._root_path
+            if root_path and path.startswith(root_path + "/"):
+                path = path[len(root_path) :]  # rebind-ok: local strip after the boundary check above
             for feat in self._features:
-                if feat.module_path in self._loaded:
+                if feat.module_path in self._loaded or not feat.matches(path):
                     continue
-                if feat.matches(path):
-                    await _force_load(self._fastapi_app, feat)
+                if _eager_route_wins(self._fastapi_app, feat, scope):
+                    continue
+                await _force_load(self._fastapi_app, feat, self._features)
         await self.app(scope, receive, send)
 
 
-async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
+def _lazy_slots(app: "FastAPI") -> Mapping[str, BaseRoute | None]:
+    return app.state.lazy_slots if hasattr(app.state, "lazy_slots") else MappingProxyType({})
+
+
+def reserve_lazy_slot(app: "FastAPI", name: str, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
+    """Record the route the feature's router used to be included after, so its routes
+    are spliced back in there once it loads and keep the same precedence. Anchoring on
+    the route rather than its index survives later reordering of the table."""
+    feat: Final = next(f for f in features if f.name == name)
+    anchor: Final = app.router.routes[-1] if app.router.routes else None
+    app.state.lazy_slots = MappingProxyType({**_lazy_slots(app), feat.module_path: anchor})
+
+
+def _slot_index(routes: Sequence[BaseRoute], anchor: BaseRoute | None) -> int:
+    if anchor is None:
+        return 0
+    return next((i + 1 for i, route in enumerate(routes) if route is anchor), len(routes))
+
+
+def _eager_route_wins(app: "FastAPI", feat: LazyFeature, scope: Scope) -> bool:
+    """Routes ahead of a feature's reserved slot beat its routes in Starlette's scan,
+    so a request one of them fully matches never needs the feature loaded."""
+    slots: Final = _lazy_slots(app)
+    if feat.module_path not in slots:
+        return False
+    ahead: Final = app.router.routes[: _slot_index(app.router.routes, slots[feat.module_path])]
+    return any(route.matches(scope)[0] is Match.FULL for route in ahead)
+
+
+def _in_registry_order(
+    routes: Sequence[BaseRoute],
+    lazy_routes: Mapping[str, tuple[BaseRoute, ...]],
+    features: tuple[LazyFeature, ...],
+    slots: Mapping[str, BaseRoute | None],
+) -> tuple[BaseRoute, ...]:
+    """Lazy routers land in registry order, not first-request order, so overlapping
+    paths (/openai/{endpoint:path} vs /openai/v1/realtime/calls) resolve the same
+    way no matter which feature a deployment happens to hit first. Features with a
+    reserved slot go back where they were eagerly included; the rest follow every
+    eager route."""
+    rank: Final = MappingProxyType({f.module_path: i for i, f in enumerate(features)})
+    modules: Final = tuple(sorted(lazy_routes, key=lambda m: rank.get(m, len(rank))))
+    lazy_ids: Final = frozenset(id(route) for module_path in modules for route in lazy_routes[module_path])
+    eager: Final = tuple(route for route in routes if id(route) not in lazy_ids)
+
+    def slot_of(module_path: str) -> int:
+        return _slot_index(eager, slots[module_path]) if module_path in slots else len(eager)
+
+    return tuple(
+        route
+        for index in range(len(eager) + 1)
+        for route in (
+            *(r for module_path in modules if slot_of(module_path) == index for r in lazy_routes[module_path]),
+            *eager[index : index + 1],
+        )
+    )
+
+
+async def _force_load(app: "FastAPI", feat: LazyFeature, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> bool:
     """Import + register a lazy feature exactly once per (app, module).
     Shared by the middleware and the /lazy/warm endpoint."""
     if not hasattr(app.state, "lazy_loaded"):
@@ -326,7 +417,18 @@ async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
             # mutates app.router.routes, so it stays on the loop thread.
             loop: Final = asyncio.get_running_loop()
             module: Final = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
+            before: Final = len(app.router.routes)
             feat.register_fn(app, module)
+            previous: Final[Mapping[str, tuple[BaseRoute, ...]]] = (
+                app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
+            )
+            lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]]] = MappingProxyType(
+                {**previous, feat.module_path: tuple(app.router.routes[before:])}
+            )
+            app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
+            app.router.routes[:] = hot_routes_first(  # rebind-ok: the app owns its route table
+                _in_registry_order(app.router.routes, lazy_routes, features, _lazy_slots(app))
+            )
             app.state.lazy_loaded.add(feat.module_path)
             app.openapi_schema = None
             verbose_proxy_logger.info(

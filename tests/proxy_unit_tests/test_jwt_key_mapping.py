@@ -1333,3 +1333,86 @@ def test_jwt_client_id_field_does_not_raise_on_duplicate():
         virtual_key_claim_field="new_field",
     )
     assert auth.virtual_key_claim_field == "new_field"
+
+
+# ──────────────────────────────────────────────
+# Tests: cache eviction must happen AFTER the DB write commits
+# ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_evicts_cache_after_row_is_gone():
+    """A JWT request racing the delete must not keep the removed mapping authorized.
+
+    The DB delete simulates a concurrent request re-caching the mapping mid-write.
+    If the endpoint evicts before the delete commits, that repopulated entry
+    survives until TTL and the deleted mapping stays usable.
+    """
+    from litellm.proxy._types import DeleteJWTKeyMappingRequest
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+
+    cache_key = jwt_key_mapping_cache_key("email", "user@example.com")
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(key=cache_key, value="hashed_token")
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_jwtkeymapping.find_unique.return_value = _mock_mapping()
+
+    async def concurrent_reader_repopulates(**kwargs):
+        await user_api_key_cache.async_set_cache(key=cache_key, value="hashed_token")
+        return _mock_mapping()
+
+    mock_prisma.db.litellm_jwtkeymapping.delete.side_effect = concurrent_reader_repopulates
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    ):
+        result = await delete_jwt_key_mapping(
+            data=DeleteJWTKeyMappingRequest(id="mapping-1"),
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert result == {"status": "success"}
+    assert await user_api_key_cache.async_get_cache(cache_key) is None
+
+
+@pytest.mark.asyncio
+async def test_update_evicts_old_and_new_cache_keys_after_write():
+    """Renaming a mapping's claim must leave neither claim serving stale cache.
+
+    The DB update simulates a concurrent request re-caching the OLD mapping
+    mid-write. Both the old claim's entry (would restore the pre-rename token)
+    and the new claim's __NO_MAPPING__ sentinel (would 403 the renamed claim)
+    must be gone once the endpoint returns.
+    """
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+
+    old_cache_key = jwt_key_mapping_cache_key("email", "user@example.com")
+    new_cache_key = jwt_key_mapping_cache_key("email", "renamed@example.com")
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(key=old_cache_key, value="hashed_token")
+    await user_api_key_cache.async_set_cache(key=new_cache_key, value="__NO_MAPPING__")
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_jwtkeymapping.find_unique.return_value = _mock_mapping()
+
+    async def concurrent_reader_repopulates(**kwargs):
+        await user_api_key_cache.async_set_cache(key=old_cache_key, value="hashed_token")
+        return _mock_mapping(claim_value="renamed@example.com")
+
+    mock_prisma.db.litellm_jwtkeymapping.update.side_effect = concurrent_reader_repopulates
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    ):
+        result = await update_jwt_key_mapping(
+            data=UpdateJWTKeyMappingRequest(id="mapping-1", jwt_claim_value="renamed@example.com"),
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert result.jwt_claim_value == "renamed@example.com"
+    assert await user_api_key_cache.async_get_cache(old_cache_key) is None
+    assert await user_api_key_cache.async_get_cache(new_cache_key) is None

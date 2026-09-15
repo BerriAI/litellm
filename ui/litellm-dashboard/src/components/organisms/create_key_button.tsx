@@ -13,29 +13,21 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
-import { SearchSelect } from "@/components/shared/SearchSelect";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { ChevronDown, Info } from "lucide-react";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
+import SkillSelector from "../skills/SkillSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
@@ -70,7 +62,6 @@ import {
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import {
@@ -128,14 +119,18 @@ interface McpToolPermissionsFieldProps {
 }
 
 const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ accessToken, control, setValue }) => {
-  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as { servers?: string[] } | undefined;
+  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as
+    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
+    | undefined;
   const toolPermissions = useWatch({ control, name: "mcp_tool_permissions" }) as Record<string, string[]> | undefined;
 
   return (
     <div className="mt-6">
       <MCPToolPermissions
         accessToken={accessToken}
-        selectedServers={(selection?.servers || []).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
+        selectedServers={selection?.servers || []}
+        selectedAccessGroups={selection?.accessGroups || []}
+        selectedToolsets={selection?.toolsets || []}
         toolPermissions={toolPermissions || {}}
         onChange={(toolPerms) => setValue("mcp_tool_permissions", toolPerms)}
       />
@@ -167,12 +162,6 @@ interface User {
   user_id: string;
   user_email: string;
   role?: string;
-}
-
-interface UserOption {
-  label: string;
-  value: string;
-  user: User;
 }
 
 export const fetchTeamModels = async (
@@ -270,7 +259,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userOptions, setUserOptions] = useState<SearchSelectOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const latestUserSearchRef = useRef(0);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
@@ -349,7 +338,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -588,10 +577,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       if (!isLatestSearch()) return;
 
       const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
+      const options: SearchSelectOption[] = data.map((user) => ({
         label: `${user.user_email} (${user.user_id})`,
         value: user.user_id,
-        user,
       }));
 
       setUserOptions(options);
@@ -603,38 +591,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const handleUserSearch = useDebouncedCallback((text: string) => fetchUsers(text), { wait: DEBOUNCE_WAIT_MS });
-
-  const changeOrganization = (write: FieldWrite) => (orgId: string) => {
+  const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
     write(orgId);
-    setSelectedOrganizationId(orgId || null);
+    setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);
-    form.setValue("team_id", undefined);
-    form.setValue("project_id", undefined);
+    form.setValue("team_id", null);
+    form.setValue("project_id", null);
   };
 
   const selectTeam = (team: Team | null) => {
     setSelectedCreateKeyTeam(team);
     setSelectedProjectId(null);
-    form.setValue("project_id", undefined);
+    form.setValue("project_id", null);
     // Auto-populate org from team for non-admin users
     if (team?.organization_id) {
       setSelectedOrganizationId(team.organization_id);
       form.setValue("organization_id", team.organization_id);
     } else if (!team) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
-  const changeProject = (write: FieldWrite) => (projectId: string) => {
+  const changeProject = (write: FieldWrite) => (projectId: string | null) => {
     write(projectId);
     if (!projectId) {
       setSelectedProjectId(null);
       setSelectedCreateKeyTeam(null);
-      form.setValue("team_id", undefined);
+      form.setValue("team_id", null);
       return;
     }
     setSelectedProjectId(projectId);
@@ -736,36 +722,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <div>
                         <div className="mb-2 flex">
-                          <Combobox
-                            items={userOptions}
-                            value={userOptions.find((option) => option.value === control.value) ?? null}
-                            filter={null}
-                            onValueChange={(option: UserOption | null) => control.onChange(option?.value)}
-                            onInputValueChange={handleUserSearch}
-                            isItemEqualToValue={(a: UserOption, b: UserOption) => a.value === b.value}
-                            itemToStringLabel={(option: UserOption) => option.label}
-                          >
-                            <ComboboxInput
-                              id={control.id}
-                              className="w-full"
-                              placeholder="Type email to search for users"
-                              aria-required={control["aria-required"]}
-                              aria-invalid={control["aria-invalid"]}
-                              aria-describedby={control["aria-describedby"]}
-                              showClear={control.value != null && control.value !== ""}
-                              onBlur={control.onBlur}
-                            />
-                            <ComboboxContent>
-                              <ComboboxEmpty>{userSearchLoading ? "Searching..." : "No users found"}</ComboboxEmpty>
-                              <ComboboxList>
-                                {(option: UserOption) => (
-                                  <ComboboxItem key={option.value} value={option} title={option.label}>
-                                    {option.label}
-                                  </ComboboxItem>
-                                )}
-                              </ComboboxList>
-                            </ComboboxContent>
-                          </Combobox>
+                          <PaginatedSearchSelect
+                            options={userOptions}
+                            value={typeof control.value === "string" ? control.value : undefined}
+                            onValueChange={control.onChange}
+                            onSearchChange={fetchUsers}
+                            isLoading={userSearchLoading}
+                            placeholder="Type email to search for users"
+                            emptyText="No users found"
+                            loadingText="Searching..."
+                            inputId={control.id}
+                            aria-required={control["aria-required"] === "true" ? true : undefined}
+                            aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
+                            aria-describedby={control["aria-describedby"]}
+                          />
                           <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
                             Create User
                           </Button>
@@ -786,8 +756,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       inputId="create-key-agent"
                       placeholder="Select an agent"
                       emptyText="No agents found"
-                      value={selectedAgentId ?? undefined}
-                      onValueChange={(value) => setSelectedAgentId(value === "" ? null : value)}
+                      value={selectedAgentId}
+                      onValueChange={setSelectedAgentId}
                       options={agentsList.map((a) => ({
                         label: a.agent_name || a.agent_id,
                         value: a.agent_id,
@@ -813,7 +783,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <OrganizationDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       organizations={organizations}
                       loading={isOrganizationsLoading}
                       disabled={userRole !== "Admin"}
@@ -839,7 +809,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <TeamDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       onChange={control.onChange}
                       disabled={selectedProjectId !== null}
                       organizationId={selectedOrganizationId}
@@ -863,7 +833,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <ProjectDropdown
                         id={control.id}
-                        value={control.value as string | undefined}
+                        value={typeof control.value === "string" ? control.value : null}
                         projects={projects}
                         teamId={selectedCreateKeyTeam?.team_id}
                         loading={isProjectsLoading || !teams}
@@ -1051,7 +1021,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             value={control.value as string | null | undefined}
                             showNeverResets
                             placeholder="Not set"
-                            onChange={control.onChange}
+                            onChange={(next) => control.onChange(next ?? undefined)}
                           />
                         )}
                       </MountedFormField>
@@ -1582,6 +1552,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 value={control.value as AgentSelectorValue | undefined}
                                 accessToken={accessToken}
                                 placeholder="Select agents or access groups (optional)"
+                              />
+                            )}
+                          </MountedFormField>
+                        </CollapsibleContent>
+                      </Collapsible>
+
+                      <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                        <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
+                          <b>Skill Settings</b>
+                          <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="px-4 pb-3">
+                          <MountedFormField
+                            label={
+                              <span>
+                                Allowed Skills{" "}
+                                <SimpleTooltip content="Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here">
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </SimpleTooltip>
+                              </span>
+                            }
+                            name="allowed_skills"
+                            help="Select private skills this key can access in the Claude Code marketplace"
+                          >
+                            {(control) => (
+                              <SkillSelector
+                                onChange={control.onChange}
+                                value={control.value as string[] | undefined}
+                                accessToken={accessToken}
+                                placeholder="Select skills (optional)"
                               />
                             )}
                           </MountedFormField>

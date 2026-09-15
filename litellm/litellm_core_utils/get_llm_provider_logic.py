@@ -2,7 +2,7 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
-from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO, REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
@@ -125,6 +125,18 @@ def handle_anthropic_text_model_custom_llm_provider(
             return _model, "anthropic_text"
 
     return model, custom_llm_provider
+
+
+def declared_authenticating_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
+    """The authenticating provider this pair already names, or None.
+
+    get_llm_provider runs the OAuth device flow for github_copilot and chatgpt, because their
+    provider info includes the key it unlocks. For a metadata question that flow is pure hazard,
+    and for a declared pair the resolver's answer is the declaration itself, so metadata callers
+    adopt the declaration instead of resolving.
+    """
+    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
+    return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
 def get_llm_provider(
@@ -357,6 +369,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.meta.ai/v1":
                         custom_llm_provider = "meta"
                         dynamic_api_key = get_secret_str("META_API_KEY")
+                    elif endpoint == "https://gigachat.devices.sberbank.ru/api/v1":
+                        custom_llm_provider = "gigachat"
+                        dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
                     elif (json_provider := JSONProviderRegistry.get_by_base_url(endpoint)) is not None:
                         custom_llm_provider = json_provider.slug
                         dynamic_api_key = api_key if api_key is not None else get_secret_str(json_provider.api_key_env)
@@ -521,6 +536,14 @@ def get_llm_provider(
             )
 
 
+def _dashscope_family_chat_config(custom_llm_provider: str) -> "litellm.DashScopeChatConfig":
+    if custom_llm_provider == "qwencloud":
+        return litellm.QwenCloudChatConfig()
+    if custom_llm_provider == "qwen_ai_platform":
+        return litellm.QwenAIPlatformChatConfig()
+    return litellm.DashScopeChatConfig()
+
+
 def _get_openai_compatible_provider_info(
     model: str,
     api_base: str | None,
@@ -578,12 +601,15 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "bedrock_mantle":
+        from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
         (
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key, litellm_params=litellm_params, model=model
         )
+        model = split_mantle_region_prefix(model)[1]  # rebind-ok: the prefix is routing only, not a Mantle model id
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("NVIDIA_NIM_API_BASE") or "https://integrate.api.nvidia.com/v1"
@@ -770,11 +796,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.HerokuChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "dashscope":
+    elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         (
             api_base,
             dynamic_api_key,
-        ) = litellm.DashScopeChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = _dashscope_family_chat_config(custom_llm_provider)._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "modelscope":
         (
             api_base,
@@ -855,6 +881,9 @@ def _get_openai_compatible_provider_info(
         # Manus is OpenAI compatible for responses API
         api_base = api_base or get_secret_str("MANUS_API_BASE") or "https://api.manus.im"
         dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
+    elif custom_llm_provider == "gigachat":
+        api_base = api_base or get_secret_str("GIGACHAT_API_BASE") or "https://gigachat.devices.sberbank.ru/api/v1"
+        dynamic_api_key = api_key or get_secret_str("GIGACHAT_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception(f"api base needs to be a string. api_base={api_base}")

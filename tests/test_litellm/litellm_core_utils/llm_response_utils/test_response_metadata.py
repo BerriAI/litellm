@@ -5,6 +5,7 @@ Covers the callback_duration_ms timing metric that flows from the Logging object
 through _hidden_params to the x-litellm-callback-duration-ms response header.
 """
 
+import asyncio
 import datetime
 from unittest.mock import MagicMock
 
@@ -13,6 +14,7 @@ import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
+    response_timing_metrics,
     update_response_metadata,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -123,6 +125,158 @@ class TestDictResultsSkipMetadataUpdate:
 
         logging_obj._response_cost_calculator.assert_not_called()
         assert "_hidden_params" not in anthropic_response
+
+    def test_update_response_metadata_keeps_timing_on_logging_obj_for_dict_results(self):
+        """LIT-5466: the /v1/messages dict cannot carry _hidden_params, so its timing
+        (the input to x-litellm-overhead-duration-ms and the SLP litellm_overhead_time_ms)
+        lands on the logging object instead - still without recomputing cost."""
+        anthropic_response = {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
+        logging_obj.caching_details = None
+
+        update_response_metadata(
+            result=anthropic_response,
+            logging_obj=logging_obj,
+            model="openai/gpt-4o-mini",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj.set_response_timing_metrics.assert_called_once_with(
+            {"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0}
+        )
+        logging_obj._response_cost_calculator.assert_not_called()
+        assert "_hidden_params" not in anthropic_response
+
+    def test_update_response_metadata_keeps_timing_for_stream_wrapper_without_hidden_params(self):
+        """The /v1/messages bridge streams a bare async generator, which cannot hold
+        _hidden_params either; when the provider duration is unknown only the total is kept."""
+
+        async def sse_stream():
+            yield b"event: message_start\n\n"
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        logging_obj.caching_details = None
+
+        async def drive():
+            stream = sse_stream()
+            try:
+                update_response_metadata(
+                    result=stream,
+                    logging_obj=logging_obj,
+                    model="openai/gpt-4o-mini",
+                    kwargs={},
+                    start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+                    end_time=datetime.datetime(2025, 1, 1, 0, 0, 0, 250000),
+                )
+            finally:
+                await stream.aclose()
+
+        asyncio.run(drive())
+
+        logging_obj.set_response_timing_metrics.assert_called_once_with({"_response_ms": 250.0})
+        logging_obj._response_cost_calculator.assert_not_called()
+
+    def test_update_response_metadata_leaves_logging_obj_alone_for_objects_with_hidden_params(self):
+        """ModelResponse keeps carrying its own timing; the logging-object carrier is not written."""
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
+        logging_obj.caching_details = None
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj.set_response_timing_metrics.assert_not_called()
+        assert result._hidden_params["litellm_overhead_time_ms"] == 100.0
+
+    def test_update_response_metadata_omits_overhead_for_completed_stream(self):
+        """LIT-5466: the Responses streaming iterator finishes the whole stream before updating
+        metadata, and the provider call it recorded stopped at the first byte."""
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"llm_api_duration_ms": 200.0}
+        logging_obj.caching_details = None
+        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+            include_overhead=False,
+        )
+
+        assert result._hidden_params["_response_ms"] == 1000.0
+        assert "litellm_overhead_time_ms" not in result._hidden_params
+
+
+class TestResponseTimingMetrics:
+    """response_timing_metrics() is the single source of _response_ms / litellm_overhead_time_ms."""
+
+    START = datetime.datetime(2025, 1, 1, 0, 0, 0)
+    END = datetime.datetime(2025, 1, 1, 0, 0, 1)
+
+    def _make_logging_obj(self, llm_api_duration_ms=None, caching_details=None):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        if llm_api_duration_ms is not None:
+            logging_obj.model_call_details["llm_api_duration_ms"] = llm_api_duration_ms
+        logging_obj.caching_details = caching_details
+        return logging_obj
+
+    def test_overhead_is_total_minus_provider_call(self):
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=900.0)
+        assert response_timing_metrics(self.START, self.END, logging_obj) == {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 100.0,
+        }
+
+    def test_overhead_omitted_when_no_provider_or_cache_duration_recorded(self):
+        logging_obj = self._make_logging_obj()
+        assert response_timing_metrics(self.START, self.END, logging_obj) == {"_response_ms": 1000.0}
+
+    def test_cache_hit_overhead_is_total_minus_cache_read(self):
+        logging_obj = self._make_logging_obj(
+            llm_api_duration_ms=900.0, caching_details={"cache_hit": True, "cache_duration_ms": 250.0}
+        )
+        assert response_timing_metrics(self.START, self.END, logging_obj) == {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 750.0,
+        }
+
+    def test_cache_miss_ignores_cache_duration(self):
+        logging_obj = self._make_logging_obj(caching_details={"cache_hit": False, "cache_duration_ms": 250.0})
+        assert response_timing_metrics(self.START, self.END, logging_obj) == {"_response_ms": 1000.0}
+
+    def test_cache_hit_without_recorded_cache_duration_falls_back_to_provider_call(self):
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=900.0, caching_details={"cache_hit": True})
+        assert response_timing_metrics(self.START, self.END, logging_obj) == {
+            "_response_ms": 1000.0,
+            "litellm_overhead_time_ms": 100.0,
+        }
+
+    def test_overhead_omitted_when_caller_measured_a_wider_window(self):
+        """A stream read to completion times the provider call to first byte, so the rest of the
+        stream is token generation, not LiteLLM overhead."""
+        logging_obj = self._make_logging_obj(llm_api_duration_ms=200.0)
+        assert response_timing_metrics(self.START, self.END, logging_obj, include_overhead=False) == {
+            "_response_ms": 1000.0
+        }
 
 
 class TestCallbackDurationInCustomHeaders:
