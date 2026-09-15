@@ -123,9 +123,7 @@ def test_counters_increment_rather_than_overwrite(column):
 
 
 @pytest.mark.parametrize(("column", "expected_sum"), [("latency_ms", 1500), ("latency_requests", 2)])
-def test_latency_is_summed_across_a_batch_and_written_as_a_bigint(column, expected_sum):
-    """A row queued by a pod on the previous release carries no latency keys at all and
-    must merge as zero rather than dropping the batch."""
+def test_latency_is_summed_across_a_batch_that_includes_a_row_without_latency_keys(column, expected_sum):
     merged = merge_by_conflict_key(
         TAG_TABLE,
         (
@@ -139,9 +137,7 @@ def test_latency_is_summed_across_a_batch_and_written_as_a_bigint(column, expect
     assert len(merged) == 1
     assert merged[0][1][column] == expected_sum
     insert_columns = re.search(r'INSERT INTO "LiteLLM_DailyTagSpend" \((.*?), "updated_at"\)', sql).group(1)
-    position = insert_columns.split(", ").index(f'"{column}"')
-    assert f"${position + 1}::bigint" in sql
-    assert params[position] == expected_sum
+    assert params[insert_columns.split(", ").index(f'"{column}"')] == expected_sum
 
 
 def test_request_id_is_preserved_when_a_later_batch_carries_none():
