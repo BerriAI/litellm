@@ -21,6 +21,63 @@ from litellm.router_strategy.complexity_router.llm_v2 import (
 )
 from litellm.router_utils.auto_router_model_naming import strategy_router_dependencies
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.router_strategy.complexity_router.selective_policy import SelectiveHead, SelectivePolicy
+
+
+def test_learned_policy_overrides_raw_gap_without_rewriting_raw_probabilities() -> None:
+    config: Final = _config().llm_v2_config
+    assert config is not None
+    policy: Final = SelectivePolicy(
+        version="test-rescue",
+        feature_schema="v2-v1",
+        target="rescue",
+        threshold=0.05,
+        heads=(SelectiveHead(constant=1),),
+    )
+    trained: Final = LLMV2Config.model_validate({**config.model_dump(), "selective_policy": policy})
+    decision: Final = trained.classify(_verdict(0.9, 0.92))
+    assert not decision.use_efficient
+    assert decision.efficient == 0.9
+    assert "selective:target=rescue" in decision.signals
+
+
+@pytest.mark.asyncio
+async def test_learned_policy_metadata_does_not_claim_unused_raw_gap_threshold() -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    policy: Final = SelectivePolicy(
+        version="test-rescue",
+        feature_schema="v2-v1",
+        target="rescue",
+        threshold=0.05,
+        heads=(SelectiveHead(constant=1),),
+    )
+    config: Final = _config(llm_v2_config={**base.model_dump(), "selective_policy": policy.model_dump()})
+    router, _ = _router(_verdict().model_dump_json(), config)
+    result: Final = await router.async_pre_routing_hook(
+        model="v2-router", messages=[{"role": "user", "content": "Fix nested behavior"}], request_kwargs={}
+    )
+    assert result is not None and result.model == "capable"
+    decision: Final = result.routing_decision
+    assert decision is not None
+    assert decision["classifier_efficient_p_solve"] == 0.9
+    assert decision["classifier_capable_p_solve"] == 0.92
+    assert "classifier_max_quality_gap" not in decision
+    assert "selective:target=rescue" in decision["signals"]
+
+
+def test_learned_policy_rejects_another_classifier_feature_schema() -> None:
+    config: Final = _config().llm_v2_config
+    assert config is not None
+    policy: Final = SelectivePolicy(
+        version="wrong-schema",
+        feature_schema="cap-v1",
+        target="rescue",
+        threshold=0.05,
+        heads=(SelectiveHead(constant=1),),
+    )
+    with pytest.raises(ValidationError, match="v2-v1"):
+        LLMV2Config.model_validate({**config.model_dump(), "selective_policy": policy})
 
 
 def _config(**overrides: object) -> ComplexityRouterConfig:
@@ -62,6 +119,54 @@ def _response(content: str) -> ModelResponse:
     response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": content}}])
     response._hidden_params = {"response_cost": 0.001}
     return response
+
+
+def test_task_calibration_changes_only_matching_demands_and_survives_serialization() -> None:
+    base: Final = _config().llm_v2_config
+    assert base is not None
+    config: Final = LLMV2Config.model_validate(
+        {
+            **base.model_dump(),
+            "calibration": {
+                "version": "sonnet-opus-high-test",
+                "prompt_version": "llm-v2-1",
+                "efficient": {
+                    "slope": 1.0,
+                    "intercept": 0.0,
+                    "offsets": [{"feature": "scope:coupled", "intercept": -2.0}],
+                },
+                "capable": {"slope": 1.0, "intercept": 0.0},
+            },
+        }
+    )
+    restored: Final = LLMV2Config.model_validate_json(config.model_dump_json())
+    coupled: Final = restored.classify(_verdict())
+    localized: Final = restored.classify(
+        LLMV2Verdict.model_validate(
+            {
+                **_verdict().model_dump(),
+                "demands": {"reasoning": "multistep", "scope": "localized", "specification": "clear"},
+            }
+        )
+    )
+    assert not coupled.use_efficient
+    assert localized.use_efficient
+    assert localized.efficient == pytest.approx(0.9)
+    assert coupled.capable == localized.capable == pytest.approx(0.92)
+    assert coupled.efficient == pytest.approx(0.5491469396)
+
+
+@pytest.mark.parametrize(
+    "offsets",
+    [
+        [{"feature": "scope:coupled", "intercept": 1.0}] * 2,
+        [{"feature": "scope:invented", "intercept": 1.0}],
+        [{"feature": "scope:coupled", "intercept": float("nan")}],
+    ],
+)
+def test_task_calibration_rejects_unusable_offsets(offsets: list[dict[str, object]]) -> None:
+    with pytest.raises(ValidationError):
+        LLMV2ProbabilityCalibration.model_validate({"slope": 1.0, "intercept": 0.0, "offsets": offsets})
 
 
 def _router(content: str, config: ComplexityRouterConfig | None = None) -> tuple[ComplexityRouter, MagicMock]:

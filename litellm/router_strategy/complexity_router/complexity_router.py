@@ -1033,7 +1033,7 @@ def _with_llm_v2_forecast(
         **decision,
         "classifier_efficient_p_solve": forecast.verdict.forecasts.efficient.p_solve,
         "classifier_capable_p_solve": forecast.verdict.forecasts.capable.p_solve,
-        "classifier_max_quality_gap": forecast.max_quality_gap,
+        **({"classifier_max_quality_gap": forecast.max_quality_gap} if forecast.selective_decision is None else {}),
         "classifier_prompt_version": LLM_V2_PROMPT_VERSION,
     }
     if forecast.calibration_version is None:
@@ -2388,48 +2388,46 @@ class ComplexityRouter(CustomLogger):
 
     async def _call_classifier_model(
         self,
-        messages_for_call: list[AllMessageValues],  # mutable-ok: provider SDK requires a concrete message list
+        messages_for_call: list[AllMessageValues],  # mutable-ok: SDKs require a list
         request_kwargs: Mapping[str, object] | None,
-        max_output_tokens: int | None = None,
         encrypted_task: Mapping[str, object] | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, float | None]:
-        """Execute one structured classifier call with the router's shared safeguards."""
         llm_config: Final = self.config.classifier_llm_config
-        response_format: Final = self._classifier_response_format
-        if llm_config is None or response_format is None:
+        classifier_response_format: Final = self._classifier_response_format
+        if llm_config is None or classifier_response_format is None:
             raise ValueError("classifier_llm_config is not set")
-
-        request_values: Final = request_kwargs or EMPTY_MAPPING
-        request_metadata = request_values.get("litellm_metadata") or request_values.get("metadata")
+        request: Final[Mapping[str, object]] = request_kwargs or MappingProxyType({})
+        request_metadata: Final = TypeAdapter(Mapping[str, object] | None).validate_python(
+            request.get("litellm_metadata") or request.get("metadata")
+        )
         metadata: Final = {  # mutable-ok: SDK metadata kwarg is enriched by the request pipeline
             **forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
             INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
         }
-        classifier_call_params: Final = (
+        turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
+
+        response_format: Final = classifier_response_format
+        classifier_call_params: Final[Mapping[str, str]] = (
             MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
             if llm_config.reasoning_effort is not None
-            else EMPTY_MAPPING
+            else MappingProxyType({})
         )
-        classifier_payload: Final = (
+
+        base_payload: Final = (
             self._native_classifier_payload(messages_for_call, response_format, encrypted_task)
             if encrypted_task is not None
             else MappingProxyType(
                 {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
             )
         )
-        payload: Final = MappingProxyType(
-            {
-                **classifier_payload,
-                **(
-                    MappingProxyType(
-                        {"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens}
-                    )
-                    if max_output_tokens is not None
-                    else EMPTY_MAPPING
-                ),
-            }
+        token_limit: Final[Mapping[str, int]] = (
+            MappingProxyType({"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens})
+            if max_output_tokens is not None
+            else MappingProxyType({})
         )
-        proxy_server_request: Final = {
+        payload: Final = MappingProxyType({**base_payload, **token_limit})
+        proxy_server_request: Final = {  # mutable-ok: logging SDK enriches this request dictionary
             "originating_request_masked": masked_originating_request(request_kwargs),
             "body": {"model": llm_config.model, **payload},  # mutable-ok: logging SDK expects a JSON request body
         }
@@ -2449,7 +2447,7 @@ class ComplexityRouter(CustomLogger):
                 disable_fallbacks=True,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
-                turn_off_message_logging=_effective_turn_off_message_logging(request_kwargs),
+                turn_off_message_logging=turn_off_message_logging,
                 **payload,
                 **_parent_session_kwargs(request_kwargs),
             ),

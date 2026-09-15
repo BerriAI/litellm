@@ -7,11 +7,16 @@ from dataclasses import dataclass
 from sys import float_info
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StringConstraints, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StringConstraints, TypeAdapter, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # legacy output validated below
+)
+from litellm.router_strategy.complexity_router.selective_policy import (
+    SelectiveDecision,
+    SelectivePolicy,
+    verdict_features,
 )
 
 ShortText: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)]
@@ -110,15 +115,46 @@ class LLMV2Verdict(BaseModel):
     forecasts: LLMV2SolverForecasts
 
 
+class LLMV2CalibrationOffset(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    feature: Literal[
+        "reasoning:routine",
+        "reasoning:multistep",
+        "reasoning:open_ended",
+        "reasoning:unknown",
+        "scope:localized",
+        "scope:coupled",
+        "scope:broad",
+        "scope:unknown",
+        "specification:clear",
+        "specification:ambiguous",
+        "specification:unknown",
+        "verification:relevant",
+        "verification:partial",
+        "verification:unavailable",
+        "verification:unknown",
+    ]
+    intercept: float = Field(ge=-5.0, le=5.0, allow_inf_nan=False)
+
+
 class LLMV2ProbabilityCalibration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     slope: float = Field(gt=0.0, allow_inf_nan=False)
     intercept: float = Field(allow_inf_nan=False)
+    offsets: tuple[LLMV2CalibrationOffset, ...] = Field(default=(), max_length=15)
 
-    def calibrate(self, probability: float) -> float:
+    @model_validator(mode="after")
+    def _validate_unique_features(self) -> LLMV2ProbabilityCalibration:
+        if len(frozenset(offset.feature for offset in self.offsets)) != len(self.offsets):
+            raise ValueError("offsets must contain unique demand features")
+        return self
+
+    def calibrate(self, probability: float, features: tuple[str, ...] = ()) -> float:
         clipped: Final = min(max(probability, 1e-6), 1.0 - 1e-6)
-        logit: Final = self.slope * math.log(clipped / (1.0 - clipped)) + self.intercept
+        adjustment: Final = sum(offset.intercept for offset in self.offsets if offset.feature in features)
+        logit: Final = self.slope * math.log(clipped / (1.0 - clipped)) + self.intercept + adjustment
         if logit >= 0:
             return 1.0 / (1.0 + math.exp(-logit))
         exponential: Final = math.exp(logit)
@@ -146,6 +182,17 @@ class LLMV2Config(BaseModel):
     max_output_tokens: int = Field(default=1024, ge=1)
     response_format: Literal["json_schema", "json_object"] = "json_schema"
     calibration: LLMV2Calibration | None = None
+    selective_policy: SelectivePolicy | None = None
+    empirical_supplement: str | None = Field(default=None, min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def _validate_selective_policy(self) -> LLMV2Config:
+        if self.selective_policy is not None:
+            if self.selective_policy.feature_schema != "v2-v1":
+                raise ValueError("LLM V2 requires a v2-v1 selective policy")
+            if self.calibration is not None:
+                raise ValueError("selective_policy and calibration are mutually exclusive")
+        return self
 
     def system_prompt(self, efficient_model: str, capable_model: str) -> str:
         profiles: Final[_SolverProfiles] = {
@@ -159,17 +206,44 @@ class LLMV2Config(BaseModel):
             if self.response_format == "json_object"
             else ""
         )
-        return LLM_V2_SYSTEM_PROMPT + "\n\nConfigured solver profiles:\n" + json.dumps(profiles) + schema
+        return (
+            LLM_V2_SYSTEM_PROMPT
+            + "\n\nConfigured solver profiles:\n"
+            + json.dumps(profiles)
+            + (self.empirical_supplement or "")
+            + schema
+        )
 
     def classify(self, verdict: LLMV2Verdict) -> LLMV2Decision:
         efficient: Final = verdict.forecasts.efficient.p_solve
         capable: Final = verdict.forecasts.capable.p_solve
+        features: Final = (
+            f"reasoning:{verdict.demands.reasoning}",
+            f"scope:{verdict.demands.scope}",
+            f"specification:{verdict.demands.specification}",
+            f"verification:{verdict.verification}",
+        )
         return LLMV2Decision(
             verdict=verdict,
-            efficient=self.calibration.efficient.calibrate(efficient) if self.calibration else efficient,
-            capable=self.calibration.capable.calibrate(capable) if self.calibration else capable,
+            efficient=self.calibration.efficient.calibrate(efficient, features) if self.calibration else efficient,
+            capable=self.calibration.capable.calibrate(capable, features) if self.calibration else capable,
             max_quality_gap=self.max_quality_gap,
             calibration_version=self.calibration.version if self.calibration else None,
+            selective_decision=self.selective_policy.evaluate(
+                verdict_features(
+                    verdict.crux,
+                    {
+                        "p_e": efficient,
+                        "p_s": capable,
+                        "gap": capable - efficient,
+                        **{feature: 1.0 for feature in features},
+                    },
+                ),
+                efficient,
+                capable,
+            )
+            if self.selective_policy is not None
+            else None,
         )
 
 
@@ -180,9 +254,12 @@ class LLMV2Decision:
     capable: float
     max_quality_gap: float
     calibration_version: str | None
+    selective_decision: SelectiveDecision | None = None
 
     @property
     def use_efficient(self) -> bool:
+        if self.selective_decision is not None:
+            return self.selective_decision.use_efficient
         return self.capable - self.efficient <= self.max_quality_gap + float_info.epsilon
 
     @property
@@ -199,6 +276,7 @@ class LLMV2Decision:
             f"llm-v2:capable={self.capable:.6f}",
             f"llm-v2:max-quality-gap={self.max_quality_gap:.6f}",
             f"llm-v2:calibration={self.calibration_version or 'none'}",
+            *(self.selective_decision.signals if self.selective_decision is not None else ()),
         )
 
 
