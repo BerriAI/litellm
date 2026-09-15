@@ -4651,9 +4651,13 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
 @pytest.mark.parametrize("filter_name", [
     "get_non_default_completion_params", "get_non_default_transcription_params", "filter_out_litellm_params",
 ])
-def test_scoped_weights_are_excluded_from_provider_params(filter_name: str) -> None:
+@pytest.mark.parametrize(
+    "internal",
+    [{"_router_weights": {"group": {"deployment": 100}}}, {"_litellm_addressed_response_id": "resp_private"}],
+)
+def test_internal_metadata_is_excluded_from_provider_params(filter_name: str, internal: dict[str, object]) -> None:
     filtered = getattr(litellm.utils, filter_name)(
-        {"provider_option": "kept", "_router_weights": {"group": {"deployment": 100}}}
+        {"provider_option": "kept", **internal}
     )
     assert filtered == {"provider_option": "kept"}
 

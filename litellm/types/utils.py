@@ -3778,6 +3778,7 @@ all_litellm_params = (
         "aembedding",
         "allm_passthrough_route",
         "_litellm_strip_stream_usage",
+        "_litellm_addressed_response_id",
         "use_client",
         "id",
         "fallbacks",
