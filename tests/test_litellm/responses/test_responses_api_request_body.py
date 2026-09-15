@@ -246,8 +246,10 @@ async def test_aresponses_keeps_include_obfuscation_in_stream_options():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, "true"])
 async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service_tier(
     monkeypatch,
+    drop_params,
 ):
     """
     Request-level drop_params=True (as the proxy injects for agentic CLIs) must
@@ -271,7 +273,7 @@ async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service
             aws_region_name="us-east-1",
             input="hi",
             service_tier="priority",
-            drop_params=True,
+            drop_params=drop_params,
         )
 
         mock_post.assert_called_once()

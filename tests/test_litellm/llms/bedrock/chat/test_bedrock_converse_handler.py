@@ -6,16 +6,21 @@ extension, and AWS credential resolution is stubbed so nothing reaches STS.
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import boto3
 import httpx
 import pytest
 
 from botocore.credentials import Credentials
+from botocore.exceptions import ClientError
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import chat_completions as bridge
 from litellm.types.utils import ModelResponse
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 RUST_RESPONSE = {
     "created": 1_700_000_000,
@@ -48,7 +53,7 @@ RESOLVED_CREDENTIALS = Credentials(
 
 @pytest.fixture(autouse=True)
 def reset_bridge(monkeypatch):
-    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    monkeypatch.setenv("LITELLM_RUST", "1")
     bridge.set_rust_chat_completions(
         chat_completions=None, achat_completions=None, decline=None
     )
@@ -87,7 +92,7 @@ def _completion_kwargs(**overrides):
         "optional_params": {"maxTokens": 16},
         "acompletion": False,
         "timeout": 30.0,
-        "litellm_params": {"rust": True},
+        "litellm_params": {},
         "extra_headers": None,
         "client": None,
         "api_key": None,
@@ -157,7 +162,8 @@ def test_the_core_receives_the_untranslated_openai_messages():
     ]
 
 
-def test_without_the_opt_in_the_core_is_never_consulted():
+def test_without_the_opt_in_the_core_is_never_consulted(monkeypatch):
+    monkeypatch.setenv("LITELLM_RUST", "0")
     seen = _inject()
     try:
         _run(litellm_params={})
@@ -307,7 +313,9 @@ CONVERSE_RESPONSE = {
 }
 
 
-async def _drive_async_completion(*, skip_pre_call_logging: bool, logging_obj):
+async def _drive_async_completion(
+    *, skip_pre_call_logging: bool, logging_obj, credentials: Credentials = RESOLVED_CREDENTIALS
+):
     """Run the real `async_completion` with a stubbed transport."""
     import httpx as _httpx
 
@@ -334,7 +342,7 @@ async def _drive_async_completion(*, skip_pre_call_logging: bool, logging_obj):
         stream=None,
         optional_params={"maxTokens": 16},
         litellm_params={"aws_region_name": "us-west-2"},
-        credentials=RESOLVED_CREDENTIALS,
+        credentials=credentials,
         headers={},
         client=client,
         skip_pre_call_logging=skip_pre_call_logging,
@@ -354,6 +362,23 @@ async def test_async_completion_logs_pre_call_by_default():
     logging_obj = MagicMock()
     await _drive_async_completion(skip_pre_call_logging=False, logging_obj=logging_obj)
     assert logging_obj.pre_call.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_completion_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: botocore refreshes expiring credentials inside SigV4 signing with a
+    blocking HTTP call, so `async_completion` must sign on a worker thread to keep the loop serving."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    probe = EventLoopProbe()
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+
+    response = await _drive_async_completion(
+        skip_pre_call_logging=False, logging_obj=MagicMock(), credentials=probe.credentials()
+    )
+    await release
+
+    assert response.choices[0].message.content == "hi"
+    assert probe.served_during_refresh is True
 
 
 def _sync_client_returning_converse_response():
@@ -401,9 +426,10 @@ def test_pre_call_logging_fires_once_when_the_sync_rust_path_declines():
     assert logging_obj.pre_call.call_count == 1
 
 
-def test_the_sync_python_path_still_logs_pre_call_without_the_opt_in():
+def test_the_sync_python_path_still_logs_pre_call_without_the_opt_in(monkeypatch):
     """The suppression must not swallow the log on a request the gate declined,
     so a deployment with no `rust` flag keeps exactly the log it always had."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
     logging_obj = MagicMock()
     response = _run(
         logging_obj=logging_obj,
@@ -491,6 +517,7 @@ def test_bearer_token_auth_serves_when_boto3_resolves_no_sigv4_credentials(monke
     """With only `AWS_BEARER_TOKEN_BEDROCK` configured boto3 resolves no
     credentials at all. Preparing the Rust handoff must not dereference that
     None: the bearer token signs the request on its own."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
     client = _sync_client_returning_converse_response()
 
@@ -520,6 +547,7 @@ def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, co
     """The deployment's AWS profile does not exist, so resolving SigV4 credentials
     raises; a bearer-token deployment must still serve the request, since the
     bearer token alone signs it."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
     if configured_through == "env_var":
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
     else:
@@ -537,3 +565,54 @@ def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, co
 
     assert response.choices[0].message.content == "hi"
     assert client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer bedrock-bearer-token"
+
+
+def test_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
+    """The tagged STS session signs the Converse call and the tags never reach the request body (#34069)."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if list(params.get("Tags", ())) != tags:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIACONVERSETAGGED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(minutes=30),
+                }
+            }
+
+    client = _sync_client_returning_converse_response()
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        response = BedrockConverseLLM().completion(
+            **_completion_kwargs(
+                optional_params={
+                    "maxTokens": 16,
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "AKIACONVERSECALLER",
+                    "aws_secret_access_key": "pod-caller-secret",
+                    "aws_role_name": "arn:aws:iam::999999999999:role/litellm-converse-role",
+                    "aws_session_name": "litellm-converse-session",
+                    "aws_session_tags": tags,
+                },
+                litellm_params={},
+                client=client,
+            )
+        )
+
+    assert response.choices[0].message.content == "hi"
+    sent = client.post.call_args.kwargs
+    assert "Credential=ASIACONVERSETAGGED/" in sent["headers"]["Authorization"]
+    assert "aws_session_tags" not in sent["data"]
