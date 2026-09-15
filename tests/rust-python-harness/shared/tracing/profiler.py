@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import sys
 import threading
-from collections.abc import Generator, Iterator, Mapping
+import warnings
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -32,6 +33,7 @@ class PythonProfiler:
         self._source_root: Final = str(source_root.resolve()) + "/"
         self._seen_frames: Final[set[FrameType]] = set()
         self._event_ids: Final[dict[FrameType, int]] = {}
+        self._lock: Final = threading.Lock()
         self.events: Final[list[FunctionTraceEvent]] = []
 
     def __call__(self, frame: FrameType, event: str, _arg: object) -> None:
@@ -40,14 +42,15 @@ class PythonProfiler:
         function_name: Final = self.function_name(frame)
         if function_name is None:
             return
-        event_id: Final = len(self.events)
-        parent_id: Final = next(
-            (self._event_ids[ancestor] for ancestor in _frame_ancestors(frame) if ancestor in self._event_ids),
-            None,
-        )
-        self._seen_frames.add(frame)
-        self._event_ids[frame] = event_id
-        self.events.append(FunctionTraceEvent(id=event_id, parent_id=parent_id, function=function_name))
+        with self._lock:
+            event_id: Final = len(self.events)
+            parent_id: Final = next(
+                (self._event_ids[ancestor] for ancestor in _frame_ancestors(frame) if ancestor in self._event_ids),
+                None,
+            )
+            self._seen_frames.add(frame)
+            self._event_ids[frame] = event_id
+            self.events.append(FunctionTraceEvent(id=event_id, parent_id=parent_id, function=function_name))
 
     def function_name(self, frame: FrameType) -> str | None:
         code: Final = frame.f_code
@@ -137,19 +140,49 @@ def _frame_ancestors(frame: FrameType) -> Generator[FrameType]:
 
 
 @contextmanager
-def profile_python(source_root: Path, *, threads: bool = False) -> Generator[PythonProfiler]:
-    profiler: Final = PythonProfiler(source_root)
+def _installed_profiler(profiler: Callable[[FrameType, str, object], None], *, threads: bool) -> Generator[None]:
+    if threads and sys.version_info >= (3, 12):
+        tool_id: Final = next((slot for slot in (2, 3, 4, 0, 1, 5) if sys.monitoring.get_tool(slot) is None), None)
+        if tool_id is None:
+            raise RuntimeError("no sys.monitoring tool ID is available for Python trace collection")
+
+        def started(_code: CodeType, _offset: int) -> None:
+            profiler(sys._getframe(1), "call", None)
+
+        sys.monitoring.use_tool_id(tool_id, "litellm-python-trace")
+        try:
+            sys.monitoring.register_callback(tool_id, sys.monitoring.events.PY_START, started)
+            sys.monitoring.set_events(tool_id, sys.monitoring.events.PY_START)
+            yield
+        finally:
+            sys.monitoring.set_events(tool_id, 0)
+            sys.monitoring.register_callback(tool_id, sys.monitoring.events.PY_START, None)
+            sys.monitoring.free_tool_id(tool_id)
+        return
+    if threads:
+        warnings.warn(
+            "Python <3.12 cannot trace existing worker threads; use Python 3.12+ for complete threaded traces",
+            RuntimeWarning,
+            stacklevel=3,
+        )
     previous_thread: Final = threading.getprofile()
     if threads:
         threading.setprofile(profiler)
     previous: Final = sys.getprofile()
     sys.setprofile(profiler)
     try:
-        yield profiler
+        yield
     finally:
         sys.setprofile(previous)
         if threads:
             threading.setprofile(previous_thread)
+
+
+@contextmanager
+def profile_python(source_root: Path, *, threads: bool = False) -> Generator[PythonProfiler]:
+    profiler: Final = PythonProfiler(source_root)
+    with _installed_profiler(profiler, threads=threads):
+        yield profiler
 
 
 @contextmanager
@@ -160,14 +193,5 @@ def profile_python_function_usage(
     threads: bool = False,
 ) -> Generator[PythonFunctionUsageProfiler]:
     profiler: Final = PythonFunctionUsageProfiler(source_root, functions)
-    previous_thread: Final = threading.getprofile()
-    if threads:
-        threading.setprofile(profiler)
-    previous: Final = sys.getprofile()
-    sys.setprofile(profiler)
-    try:
+    with _installed_profiler(profiler, threads=threads):
         yield profiler
-    finally:
-        sys.setprofile(previous)
-        if threads:
-            threading.setprofile(previous_thread)

@@ -16,6 +16,7 @@ longer signal it.
 
 ### Added
 
+- **team_member_add**: `tpm_limit`, `rpm_limit`, `budget_duration`, and `allowed_models` attributes on `litellm_team_member_add`, applied to every member of the resource; `budget_duration` and `allowed_models` ride on `/team/member_add`, while the limits are sent through `/team/member_update`, which is where the proxy accepts them
 - **team**: Optional `team_id` argument on `litellm_team`, so teams can be created with a stable, human-readable ID instead of a provider-generated UUID; changing it forces replacement
 - **jwt_key_mapping**: New `litellm_jwt_key_mapping` resource for the proxy's JWT to virtual key mappings, so JWT clients identified by a claim (`client_id`, `azp`, `sub`) map to virtual keys and inherit their models, budgets and rate limits. Supports `description` and `is_active`, rotating the mapped key in place, and forces replacement when the claim name or value changes
 - **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
@@ -38,6 +39,9 @@ longer signal it.
 ### Fixed
 
 - **key**: An update that changes `team_id` and fails because the key was already cascade-deleted along with its previous team now recovers by recreating the key under the new team, instead of aborting the apply. The key's absence is confirmed against the proxy first, so an unrelated failure still errors out, and a `team_id` change between two teams that both still exist stays a plain in-place update
+- **credential**: create now reports a `credential_name` collision as a clear error naming the `terraform import` command that adopts the existing credential, instead of surfacing the proxy's raw 500 with a Prisma `Unique constraint failed` message. New `adopt_existing` argument (default `false`) opts into taking the existing credential over during create, which makes `apply` idempotent again once state loses track of a credential that still exists on the proxy. Requires a proxy that answers 409 on the collision; older proxies are still detected by their 500 message
+- **credential**: credential names and `model_id` are now percent-encoded in request URLs, so a name containing `/`, `?`, `#` or spaces reaches the proxy intact instead of being cut at the first reserved character and read, updated or deleted as a different credential
+- **credential**: update now sends `model_id`, so a `model_id`-scoped credential keeps resolving its values from that deployment on update and on adoption instead of being overwritten with the literal `credential_values`; needs a proxy from 1.102.0, older proxies ignore the field
 - **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
 - **key**: Read now unwraps the `info` envelope `/key/info` actually returns; previously reads mapped nothing back into state, so drift on a key was never detected
 - **key**: Read now picks up `model_rpm_limit`, `model_tpm_limit`, `guardrails`, `tags`, `enforced_params`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type` and `prompts` from `info.metadata`, where the proxy actually stores them; previously they stayed empty in state, so a matching config showed a permanent phantom diff on them and out-of-band changes to them were never detected

@@ -164,6 +164,32 @@ const STORED_LLM = {
   classifier_context_per_turn_chars: 300,
 };
 
+describe("capability classifier configuration", () => {
+  it("preserves the judge and calibrated policy through an untouched dashboard edit", () => {
+    const stored = {
+      tiers: { SIMPLE: ["efficient-model"], REASONING: ["capable-model"] },
+      classifier_type: "capability" as const,
+      classifier_llm_config: { model: "judge", timeout_ms: 30000, temperature: 0 },
+      capability_classifier_config: {
+        efficient_tier: "SIMPLE",
+        capable_tier: "REASONING",
+        base_threshold: 0.66,
+        max_output_tokens: 512,
+        response_format: "json_object",
+        calibration: { version: "fitted-v1", slope: 0.15, intercept: 0.19 },
+      },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, null);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.classifier_type).toBe("capability");
+    expect(saved.classifier_llm_config).toEqual(stored.classifier_llm_config);
+    expect(saved.capability_classifier_config).toEqual(stored.capability_classifier_config);
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("custom_dimensions");
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
   it("round-trips an untouched edit without changing the classifier context values", () => {
     const formValue = {
@@ -814,5 +840,42 @@ describe("managed keys survive an untouched open-and-save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     expect(hydrated.heuristic_first_max_tier).toBe("SIMPLE");
     expect(buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated).heuristic_first_max_tier).toBe("SIMPLE");
+  });
+});
+
+describe("LLM V2 configuration preservation", () => {
+  const v2Config = {
+    efficient_profile: "Efficient coding model",
+    capable_profile: "Capable coding model",
+    harness: "Shell access, one attempt",
+    max_quality_gap: 0.03,
+    response_format: "json_object",
+    calibration: { version: "pair-v1", prompt_version: "llm-v2-1" },
+  };
+  const stored = {
+    tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
+    classifier_type: "llm_v2" as const,
+    classifier_llm_config: { model: "judge", timeout_ms: 15000 },
+    llm_v2_config: v2Config,
+    classification_mode: "user_turn" as const,
+    adaptive: false,
+  };
+
+  it("preserves profiles and the judge when saving an existing V2 router", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, value);
+    expect(saved.classifier_type).toBe("llm_v2");
+    expect(saved.classifier_llm_config).toMatchObject(stored.classifier_llm_config);
+    expect(saved.llm_v2_config).toEqual(v2Config);
+    expect(saved.classification_mode).toBe("user_turn");
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("dimension_weights");
+  });
+
+  it("drops V2 settings when switching to a different classifier", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, { ...value, classifier_type: "heuristic" });
+    expect(saved).not.toHaveProperty("llm_v2_config");
+    expect(saved).not.toHaveProperty("classifier_llm_config");
   });
 });

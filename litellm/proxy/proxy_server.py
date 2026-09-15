@@ -250,7 +250,7 @@ import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
@@ -274,6 +274,8 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
@@ -365,6 +367,7 @@ from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
 )
+from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -473,9 +476,10 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_spend_event
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.list_api.common import (
-    PROBLEM_TYPE_BASE,
     ManagementProblem,
+    ValidationErrorDetail,
     problem_response,
+    request_validation_problem,
 )
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
@@ -598,7 +602,6 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
-from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -925,6 +928,7 @@ def cleanup_router_config_variables():
         user_custom_auth_path, \
         user_custom_key_generate, \
         user_custom_key_update, \
+        user_custom_key_policy, \
         user_custom_sso, \
         user_custom_ui_sso_sign_in_handler, \
         use_background_health_checks, \
@@ -942,6 +946,7 @@ def cleanup_router_config_variables():
     user_custom_auth_path = None
     user_custom_key_generate = None
     user_custom_key_update = None
+    user_custom_key_policy = None
     TEAM_METADATA_VALIDATOR_REGISTRY.set(None)
     TEAM_METADATA_SCHEMA_REGISTRY.set(())
     user_custom_sso = None
@@ -1784,27 +1789,13 @@ class _ExceptionRow(TypedDict, total=False):
     exception_counts: Mapping[str, int]
 
 
-class _ValidationErrorDetail(TypedDict):
-    loc: tuple[int | str, ...]
-    msg: str
-
-
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        _close_dangling_otel_server_span(request, 400, exc=exc)
-        validation_errors: Final[Sequence[_ValidationErrorDetail]] = exc.errors()
-        return problem_response(
-            ProblemDetail(
-                type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
-                title="Invalid query parameter",
-                status=400,
-                detail="; ".join(
-                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in validation_errors
-                )
-                or "The request query parameters are invalid.",
-            )
-        )
+        validation_errors: Final[Sequence[ValidationErrorDetail]] = exc.errors()
+        problem: Final = request_validation_problem(validation_errors)
+        _close_dangling_otel_server_span(request, problem.status, exc=exc)
+        return problem_response(problem)
     _close_dangling_otel_server_span(request, 422, exc=exc)
     return JSONResponse(
         status_code=422,
@@ -2366,6 +2357,7 @@ user_custom_key_generate = None
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
 user_custom_key_update = None
+user_custom_key_policy = None
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
@@ -3069,7 +3061,7 @@ async def _reconcile_budget_reservation_for_counter_update(
     budget_reservation: dict | None,
     response_cost: float | None,
 ) -> set[str]:
-    if budget_reservation is None:
+    if budget_reservation is None or budget_reservation.get("finalized") is True:
         return set()
 
     from litellm.proxy.spend_tracking.budget_reservation import (
@@ -3450,8 +3442,10 @@ async def _invalidate_spend_counter(counter_key: str):
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
     try:
         await increment_spend_counters_pipeline(pending=pending)
-    except RedisCircuitBreakerOpenError:
-        return
+    except Exception as e:
+        if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e):
+            return
+        raise
 
 
 async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> None:
@@ -4251,6 +4245,7 @@ _DB_OVERLAY_REMOTE_MODULE_STR_FIELDS: Final[dict[str, tuple[str, ...]]] = {
         "custom_auth",
         "custom_key_generate",
         "custom_key_update",
+        "custom_key_policy",
         "custom_team_metadata_validate",
         "custom_sso",
         "custom_ui_sso_sign_in_handler",
@@ -5400,6 +5395,7 @@ class ProxyConfig:
             user_custom_auth_path, \
             user_custom_key_generate, \
             user_custom_key_update, \
+            user_custom_key_policy, \
             user_custom_sso, \
             user_custom_ui_sso_sign_in_handler, \
             use_background_health_checks, \
@@ -5936,6 +5932,10 @@ class ProxyConfig:
             custom_key_update: Final = general_settings.get("custom_key_update", None)
             if custom_key_update is not None:
                 user_custom_key_update = get_instance_fn(value=custom_key_update, config_file_path=config_file_path)
+
+            custom_key_policy: Final = general_settings.get("custom_key_policy", None)
+            if custom_key_policy is not None:
+                user_custom_key_policy = get_instance_fn(value=custom_key_policy, config_file_path=config_file_path)
 
             custom_team_metadata_validate: Final = general_settings.get("custom_team_metadata_validate", None)
             TEAM_METADATA_VALIDATOR_REGISTRY.set(
@@ -7064,6 +7064,9 @@ class ProxyConfig:
 
         if "max_file_size_mb" not in self._yaml_general_settings_keys:
             general_settings["max_file_size_mb"] = _general_settings.get("max_file_size_mb")
+
+        if "allowed_file_extensions" not in self._yaml_general_settings_keys:
+            general_settings["allowed_file_extensions"] = _general_settings.get("allowed_file_extensions")
 
         if "blocked_file_extensions" not in self._yaml_general_settings_keys:
             general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
@@ -9513,6 +9516,9 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        jwt_handler.bind_agent_lookup(global_agent_registry)
 
     @classmethod
     def _add_proxy_budget_to_db(cls):
@@ -9538,6 +9544,7 @@ class ProxyStartupEvent:
         gate the first duration window.
         """
         await generate_key_helper_fn(
+            llm_router=llm_router,
             request_type="user",
             table_name="user",
             user_id=LITELLM_PROXY_BUDGET_NAME,
@@ -11893,6 +11900,13 @@ async def _release_realtime_budget_reservation(user_api_key_dict: UserAPIKeyAuth
     )
 
 
+async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth) -> None:
+    release_like_http_disconnect: Final = (
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect  # pyright: ignore[reportPrivateUsage]  # shared
+    )
+    await release_like_http_disconnect(user_api_key_dict)
+
+
 async def _reject_realtime_session(
     websocket: WebSocket,
     user_api_key_dict: UserAPIKeyAuth,
@@ -11912,6 +11926,7 @@ async def _reject_realtime_session(
         await websocket.close(code=code, reason=reason)
     finally:
         await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 @app.websocket("/openai/v1/realtime")
@@ -12015,6 +12030,9 @@ async def realtime_websocket_endpoint(
             websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
         )
         return
+    except BaseException:
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
 
     # Phase 2: route to upstream LLM.
     try:
@@ -12044,12 +12062,10 @@ async def realtime_websocket_endpoint(
         except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
     finally:
-        from litellm.litellm_core_utils.realtime_streaming import (
-            REALTIME_SESSION_SUCCESS_LOGGED_KEY,
-        )
-
         if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
             await _release_realtime_budget_reservation(user_api_key_dict)
+            if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):
+                await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
 ######################################################################
@@ -15033,6 +15049,13 @@ def _get_proxy_model_info(model: dict) -> dict:
     return _translate_model_name_for_response(model)
 
 
+def _model_info_json_response(data: Sequence[Mapping[str, object]] | Mapping[str, object]) -> Response:
+    return Response(
+        content=orjson.dumps({"data": data}, default=jsonable_encoder, option=orjson.OPT_NON_STR_KEYS),
+        media_type="application/json",
+    )
+
+
 @router.get(
     "/model/info",
     tags=["model management"],
@@ -15080,7 +15103,7 @@ async def model_info_v1(
     `model_info.direct_access` when the proxy database is connected.
 
     Returns:
-        Returns a dictionary containing information about each model.
+        A JSON response whose `data` list holds one entry per model.
 
     Example Response:
     ```json
@@ -15128,7 +15151,7 @@ async def model_info_v1(
             deployment_dict=_deployment_info_dict,
             excluded_keys={"litellm_credential_name"},
         )
-        return {"data": _deployment_info_dict}
+        return _model_info_json_response(_deployment_info_dict)
 
     if llm_model_list is None:
         raise HTTPException(
@@ -15179,7 +15202,7 @@ async def model_info_v1(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-        return {"data": single_model_list}
+        return _model_info_json_response(single_model_list)
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
     # expanded model names from get_complete_model_list(). Team-scoped rows
@@ -15247,7 +15270,7 @@ async def model_info_v1(
     visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
-    return {"data": visible_models}
+    return _model_info_json_response(visible_models)
 
 
 @router.get(
@@ -15816,10 +15839,7 @@ async def fallback_login(request: Request):
 
     from fastapi.responses import HTMLResponse
 
-    hide_default_credentials_hint: Final = (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-    )
+    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     return HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=False,
@@ -16269,6 +16289,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     global master_key, general_settings
 
     response: Final = await generate_key_helper_fn(
+        llm_router=llm_router,
         request_type="key",
         **{
             "user_role": user_obj.user_role,
@@ -17036,6 +17057,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
         "max_file_size_mb": "Integer",
+        "allowed_file_extensions": "List",
         "blocked_file_extensions": "List",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",

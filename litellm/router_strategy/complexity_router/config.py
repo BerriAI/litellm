@@ -13,7 +13,16 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SkipValidation,
+    StrictFloat,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
@@ -23,6 +32,7 @@ with warnings.catch_warnings():
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
+from .llm_v2 import LLMV2Config
 from .tier_predictor import TrainedTierArtifact
 
 
@@ -53,7 +63,7 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 # The classifier_type values that can call classifier_llm_config.model. Every consumer asking
 # "is the classifier model a real dependency of this router" resolves it here, including the ones
 # that only hold the raw config mapping and cannot reach ComplexityRouterConfig.uses_llm_classifier.
-LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first", "hybrid"})
+LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "capability", "llm_v2", "heuristic_first", "hybrid"})
 
 
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
@@ -591,6 +601,78 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
+class CapabilityCalibrationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
+    slope: StrictFloat = Field(ge=0.0, le=20.0, allow_inf_nan=False)
+    intercept: StrictFloat = Field(ge=-20.0, le=20.0, allow_inf_nan=False)
+
+    def calibrate(self, p_solve: float) -> float:
+        clipped: Final = min(max(p_solve, 1e-6), 1.0 - 1e-6)
+        log_odds: Final = self.slope * (math.log(clipped) - math.log1p(-clipped)) + self.intercept
+        return 1.0 / (1.0 + math.exp(-log_odds))
+
+
+class CapabilityClassifierConfig(BaseModel):
+    """Switchyard-compatible probability threshold policy for two model tiers."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    efficient_tier: str = Field(
+        description="Tier used when the efficient model's forecasted solve probability meets the adjusted threshold",
+    )
+    capable_tier: str = Field(
+        description=(
+            "Higher, fail-closed tier used below the adjusted threshold or when the classifier verdict is unavailable"
+        ),
+    )
+    base_threshold: StrictFloat = Field(
+        ge=0.0,
+        le=1.0,
+        description="Lowest p_solve that routes a supported task to efficient_tier",
+    )
+    threshold_step: StrictFloat = Field(
+        default=0.0,
+        ge=0.0,
+        description=("Amount added once for uncertain or unmatched verdicts and twice for unsupported verdicts"),
+    )
+    max_output_tokens: int = Field(
+        default=4096,
+        ge=1,
+        description="Maximum completion tokens available to the capability classifier verdict",
+    )
+    calibration: CapabilityCalibrationConfig | None = Field(
+        default=None,
+        description=(
+            "Optional versioned sigmoid calibration fitted for this judge, capability card, efficient model, "
+            "and execution setup. Applies sigmoid(slope * logit(clip(p_solve, 1e-6, 1-1e-6)) + intercept) "
+            "before the threshold policy. Omit to route on the raw forecast."
+        ),
+    )
+    response_format: Literal["json_schema", "json_object"] = Field(
+        default="json_schema",
+        description=(
+            "Use json_object for judges without strict JSON Schema support. This appends the verdict schema "
+            "to the packaged system prompt; both modes validate the returned verdict identically."
+        ),
+    )
+
+    @field_validator("efficient_tier", "capable_tier")
+    @classmethod
+    def _normalize_tier(cls, value: str) -> str:
+        normalized: Final = value.strip()
+        if not normalized:
+            raise ValueError("tier must be non-empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_threshold_range(self) -> "CapabilityClassifierConfig":
+        if self.base_threshold + 2 * self.threshold_step > 1.0:
+            raise ValueError("base_threshold + 2 * threshold_step must be at most 1")
+        return self
+
+
 MAX_CUSTOM_PATTERN_REPEAT: Final[int] = 64
 MAX_CUSTOM_PATTERN_WORK: Final[int] = 2048
 MAX_CUSTOM_DIMENSIONS_WORK: Final[int] = 8192
@@ -882,14 +964,21 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first", "hybrid"] = Field(
+    classifier_type: Literal[
+        "heuristic", "heuristic_v2", "llm", "capability", "llm_v2", "custom", "heuristic_first", "hybrid"
+    ] = Field(
         default="heuristic",
         description=(
             "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
-            "an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays "
-            "for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', "
-            "which trusts the local scorer everywhere except when its score lands near a tier boundary"
+            "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, "
+            "a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
+            "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
+            "everywhere except when its score lands near a tier boundary"
         ),
+    )
+    llm_v2_config: LLMV2Config | None = Field(
+        default=None,
+        description="Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2.",
     )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
         default="ultrafeedback",
@@ -902,7 +991,15 @@ class ComplexityRouterConfig(BaseModel):
         default=None,
         description=(
             "Configuration for the LLM classifier; required when classifier_type is 'llm', "
-            "'heuristic_first' or 'hybrid'"
+            "'capability', 'heuristic_first' or 'hybrid'"
+        ),
+    )
+    capability_classifier_config: CapabilityClassifierConfig | None = Field(
+        default=None,
+        description=(
+            "Probability threshold policy required when classifier_type is 'capability'. The classifier "
+            "forecasts p_solve for efficient_tier, adjusts base_threshold using the capability-card boundary, "
+            "and otherwise routes to capable_tier"
         ),
     )
     heuristic_first_max_tier: str | None = Field(
@@ -1256,20 +1353,16 @@ class ComplexityRouterConfig(BaseModel):
     deployment_affinity: bool = Field(
         default=True,
         description=(
-            "When True and a session_id is resolvable on the request, pin the deployment chosen "
-            "inside each routed model group and reuse it whenever the session returns to that "
-            "group, without pinning which group the session routes to. Independent of "
-            "session_affinity, which pins the model group instead (and always carries this "
-            "deployment pin with it): with session_affinity off, "
-            "every turn is still classified on its own merits while a session that escalates to a "
-            "stronger tier and comes back still lands on the deployment it used before, which is "
-            "what keeps a provider prompt cache warm. Pins are held per model group, so switching "
-            "tiers does not disturb the pin left behind in the previous group. On by default "
-            "because re-shuffling a conversation across deployments of the same model discards "
-            "that cache for no benefit; set False to keep every turn load-balanced across the "
-            "group, which is what a deployment set with tight per-deployment rate limits wants. "
-            "Inert when no session_id is resolvable, since there is nothing to key a pin on, and "
-            "suppressed when plugins are configured, for the same reason session_affinity is."
+            "When True and a client session_id is resolvable, reuse the session's chosen model "
+            "for each classified tier and its deployment within each model group. With "
+            "session_affinity off, every turn is still classified: moving to another tier leaves "
+            "the previous tier's model pin intact for a later return. Pins yield to current "
+            "candidate, context, modality, and availability constraints. Adaptive selection chooses "
+            "the initial model from its eligible pool, then reuses that choice per tier. This "
+            "reduces avoidable provider prompt-cache misses; it does not guarantee cache hits. "
+            "Set False to select models and load-balance deployments on every turn, unless "
+            "session_affinity or user_turn classification requires a pin. Inert without a client "
+            "session_id and suppressed when plugins are configured."
         ),
     )
     session_affinity_ttl_seconds: int = Field(
@@ -1277,7 +1370,7 @@ class ComplexityRouterConfig(BaseModel):
         gt=0,
         description=(
             "TTL for the session affinity pin; refreshed on every cache hit. Bounds both the "
-            "session_affinity model pin and the deployment_affinity deployment pin, so it measures "
+            "session_affinity model pin and the deployment_affinity per-tier model and deployment pins, so it measures "
             "idle time for the session's routing decisions rather than total session length"
         ),
     )
@@ -1429,6 +1522,102 @@ class ComplexityRouterConfig(BaseModel):
                 f"classifier_plugin is set but classifier_type is {self.classifier_type!r}; "
                 "the plugin would never run. Set classifier_type 'custom' or remove classifier_plugin"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_capability_classifier_config(self) -> "ComplexityRouterConfig":
+        capability: Final = self.capability_classifier_config
+        if self.classifier_type != "capability":
+            if capability is not None:
+                raise ValueError(
+                    "capability_classifier_config requires classifier_type 'capability'; otherwise it has no effect"
+                )
+            return self
+        if capability is None:
+            raise ValueError("capability_classifier_config is required when classifier_type is 'capability'")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_capability_classifier_tiers(self) -> "ComplexityRouterConfig":
+        capability: Final = self.capability_classifier_config
+        if self.classifier_type != "capability" or capability is None:
+            return self
+        if self.tier_definitions is not None:
+            raise ValueError(
+                "classifier_type 'capability' uses the built-in tier map and cannot be combined with tier_definitions"
+            )
+        for field, tier in (
+            ("efficient_tier", capability.efficient_tier),
+            ("capable_tier", capability.capable_tier),
+        ):
+            if tier not in self.tier_names():
+                raise ValueError(
+                    f"{field} {tier!r} is not an active tier: it must name one of {', '.join(self.tier_names())}"
+                )
+            if not self.tiers.get(tier):
+                raise ValueError(f"{field} {tier!r} has no model configured in tiers")
+        names: Final = self.tier_names()
+        if names.index(capability.capable_tier) <= names.index(capability.efficient_tier):
+            raise ValueError("capable_tier must be a higher tier than efficient_tier")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_capability_classifier_prompt_policy(self) -> "ComplexityRouterConfig":
+        if self.classifier_type != "capability":
+            return self
+        llm_config: Final = self.classifier_llm_config
+        if llm_config is not None and (
+            llm_config.system_prompt is not None or llm_config.classification_rubric is not None
+        ):
+            raise ValueError(
+                "classifier_type 'capability' uses the packaged capability card; classifier_llm_config.system_prompt "
+                "and classification_rubric are not supported"
+            )
+        if self.classification_prompt is not None or self.classification_examples is not None:
+            raise ValueError(
+                "classifier_type 'capability' uses the packaged capability card; classification_prompt and "
+                "classification_examples are not supported"
+            )
+        if self.classifier_fallback != "heuristic":
+            raise ValueError(
+                "classifier_type 'capability' always fails closed to capable_tier; classifier_fallback cannot override it"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_llm_v2(self) -> "ComplexityRouterConfig":
+        v2: Final = self.llm_v2_config
+        if self.classifier_type != "llm_v2":
+            if v2 is not None:
+                raise ValueError("llm_v2_config requires classifier_type llm_v2")
+            return self
+        if v2 is None:
+            raise ValueError("llm_v2_config is required when classifier_type is llm_v2")
+        if self.classifier_fallback != "heuristic":
+            raise ValueError("llm_v2 always fails closed to capable_tier; classifier_fallback cannot override it")
+        llm: Final = self.classifier_llm_config
+        if self.adaptive or self.tier_definitions is not None or self.enable_non_reasoning_tier:
+            raise ValueError("llm_v2 requires two built-in tiers and adaptive=false")
+        if (
+            self.classification_prompt
+            or self.classification_examples
+            or (llm is not None and (llm.system_prompt is not None or llm.classification_rubric is not None))
+        ):
+            raise ValueError("llm_v2 uses its packaged prompt; complexity prompt overrides are not supported")
+        names: Final = tuple(tier.value for tier in self.active_tier_severity_order())
+        if v2.efficient_tier not in names or v2.capable_tier not in names:
+            raise ValueError("llm_v2 tiers must name built-in tiers")
+        if names.index(v2.efficient_tier) >= names.index(v2.capable_tier):
+            raise ValueError("llm_v2 efficient_tier must precede capable_tier")
+        if frozenset(tier for tier, models in self.tiers.items() if models) != frozenset(
+            (v2.efficient_tier, v2.capable_tier)
+        ):
+            raise ValueError("llm_v2 requires exactly its efficient and capable tiers")
+        pools: Final = tuple(
+            (models,) if isinstance(models, str) else tuple(models) for models in self.tiers.values() if models
+        )
+        if any(len(pool) != 1 or not pool[0].strip() for pool in pools) or pools[0] == pools[1]:
+            raise ValueError("llm_v2 requires one distinct model group in each tier")
         return self
 
     @model_validator(mode="after")
@@ -1694,7 +1883,7 @@ class ComplexityRouterConfig(BaseModel):
         )
         if duplicated:
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
-        if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first", "hybrid"):
+        if self.classifier_type in ("heuristic", "heuristic_v2", "capability", "heuristic_first", "hybrid"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
                 "produces the built-in tiers from SIMPLE up, as does heuristic_v2"

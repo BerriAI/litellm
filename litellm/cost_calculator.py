@@ -97,6 +97,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -813,6 +814,7 @@ def _select_model_name_for_cost_calc(
             if (
                 entry.get("input_cost_per_token") is not None
                 or entry.get("input_cost_per_second") is not None
+                or entry.get("input_cost_per_query") is not None
                 or entry.get("tiered_pricing") is not None
             ):
                 return_model = router_model_id
@@ -2277,6 +2279,19 @@ def default_video_cost_calculator(
     return 0.0
 
 
+def _batch_rate(
+    model_info: ModelInfo,
+    key: Literal[
+        "input_cost_per_audio_token_batches",
+        "input_cost_per_image_token_batches",
+        "input_cost_per_video_token_batches",
+    ],
+    fallback: float,
+) -> float:
+    rate: Final = model_info.get(key)
+    return fallback if rate is None else rate
+
+
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -2336,7 +2351,29 @@ def batch_cost_calculator(
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
     if input_cost_per_token_batches is not None:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+        batch_details: Final = parse_prompt_tokens_details(usage)
+        audio_tokens, image_tokens, video_tokens = (
+            batch_details["audio_tokens"],
+            batch_details["image_tokens"],
+            batch_details["video_tokens"],
+        )
+        modality_rates: Final = (
+            _batch_rate(model_info, "input_cost_per_audio_token_batches", input_cost_per_token_batches),
+            _batch_rate(model_info, "input_cost_per_image_token_batches", input_cost_per_token_batches),
+            _batch_rate(model_info, "input_cost_per_video_token_batches", input_cost_per_token_batches),
+        )
+        total_prompt_cost = sum(
+            tokens * rate
+            for tokens, rate in zip(
+                (
+                    max((usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens, 0),
+                    audio_tokens,
+                    image_tokens,
+                    video_tokens,
+                ),
+                (input_cost_per_token_batches, *modality_rates),
+            )
+        )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
@@ -2381,6 +2418,46 @@ def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]
     return [attr for attr in field_names if attr != "cache_creation_tokens"]
 
 
+def _combine_cached_tokens_details(
+    current: CachedTokensDetails | None, new: CachedTokensDetails
+) -> CachedTokensDetails:
+    def _sum_optional(current_value: int | None, new_value: int | None) -> int | None:
+        if current_value is None and new_value is None:
+            return None
+        return (current_value or 0) + (new_value or 0)
+
+    return CachedTokensDetails(
+        text_tokens=_sum_optional(current.text_tokens if current is not None else None, new.text_tokens),
+        audio_tokens=_sum_optional(current.audio_tokens if current is not None else None, new.audio_tokens),
+        image_tokens=_sum_optional(current.image_tokens if current is not None else None, new.image_tokens),
+    )
+
+
+def _combine_prompt_tokens_details(
+    current: PromptTokensDetailsWrapper | None, new: PromptTokensDetailsWrapper
+) -> PromptTokensDetailsWrapper:
+    base: Final = current if current is not None else PromptTokensDetailsWrapper()
+    base_values: Final = MappingProxyType(
+        {attr: getattr(base, attr) for attr in type(base).model_fields if hasattr(base, attr)}
+    )
+    summed: Final = MappingProxyType(
+        {
+            attr: (getattr(base, attr, 0) or 0) + (getattr(new, attr) or 0)
+            for attr in _summable_prompt_token_fields(new)
+            if hasattr(new, attr) and isinstance(getattr(new, attr) or 0, (int, float))
+        }
+    )
+    new_cached_tokens_details: Final = getattr(new, "cached_tokens_details", None)
+    cached_tokens_details: Final = (
+        _combine_cached_tokens_details(getattr(base, "cached_tokens_details", None), new_cached_tokens_details)
+        if isinstance(new_cached_tokens_details, CachedTokensDetails)
+        else getattr(base, "cached_tokens_details", None)
+    )
+    return PromptTokensDetailsWrapper(
+        **MappingProxyType({**base_values, **summed, "cached_tokens_details": cached_tokens_details})
+    )
+
+
 class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: list[Usage]) -> Usage:
@@ -2389,7 +2466,6 @@ class BaseTokenUsageProcessor:
         """
         from litellm.types.utils import (
             CompletionTokensDetailsWrapper,
-            PromptTokensDetailsWrapper,
             Usage,
         )
 
@@ -2408,27 +2484,10 @@ class BaseTokenUsageProcessor:
                         and isinstance(current_val, (int, float))
                     ):
                         setattr(combined, attr, current_val + new_val)
-            # Handle nested prompt_tokens_details
             if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-                if not hasattr(combined, "prompt_tokens_details") or not combined.prompt_tokens_details:
-                    combined.prompt_tokens_details = PromptTokensDetailsWrapper()
-
-                # Check what keys exist in the model's prompt_tokens_details
-                # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-                for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
-                    if (
-                        hasattr(usage.prompt_tokens_details, attr)
-                        and not attr.startswith("_")
-                        and not callable(_attribute_value(usage.prompt_tokens_details, attr))
-                    ):
-                        current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
-                        new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
-                        if new_val is not None and isinstance(new_val, (int, float)):
-                            setattr(
-                                combined.prompt_tokens_details,
-                                attr,
-                                current_val + new_val,
-                            )
+                combined.prompt_tokens_details = _combine_prompt_tokens_details(
+                    getattr(combined, "prompt_tokens_details", None), usage.prompt_tokens_details
+                )
 
             # Handle nested completion_tokens_details
             if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:

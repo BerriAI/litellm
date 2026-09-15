@@ -81,6 +81,11 @@ class WriterPinnedClient:
         self.db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) and not db.writer_unavailable else db
 
 
+def writer_wrapper(db: "PrismaWrapper | RoutingPrismaWrapper") -> PrismaWrapper:
+    """Unlike `WriterPinnedClient`, ignores `writer_unavailable`: a raw SQL write has no replica fallback."""
+    return db.writer if isinstance(db, RoutingPrismaWrapper) else db
+
+
 class RoutingPrismaWrapper:
     """
     Routes Prisma operations between a writer and a reader Prisma client.

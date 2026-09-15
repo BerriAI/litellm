@@ -15,7 +15,7 @@ import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
 import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
-import { testAutoRouterRouting } from "../networking";
+import { modelCreateCall, testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AutoRouterPreset, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
 import { BUNDLED_PRESETS, LOADED_PRESETS_QUERY, useAutoRouterPresets } from "../../../tests/mocks/autoRouterPresets";
@@ -104,6 +104,7 @@ const { validateAutoRouterConfig } = vi.hoisted(() => ({
 }));
 
 vi.mock("../networking", () => ({
+  modelCreateCall: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
   validateAutoRouterConfig,
@@ -111,6 +112,7 @@ vi.mock("../networking", () => ({
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: mockFetchAvailableModels,
+  fetchAutoRouterModels: mockFetchAvailableModels,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => {
@@ -143,6 +145,7 @@ vi.mock("../common_components/team_dropdown", () => ({
       >
         <option value="">none</option>
         <option value="team-1">team-1</option>
+        <option value="team-2">team-2</option>
       </select>
       <button type="button" data-testid="team-dropdown-clear" onClick={() => onChange?.(null)}>
         clear team
@@ -292,6 +295,62 @@ describe("AddAutoRouterTab", () => {
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({ team_id: "team-1" });
+  });
+
+  it("creates a member's router with only its name, team and routing configuration", async () => {
+    mockFetchAvailableModels.mockImplementation(async (_token: string, teamId?: string) =>
+      teamId === "team-1" ? ALL_FAMILY_MODELS : [],
+    );
+    const actualSubmit = await vi.importActual<typeof import("./handle_add_auto_router_submit")>(
+      "./handle_add_auto_router_submit",
+    );
+    vi.mocked(handleAddAutoRouterSubmit).mockImplementationOnce(actualSubmit.handleAddAutoRouterSubmit);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddAutoRouterTab
+        handleOk={vi.fn()}
+        accessToken="token"
+        userRole="Internal User"
+        userId="member"
+        createScope="team-required"
+        teams={
+          [
+            {
+              team_id: "team-1",
+              team_member_permissions: ["/auto_router/manage"],
+              members_with_roles: [{ user_id: "member", user_email: "member@example.com", role: "user" }],
+            },
+          ] as import("../networking").Team[]
+        }
+      />,
+    );
+
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    openTemplateDropdown();
+    await waitForPresetEnabled(ANTHROPIC_PRESET.label);
+    await selectTemplate(ANTHROPIC_PRESET.label);
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "my-router" } });
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-2");
+    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenLastCalledWith("token", "team-2"));
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
+    expect(screen.getByPlaceholderText(/smart_router/i)).toHaveValue("my-router");
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    expandDetailedConfiguration();
+    expect(screen.queryByText("Advanced: Compression")).not.toBeInTheDocument();
+    expect(screen.queryByText("Model Access Groups")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(modelCreateCall).toHaveBeenCalled());
+    expect(modelCreateCall).toHaveBeenLastCalledWith("token", {
+      model_name: "my-router",
+      model_info: { team_id: "team-1" },
+      litellm_params: {
+        model: "auto_router/complexity_router",
+        complexity_router_config: expect.objectContaining({ tiers: ANTHROPIC_TIERS }),
+        complexity_router_default_model: expect.any(String),
+      },
+    });
+    expect(mockFetchAvailableModels).toHaveBeenCalledWith("token", "team-1");
   });
 
   it("does not submit when the backend's dry-run rejects the config", async () => {
@@ -715,9 +774,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Affinity"));
-    expect(
-      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
-    ).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -736,7 +793,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+    await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 

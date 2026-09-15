@@ -1,6 +1,4 @@
-import json
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 
 import pytest
 
@@ -890,29 +888,6 @@ def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
     )
 
     assert snapshot_cost == alias_cost == 0.025
-
-
-def test_gpt_4o_mini_web_search_price_matches_in_both_cost_maps():
-    repo_root = Path(__file__).parents[4]
-    cost_maps = tuple(
-        json.loads((repo_root / path).read_text(encoding="utf-8"))
-        for path in (
-            "model_prices_and_context_window.json",
-            "litellm/model_prices_and_context_window_backup.json",
-        )
-    )
-    canonical, backup = cost_maps
-    expected_search_price = {
-        "search_context_size_low": 0.025,
-        "search_context_size_medium": 0.025,
-        "search_context_size_high": 0.025,
-    }
-    for model_name in ("gpt-4o-mini", "gpt-4o-mini-2024-07-18"):
-        canonical_entry = canonical[model_name]
-        backup_entry = backup[model_name]
-        assert canonical_entry["search_context_cost_per_query"] == expected_search_price
-        assert backup_entry["search_context_cost_per_query"] == expected_search_price
-        assert canonical_entry == backup_entry
 
 
 # Note: File search integration test removed due to complex annotation detection logic

@@ -5221,10 +5221,11 @@ def test_handle_anthropic_messages_parsed_response_logging_preserves_fast_mode_s
     assert getattr(result.usage, "speed", None) == "fast"
 
 
-def test_logging_init_sets_trace_id():
+def test_logging_init_sets_trace_id(monkeypatch):
     """Logging.__init__() must call set_trace_id with self.litellm_trace_id."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("")
 
     log_obj = Logging(
@@ -5240,7 +5241,7 @@ def test_logging_init_sets_trace_id():
     assert trace_id_var.get() == log_obj.litellm_trace_id
 
 
-def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
+def test_logging_init_skips_stamping_when_correlation_logging_unsupported(monkeypatch):
     """supports_correlation_logging=False (what wrapper(), the sync entry
     point, always passes) must leave trace_id_var/session_id_var completely
     untouched, even though self.litellm_trace_id/litellm_session_id (the
@@ -5248,6 +5249,7 @@ def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
     usual - only the ambient contextvar stamping is gated."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("")
     session_id_var.set("")
 
@@ -5271,10 +5273,48 @@ def test_logging_init_skips_stamping_when_correlation_logging_unsupported():
     assert log_obj.litellm_session_id == "should-not-be-stamped"
 
 
-def test_logging_init_sets_session_id_when_provided():
+def test_logging_init_skips_stamping_when_request_correlation_in_logs_disabled(monkeypatch):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    trace_id_var.set("outer")
+    session_id_var.set("outer-sid")
+    try:
+        with (
+            patch(  # test-quality-ok: regression test verifies disabled stamping skips both setters
+                "litellm.litellm_core_utils.litellm_logging.set_trace_id"
+            ) as mock_set_trace_id,
+            patch(  # test-quality-ok: regression test verifies disabled stamping skips both setters
+                "litellm.litellm_core_utils.litellm_logging.set_session_id"
+            ) as mock_set_session_id,
+        ):
+            log_obj = Logging(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+                call_type="completion",
+                start_time=None,
+                litellm_call_id="call-disabled",
+                function_id="fn-disabled",
+                kwargs={"litellm_session_id": "disabled-session"},
+                supports_correlation_logging=True,
+            )
+
+            assert trace_id_var.get() == "outer"
+            assert session_id_var.get() == "outer-sid"
+            assert log_obj._own_trace_id == "outer"
+            mock_set_trace_id.assert_not_called()
+            mock_set_session_id.assert_not_called()
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_logging_init_sets_session_id_when_provided(monkeypatch):
     """Logging.__init__() must call set_session_id when litellm_session_id is in kwargs."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     session_id_var.set("")
 
     Logging(
@@ -5290,11 +5330,12 @@ def test_logging_init_sets_session_id_when_provided():
     assert session_id_var.get() == "my-session-99"
 
 
-def test_logging_init_resets_session_id_to_empty_when_absent():
+def test_logging_init_resets_session_id_to_empty_when_absent(monkeypatch):
     """When no session_id is in kwargs, Logging.__init__() must reset session_id_var to ""
     so a prior request's session_id does not leak into subsequent log records."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     session_id_var.set("preexisting-sid")
 
     Logging(
@@ -5310,7 +5351,7 @@ def test_logging_init_resets_session_id_to_empty_when_absent():
     assert session_id_var.get() == ""
 
 
-def test_restore_correlation_context_resets_to_pre_call_value():
+def test_restore_correlation_context_resets_to_pre_call_value(monkeypatch):
     """_restore_correlation_context() must put trace_id_var/session_id_var back to
     whatever they were immediately before this Logging instance was constructed.
     This is the mechanism that prevents a nested call (e.g. a guardrail's own
@@ -5318,6 +5359,7 @@ def test_restore_correlation_context_resets_to_pre_call_value():
     session_id into the outer call's subsequent log lines."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace")
     session_id_var.set("outer-session")
     try:
@@ -5343,7 +5385,7 @@ def test_restore_correlation_context_resets_to_pre_call_value():
         session_id_var.set("")
 
 
-def test_restore_correlation_context_safe_to_call_repeatedly():
+def test_restore_correlation_context_safe_to_call_repeatedly(monkeypatch):
     """Calling _restore_correlation_context() more than once must not raise.
 
     It's deliberately NOT guarded against repeat calls: wrapper()'s finally
@@ -5353,6 +5395,7 @@ def test_restore_correlation_context_safe_to_call_repeatedly():
     the contextvars, so repeat calls are expected, not just tolerated."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     log_obj = Logging(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
@@ -5367,8 +5410,40 @@ def test_restore_correlation_context_safe_to_call_repeatedly():
     log_obj._restore_correlation_context()  # must not raise
 
 
+def test_restore_correlation_context_does_not_resanitize(monkeypatch):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm._logging import _sanitize_correlation_id
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="call-no-resanitize",
+            function_id="fn-no-resanitize",
+            kwargs={"litellm_session_id": "inner-session"},
+        )
+
+        with patch(  # test-quality-ok: regression test verifies restore avoids sanitization
+            "litellm._logging._sanitize_correlation_id", wraps=_sanitize_correlation_id
+        ) as mock_sanitize:
+            log_obj._restore_correlation_context()
+
+        mock_sanitize.assert_not_called()
+        assert trace_id_var.get() == "outer-trace"
+        assert session_id_var.get() == "outer-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 @pytest.mark.asyncio
-async def test_restore_correlation_context_works_across_asyncio_task_boundary():
+async def test_restore_correlation_context_works_across_asyncio_task_boundary(monkeypatch):
     """_restore_correlation_context() must succeed even when it's called from a
     different asyncio Task than the one Logging.__init__() ran in - exactly what
     happens on litellm's real async success path, where async_success_handler is
@@ -5385,6 +5460,7 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
 
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-cross-task")
     session_id_var.set("outer-session-cross-task")
     try:
@@ -7079,3 +7155,21 @@ def test_get_additional_headers_survives_a_thread_growing_headers_mid_copy():
         assert copied["llm_provider-x-custom-1999"] == "1999"
 
     _run_while_a_thread_grows(headers, read, reads=300)
+
+
+def test_add_dynamic_callback_registers_once_per_list_without_touching_the_callers_list(logging_obj: LitellmLogging):
+    callback: Final = CustomLogger()
+    caller_owned: Final = ["langfuse"]
+    logging_obj.dynamic_success_callbacks = caller_owned
+
+    logging_obj.add_dynamic_callback(callback)
+    logging_obj.add_dynamic_callback(callback)
+
+    assert caller_owned == ["langfuse"]
+    assert logging_obj.dynamic_success_callbacks == ["langfuse", callback]
+    assert logging_obj.dynamic_input_callbacks == [callback]
+    assert logging_obj.dynamic_async_success_callbacks == [callback]
+    assert logging_obj.dynamic_failure_callbacks == [callback]
+    assert logging_obj.dynamic_async_failure_callbacks == [callback]
+    assert LitellmLogging._with_dynamic_callback(None, callback) == [callback]
+    assert LitellmLogging._with_dynamic_callback((callback,), callback) == [callback]

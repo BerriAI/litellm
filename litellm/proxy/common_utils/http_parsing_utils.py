@@ -189,8 +189,9 @@ async def _read_request_body(request: Request | None) -> dict:
 
                     try:
                         parsed_body = json.loads(body_str)
-                    except json.JSONDecodeError:
-                        # If both orjson and json.loads fail, throw a proper error
+                        json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+                    except (json.JSONDecodeError, UnicodeEncodeError):
+                        # json.loads accepts lone surrogate escapes that no provider can encode
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
                         raise ProxyException(
                             message=f"Invalid JSON payload: {e}",
