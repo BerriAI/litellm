@@ -302,6 +302,112 @@ describe("Settings", () => {
     });
   });
 
+  const mockS3Callback = (variables: Record<string, string | null>, callbackName = "s3") => {
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [{ name: callbackName, variables }],
+      available_callbacks: {
+        s3: {
+          litellm_callback_name: "s3",
+          litellm_callback_params: [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+            "S3_LOG_PROMPTS_ONLY",
+          ],
+          ui_callback_name: "s3 Bucket (AWS)",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      {
+        id: "s3",
+        displayName: "S3",
+        dynamic_params: {
+          s3_bucket_name: { type: "text", ui_name: "S3 Bucket Name", required: false },
+          s3_log_prompts_only: { type: "boolean", ui_name: "Log Prompts Only", required: false },
+        },
+      },
+    ]);
+  };
+
+  const openS3EditModal = async (callbackName = "s3") => {
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+    await user.click(await screen.findByTestId(`callback-actions-${callbackName}-success`));
+    await user.click(await screen.findByTestId("callback-action-edit"));
+    return user;
+  };
+
+  it("should render a saved boolean dynamic param as a checked switch and post false when toggled off", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: "true" });
+    const user = await openS3EditModal();
+
+    const promptsOnlySwitch = await screen.findByRole("switch", { name: "Log Prompts Only" });
+    expect(promptsOnlySwitch).toBeChecked();
+
+    await user.click(promptsOnlySwitch);
+    expect(promptsOnlySwitch).not.toBeChecked();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({ callback: "s3", s3_log_prompts_only: "false" }),
+        }),
+      );
+    });
+  });
+
+  it("should render an unset boolean dynamic param as an unchecked switch and post true when toggled on", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null });
+    const user = await openS3EditModal();
+
+    const promptsOnlySwitch = await screen.findByRole("switch", { name: "Log Prompts Only" });
+    expect(promptsOnlySwitch).not.toBeChecked();
+
+    await user.click(promptsOnlySwitch);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({ callback: "s3", s3_log_prompts_only: "true" }),
+        }),
+      );
+    });
+  });
+
+  it.each(["True", "1"])("should render a boolean dynamic param stored as %s as a checked switch", async (stored) => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: stored });
+    await openS3EditModal();
+
+    expect(await screen.findByRole("switch", { name: "Log Prompts Only" })).toBeChecked();
+  });
+
+  it("should resolve the s3_v2 callback to the s3 dynamic params and post under the s3_v2 name", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null }, "s3_v2");
+    const user = await openS3EditModal("s3_v2");
+
+    const promptsOnlySwitch = await screen.findByRole("switch", { name: "Log Prompts Only" });
+    expect(promptsOnlySwitch).not.toBeChecked();
+
+    await user.click(promptsOnlySwitch);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({ callback: "s3_v2", s3_log_prompts_only: "true" }),
+          litellm_settings: { success_callback: ["s3_v2"] },
+        }),
+      );
+    });
+  });
+
   it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {
     const user = userEvent.setup();
     render(<Settings {...defaultProps} />);

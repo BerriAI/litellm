@@ -118,6 +118,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         alias_map: Final = {
             "langfuse_otel": "langfuse",
+            "s3_v2": "s3",
         }
         lookup_name: Final = alias_map.get(normalized_name, normalized_name)
 

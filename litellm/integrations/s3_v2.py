@@ -21,6 +21,8 @@ from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_S
 from litellm.integrations.s3 import (
     get_s3_object_download_filename,
     get_s3_object_key,
+    prompts_only_payload,
+    resolve_s3_log_prompts_only,
     resolve_sse_params,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -68,6 +70,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
+        s3_log_prompts_only: bool | None = None,
         s3_callback_params_override: dict | None = None,
         **kwargs,
     ):
@@ -108,6 +111,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_use_virtual_hosted_style=s3_use_virtual_hosted_style,
                 s3_server_side_encryption=s3_server_side_encryption,
                 s3_sse_kms_key_id=s3_sse_kms_key_id,
+                s3_log_prompts_only=s3_log_prompts_only,
             )
             verbose_logger.debug("s3 logger using endpoint url %s", s3_endpoint_url)
 
@@ -163,6 +167,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
+        s3_log_prompts_only: bool | None = None,
         params_source: dict | None = None,
     ):
         """
@@ -210,6 +215,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         self.s3_use_virtual_hosted_style = (
             bool(params.get("s3_use_virtual_hosted_style", False)) or s3_use_virtual_hosted_style
+        )
+
+        self.s3_log_prompts_only: object = (
+            params.get("s3_log_prompts_only") if s3_log_prompts_only is None else s3_log_prompts_only
         )
 
         self.s3_server_side_encryption, self.s3_sse_kms_key_id = resolve_sse_params(
@@ -489,8 +498,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         s3_object_download_filename: Final = get_s3_object_download_filename(start_time, standard_logging_payload["id"])
 
+        payload: Final = (
+            prompts_only_payload(standard_logging_payload)
+            if resolve_s3_log_prompts_only(self.s3_log_prompts_only)
+            else standard_logging_payload
+        )
         return s3BatchLoggingElement(
-            payload=dict(standard_logging_payload),
+            payload=dict(payload),
             s3_object_key=s3_object_key,
             s3_object_download_filename=s3_object_download_filename,
         )
