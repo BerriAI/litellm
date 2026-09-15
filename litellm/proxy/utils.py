@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    NON_INFERENCE_CALL_TYPES,
     SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
@@ -142,7 +143,7 @@ from litellm.proxy.db.prisma_client import (
     PrismaWrapper,
     parse_iam_endpoint_from_url,
 )
-from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
 from litellm.proxy.db.spend_log_batching import (
     spend_log_queue_within_budget,
     spend_log_row_bytes,
@@ -7234,9 +7235,100 @@ async def _monitor_spend_logs_queue(
 
 MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
+_OBJECT_ID_KEYED_SPEND_LOG_CALL_TYPES: Final = NON_INFERENCE_CALL_TYPES | frozenset(
+    {
+        CallTypes.create_batch.value,
+        CallTypes.acreate_batch.value,
+        CallTypes.retrieve_batch.value,
+        CallTypes.aretrieve_batch.value,
+        CallTypes.create_file.value,
+        CallTypes.acreate_file.value,
+    }
+)
+"""Rows keyed on the id of the object the call addressed rather than on a fresh response id:
+the zero-priced reads and management calls of a stored object, batch polls (every poll of one
+batch collapses into its single cost row, the claim in ``_claim_batch_cost_spend_log``) and file
+uploads. A second row for one of these collapses on purpose."""
+
 
 def _is_transient_spend_log_write_error(e: Exception) -> bool:
     return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
+
+
+def _spend_log_row_can_rekey_on_call_id(row: Mapping[str, object]) -> bool:
+    call_id: Final = row.get("litellm_call_id")
+    return isinstance(call_id, str) and call_id != "" and call_id != row.get("request_id")
+
+
+def _spend_log_row_is_stored(row: Mapping[str, object], stored_identities: frozenset[tuple[object, object]]) -> bool:
+    """A stored row with this row's identity is this row or a replay of it, under either key."""
+    call_id: Final = row.get("litellm_call_id")
+    return (row.get("request_id"), call_id) in stored_identities or (call_id, call_id) in stored_identities
+
+
+async def _spend_logs_rekeyed_after_duplicate_skip(
+    repo: SpendLogsRepository, rows: Sequence[Mapping[str, object]]
+) -> tuple[Mapping[str, object], ...]:
+    """The rows ``create_many(skip_duplicates=True)`` skipped, re-keyed on their own ``litellm_call_id``.
+
+    ``request_id`` is the provider's response id, so a provider that reuses one completion id
+    (a self-hosted OpenAI-compatible server, commonly) had every request after the first
+    served and charged but never logged (LIT-6666). The insert reports only how many rows
+    landed, so the rows are read back by identity from the writer (a lagging read replica
+    would report the rows this very insert landed as missing): a stored row carrying this
+    row's ``request_id`` AND ``litellm_call_id``, or already keyed on its call id, is this row
+    or a replay of it after a transport retry, and stays skipped. Rows keyed on an object id
+    collapse on purpose, and a row already keyed on its call id has nothing left to fall back
+    to; those are skipped and only logged.
+    """
+    unverified: Final = tuple(row for row in rows if row.get("call_type") not in _OBJECT_ID_KEYED_SPEND_LOG_CALL_TYPES)
+    if not unverified:
+        return ()
+    stored_identities: Final = await SpendLogsRepository(WriterPinnedClient(repo.prisma_client.db)).stored_identities(
+        str(key) for row in unverified for key in (row.get("request_id"), row.get("litellm_call_id")) if key
+    )
+    dropped: Final = tuple(row for row in unverified if not _spend_log_row_is_stored(row, stored_identities))
+    rekeyable: Final = tuple(row for row in dropped if _spend_log_row_can_rekey_on_call_id(row))
+    for row in dropped:
+        if not _spend_log_row_can_rekey_on_call_id(row):
+            verbose_proxy_logger.error(
+                "Spend tracking - dropping spend log row whose request_id %s is already taken and whose "
+                "litellm_call_id %s offers no other key",
+                row.get("request_id"),
+                row.get("litellm_call_id"),
+            )
+    if rekeyable:
+        verbose_proxy_logger.warning(
+            "Spend tracking - %d spend log row(s) shared a request_id with a stored row and were re-keyed on "
+            "their litellm_call_id: %s",
+            len(rekeyable),
+            sorted(frozenset(str(row.get("request_id")) for row in rekeyable)),
+        )
+    return tuple(
+        {**row, "request_id": row["litellm_call_id"]}  # mutable-ok: prisma create_many takes dict rows
+        for row in rekeyable
+    )
+
+
+async def _spend_logs_rekeyed_or_left_skipped(
+    repo: SpendLogsRepository, rows: Sequence[Mapping[str, object]]
+) -> tuple[Mapping[str, object], ...]:
+    """``_spend_logs_rekeyed_after_duplicate_skip``, leaving the rows skipped (the pre-existing
+    outcome) when the read-back fails on its data rather than on transport, so one bad read
+    cannot requeue a whole flush behind it forever."""
+    try:
+        return await _spend_logs_rekeyed_after_duplicate_skip(repo, rows)
+    except Exception as e:
+        if _is_transient_spend_log_write_error(e):
+            raise
+        spend_log_error(
+            "Spend tracking - could not read back which of %d skipped spend log rows are stored; leaving them "
+            "skipped. error=%s",
+            len(rows),
+            str(e),
+            exc=e,
+        )
+        return ()
 
 
 async def _create_spend_logs_with_poison_isolation(
@@ -7267,8 +7359,7 @@ async def _create_spend_logs_with_poison_isolation(
     persist. Returns the budget left after this subtree.
     """
     try:
-        await repo.table.create_many(data=rows, skip_duplicates=True)
-        return failure_budget
+        inserted: Final = await repo.table.create_many(data=rows, skip_duplicates=True)
     except Exception as e:
         if not PrismaDBExceptionHandler.is_prisma_data_error(e):
             raise
@@ -7303,6 +7394,11 @@ async def _create_spend_logs_with_poison_isolation(
             )
             return 0
         return await _create_spend_logs_with_poison_isolation(repo, rows[mid:], remaining)
+    if isinstance(inserted, int) and inserted < len(rows):
+        rekeyed: Final = await _spend_logs_rekeyed_or_left_skipped(repo, rows)
+        if rekeyed:
+            return await _create_spend_logs_with_poison_isolation(repo, rekeyed, failure_budget)
+    return failure_budget
 
 
 def _raise_failed_update_spend_exception(e: Exception, start_time: float, proxy_logging_obj: ProxyLogging):

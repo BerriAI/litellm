@@ -1356,6 +1356,43 @@ def test_get_logging_payload_populates_litellm_call_id_alongside_provider_reques
     assert payload["litellm_call_id"] == call_id
 
 
+def test_get_logging_payload_keeps_the_provider_response_id_in_metadata():
+    """LIT-6666: a row the flush re-keys on its call id (its provider id was already taken
+    by another request) still has to say which response it logged."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "call-1",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "response_id": "caller-supplied"}},
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-static-1",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"])["response_id"] == "chatcmpl-static-1"
+
+
+def test_get_logging_payload_leaves_metadata_response_id_empty_without_a_response_id():
+    """A failure row has no provider response; a caller cannot fill the slot through request metadata."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "call-1",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "response_id": "caller-supplied"}},
+        },
+        response_obj=None,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"])["response_id"] is None
+
+
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():

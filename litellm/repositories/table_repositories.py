@@ -7,6 +7,7 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final, Generic
 
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
@@ -64,8 +65,18 @@ class OrganizationMembershipRepository(PrismaTableRepository["prisma_models.Lite
     table_name = "litellm_organizationmembership"
 
 
+_SPEND_LOG_IDENTITIES_SQL: Final = (
+    'SELECT request_id, litellm_call_id FROM "LiteLLM_SpendLogs" WHERE request_id = ANY($1::text[])'
+)
+
+
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
     table_name = "litellm_spendlogs"
+
+    async def stored_identities(self, request_ids: Iterable[str]) -> frozenset[tuple[object, object]]:
+        """``(request_id, litellm_call_id)`` of every stored row keyed on one of ``request_ids``."""
+        rows: Final = await self.prisma_client.db.query_raw(_SPEND_LOG_IDENTITIES_SQL, sorted(frozenset(request_ids)))
+        return frozenset((row.get("request_id"), row.get("litellm_call_id")) for row in rows)
 
 
 class BudgetWindowSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_BudgetWindowSpend"]):
