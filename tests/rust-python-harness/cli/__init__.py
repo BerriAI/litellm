@@ -58,16 +58,29 @@ def _strategy_command(strategy: Strategy) -> click.Command:
                 help=runner_argument.help,
             )
         )
+    for runner_option in strategy.definition.runner_options:
+        name: Final = runner_option.option.removeprefix("--").replace("-", "_")
+        params.append(
+            click.Option(
+                (runner_option.option, name),
+                type=click.Choice(runner_option.choices),
+                help=runner_option.help,
+            )
+        )
 
     def run_strategy(
         sdk_functions: tuple[str, ...],
         surface: str | None = None,
         runner_args: tuple[str, ...] = (),
+        **runner_options: str | None,
     ) -> int:
         selected_functions: Final = cast(frozenset[SdkFunction], frozenset(sdk_functions))
         selected_surface: Final = cast(Surface | None, surface)
         cases: Final = select_cases((strategy,), selected_functions, selected_surface)
-        return run_command((strategy,), cases, runner_args)
+        option_args: Final = tuple(
+            f"--{name.replace('_', '-')}={value}" for name, value in runner_options.items() if value is not None
+        )
+        return run_command((strategy,), cases, (*runner_args, *option_args))
 
     return click.Command(
         strategy.id,

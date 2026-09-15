@@ -1,3 +1,4 @@
+import json
 import os
 import traceback
 from dotenv import load_dotenv
@@ -628,17 +629,29 @@ def test_deployment_callback_respects_cooldown_time(model_list):
         assert mock_set.call_args.kwargs["time_to_cooldown"] == 0
 
 
-def test_log_retry(model_list):
-    """Test if the '_log_retry' function is working correctly"""
-    import time
-
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_log_retry(model_list, metadata_key):
+    """log_retry appends one flat record per failed attempt and copies neither the request kwargs nor
+    the request metadata into it"""
     router = Router(model_list=model_list)
     new_kwargs = router.log_retry(
-        kwargs={"metadata": {}},
-        e=Exception(),
+        kwargs={
+            "model": "gpt-3.5-turbo",
+            "api_key": "sk-must-not-be-recorded",
+            "messages": [{"role": "user", "content": "hi"}],
+            metadata_key: {"model_info": {"id": "deployment-1"}, "attempted_retries": 2, "user_api_key": "sk-proxy"},
+        },
+        e=litellm.RateLimitError(message="slow down", llm_provider="openai", model="gpt-3.5-turbo"),
     )
-    assert "metadata" in new_kwargs
-    assert "previous_models" in new_kwargs["metadata"]
+    assert json.loads(json.dumps(new_kwargs[metadata_key]["previous_models"])) == [
+        {
+            "model_group": "gpt-3.5-turbo",
+            "deployment_id": "deployment-1",
+            "exception_type": "RateLimitError",
+            "exception_string": "litellm.RateLimitError: slow down",
+            "attempted_retries": 2,
+        }
+    ]
 
 
 def test_update_usage(model_list):

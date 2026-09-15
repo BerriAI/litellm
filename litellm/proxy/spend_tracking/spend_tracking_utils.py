@@ -159,7 +159,7 @@ def _get_spend_logs_metadata(
             requester_ip_address=None,
             additional_usage_values=None,
             applied_guardrails=None,
-            status=None or "success",
+            status="success",
             error_information=None,
             proxy_server_request=None,
             batch_models=None,
