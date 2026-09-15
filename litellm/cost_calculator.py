@@ -293,10 +293,27 @@ def _get_additional_costs(
     return None
 
 
-def _transcription_usage_has_token_details(
+def _transcription_uses_token_pricing(
+    model: str,
+    custom_llm_provider: str | None,
     usage_block: Usage | None,
 ) -> bool:
     if usage_block is None:
+        return False
+
+    model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    has_token_pricing: Final = any(
+        model_info.get(field)
+        for field in (
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "input_cost_per_audio_token",
+            "output_cost_per_audio_token",
+        )
+    )
+    if not has_token_pricing and (
+        model_info.get("input_cost_per_second") is not None or model_info.get("output_cost_per_second") is not None
+    ):
         return False
 
     prompt_tokens_val: Final = getattr(usage_block, "prompt_tokens", 0) or 0
@@ -586,7 +603,7 @@ def cost_per_token(
             data_residency=data_residency,
         )
     elif call_type == "atranscription" or call_type == "transcription":
-        if _transcription_usage_has_token_details(usage_block):
+        if _transcription_uses_token_pricing(model_without_prefix, custom_llm_provider, usage_block):
             return generic_cost_per_token(
                 model=model_without_prefix,
                 usage=usage_block,
@@ -986,6 +1003,25 @@ def _get_usage_object(
     else:
         verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
         return None
+
+
+def _get_transcription_usage_duration(completion_response: object) -> float | None:
+    usage_object: Final = (
+        completion_response.get("usage")
+        if isinstance(completion_response, dict)
+        else getattr(completion_response, "usage", None)
+    )
+    usage_type: Final = (
+        usage_object.get("type") if isinstance(usage_object, dict) else getattr(usage_object, "type", None)
+    )
+    if usage_type != "duration":
+        return None
+    seconds: Final = (
+        usage_object.get("seconds") if isinstance(usage_object, dict) else getattr(usage_object, "seconds", None)
+    )
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds < 0:
+        return None
+    return float(seconds)
 
 
 def _is_known_usage_objects(usage_obj):
@@ -1504,9 +1540,14 @@ def completion_cost(
                     # the response attribute (for verbose_json responses that
                     # naturally include duration from the provider).
                     _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
+                    provider_duration = _get_transcription_usage_duration(completion_response)
+                    audio_transcription_file_duration = (
+                        provider_duration
+                        if provider_duration is not None
+                        else _hidden.get(
+                            "audio_transcription_duration",
+                            getattr(completion_response, "duration", 0.0),
+                        )
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
@@ -2593,6 +2634,7 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
+_TRANSLATION_CLOSED_EVENT_TYPE: Final = "session.closed"
 
 
 def _candidate_realtime_token_costs(
@@ -2692,7 +2734,21 @@ def handle_realtime_stream_cost_calculation(
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
     )
-    total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost
+    translation_cost: Final = handle_realtime_translation_cost_calculation(
+        results=results,
+        custom_llm_provider=custom_llm_provider,
+        litellm_model_name=litellm_model_name,
+    )
+    total_cost: Final = input_cost_per_token + output_cost_per_token + transcription_cost + translation_cost
+
+    additional_costs: Final = {  # mutable-ok: logging stores a mutable per-request cost breakdown
+        key: value
+        for key, value in (
+            ("transcription_cost", transcription_cost),
+            ("translation_cost", translation_cost),
+        )
+        if value > 0
+    }
 
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
@@ -2700,11 +2756,38 @@ def handle_realtime_stream_cost_calculation(
         completion_tokens_cost_usd_dollar=output_cost_per_token,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
-        additional_costs={"transcription_cost": transcription_cost} if transcription_cost > 0 else None,
         data_residency=data_residency,
+        additional_costs=additional_costs or None,
     )
 
     return total_cost
+
+
+def handle_realtime_translation_cost_calculation(
+    results: OpenAIRealtimeStreamList,
+    custom_llm_provider: str,
+    litellm_model_name: str,
+) -> float:
+    output_seconds = 0.0  # rebind-ok: duration is accumulated across translation close events
+    for result in results:
+        if result.get("type") != _TRANSLATION_CLOSED_EVENT_TYPE:
+            continue
+        usage = result.get("usage")
+        if isinstance(usage, dict) and isinstance(usage.get("output_seconds"), (int, float)):
+            output_seconds += float(usage["output_seconds"])
+    if output_seconds <= 0:
+        return 0.0
+    try:
+        model_info: Final = litellm.get_model_info(
+            model=litellm_model_name,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception:  # noqa: BLE001  # unknown model metadata should yield zero translation cost
+        return 0.0
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    if not isinstance(output_cost_per_second, (int, float)):
+        return 0.0
+    return output_seconds * output_cost_per_second
 
 
 def handle_realtime_transcription_cost_calculation(
