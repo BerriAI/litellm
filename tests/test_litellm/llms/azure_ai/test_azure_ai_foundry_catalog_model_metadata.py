@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from litellm import completion_cost
+from litellm import completion_cost, cost_per_token, get_model_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.utils import TranscriptionResponse
 
@@ -50,6 +50,34 @@ def _whisper_transcription_cost(duration_seconds: int) -> float:
 def test_azure_ai_catalog_name_routes_to_azure_ai(catalog_name: str) -> None:
     routed_model, provider, _, _ = get_llm_provider(model=f"azure_ai/{catalog_name}")
     assert (routed_model, provider) == (catalog_name, "azure_ai")
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("catalog_name", TOKEN_PRICED_NAMES)
+def test_azure_ai_catalog_name_charges_its_own_entry_per_token(catalog_name: str) -> None:
+    entry: Final = get_model_info(f"azure_ai/{catalog_name}")
+    prompt_cost, completion_cost_usd = cost_per_token(
+        model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=A_MILLION
+    )
+    assert prompt_cost > 0
+    assert prompt_cost == pytest.approx(A_MILLION * entry["input_cost_per_token"])
+    assert completion_cost_usd == pytest.approx(A_MILLION * entry["output_cost_per_token"])
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("catalog_name", TOKEN_PRICED_NAMES)
+def test_azure_ai_catalog_name_prices_the_same_in_any_casing(catalog_name: str) -> None:
+    lowercase_cost = cost_per_token(model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0)
+    upper_cost = cost_per_token(model=f"azure_ai/{catalog_name.upper()}", prompt_tokens=A_MILLION, completion_tokens=0)
+    assert upper_cost == lowercase_cost
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_azure_ai_whisper_catalog_name_is_priced_per_second() -> None:
+    one_second_cost: Final = _whisper_transcription_cost(1)
+    one_hour_cost: Final = _whisper_transcription_cost(AN_HOUR_IN_SECONDS)
+    assert one_second_cost > 0
+    assert one_hour_cost == pytest.approx(AN_HOUR_IN_SECONDS * one_second_cost)
 
 
 def test_azure_ai_model_router_spellings_share_one_entry() -> None:

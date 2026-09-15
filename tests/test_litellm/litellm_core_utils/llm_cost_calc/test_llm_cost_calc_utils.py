@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 import litellm
+from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
@@ -2086,6 +2087,95 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     assert round(result, 6) == round(expected, 6)
 
 
+def test_a_pinned_billing_time_prices_the_totals_and_the_reported_rates_at_one_moment(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "off-peak-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "off_peak_pricing": {
+                "hours_utc": "02:00-03:00",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 5e-6,
+            },
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    with pinned_billing_time(datetime(2026, 1, 1, 2, 30, tzinfo=timezone.utc)):
+        off_peak_prompt_cost, off_peak_completion_cost = generic_cost_per_token(
+            model="off-peak-model", usage=usage, custom_llm_provider="openai"
+        )
+        off_peak_rates = get_billed_token_rates(model="off-peak-model", custom_llm_provider="openai", usage=usage)
+    with pinned_billing_time(datetime(2026, 1, 1, 12, 30, tzinfo=timezone.utc)):
+        peak_prompt_cost, peak_completion_cost = generic_cost_per_token(
+            model="off-peak-model", usage=usage, custom_llm_provider="openai"
+        )
+        peak_rates = get_billed_token_rates(model="off-peak-model", custom_llm_provider="openai", usage=usage)
+
+    assert off_peak_rates.input_cost_per_token == pytest.approx(1e-6)
+    assert peak_rates.input_cost_per_token == pytest.approx(3e-6)
+    assert off_peak_prompt_cost == pytest.approx(1000 * off_peak_rates.input_cost_per_token)
+    assert off_peak_completion_cost == pytest.approx(500 * off_peak_rates.output_cost_per_token)
+    assert peak_prompt_cost == pytest.approx(1000 * peak_rates.input_cost_per_token)
+    assert peak_completion_cost == pytest.approx(500 * peak_rates.output_cost_per_token)
+
+
+def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(_local_model_cost_map, monkeypatch):
+    from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    model = "claude-test-geo-breakdown-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "cache_creation_input_token_cost": 6.25e-6,
+                "cache_read_input_token_cost": 0.5e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"us": 1.1},
+            }
+        }
+    )
+
+    def make_usage() -> Usage:
+        return Usage(
+            prompt_tokens=10_000,
+            completion_tokens=500,
+            total_tokens=10_500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=2_000,
+                cache_creation_tokens=6_000,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=200, text_tokens=300),
+        )
+
+    base_usage = make_usage()
+    geo_usage = make_usage()
+    geo_usage.inference_geo = "us"
+
+    base = get_token_type_cost_breakdown(model=model, custom_llm_provider="anthropic", usage=base_usage)
+    geo = get_token_type_cost_breakdown(model=model, custom_llm_provider="anthropic", usage=geo_usage)
+
+    assert base.cache_read_cost == pytest.approx(2_000 * 0.5e-6)
+    assert base.cache_creation_cost == pytest.approx(6_000 * 6.25e-6)
+    assert geo.cache_read_cost == pytest.approx(base.cache_read_cost * 1.1)
+    assert geo.cache_creation_cost == pytest.approx(base.cache_creation_cost * 1.1)
+    assert geo.reasoning_cost == pytest.approx(base.reasoning_cost * 1.1)
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(model=model, usage=geo_usage)
+    text_input_cost = 2_000 * 5e-6 * 1.1
+    text_output_cost = 300 * 25e-6 * 1.1
+    assert text_input_cost + geo.cache_read_cost + geo.cache_creation_cost == pytest.approx(prompt_cost)
+    assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
+
+
 def test_service_tier_ultrafast_pricing():
     """An ultrafast request bills the *_ultrafast rates for all token types.
 
@@ -3249,6 +3339,58 @@ def test_token_type_cost_breakdown_applies_vertex_regional_uplift(_local_model_c
     )
     text_input_cost = 600 * model_info["input_cost_per_token"] * uplift
     assert text_input_cost + regional.cache_read_cost == pytest.approx(prompt_cost)
+
+
+@pytest.mark.parametrize("details_as_dict", [True, False])
+def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
+    """
+    Image input tokens must be priced at input_cost_per_image_token even when
+    input_tokens_details is a plain dict, as in OpenAI image edit responses.
+
+    Regression test: dict-shaped input_tokens_details was read with getattr(),
+    which returns None for dicts, so image input tokens silently fell back to
+    the text input rate (e.g. $5/M instead of $8/M for gpt-image-2).
+    """
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        calculate_image_response_cost_from_usage,
+    )
+    from litellm.types.utils import Usage
+
+    mock_model_info = {
+        "input_cost_per_token": 5e-6,
+        "input_cost_per_image_token": 8e-6,
+        "output_cost_per_image_token": 3e-5,
+    }
+
+    input_details = {"text_tokens": 19, "image_tokens": 512}
+    image_response = ImageResponse(data=[ImageObject(b64_json="x")])
+    # Mirror the usage shape of a real OpenAI images.edit response:
+    # a Usage object carrying input_tokens/output_tokens with detail dicts.
+    image_response.usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=689,
+        input_tokens=531,
+        input_tokens_details=(input_details if details_as_dict else ImageUsageInputTokensDetails(**input_details)),
+        output_tokens=158,
+        output_tokens_details={"image_tokens": 158, "text_tokens": 0},
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        cost = calculate_image_response_cost_from_usage(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+    expected = 19 * 5e-6 + 512 * 8e-6 + 158 * 3e-5
+    assert cost is not None
+    assert round(cost, 12) == round(expected, 12)
 
 
 GEMINI_DAY0_LAUNCH_PRICING = [

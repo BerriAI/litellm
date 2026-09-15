@@ -86,6 +86,21 @@ def test_validation_accepts_healthy_file_with_meta_keys():
     )
 
 
+def test_validation_rejects_significant_shrink_vs_backup():
+    # 600 real models vs a 2000-model backup is below the 50% shrink threshold.
+    shrunk = _make_models(600)
+    shrunk[FALLBACK_GENERALIZATIONS_KEY] = {"rules": []}
+    assert (
+        GetModelCostMap.validate_model_cost_map(
+            fetched_map=shrunk,
+            backup_model_count=2000,
+            min_model_count=50,
+            max_shrink_ratio=0.5,
+        )
+        is False
+    )
+
+
 def test_finalize_pops_key_and_installs_rules():
     previous = list(get_fallback_generalization_rules())
     try:
@@ -587,6 +602,41 @@ def test_boot_load_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
     assert source["etag"] == 'W/"boot"'
     assert source["source_revision"] == git_blob_id(body)
     assert source["loaded_at"] is not None
+
+
+def test_boot_load_fallback_to_the_backup_reports_its_blob_id_and_drops_the_remote_etag():
+    remote, _ = _mock_client(
+        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
+    )
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=remote)
+    failing, _ = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
+
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=failing)
+
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["etag"] is None
+    assert source["source_revision"] == _bundled_blob_id()
+
+
+def test_boot_load_that_fails_the_integrity_check_reports_the_backup_not_the_rejected_fetch():
+    remote, _ = _mock_client(
+        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
+    )
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=remote)
+    shrunk_body = b'{"gpt-5.4-mini": {"mode": "chat", "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}}'
+    shrunk, _ = _mock_client(
+        [httpx.Response(200, headers={"ETag": 'W/"shrunk"'}, content=shrunk_body)], client_cls=httpx.Client
+    )
+
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=shrunk)
+
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["fallback_reason"] == "Remote data failed integrity validation"
+    assert source["etag"] is None
+    assert source["source_revision"] == _bundled_blob_id()
+    assert source["source_revision"] != git_blob_id(shrunk_body)
 
 
 @pytest.mark.parametrize(
