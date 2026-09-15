@@ -10862,24 +10862,15 @@ def test_validate_max_ui_session_budget_empty_restores_default(empty_value):
 
 @pytest.mark.asyncio
 async def test_update_config_field_model_access_denied_message_sets_live_value(monkeypatch):
-    """LIT-5283: the client-facing model access denial message is editable from the Admin UI
-    General tab as a String field, applies live via setattr, and persists under litellm_settings."""
-    from unittest.mock import MagicMock
+    from unittest.mock import AsyncMock, MagicMock
 
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import ConfigFieldUpdate, LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.proxy_server import update_config_general_settings
 
-    saved: dict = {}
-
-    async def fake_get_config():
-        return {"litellm_settings": {}}
-
-    async def fake_save_config(new_config=None):
-        saved.update(new_config or {})
-
-    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
-    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    save_config = AsyncMock()
+    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value={"litellm_settings": {}}))
+    monkeypatch.setattr(ps.proxy_config, "save_config", save_config)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
     monkeypatch.setattr(litellm, "store_audit_logs", False)
     monkeypatch.setattr(litellm, "model_access_denied_message", None)
@@ -10895,7 +10886,11 @@ async def test_update_config_field_model_access_denied_message_sets_live_value(m
     )
 
     assert litellm.model_access_denied_message == "Model `{model}` is unavailable for this key."
-    assert saved["litellm_settings"]["model_access_denied_message"] == "Model `{model}` is unavailable for this key."
+    save_config.assert_awaited_once()
+    saved_config = save_config.await_args.kwargs["new_config"]
+    assert saved_config["litellm_settings"]["model_access_denied_message"] == (
+        "Model `{model}` is unavailable for this key."
+    )
 
 
 @pytest.mark.parametrize("bad_value", [True, 3, 1.5, ["x"], {"a": "b"}])
@@ -10918,12 +10913,39 @@ def test_validate_model_access_denied_message_empty_restores_detailed_default(em
 
 @pytest.mark.parametrize("empty_value", [None, ""])
 def test_validate_expose_router_debug_in_errors_empty_restores_true_default(empty_value):
-    """Clearing the field from the Admin UI must restore the historical default (debug details
-    exposed), not the generic Boolean fallback of False."""
     from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
 
     assert _validate_general_settings_ui_litellm_value("expose_router_debug_in_errors", empty_value) is True
     assert _validate_general_settings_ui_litellm_value("expose_router_debug_in_errors", False) is False
+
+
+@pytest.mark.parametrize(
+    "field_name, booted_value, db_value, read_setting",
+    [
+        (
+            "model_access_denied_message",
+            None,
+            "Model `{model}` is unavailable for this key.",
+            lambda: litellm.model_access_denied_message,
+        ),
+        ("expose_router_debug_in_errors", True, False, lambda: litellm.expose_router_debug_in_errors),
+    ],
+)
+def test_model_access_denied_settings_propagate_on_config_reload(
+    monkeypatch, field_name, booted_value, db_value, read_setting
+):
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, field_name, booted_value)
+    assert read_setting() == booted_value
+
+    ps.ProxyConfig()._update_config_fields(
+        current_config={"litellm_settings": {}},
+        param_name="litellm_settings",
+        db_param_value={field_name: db_value},
+    )
+
+    assert read_setting() == db_value
 
 
 def test_general_settings_ui_defaults_unchanged_for_existing_fields():

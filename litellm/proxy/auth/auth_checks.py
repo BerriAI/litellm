@@ -4034,11 +4034,11 @@ async def _get_agent_ids_from_access_groups(
     )
 
 
-def _client_facing_model_access_denied_message(internal_message: str, model: str | list[str]) -> str:
+def client_facing_model_access_denied_message(internal_message: str, model: str | list[str]) -> str:
     template: Final = litellm.model_access_denied_message
     if not template:
         return internal_message
-    verbose_proxy_logger.warning(internal_message)
+    verbose_proxy_logger.warning(internal_message.replace("\r", "").replace("\n", ""))
     return template.replace(MODEL_ACCESS_DENIED_MESSAGE_MODEL_PLACEHOLDER, str(model))
 
 
@@ -4164,7 +4164,7 @@ def _can_object_call_model(
             return True
 
     raise ProxyException(
-        message=_client_facing_model_access_denied_message(
+        message=client_facing_model_access_denied_message(
             internal_message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
             model=model,
         ),
@@ -4793,7 +4793,7 @@ async def can_user_call_model(
 
     if SpecialModelNames.no_default_models.value in user_object.models:
         raise ProxyException(
-            message=_client_facing_model_access_denied_message(
+            message=client_facing_model_access_denied_message(
                 internal_message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
                 model=model,
             ),
@@ -5398,7 +5398,7 @@ async def _check_team_member_model_access(
         )
     except ProxyException:
         raise ProxyException(
-            message=_client_facing_model_access_denied_message(
+            message=client_facing_model_access_denied_message(
                 internal_message=f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, Model={model}. Allowed member models = {member_allowed_models}",
                 model=model,
             ),

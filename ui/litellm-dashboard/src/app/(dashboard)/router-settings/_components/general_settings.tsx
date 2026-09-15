@@ -40,7 +40,7 @@ const NUMERIC_INPUT_WIDTH = "w-36";
 
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
 const toStringValue = (raw: string): string | null => (raw === "" ? null : raw);
-const RESETS_WHEN_CLEARED = new Set(["Select", "String"]);
+const RESETS_WHEN_CLEARED: ReadonlySet<string> = new Set(["Select", "String"]);
 
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
@@ -213,7 +213,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = (fieldName: string) => {
+  const handleUpdateField = async (fieldName: string) => {
     if (!accessToken) {
       return;
     }
@@ -222,37 +222,33 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (setting && RESETS_WHEN_CLEARED.has(setting.field_type)) handleResetField(fieldName);
+      if (setting && RESETS_WHEN_CLEARED.has(setting.field_type)) await handleResetField(fieldName);
       return;
     }
     try {
-      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
-      // update value in state
-
-      const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting,
+      await updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+      setGeneralSettings((current) =>
+        current.map((setting) => (setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting)),
       );
-      setGeneralSettings(updatedSettings);
     } catch (error) {
       // do something
     }
   };
 
-  const handleResetField = (fieldName: string) => {
+  const handleResetField = async (fieldName: string) => {
     if (!accessToken) {
       return;
     }
 
     try {
-      deleteConfigFieldSetting(accessToken, fieldName);
-      // update value in state
-
-      const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName
-          ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
-          : setting,
+      await deleteConfigFieldSetting(accessToken, fieldName);
+      setGeneralSettings((current) =>
+        current.map((setting) =>
+          setting.field_name === fieldName
+            ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
+            : setting,
+        ),
       );
-      setGeneralSettings(updatedSettings);
     } catch (error) {
       // do something
     }

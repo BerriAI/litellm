@@ -130,6 +130,31 @@ describe("GeneralSettings General tab", () => {
     expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "model_access_denied_message");
     expect(vi.mocked(updateConfigFieldSetting).mock.calls).toHaveLength(1);
   });
+
+  it("keeps the stored value visible when the reset request fails", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue(
+      SETTINGS_FIXTURE.map((s) =>
+        s.field_name === "model_access_denied_message"
+          ? { ...s, field_value: "Model `{model}` is unavailable.", stored_in_db: true }
+          : { ...s },
+      ),
+    );
+    vi.mocked(deleteConfigFieldSetting).mockRejectedValueOnce(new Error("proxy unreachable"));
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+
+    await user.click(screen.getByText("General"));
+    const row = await settingsRow("model_access_denied_message");
+    const input = within(row).getByRole("textbox") as HTMLInputElement;
+    expect(within(row).getByText("In DB")).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "" } });
+    await user.click(within(row).getByRole("button", { name: /update/i }));
+
+    expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "model_access_denied_message");
+    expect(within(row).getByText("In DB")).toBeInTheDocument();
+    expect(within(row).queryByText("Not Set")).not.toBeInTheDocument();
+  });
 });
 
 // The five tabs here are proxy-wide settings. Auto-routers moved to Models + Endpoints.
