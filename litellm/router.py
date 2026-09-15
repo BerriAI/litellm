@@ -2854,12 +2854,13 @@ class Router:
                     if continue_after_content:
                         from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
                             MID_STREAM_CONTINUATION_KWARG,
+                            MID_STREAM_CONTINUATION_MARKER,
                         )
 
                         initial_kwargs["messages"] = self._build_completion_continuation_input(
                             messages, e.generated_content
                         )
-                        initial_kwargs[MID_STREAM_CONTINUATION_KWARG] = True
+                        initial_kwargs[MID_STREAM_CONTINUATION_KWARG] = MID_STREAM_CONTINUATION_MARKER
                     else:
                         initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)

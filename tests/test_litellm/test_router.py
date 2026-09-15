@@ -2229,6 +2229,7 @@ async def test_acompletion_streaming_iterator_continues_after_content_when_eligi
     from litellm.exceptions import MidStreamFallbackError
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
         MID_STREAM_CONTINUATION_KWARG,
+        MID_STREAM_CONTINUATION_MARKER,
     )
 
     router = litellm.Router(
@@ -2264,7 +2265,7 @@ async def test_acompletion_streaming_iterator_continues_after_content_when_eligi
 
     mock_fallback.assert_awaited_once()
     passed_kwargs = mock_fallback.await_args.kwargs["kwargs"]
-    assert passed_kwargs[MID_STREAM_CONTINUATION_KWARG] is True
+    assert passed_kwargs[MID_STREAM_CONTINUATION_KWARG] is MID_STREAM_CONTINUATION_MARKER
     assert passed_kwargs["messages"][-1] == {"role": "assistant", "content": "Hello", "prefix": True}
     assert fallback_chunk in collected
 

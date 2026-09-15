@@ -2,6 +2,7 @@ import pytest
 
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_KWARG,
+    MID_STREAM_CONTINUATION_MARKER,
     ContinuationPrefillDeploymentCheck,
     _deployment_supports_prefill,
 )
@@ -40,6 +41,24 @@ async def test_filter_is_noop_without_continuation_marker():
 
 
 @pytest.mark.asyncio
+async def test_filter_ignores_forged_client_flag():
+    """A client cannot steer routing: a plain truthy value under the marker key
+    (which the proxy could forward from the request body) is not the internal
+    sentinel, so the filter leaves the deployment list untouched."""
+    check = ContinuationPrefillDeploymentCheck()
+    deployments = [_deployment(PREFILL_MODEL, "a"), _deployment(NON_PREFILL_MODEL, "b")]
+
+    for forged in (True, "true", 1, {"any": "json"}):
+        result = await check.async_filter_deployments(
+            model="group",
+            healthy_deployments=deployments,
+            messages=None,
+            request_kwargs={MID_STREAM_CONTINUATION_KWARG: forged},
+        )
+        assert result == deployments
+
+
+@pytest.mark.asyncio
 async def test_filter_keeps_only_prefill_capable_on_continuation():
     check = ContinuationPrefillDeploymentCheck()
     deployments = [_deployment(PREFILL_MODEL, "a"), _deployment(NON_PREFILL_MODEL, "b")]
@@ -48,7 +67,7 @@ async def test_filter_keeps_only_prefill_capable_on_continuation():
         model="group",
         healthy_deployments=deployments,
         messages=None,
-        request_kwargs={MID_STREAM_CONTINUATION_KWARG: True},
+        request_kwargs={MID_STREAM_CONTINUATION_KWARG: MID_STREAM_CONTINUATION_MARKER},
     )
     assert [d["model_info"]["id"] for d in result] == ["a"]
 
@@ -64,6 +83,6 @@ async def test_filter_empties_group_when_no_prefill_capable_deployment():
         model="group",
         healthy_deployments=deployments,
         messages=None,
-        request_kwargs={MID_STREAM_CONTINUATION_KWARG: True},
+        request_kwargs={MID_STREAM_CONTINUATION_KWARG: MID_STREAM_CONTINUATION_MARKER},
     )
     assert result == []

@@ -1,9 +1,9 @@
 """
 Mid-stream fallback continuation: keep the fallback on a deployment that can
-continue a prefilled assistant message. When a request carries
-``MID_STREAM_CONTINUATION_KWARG``, deployments whose model does not support
-assistant prefill are dropped, so the partial text is continued rather than
-regenerated or rejected. Requests without the marker pass through untouched.
+continue a prefilled assistant message. When the router marks a fallback
+re-entry as a continuation, deployments whose model does not support assistant
+prefill are dropped, so the partial text is continued rather than regenerated or
+rejected. Requests without the marker pass through untouched.
 """
 
 from collections.abc import Mapping, Sequence
@@ -15,9 +15,19 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_assistant_prefill
 
-# Marks a fallback re-entry as a mid-stream continuation. Router sets it (via a
-# lazy import) and this filter reads it; kept here to avoid a module-level cycle.
+# The router marks a continuation re-entry by placing MID_STREAM_CONTINUATION_MARKER
+# under this key. Since the proxy can forward arbitrary request-body fields into the
+# router, the marker is a private object checked by type rather than a truthy value:
+# a JSON request body cannot construct one, so a client cannot forge the flag to steer
+# deployment selection toward prefill-capable deployments.
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
+
+
+class _ContinuationMarker:
+    """Unforgeable sentinel; only the router can produce an instance."""
+
+
+MID_STREAM_CONTINUATION_MARKER: Final = _ContinuationMarker()
 
 _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -41,7 +51,8 @@ class ContinuationPrefillDeploymentCheck(CustomLogger):
         request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
-        if not (request_kwargs or {}).get(MID_STREAM_CONTINUATION_KWARG):
+        marker: Final = (request_kwargs or {}).get(MID_STREAM_CONTINUATION_KWARG)
+        if not isinstance(marker, _ContinuationMarker):
             return healthy_deployments
         eligible: Final = (deployment for deployment in healthy_deployments if _deployment_supports_prefill(deployment))
         return list(eligible)  # mutable-ok: downstream deployment selection consumes a mutable list
