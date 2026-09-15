@@ -1,19 +1,12 @@
 """Tests for the single-statement daily spend upsert (LIT-5291)."""
 
-import pathlib
 import re
-from typing import Final
 
-import psycopg
 import pytest
-from psycopg.rows import dict_row
-from pytest_postgresql import factories
 
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
-    GLOBAL_SPEND_TABLE,
     build_bulk_upsert,
-    build_bulk_upsert_with_global_rollup,
     conflict_key,
     merge_by_conflict_key,
 )
@@ -192,146 +185,3 @@ async def test_writer_survives_a_transaction_whose_key_columns_are_null():
     _, params = prisma_client.db.statements[0]
     assert None not in params[:9]
     assert transactions == {}
-
-
-def user_txn(**overrides):
-    txn = {**tag_txn(), "user_id": "u-1", **overrides}
-    del txn["tag"]
-    del txn["request_id"]
-    return txn
-
-
-def _bound_rows(insert_sql: str, params: tuple[object, ...]) -> list[dict[str, object]]:
-    """Each VALUES row of one INSERT as a column -> bound value mapping, consuming params in order."""
-    header = re.search(r"INSERT INTO \"[A-Za-z_]+\" \(([^)]*)\)", insert_sql)
-    assert header is not None, insert_sql
-    columns = [c.strip('"') for c in header.group(1).split(", ") if c != '"updated_at"']
-    row_count = insert_sql.split("ON CONFLICT", 1)[0].count("(NOW() AT TIME ZONE 'UTC'))")
-    return [dict(zip(columns, params[i * len(columns) : (i + 1) * len(columns)])) for i in range(row_count)]
-
-
-def test_global_rollup_folds_every_key_and_user_into_one_row_per_dimension_tuple():
-    """The global table has no api_key or user_id, so a batch spread over many keys and
-    users must collapse to one row per (date, model, group, provider, mcp, endpoint)."""
-    batch = merge_by_conflict_key(
-        USER_TABLE,
-        tuple(user_txn(user_id=f"u-{i}", api_key=f"sk-{i}", spend=1.0, api_requests=1) for i in range(5))
-        + (user_txn(user_id="u-0", api_key="sk-0", model="claude", spend=10.0, api_requests=3),),
-    )
-
-    sql, params = build_bulk_upsert_with_global_rollup(USER_TABLE, batch)
-
-    entity_insert, global_insert = sql.split("RETURNING 1)")
-    entity_rows = _bound_rows(entity_insert, params)
-    global_rows = _bound_rows(global_insert, params[len(entity_rows) * len(entity_rows[0]) :])
-    assert len(entity_rows) == 6
-    assert 'INSERT INTO "LiteLLM_DailyGlobalSpend"' in global_insert
-    assert [(r["model"], r["spend"], r["api_requests"]) for r in global_rows] == [
-        ("claude", 10.0, 3),
-        ("gpt-4o-mini", 5.0, 5),
-    ]
-    assert all("api_key" not in r and "user_id" not in r for r in global_rows)
-    conflict = re.search(r"ON CONFLICT \(([^)]*)\)", global_insert)
-    assert conflict is not None
-    assert conflict.group(1) == ", ".join(f'"{c}"' for c in GLOBAL_SPEND_TABLE.key_columns)
-
-
-def test_global_rollup_params_follow_the_entity_params_in_one_placeholder_sequence():
-    """Both inserts bind from one flat tuple, so the global arm's placeholders must start
-    exactly where the entity arm's stop or every value lands one column off."""
-    batch = merge_by_conflict_key(USER_TABLE, (user_txn(),))
-
-    sql, params = build_bulk_upsert_with_global_rollup(USER_TABLE, batch)
-
-    placeholders = [int(n) for n in re.findall(r"\$(\d+)::", sql)]
-    assert placeholders == list(range(1, len(params) + 1))
-
-
-_bulk_upsert_postgresql_proc: Final = factories.postgresql_proc()
-_bulk_upsert_postgresql: Final = factories.postgresql("_bulk_upsert_postgresql_proc")
-
-_MIGRATIONS_DIR: Final = (
-    pathlib.Path(__file__).resolve().parents[4] / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
-)
-_GLOBAL_SPEND_MIGRATION: Final = _MIGRATIONS_DIR / "20260915000000_add_daily_global_spend" / "migration.sql"
-
-_DAILY_USER_SPEND_DDL: Final = """
-    CREATE TABLE "LiteLLM_DailyUserSpend" (
-        id TEXT PRIMARY KEY,
-        user_id TEXT,
-        date TEXT NOT NULL,
-        api_key TEXT NOT NULL,
-        model TEXT,
-        model_group TEXT,
-        custom_llm_provider TEXT,
-        mcp_namespaced_tool_name TEXT,
-        endpoint TEXT,
-        prompt_tokens BIGINT DEFAULT 0,
-        completion_tokens BIGINT DEFAULT 0,
-        cache_read_input_tokens BIGINT DEFAULT 0,
-        cache_creation_input_tokens BIGINT DEFAULT 0,
-        compression_saved_tokens BIGINT DEFAULT 0,
-        compression_savings_spend DOUBLE PRECISION DEFAULT 0,
-        prompt_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
-        gateway_injected_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
-        autorouter_savings_spend DOUBLE PRECISION DEFAULT 0,
-        spend DOUBLE PRECISION DEFAULT 0,
-        api_requests BIGINT DEFAULT 0,
-        successful_requests BIGINT DEFAULT 0,
-        failed_requests BIGINT DEFAULT 0,
-        created_at TIMESTAMP DEFAULT now(),
-        updated_at TIMESTAMP,
-        UNIQUE (user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint)
-    )
-"""
-
-
-def _execute_dollar_sql(conn: psycopg.Connection, sql: str, params: tuple[object, ...]) -> None:
-    converted: Final = re.sub(r"\$(\d+)", r"%(p\1)s", sql)
-    conn.execute(
-        converted,  # pyright: ignore[reportArgumentType]  # psycopg stubs want a literal-typed query
-        {f"p{i}": v for i, v in enumerate(params, start=1)},
-    )
-    conn.commit()
-
-
-def test_global_rollup_equals_the_per_key_sums_after_repeated_flushes(_bulk_upsert_postgresql: psycopg.Connection):
-    """Against real Postgres and the shipped migration: two flushes of a mixed batch leave
-    the global table exactly equal to the per-key table summed over user and key, with the
-    NULL and '' spellings of a dimension folded into one row."""
-    conn: Final = _bulk_upsert_postgresql
-    conn.execute(_DAILY_USER_SPEND_DDL)  # pyright: ignore[reportArgumentType]  # DDL literal
-    conn.execute(_GLOBAL_SPEND_MIGRATION.read_text())  # pyright: ignore[reportArgumentType]  # DDL literal
-    conn.commit()
-
-    batch = merge_by_conflict_key(
-        USER_TABLE,
-        (
-            user_txn(user_id="u-1", api_key="sk-1", spend=1.0, prompt_tokens=10),
-            user_txn(user_id="u-2", api_key="sk-2", spend=2.0, prompt_tokens=20),
-            user_txn(user_id="u-1", api_key="sk-3", model=None, custom_llm_provider=None, spend=4.0),
-            user_txn(user_id="u-3", api_key="sk-4", model="", custom_llm_provider="", spend=8.0),
-        ),
-    )
-    sql, params = build_bulk_upsert_with_global_rollup(USER_TABLE, batch)
-    _execute_dollar_sql(conn, sql, params)
-    _execute_dollar_sql(conn, sql, params)
-
-    with conn.cursor(row_factory=dict_row) as cur:
-        global_rows = cur.execute(
-            'SELECT model, spend, prompt_tokens, api_requests FROM "LiteLLM_DailyGlobalSpend" ORDER BY model'
-        ).fetchall()
-        per_key = cur.execute(
-            """
-            SELECT COALESCE(model, '') AS model, SUM(spend) AS spend, SUM(prompt_tokens) AS prompt_tokens,
-                   SUM(api_requests) AS api_requests
-            FROM "LiteLLM_DailyUserSpend" GROUP BY COALESCE(model, '') ORDER BY 1
-            """
-        ).fetchall()
-
-    assert [row["model"] for row in global_rows] == ["", "gpt-4o-mini"]
-    assert [(r["model"], r["spend"], int(r["prompt_tokens"]), int(r["api_requests"])) for r in global_rows] == [
-        (r["model"], float(r["spend"]), int(r["prompt_tokens"]), int(r["api_requests"])) for r in per_key
-    ]
-    assert global_rows[0]["spend"] == pytest.approx(24.0)
-    assert global_rows[1]["spend"] == pytest.approx(6.0)

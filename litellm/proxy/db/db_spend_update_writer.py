@@ -46,7 +46,6 @@ from litellm.proxy._types import (
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
-    build_bulk_upsert_with_global_rollup,
     merge_by_conflict_key,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
@@ -1940,11 +1939,7 @@ class DBSpendUpdateWriter:
                             merged_batch = merge_by_conflict_key(
                                 table=table, transactions=tuple(transactions_to_process.values())
                             )
-                            sql, params = (
-                                build_bulk_upsert_with_global_rollup(table=table, batch=merged_batch)
-                                if entity_type == "user"
-                                else build_bulk_upsert(table=table, batch=merged_batch)
-                            )
+                            sql, params = build_bulk_upsert(table=table, batch=merged_batch)
                             await prisma_client.db.execute_raw(sql, *params)
                         except Exception as batch_error:
                             # Log detailed error information for debugging batch upsert failures
