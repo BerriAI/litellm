@@ -2461,7 +2461,7 @@ class Router:
 
             ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
             ## only run if model group given, not model id
-            if not self.has_model_id(model):
+            if model in self.model_names or not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
             input_kwargs: Final = {
