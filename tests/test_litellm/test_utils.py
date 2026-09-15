@@ -2971,6 +2971,9 @@ def test_gemini_embedding_2_ga_in_cost_map():
         assert info.get("input_cost_per_audio_token") == 6.5e-06
         assert info.get("input_cost_per_image_token") == 4.5e-07
         assert info.get("input_cost_per_video_token") == 1.2e-05
+        assert info.get("input_cost_per_audio_token_batches") == 3.25e-06
+        assert info.get("input_cost_per_image_token_batches") == 2.25e-07
+        assert info.get("input_cost_per_video_token_batches") == 6e-06
         assert "input_cost_per_image" not in info
         assert "input_cost_per_audio_per_second" not in info
         assert "input_cost_per_video_per_second" not in info

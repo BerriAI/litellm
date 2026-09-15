@@ -2337,7 +2337,35 @@ def batch_cost_calculator(
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
     if input_cost_per_token_batches is not None:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+        batch_details: Final = parse_prompt_tokens_details(usage)
+        audio_tokens, image_tokens, video_tokens = (
+            batch_details["audio_tokens"],
+            batch_details["image_tokens"],
+            batch_details["video_tokens"],
+        )
+        modality_rates: Final = (
+            cast(float, model_info.get("input_cost_per_audio_token_batches"))
+            if model_info.get("input_cost_per_audio_token_batches") is not None
+            else input_cost_per_token_batches,
+            cast(float, model_info.get("input_cost_per_image_token_batches"))
+            if model_info.get("input_cost_per_image_token_batches") is not None
+            else input_cost_per_token_batches,
+            cast(float, model_info.get("input_cost_per_video_token_batches"))
+            if model_info.get("input_cost_per_video_token_batches") is not None
+            else input_cost_per_token_batches,
+        )
+        total_prompt_cost = sum(
+            tokens * rate
+            for tokens, rate in zip(
+                (
+                    max(cast(int, usage.prompt_tokens) - audio_tokens - image_tokens - video_tokens, 0),
+                    audio_tokens,
+                    image_tokens,
+                    video_tokens,
+                ),
+                (input_cost_per_token_batches, *modality_rates),
+            )
+        )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
