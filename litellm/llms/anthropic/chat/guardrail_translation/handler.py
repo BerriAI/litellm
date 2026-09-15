@@ -678,18 +678,18 @@ class AnthropicMessagesHandler(BaseTranslation):
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):
                     raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-                # Step 3: Map guardrail responses back to original message structure
-                await self._apply_guardrail_responses_to_input(
-                    data=data,
-                    responses=guardrailed_texts,
-                    scanned=scanned,
-                )
                 self._apply_guardrail_tool_calls_to_input(
                     messages=messages,
                     scanned_tool_calls=scanned_tool_calls,
                     pre_guardrail_tool_calls=pre_guardrail_tool_calls,
                     returned_tool_calls=guardrailed_inputs.get("tool_calls"),
                     guardrail_name=guardrail_to_apply.guardrail_name,
+                )
+                # Step 3: Map guardrail responses back to original message structure
+                await self._apply_guardrail_responses_to_input(
+                    data=data,
+                    responses=guardrailed_texts,
+                    scanned=scanned,
                 )
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed input messages: %s", messages)
