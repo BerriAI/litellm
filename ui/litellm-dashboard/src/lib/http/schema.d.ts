@@ -32581,6 +32581,11 @@ export interface components {
         /** MemorySettings */
         MemorySettings: {
             /**
+             * Capture Instructions
+             * @default Save durable new facts, decisions or corrections when useful, without waiting for an explicit request to remember.
+             */
+            capture_instructions: string;
+            /**
              * Enabled
              * @default false
              */
@@ -32599,6 +32604,16 @@ export interface components {
         };
         /** MemorySettingsView */
         MemorySettingsView: {
+            /**
+             * Capture Instructions
+             * @default Save durable new facts, decisions or corrections when useful, without waiting for an explicit request to remember.
+             */
+            capture_instructions: string;
+            /**
+             * Default Capture Instructions
+             * @default Save durable new facts, decisions or corrections when useful, without waiting for an explicit request to remember.
+             */
+            default_capture_instructions: string;
             /**
              * Enabled
              * @default false

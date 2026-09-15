@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { toast } from "@/lib/toast";
@@ -99,6 +100,49 @@ function EnrollmentEditor({
   );
 }
 
+function CaptureGuidanceEditor({
+  value,
+  defaultValue,
+  disabled,
+  onChange,
+}: Readonly<{
+  value: string;
+  defaultValue: string | undefined;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}>) {
+  return (
+    <div className="space-y-3 rounded-lg border p-5">
+      <Label htmlFor="memory-capture-instructions" className="text-base">
+        What should memory remember?
+      </Label>
+      <p id="memory-capture-instructions-help" className="text-sm text-muted-foreground">
+        Guide what assistants save across the gateway. Applies to future saves when saving is enabled; existing memories
+        stay unchanged. Assistants use judgment, so this is guidance rather than a guaranteed filter.
+      </p>
+      <Textarea
+        id="memory-capture-instructions"
+        aria-describedby="memory-capture-instructions-help"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        maxLength={4000}
+        rows={4}
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={disabled || !defaultValue}
+        onClick={() => {
+          if (defaultValue) onChange(defaultValue);
+        }}
+      >
+        Reset to default
+      </Button>
+    </div>
+  );
+}
+
 export function MemoryAdministration({
   userId,
   proxyAdmin,
@@ -114,8 +158,10 @@ export function MemoryAdministration({
   });
   const current = draft ?? settings.data;
   const save = useMutation({
-    mutationFn: ({ enabled, everyone, user_ids, read }: Settings) =>
-      fetchClient.PUT("/memory/v2/settings", { body: { enabled, everyone, user_ids, read: read ?? OFF } }),
+    mutationFn: ({ enabled, everyone, user_ids, read, capture_instructions }: Settings) =>
+      fetchClient.PUT("/memory/v2/settings", {
+        body: { enabled, everyone, user_ids, read: read ?? OFF, capture_instructions },
+      }),
     onSuccess: async ({ data }) => {
       cache.setQueryData(["memorySettings", userId], data);
       setDraft(null);
@@ -170,6 +216,12 @@ export function MemoryAdministration({
             These controls are independent. Turn both off to stop automatic saving and recall. Existing memories remain
             available to authorized viewers. Enabling memory can add model calls, latency, and spend.
           </p>
+          <CaptureGuidanceEditor
+            value={current.capture_instructions}
+            defaultValue={settings.data?.default_capture_instructions}
+            disabled={busy}
+            onChange={(capture_instructions) => setDraft({ ...current, capture_instructions })}
+          />
           {save.error && (
             <p role="alert" className="text-destructive">
               {save.error.message}
@@ -185,9 +237,12 @@ export function MemoryAdministration({
                 save.reset();
               }}
             >
-              Reset
+              Discard changes
             </Button>
-            <Button disabled={busy || !draft} onClick={() => save.mutate(current)}>
+            <Button
+              disabled={busy || !draft || current.capture_instructions?.trim() === ""}
+              onClick={() => save.mutate(current)}
+            >
               Save changes
             </Button>
           </div>

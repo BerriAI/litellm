@@ -12,6 +12,7 @@ from fastapi import HTTPException, Request
 from prisma.models import LiteLLM_MemoryTable
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from litellm.constants import DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
 from litellm.litellm_core_utils.prompt_templates.server_tool_responses import (
     combined_usage,
     executable_server_calls,
@@ -408,6 +409,34 @@ async def test_read_only_injection_and_forced_no_tools_do_not_request_reflection
     )
     await forced.prepare()
     assert forced.data["tool_choice"] == {"type": "none"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["acompletion", "aresponses", "anthropic_messages"])
+@pytest.mark.parametrize("save,read", [(True, False), (True, True), (False, True)])
+async def test_admin_capture_guidance_is_stable_and_only_injected_when_saving(
+    prisma_edge: MagicMock, route: ServerToolRoute, save: bool, read: bool
+) -> None:
+    guidance: Final = "Remember only architecture decisions, including {service} ownership."
+    configured: Final = MemorySettings(enabled=save, read=MemoryEnrollment(enabled=read), capture_instructions=guidance)
+    prisma_edge.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=configured.model_dump())
+    access: Final = await resolve_memory_access(prisma_edge, _IDENTITY)
+    original: Final = {"input" if route == "aresponses" else "messages": [{"role": "user", "content": "Hello"}]}
+    snapshot: Final = json.dumps(original)
+    loops: Final = tuple(
+        GatewayMemoryLoop(AsyncMock(), request(), original, route, MemoryStore(prisma_edge, access), UserAPIKeyAuth())
+        for _ in range(2)
+    )
+    for loop in loops:
+        await loop.prepare()
+        payload: Final = json.dumps(loop.data)
+        assert payload.count(guidance) == int(save)
+        assert "Each observation must quote its evidence verbatim" in payload if save else guidance not in payload
+        assert DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS not in payload
+        assert "litellm_memory_capture" in payload if save else "litellm_memory_capture" not in payload
+    for field in ("input", "messages", "instructions", "system", "tools"):
+        assert loops[0].data.get(field) == loops[1].data.get(field)
+    assert json.dumps(original) == snapshot
 
 
 @pytest.mark.asyncio

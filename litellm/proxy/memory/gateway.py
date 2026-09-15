@@ -35,12 +35,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import wrap_passthrough_sse_bytes_with_keepalive_pings
 from litellm.proxy.memory.continuation import MemoryContinuation, MemoryContinuations
 from litellm.proxy.memory.knowledge import (
-    MEMORY_CAPTURE_WORKFLOW,
-    MEMORY_READ_ONLY_WORKFLOW,
     MEMORY_TOOL_NAMES,
-    MEMORY_WORKFLOW,
     execute_memory_tool,
     memory_functions,
+    memory_workflow,
 )
 from litellm.proxy.memory.policy import (
     MemoryIdentity,
@@ -124,11 +122,7 @@ class GatewayMemoryLoop:
             },
             self.route,
             functions,
-            MEMORY_WORKFLOW
-            if self.store.access.save_enabled and self.store.access.read_enabled
-            else MEMORY_CAPTURE_WORKFLOW
-            if self.store.access.save_enabled
-            else MEMORY_READ_ONLY_WORKFLOW,
+            memory_workflow(self.store.access),
             reserved_names=MEMORY_TOOL_NAMES,
         )
         self.replaced_input = trailing_system_messages(injected, self.route)

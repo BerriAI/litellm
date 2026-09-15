@@ -4,14 +4,17 @@ import json
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.models import LiteLLM_MemoryTable
+from pydantic import ValidationError
 
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
 from litellm.proxy._types import UI_TEAM_ID, KeyManagementRoutes, LiteLLM_TeamTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.record_permissions import can_read_team_records
@@ -129,6 +132,34 @@ async def test_default_off_and_proxy_admin_can_enable_selected_users(database: M
 
 
 @pytest.mark.asyncio
+async def test_capture_guidance_defaults_persists_and_resets_without_enabling_memory(database: MagicMock) -> None:
+    admin: Final = auth("admin", LitellmUserRoles.PROXY_ADMIN)
+    defaults: Final = await management.get_settings(admin)
+    assert defaults.capture_instructions == defaults.default_capture_instructions == DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
+    database.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value={"enabled": True})
+    assert (await management.get_settings(admin)).capture_instructions == DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
+    saved: Final = await management.set_settings(
+        MemorySettings(capture_instructions="  Remember only architecture decisions.  "), admin
+    )
+    written: Final = database.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"]
+    database.db.litellm_config.find_unique.return_value = SimpleNamespace(param_value=written)
+    loaded: Final = await management.get_settings(admin)
+    assert loaded.capture_instructions == saved.capture_instructions == "Remember only architecture decisions."
+    assert not loaded.enabled and not loaded.read.enabled
+    assert (await management.memory_store(auth())).access.settings.capture_instructions == loaded.capture_instructions
+    reset: Final = await management.set_settings(
+        MemorySettings(capture_instructions=loaded.default_capture_instructions), admin
+    )
+    assert reset.capture_instructions == DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
+
+
+@pytest.mark.parametrize("guidance", ["", " \n\t", "x" * 4001])
+def test_capture_guidance_rejects_empty_or_excessive_instructions(guidance: str) -> None:
+    with pytest.raises(ValidationError):
+        MemorySettings(capture_instructions=guidance)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "role",
     [
@@ -141,7 +172,9 @@ async def test_default_off_and_proxy_admin_can_enable_selected_users(database: M
 async def test_only_proxy_admin_can_change_activation(database: MagicMock, role: LitellmUserRoles) -> None:
     database.db.litellm_teamtable.find_many.return_value = [team(role="admin")]
     with pytest.raises(HTTPException) as exc:
-        await management.set_settings(MemorySettings(enabled=True), auth(role=role))
+        await management.set_settings(
+            MemorySettings(enabled=True, capture_instructions="Remember only architecture decisions."), auth(role=role)
+        )
     assert exc.value.status_code == 403
     database.db.litellm_config.upsert.assert_not_awaited()
 

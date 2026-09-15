@@ -10,6 +10,7 @@ vi.unmock("@/lib/toast");
 
 const fetchMock = vi.fn<typeof fetch>();
 const calls: { path: string; method: string; body: unknown; params: string }[] = [];
+const DEFAULT_GUIDANCE = "Save useful durable facts";
 const OFF = { enabled: false, everyone: true, user_ids: [] };
 let settings: components["schemas"]["MemorySettings"];
 let paginated = false;
@@ -43,7 +44,7 @@ beforeEach(async () => {
   await testQueryClient.cancelQueries();
   testQueryClient.clear();
   calls.length = 0;
-  settings = { ...OFF, read: OFF };
+  settings = { ...OFF, read: OFF, capture_instructions: DEFAULT_GUIDANCE };
   paginated = false;
   failure = "";
   canEdit = true;
@@ -65,7 +66,12 @@ beforeEach(async () => {
     const response = () => {
       if (path === "/memory/v2/settings") {
         if (request.method === "PUT") settings = JSON.parse(text);
-        return { ...settings, user_names: { u1: "Alex Rivera" } };
+        return {
+          capture_instructions: DEFAULT_GUIDANCE,
+          ...settings,
+          default_capture_instructions: DEFAULT_GUIDANCE,
+          user_names: { u1: "Alex Rivera" },
+        };
       }
       if (path === "/memory/v2/status")
         return {
@@ -105,6 +111,42 @@ beforeEach(async () => {
 });
 
 describe("Memory dashboard", () => {
+  it("saves capture guidance, reloads it, and lets admins reset or discard edits", async () => {
+    session("proxy_admin");
+    const user = userEvent.setup();
+    const view = renderWithProviders(<Memory />);
+    await user.click(screen.getByRole("tab", { name: "Administration" }));
+    const input = await screen.findByRole("textbox", { name: "What should memory remember?" });
+    expect(input).toHaveValue(DEFAULT_GUIDANCE);
+    fireEvent.change(input, { target: { value: "Remember only architecture decisions" } });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(settings.capture_instructions).toBe("Remember only architecture decisions"));
+    expect(settings.enabled).toBe(false);
+    expect(settings.read?.enabled).toBe(false);
+    expect(calls.find(({ method }) => method === "PUT")?.body).not.toHaveProperty("default_capture_instructions");
+    view.unmount();
+    testQueryClient.clear();
+    renderWithProviders(<Memory />);
+    await user.click(screen.getByRole("tab", { name: "Administration" }));
+    expect(await screen.findByRole("textbox", { name: "What should memory remember?" })).toHaveValue(
+      "Remember only architecture decisions",
+    );
+    await user.click(screen.getByRole("button", { name: "Reset to default" }));
+    expect(screen.getByRole("textbox", { name: "What should memory remember?" })).toHaveValue(DEFAULT_GUIDANCE);
+    expect(settings.capture_instructions).toBe("Remember only architecture decisions");
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(screen.getByRole("textbox", { name: "What should memory remember?" })).toHaveValue(
+      "Remember only architecture decisions",
+    );
+    await user.click(screen.getByRole("button", { name: "Reset to default" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(settings.capture_instructions).toBe(DEFAULT_GUIDANCE));
+    fireEvent.change(screen.getByRole("textbox", { name: "What should memory remember?" }), {
+      target: { value: "   " },
+    });
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
   it("lets admins enable recall for selected users while saving remains off", async () => {
     session("proxy_admin");
     const user = userEvent.setup();
@@ -118,7 +160,11 @@ describe("Memory dashboard", () => {
     await user.click(screen.getByLabelText("Add a user to recall"));
     await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    const expected = { ...OFF, read: { enabled: true, everyone: false, user_ids: ["u1"] } };
+    const expected = {
+      ...OFF,
+      capture_instructions: DEFAULT_GUIDANCE,
+      read: { enabled: true, everyone: false, user_ids: ["u1"] },
+    };
     await waitFor(() => expect(settings).toEqual(expected));
     expect(screen.getByRole("switch", { name: "Save memories" })).not.toBeChecked();
     await user.click(screen.getByRole("tab", { name: "Memories" }));
@@ -168,7 +214,13 @@ describe("Memory dashboard", () => {
     await user.click(await screen.findByRole("option", { name: "alex@example.test" }));
     expect(screen.getByRole("button", { name: "Remove alex@example.test from saving" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    const expected = { enabled: true, everyone: false, user_ids: ["u1"], read: OFF };
+    const expected = {
+      enabled: true,
+      everyone: false,
+      user_ids: ["u1"],
+      read: OFF,
+      capture_instructions: DEFAULT_GUIDANCE,
+    };
     await waitFor(() => expect(settings).toEqual(expected));
   });
 
@@ -181,7 +233,13 @@ describe("Memory dashboard", () => {
     expect(await screen.findByRole("button", { name: "Remove Alex Rivera from saving" })).toBeVisible();
     await user.click(screen.getByRole("switch", { name: "Save memories" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    const expected = { enabled: false, everyone: false, user_ids: ["u1"], read: OFF };
+    const expected = {
+      enabled: false,
+      everyone: false,
+      user_ids: ["u1"],
+      read: OFF,
+      capture_instructions: DEFAULT_GUIDANCE,
+    };
     await waitFor(() => expect(settings).toEqual(expected));
   });
 
@@ -206,6 +264,8 @@ describe("Memory dashboard", () => {
     expect(screen.queryByRole("button", { name: "Edit memory" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close" }));
     await user.click(screen.getByRole("tab", { name: "Administration" }));
+    expect(await screen.findByRole("textbox", { name: "What should memory remember?" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reset to default" })).toBeDisabled();
     expect(await screen.findByRole("switch", { name: "Save memories" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });

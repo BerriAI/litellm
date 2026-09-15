@@ -85,7 +85,9 @@ async def set_settings(settings: MemorySettings, auth: UserAPIKeyAuth = _AUTH) -
         )
         if frozenset(user.user_id for user in users) != frozenset(selected):
             raise HTTPException(status_code=422, detail="One or more selected users no longer exist")
-    saved: Final = MemorySettings(**enrollments[0].model_dump(), read=enrollments[1])
+    saved: Final = MemorySettings(
+        **enrollments[0].model_dump(), read=enrollments[1], capture_instructions=settings.capture_instructions
+    )
     await ConfigRepository(prisma).set_param(MEMORY_CONFIG_PARAM, saved.model_dump(mode="json"))
     await invalidate_memory_configuration()
     return await settings_view(saved)

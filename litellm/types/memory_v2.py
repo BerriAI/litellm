@@ -3,7 +3,9 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
+
+from litellm.constants import DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
 
 MemoryKind: TypeAlias = Literal["workflow", "decision", "correction", "learning", "context", "disagreement"]
 MemoryCertainty: TypeAlias = Literal["user_stated", "observed", "inferred"]
@@ -33,10 +35,14 @@ class MemoryEnrollment(BaseModel):
 
 class MemorySettings(MemoryEnrollment):
     read: MemoryEnrollment = Field(default_factory=MemoryEnrollment)
+    capture_instructions: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)] = (
+        DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
+    )
 
 
 class MemorySettingsView(MemorySettings):
     user_names: Mapping[str, str]
+    default_capture_instructions: str = DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS
 
 
 class MemoryStatus(BaseModel):
