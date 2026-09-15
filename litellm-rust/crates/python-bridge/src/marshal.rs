@@ -92,11 +92,27 @@ pub(crate) fn project_optional_fields(
     kwargs: &Bound<'_, PyDict>,
     names: &[&str],
 ) -> PyResult<Map<String, Value>> {
-    names
+    let controls: Vec<String> = kwargs
+        .py()
+        .import("litellm.types.utils")?
+        .getattr("all_litellm_params")?
+        .extract()?;
+    kwargs
         .iter()
-        .filter_map(|name| match kwargs.get_item(name) {
-            Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
-            Ok(None) => None,
+        .map(|(name, value)| Ok((name.extract::<String>()?, value)))
+        .filter_map(|entry: PyResult<_>| match entry {
+            Ok((name, value))
+                if names.contains(&name.as_str())
+                    || (!controls.contains(&name)
+                        && !litellm_core::params::is_control_param(&name)
+                        && !matches!(
+                            name.as_str(),
+                            "model" | "document" | "timeout" | "input_sources"
+                        )) =>
+            {
+                Some(from_py(&value).map(|value| (name, value)))
+            }
+            Ok(_) => None,
             Err(error) => Some(Err(error)),
         })
         .collect()

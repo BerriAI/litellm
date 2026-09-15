@@ -33,7 +33,11 @@ pub(super) fn prepare_provider_request(
     let headers =
         validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
 
-    let typed_request = serde_json::from_value(request.body).map_err(|err| {
+    let params: crate::params::OpaqueParams = serde_json::from_value(request.body)
+        .map_err(|_| Error::InvalidRequest("messages body must be an object".into()))?;
+    let mut fields = params.into_provider_body()?;
+    fields.insert("model".into(), Value::String(model.clone()));
+    let typed_request = serde_json::from_value(Value::Object(fields)).map_err(|err| {
         Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
     let transformed = config.transform_request(typed_request)?;

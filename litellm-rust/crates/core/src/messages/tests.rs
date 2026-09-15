@@ -199,7 +199,9 @@ async fn messages_round_trip_builds_native_anthropic_request() {
         body: json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "hi"}]
+            "messages": [{"role": "user", "content": "hi", "future_message": null}],
+            "future_option": {"nested": [null, false, 0]},
+            "extra_body": {"max_tokens": 2048, "model": "wrong"}
         }),
         api_key: Some("sk-ant"),
         api_base: Some(&format!("http://{addr}")),
@@ -214,7 +216,16 @@ async fn messages_round_trip_builds_native_anthropic_request() {
     assert_eq!(response.stop_reason.as_deref(), Some("end_turn"));
 
     let request = server.await.expect("server task completes");
-    let (head, _) = request.split_once("\r\n\r\n").expect("has body");
+    let (head, body) = request.split_once("\r\n\r\n").expect("has body");
+    let body: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body["future_option"], json!({"nested":[null,false,0]}));
+    assert_eq!(
+        body["messages"][0].get("future_message"),
+        Some(&Value::Null)
+    );
+    assert_eq!(body["max_tokens"], 2048);
+    assert_eq!(body["model"], "claude-sonnet-4-5");
+    assert!(body.get("extra_body").is_none());
     assert!(head.starts_with("POST /v1/messages "), "{head}");
     let head_lower = head.to_ascii_lowercase();
     assert!(head_lower.contains("x-api-key: sk-ant"), "{head}");

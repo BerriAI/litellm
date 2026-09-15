@@ -30,11 +30,16 @@ mod types {
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(untagged)]
     pub(crate) enum DocumentIntelligenceRequest {
-        #[serde(rename = "urlSource")]
-        UrlSource(String),
-        #[serde(rename = "base64Source")]
-        Base64Source(String),
+        UrlSource {
+            #[serde(rename = "urlSource")]
+            url_source: String,
+        },
+        Base64Source {
+            #[serde(rename = "base64Source")]
+            base64_source: String,
+        },
     }
 
     #[derive(Clone, Debug, PartialEq)]
@@ -385,11 +390,14 @@ mod mapping {
             return Err(OcrRequestError::MissingDocumentUrl);
         }
         Ok(if let Some(document) = InlineDocument::parse(source)? {
-            DocumentIntelligenceRequest::Base64Source(
-                STANDARD.encode(document.decode(crate::constants::OCR_INLINE_MAX_BYTES)?),
-            )
+            DocumentIntelligenceRequest::Base64Source {
+                base64_source: STANDARD
+                    .encode(document.decode(crate::constants::OCR_INLINE_MAX_BYTES)?),
+            }
         } else {
-            DocumentIntelligenceRequest::UrlSource(source.to_string())
+            DocumentIntelligenceRequest::UrlSource {
+                url_source: source.to_string(),
+            }
         })
     }
 

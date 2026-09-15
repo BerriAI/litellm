@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -7,19 +7,125 @@ use serde_json::{Map, Value};
 #[serde(transparent)]
 pub struct OpaqueParams(Map<String, Value>);
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct ParsedProviderParams<T> {
+    #[serde(flatten)]
+    pub known: T,
+    #[serde(default, flatten)]
+    pub extra_params: OpaqueParams,
+}
+
+pub fn is_control_param(name: &str) -> bool {
+    matches!(
+        name,
+        "api_key"
+            | "api_base"
+            | "custom_llm_provider"
+            | "extra_headers"
+            | "timeout"
+            | "timeout_seconds"
+            | "request_timeout"
+            | "max_retries"
+            | "req_format"
+            | "max_response_bytes"
+            | "litellm_call_id"
+            | "litellm_logging_obj"
+            | "litellm_metadata"
+            | "proxy_server_request"
+            | "callbacks"
+            | "success_callback"
+            | "failure_callback"
+            | "guardrails"
+            | "azure_ad_token"
+            | "azure_ad_token_provider"
+            | "tenant_id"
+            | "client_id"
+            | "client_secret"
+            | "azure_scope"
+            | "azure_authority_host"
+            | "azure_credential"
+            | "azure_federated_token_file"
+            | "enable_azure_ad_token_refresh"
+            | "vertex_credentials"
+            | "vertex_ai_credentials"
+            | "vertex_project"
+            | "vertex_ai_project"
+            | "vertex_location"
+            | "vertex_ai_location"
+            | "aws_access_key_id"
+            | "aws_secret_access_key"
+            | "aws_session_token"
+            | "aws_region_name"
+            | "aws_session_name"
+            | "aws_profile_name"
+            | "aws_role_name"
+            | "aws_web_identity_token"
+            | "aws_sts_endpoint"
+            | "aws_external_id"
+            | "aws_bedrock_runtime_endpoint"
+    )
+}
+
 impl OpaqueParams {
     pub fn into_inner(self) -> Map<String, Value> {
         self.0
     }
 
-    pub fn retain_supported(&self, supported: &[&str]) -> Self {
-        Self(
-            self.iter()
-                .filter(|(name, _)| supported.contains(&name.as_str()))
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect(),
-        )
+    pub fn without(&self, names: &[&str]) -> Self {
+        self.iter()
+            .filter(|(name, _)| !names.contains(&name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
     }
+
+    pub fn provider_params(&self) -> Self {
+        self.iter()
+            .filter(|(name, _)| !is_control_param(name))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
+    }
+
+    pub fn into_provider_body(self) -> Result<Map<String, Value>, crate::Error> {
+        let mut fields = self.0;
+        let overrides = match fields.remove("extra_body") {
+            None | Some(Value::Null) => Map::new(),
+            Some(Value::Object(fields)) => fields,
+            Some(_) => {
+                return Err(crate::Error::InvalidRequest(
+                    "extra_body must be an object".into(),
+                ));
+            }
+        };
+        Ok(fields
+            .into_iter()
+            .chain(overrides)
+            .filter(|(name, _)| name != "extra_body" && !is_control_param(name))
+            .collect())
+    }
+}
+
+pub(crate) fn merge_extra_params<B: Serialize>(
+    body: &B,
+    extra_params: OpaqueParams,
+) -> Result<Value, crate::Error> {
+    let Value::Object(fields) = serde_json::to_value(body)
+        .map_err(|_| crate::Error::InvalidRequest("body must be a JSON object".into()))?
+    else {
+        return Err(crate::Error::InvalidRequest(
+            "body must be a JSON object".into(),
+        ));
+    };
+    Ok(Value::Object(
+        fields
+            .into_iter()
+            .chain(
+                extra_params
+                    .into_provider_body()?
+                    .into_iter()
+                    .filter(|(name, _)| name != "model"),
+            )
+            .collect(),
+    ))
 }
 
 impl Deref for OpaqueParams {
@@ -27,6 +133,12 @@ impl Deref for OpaqueParams {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl DerefMut for OpaqueParams {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -64,15 +176,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn supported_keys_preserve_opaque_values() {
+    fn extras_merge_shallowly_and_preserve_values_without_leaking_controls() {
+        let extras: OpaqueParams = serde_json::from_value(json!({
+            "future": {"nested": [false, 0, null]},
+            "explicit_null": null,
+            "azure_ad_token": "secret",
+            "req_format": "native",
+            "extra_body": {
+                "future": {"replacement": true},
+                "temperature": 0.5,
+                "model": "override",
+                "aws_secret_access_key": "secret"
+            }
+        }))
+        .unwrap();
+        let body =
+            merge_extra_params(&json!({"model":"resolved", "temperature":0.1}), extras).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "model":"resolved", "temperature":0.5,
+                "future":{"replacement":true}, "explicit_null":null
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_extra_body_is_rejected_and_null_is_empty() {
+        for value in [json!(false), json!([]), json!("value"), json!(1)] {
+            let params: OpaqueParams = serde_json::from_value(json!({"extra_body":value})).unwrap();
+            assert!(params.into_provider_body().is_err());
+        }
+        let params: OpaqueParams =
+            serde_json::from_value(json!({"extra_body":null,"future":null})).unwrap();
+        assert_eq!(
+            Value::Object(params.into_provider_body().unwrap()),
+            json!({"future":null})
+        );
+    }
+
+    #[test]
+    fn provider_params_preserve_opaque_values() {
         let params: OpaqueParams = serde_json::from_value(json!({
             "object": {"future": [1, null]},
             "null": null,
-            "unsupported": true
+            "azure_ad_token": "secret"
         }))
         .unwrap();
 
-        let retained = params.retain_supported(&["object", "null"]);
+        let retained = params.provider_params();
 
         assert_eq!(
             serde_json::to_value(retained).unwrap(),

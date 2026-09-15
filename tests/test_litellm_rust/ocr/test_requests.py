@@ -63,6 +63,38 @@ def test_native_ocr_sends_model_and_document_to_mistral_ocr_path(ocr_server: Rec
     assert ocr_server.requests[0].body == {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_provider_extensions_and_overrides_survive_native_lifecycle(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    options: Final = {
+        "pages": [0],
+        "future_option": {"nested": [None, False, 0]},
+        "null_option": None,
+        "extra_body": {"pages": [2], "override_option": True, "model": "wrong"},
+    }
+    if asynchronous:
+        await call_native_aocr(ocr_server, **options)
+    else:
+        call_native_ocr(ocr_server, **options)
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": OCR_DOCUMENT,
+        "pages": [2],
+        "future_option": {"nested": [None, False, 0]},
+        "null_option": None,
+        "override_option": True,
+    }
+
+
+def test_non_json_provider_extension_fails_before_http(ocr_server: RecordingServer) -> None:
+    ocr_server.expected_requests = 0
+    with pytest.raises(litellm.APIConnectionError, match="unsupported type object"):
+        call_native_ocr(ocr_server, future_option=object())
+
+
 def test_native_ocr_prepares_file_document_like_python(ocr_server: RecordingServer) -> None:
     response: Final = call_native_ocr(
         ocr_server,
@@ -479,7 +511,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     from litellm.models.credentials import CredentialItem
 
     pages: Final = [0]
-    opaque: Final = object()
+    opaque: Final = {"nested": [None, False, 0]}
     monkeypatch.setenv("MISTRAL_API_KEY", "environment-key")
     monkeypatch.setattr(
         litellm,
@@ -516,6 +548,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     assert response.pages[0].markdown == "native OCR response"
     assert ocr_server.requests[0].headers["authorization"] == f"Bearer {expected_key}"
     assert ocr_server.requests[0].body["pages"] == [0, 2]
+
 
 
 @pytest.mark.parametrize("source", ["sdk", "proxy"])

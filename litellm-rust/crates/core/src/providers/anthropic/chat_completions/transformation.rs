@@ -128,7 +128,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         messages: &[ChatMessage],
         optional_params: &OpaqueParams,
     ) -> Option<Unsupported> {
-        unsupported_param(self.supported_openai_params(), &[], optional_params)
+        unsupported_param(optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
             // Anthropic rejects a request whose first turn is not a user turn.
             // Python only repairs that under `litellm.modify_params`, which the
@@ -147,11 +147,10 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         optional_params: OpaqueParams,
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
-            body: anthropic_body(
-                model,
-                &build_conversation(&messages),
-                optional_params.into_inner(),
-            ),
+            body: crate::params::merge_extra_params(
+                &anthropic_body(model, &build_conversation(&messages), Map::new()),
+                optional_params.without(&["stream"]),
+            )?,
         })
     }
 

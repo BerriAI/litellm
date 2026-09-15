@@ -16,8 +16,10 @@ impl ResponsesWebSocketProviderConfig for OpenAIResponsesWsConfig {
         event: &ResponsesWsEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error> {
+        let mut event = event.clone();
+        event.data = event.data.into_provider_body()?.into();
         Ok(ResponsesWsTransformResult::passthrough(enforce_model(
-            event, model,
+            &event, model,
         )))
     }
 
@@ -33,6 +35,24 @@ impl ResponsesWebSocketProviderConfig for OpenAIResponsesWsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_extensions_round_trip_with_overrides_and_resolved_model() {
+        let event = serde_json::from_value(serde_json::json!({
+            "type":"response.create", "future":{"nested":[null,false,0]},
+            "extra_body":{"model":"wrong","provider_option":null}
+        }))
+        .unwrap();
+        let result = OPENAI_RESPONSES_WS_CONFIG
+            .transform_ws_request(&event, "resolved")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&result.events[0]).unwrap(),
+            serde_json::json!({
+                "type":"response.create", "model":"resolved", "future":{"nested":[null,false,0]}, "provider_option":null
+            })
+        );
+    }
 
     #[test]
     fn openai_config_is_native_and_enforces_model() {

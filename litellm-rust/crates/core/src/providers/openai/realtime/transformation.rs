@@ -73,7 +73,9 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         event: &RealtimeEvent,
         _model: &str,
     ) -> Result<RealtimeTransformResult, Error> {
-        Ok(RealtimeTransformResult::passthrough(event.clone()))
+        let mut event = event.clone();
+        event.data = event.data.into_provider_body()?.into();
+        Ok(RealtimeTransformResult::passthrough(event))
     }
 
     fn transform_realtime_response(
@@ -82,6 +84,29 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         _model: &str,
     ) -> Result<RealtimeTransformResult, Error> {
         Ok(RealtimeTransformResult::passthrough(event.clone()))
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_unknown_events_and_nested_extensions() {
+        let event = serde_json::from_value(serde_json::json!({
+            "type":"future.event", "session":{"future":[null,false,0]},
+            "extra_body":{"provider_option":null}
+        }))
+        .unwrap();
+        let result = OPENAI_REALTIME_CONFIG
+            .transform_realtime_request(&event, "resolved")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&result.events[0]).unwrap(),
+            serde_json::json!({
+                "type":"future.event", "session":{"future":[null,false,0]}, "provider_option":null
+            })
+        );
     }
 }
 

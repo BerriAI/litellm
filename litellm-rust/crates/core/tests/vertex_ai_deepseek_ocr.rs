@@ -45,7 +45,9 @@ async fn facade_executes_vertex_deepseek_at_the_openai_endpoint() {
     let body = request_body(&requests[0]);
     assert_eq!(body["model"], "deepseek-ai/deepseek-ocr-maas");
     assert_eq!(body["temperature"], 0.1);
-    assert!(body.get("future_ocr_option").is_none());
+    assert_eq!(body["future_ocr_option"], true);
+    assert_eq!(body["provider_option"], "value");
+    assert!(body.get("vertex_project").is_none());
     assert!(body.get("extra_body").is_none());
     assert_eq!(
         body["messages"][0]["content"][0],

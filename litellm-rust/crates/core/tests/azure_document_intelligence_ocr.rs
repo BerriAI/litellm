@@ -21,7 +21,7 @@ async fn facade_maps_pages_features_and_url_document() {
     let mut request = wire_request(
         "azure_ai/doc-intelligence/prebuilt-read",
         &base,
-        json!({"pages":[2,0,0,1],"features":["keyValuePairs","languages"]}),
+        json!({"pages":[2,0,0,1],"features":["keyValuePairs","languages"], "future_option": {"nested":null}, "extra_body":{"provider_option":false}}),
     );
     request.document = serde_json::from_value(json!({
         "type":"document_url",
@@ -42,7 +42,7 @@ async fn facade_maps_pages_features_and_url_document() {
     let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(
         body,
-        json!({"urlSource":"https://example.com/document.pdf"})
+        json!({"urlSource":"https://example.com/document.pdf", "future_option":{"nested":null}, "provider_option":false})
     );
 }
 

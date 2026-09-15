@@ -86,7 +86,7 @@ fn text_content_block(text: String) -> ContentBlock {
     ]);
     ContentBlock {
         cache_control: None,
-        extra,
+        extra: extra.into(),
     }
 }
 

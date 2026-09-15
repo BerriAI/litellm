@@ -30,6 +30,31 @@ fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
 }
 
 #[test]
+fn forwards_provider_extensions_and_applies_explicit_overrides() {
+    let opts = json!({"metadata":{"user_id":"u1"}, "future":{"nested":[null,false,0]},
+        "temperature":0.1, "extra_body":{"temperature":0.7, "model":"wrong"}});
+    let msgs = json!([{"role":"user","content":"hi"}]);
+    assert_eq!(reason(msgs.clone(), opts.clone()), None);
+    let body = transform("resolved", msgs, opts);
+    assert_eq!(body["future"], json!({"nested":[null,false,0]}));
+    assert_eq!(body["metadata"], json!({"user_id":"u1"}));
+    assert_eq!(body["temperature"], 0.7);
+    assert_eq!(body["model"], "resolved");
+    assert!(body.get("extra_body").is_none());
+}
+
+#[test]
+fn overrides_cannot_hide_unsupported_streaming() {
+    assert_eq!(
+        reason(
+            json!([{"role":"user","content":"hi"}]),
+            json!({"stream":false,"extra_body":{"stream":true}})
+        ),
+        Some(Unsupported("streaming"))
+    );
+}
+
+#[test]
 fn builds_the_messages_body_python_builds() {
     let body = transform(
         "claude-sonnet-4-5",
@@ -160,14 +185,11 @@ fn accepts_an_explicit_stream_false() {
 }
 
 #[test]
-fn declines_any_param_outside_the_allowlist() {
+fn declines_params_requiring_unsupported_behavior() {
     for param in [
         json!({"tools": []}),
         json!({"tool_choice": {"type": "auto"}}),
         json!({"thinking": {"type": "enabled"}}),
-        json!({"system": "injected"}),
-        json!({"metadata": {"user_id": "u1"}}),
-        json!({"output_config": {"effort": "high"}}),
     ] {
         assert_eq!(
             reason(json!([{"role": "user", "content": "hi"}]), param.clone()),

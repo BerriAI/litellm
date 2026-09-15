@@ -36,6 +36,24 @@ fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
 }
 
 #[test]
+fn forwards_native_extension_locations_without_guessing_inference_keys() {
+    let opts = json!({"maxTokens":64, "future":null,
+        "additionalModelRequestFields":{"top_k":40,"new_option":[false,0]},
+        "extra_body":{"requestMetadata":{"key":"value"}}, "aws_secret_access_key":"secret"});
+    let msgs = json!([{"role":"user","content":"hi"}]);
+    assert_eq!(reason(msgs.clone(), opts.clone()), None);
+    let body = transform(msgs, opts);
+    assert_eq!(body["inferenceConfig"], json!({"maxTokens":64}));
+    assert_eq!(
+        body["additionalModelRequestFields"],
+        json!({"top_k":40,"new_option":[false,0]})
+    );
+    assert_eq!(body.get("future"), Some(&Value::Null));
+    assert_eq!(body["requestMetadata"], json!({"key":"value"}));
+    assert!(body.get("aws_secret_access_key").is_none());
+}
+
+#[test]
 fn builds_the_converse_body_python_builds() {
     let body = transform(
         json!([
@@ -123,13 +141,11 @@ fn declines_top_k_because_python_routes_it_by_base_model() {
 }
 
 #[test]
-fn declines_tools_and_other_params_outside_the_allowlist() {
+fn declines_params_requiring_unsupported_behavior() {
     for param in [
         json!({"tools": []}),
         json!({"tool_choice": {"auto": {}}}),
         json!({"thinking": {"type": "enabled"}}),
-        json!({"requestMetadata": {"k": "v"}}),
-        json!({"outputConfig": {}}),
         json!({"_parallel_tool_use_config": {}}),
     ] {
         assert_eq!(

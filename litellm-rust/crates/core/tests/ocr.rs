@@ -59,7 +59,7 @@ async fn facade_executes_direct_mistral_once() {
     let result = perform_ocr(wire_request(
         "mistral/model",
         &base,
-        json!({"pages":"0,2-4","extract_header":true,"unknown":"ignored"}),
+        json!({"pages":"0,2-4","extract_header":true,"unknown":{"nested":[null,false,0]}}),
     ))
     .await
     .unwrap();
@@ -81,7 +81,8 @@ async fn facade_executes_direct_mistral_once() {
             "model":"model",
             "document":{"type":"document_url","document_url":"data:application/pdf;base64,YWJj"},
             "pages":"0,2-4",
-            "extract_header":true
+            "extract_header":true,
+            "unknown":{"nested":[null,false,0]}
         })
     );
 }
@@ -130,6 +131,60 @@ async fn facade_uses_the_injected_http_client() {
 struct RecordingHooks {
     events: Arc<Mutex<Vec<&'static str>>>,
     block: bool,
+}
+
+struct ExtensionHooks;
+
+impl OcrHooks for ExtensionHooks {
+    fn intercepts_requests(&self) -> bool {
+        true
+    }
+
+    fn during_call(
+        &self,
+        mut request: OcrDuringCallRequest,
+    ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+        Box::pin(async move {
+            assert_eq!(request.body["pages"], json!([2]));
+            assert_eq!(request.body.get("future"), Some(&Value::Null));
+            assert!(
+                !request
+                    .retained_fields
+                    .iter()
+                    .any(|field| field == "pages" || field == "document")
+            );
+            request.body.as_object_mut().unwrap().remove("future");
+            request.body["hook_option"] = json!({"nested":[null,false,0]});
+            Ok(request)
+        })
+    }
+}
+
+#[tokio::test]
+async fn composed_extensions_reach_hooks_and_removed_fields_stay_removed() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let request = super::LiteLLMOcrRequest {
+        hooks: Arc::new(ExtensionHooks),
+        ..wire_request(
+            "mistral/model",
+            &base,
+            json!({
+                "pages":[0], "future":null, "extra_body":{"pages":[2],
+                    "document":{"type":"document_url","document_url":"data:application/pdf;base64,eHl6"}}
+            }),
+        )
+    };
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    let requests = seen.lock().unwrap();
+    let body: Value = serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["pages"], json!([2]));
+    assert_eq!(
+        body["document"]["document_url"],
+        "data:application/pdf;base64,eHl6"
+    );
+    assert_eq!(body["hook_option"], json!({"nested":[null,false,0]}));
+    assert!(body.get("future").is_none());
 }
 
 impl OcrHooks for RecordingHooks {

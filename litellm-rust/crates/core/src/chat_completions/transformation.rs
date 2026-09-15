@@ -18,11 +18,6 @@ pub enum ChatCompletionsAuth {
 
 /// Why a request cannot be served by the Rust path.
 ///
-/// The core declines rather than guessing: the host turns this into a
-/// transparent fallback to the Python implementation, which covers the full
-/// surface. Acceptance is an allowlist, so a parameter or message shape the
-/// core has never seen declines by construction instead of being translated
-/// wrong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unsupported(pub &'static str);
 
@@ -77,12 +72,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         messages: &[ChatMessage],
         optional_params: &OpaqueParams,
     ) -> Option<Unsupported> {
-        unsupported_param(
-            self.supported_openai_params(),
-            self.config_params(),
-            optional_params,
-        )
-        .or_else(|| messages.iter().find_map(unsupported_message))
+        unsupported_param(optional_params).or_else(|| messages.iter().find_map(unsupported_message))
     }
 
     fn transform_request(
@@ -99,26 +89,31 @@ pub trait ChatCompletionsProviderConfig: Sync {
     ) -> Result<ChatCompletionsResponse, Error>;
 }
 
-pub fn unsupported_param(
-    supported: &'static [(&'static str, &'static str)],
-    config: &'static [&'static str],
-    optional_params: &OpaqueParams,
-) -> Option<Unsupported> {
-    if optional_params
+pub fn unsupported_param(optional_params: &OpaqueParams) -> Option<Unsupported> {
+    let effective = match optional_params.clone().into_provider_body() {
+        Ok(fields) => fields,
+        Err(_) => return None,
+    };
+    if effective
         .get(STREAM_PARAM)
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
         return Some(Unsupported("streaming"));
     }
-    optional_params
+    effective
         .keys()
         .any(|key| {
-            key != STREAM_PARAM
-                && !supported
-                    .iter()
-                    .any(|(_, provider_name)| *provider_name == key)
-                && !config.contains(&key.as_str())
+            matches!(
+                key.as_str(),
+                "tools"
+                    | "tool_choice"
+                    | "toolConfig"
+                    | "thinking"
+                    | "top_k"
+                    | "topK"
+                    | "_parallel_tool_use_config"
+            )
         })
         .then_some(Unsupported("unrecognized request parameter"))
 }
