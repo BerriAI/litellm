@@ -30,22 +30,6 @@ pub(crate) struct CohereRequest {
     pub output_format: OutputFormat,
 }
 
-pub(crate) fn validate_document(document: &OcrDocument) -> Result<(), crate::ocr::Error> {
-    let OcrDocument::ImageUrl { image_url, .. } = document else {
-        return Err(crate::ocr::Error::CohereImageOnly);
-    };
-    if image_url.is_empty() {
-        return Err(crate::ocr::Error::CohereImageOnly);
-    }
-    if let Some(inline) = InlineDocument::parse(image_url)? {
-        if !inline.mime_type().type_.eq_ignore_ascii_case("image") {
-            return Err(crate::ocr::Error::CohereImageOnly);
-        }
-        inline.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
-    }
-    Ok(())
-}
-
 #[derive(Deserialize)]
 pub(crate) struct CohereResponse {
     #[serde(default)]
@@ -57,14 +41,124 @@ pub(crate) struct CohereResponse {
 struct CoherePage {
     index: Option<i64>,
     markdown: Option<CohereMarkdown>,
-    blocks: Option<Vec<Map<String, Value>>>,
+    blocks: Option<Vec<CohereBlock>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct CohereMarkdown {
     #[serde(default)]
     content: String,
-    images: Option<Vec<Map<String, Value>>>,
+    images: Option<Vec<CohereImage>>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct CohereBoundingBox<T> {
+    top_left_x: T,
+    top_left_y: T,
+    bottom_right_x: T,
+    bottom_right_y: T,
+    #[serde(flatten)]
+    extra_fields: Map<String, Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum CohereImageCategory {
+    Other,
+    Flowchart,
+    Logo,
+    Signature,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CohereImage {
+    id: String,
+    description: String,
+    category: CohereImageCategory,
+    bounding_box: CohereBoundingBox<i64>,
+    bounding_box_normalized: CohereBoundingBox<f64>,
+    #[serde(flatten)]
+    extra_fields: Map<String, Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum CohereBlock {
+    Text {
+        text: CohereText,
+        #[serde(flatten)]
+        extra_fields: Map<String, Value>,
+    },
+    Image {
+        image: CohereImage,
+        #[serde(flatten)]
+        extra_fields: Map<String, Value>,
+    },
+    Table {
+        table: CohereTable,
+        #[serde(flatten)]
+        extra_fields: Map<String, Value>,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+struct CohereText {
+    content: String,
+    #[serde(flatten)]
+    extra_fields: Map<String, Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CohereTable {
+    r#type: CohereTableType,
+    html: String,
+    bounding_box: CohereBoundingBox<i64>,
+    bounding_box_normalized: CohereBoundingBox<f64>,
+    title: Option<String>,
+    description: Option<String>,
+    #[serde(flatten)]
+    extra_fields: Map<String, Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum CohereTableType {
+    Html,
+}
+
+#[derive(Serialize)]
+struct NormalizedCohereImage {
+    id: String,
+    description: String,
+    category: CohereImageCategory,
+    bbox: CohereBoundingBox<i64>,
+    bounding_box: CohereBoundingBox<i64>,
+    bounding_box_normalized: CohereBoundingBox<f64>,
+    #[serde(flatten)]
+    extra_fields: Map<String, Value>,
+}
+
+impl From<CohereImage> for NormalizedCohereImage {
+    fn from(image: CohereImage) -> Self {
+        Self {
+            id: image.id,
+            description: image.description,
+            category: image.category,
+            bbox: image.bounding_box.clone(),
+            bounding_box: image.bounding_box,
+            bounding_box_normalized: image.bounding_box_normalized,
+            extra_fields: image.extra_fields,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct NormalizedCoherePage {
+    index: i64,
+    markdown: String,
+    images: Option<Vec<NormalizedCohereImage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocks: Option<Vec<CohereBlock>>,
 }
 
 #[derive(Deserialize)]
@@ -75,68 +169,6 @@ struct CohereMeta {
 #[derive(Deserialize)]
 struct CohereBilledUnits {
     pages: Option<i64>,
-}
-
-pub(crate) fn transform_response(
-    model: &str,
-    response: CohereResponse,
-) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-    let pages_processed = response
-        .meta
-        .and_then(|meta| meta.billed_units)
-        .and_then(|units| units.pages)
-        .map(Ok)
-        .unwrap_or_else(|| {
-            i64::try_from(response.pages.len())
-                .map_err(|_| crate::ocr::Error::NumericRange("pages"))
-        })?;
-    let pages = response
-        .pages
-        .into_iter()
-        .enumerate()
-        .map(|(position, page)| {
-            let index = page.index.map(Ok).unwrap_or_else(|| {
-                i64::try_from(position).map_err(|_| crate::ocr::Error::NumericRange("page index"))
-            })?;
-            let (content, images) = page
-                .markdown
-                .map(|markdown| {
-                    let images =
-                        markdown
-                            .images
-                            .filter(|images| !images.is_empty())
-                            .map(|images| {
-                                images
-                                    .into_iter()
-                                    .map(|mut image| {
-                                        if let Some(Value::Object(bbox)) =
-                                            image.get("bounding_box").cloned()
-                                        {
-                                            image.insert("bbox".into(), Value::Object(bbox));
-                                        }
-                                        Value::Object(image)
-                                    })
-                                    .collect::<Vec<_>>()
-                            });
-                    (markdown.content, images)
-                })
-                .unwrap_or_default();
-            let mut normalized = json!({"index": index, "markdown": content, "images": images});
-            if let Some(blocks) = page.blocks {
-                normalized["blocks"] = json!(blocks);
-            }
-            Ok(normalized)
-        })
-        .collect::<Result<Vec<_>, crate::ocr::Error>>()?;
-    Ok(LiteLLMOcrResponse {
-        pages,
-        model: model.into(),
-        document_annotation: None,
-        usage_info: Some(json!({"pages_processed": pages_processed})),
-        object: "ocr".into(),
-        extra_fields: Map::new(),
-        provider_native_response: None,
-    })
 }
 
 #[derive(Default)]
@@ -198,6 +230,81 @@ impl BaseOcrConfig for CohereParseConfig {
     }
 }
 
+pub(crate) fn validate_document(document: &OcrDocument) -> Result<(), crate::ocr::Error> {
+    let OcrDocument::ImageUrl { image_url, .. } = document else {
+        return Err(crate::ocr::Error::CohereImageOnly);
+    };
+    if image_url.is_empty() {
+        return Err(crate::ocr::Error::CohereImageOnly);
+    }
+    if let Some(inline) = InlineDocument::parse(image_url)? {
+        if !inline.mime_type().type_.eq_ignore_ascii_case("image") {
+            return Err(crate::ocr::Error::CohereImageOnly);
+        }
+        inline.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn transform_response(
+    model: &str,
+    response: CohereResponse,
+) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+    let pages_processed = response
+        .meta
+        .and_then(|meta| meta.billed_units)
+        .and_then(|units| units.pages)
+        .map(Ok)
+        .unwrap_or_else(|| {
+            i64::try_from(response.pages.len())
+                .map_err(|_| crate::ocr::Error::NumericRange("pages"))
+        })?;
+    let pages = response
+        .pages
+        .into_iter()
+        .enumerate()
+        .map(|(position, page)| {
+            let index = page.index.map(Ok).unwrap_or_else(|| {
+                i64::try_from(position).map_err(|_| crate::ocr::Error::NumericRange("page index"))
+            })?;
+            let (content, images) = page
+                .markdown
+                .map(|markdown| {
+                    let images =
+                        markdown
+                            .images
+                            .filter(|images| !images.is_empty())
+                            .map(|images| {
+                                images
+                                    .into_iter()
+                                    .map(NormalizedCohereImage::from)
+                                    .collect::<Vec<_>>()
+                            });
+                    (markdown.content, images)
+                })
+                .unwrap_or_default();
+            serde_json::to_value(NormalizedCoherePage {
+                index,
+                markdown: content,
+                images,
+                blocks: page.blocks,
+            })
+            .map_err(|_| crate::ocr::Error::ResponseField {
+                path: "pages".into(),
+            })
+        })
+        .collect::<Result<Vec<_>, crate::ocr::Error>>()?;
+    Ok(LiteLLMOcrResponse {
+        pages,
+        model: model.into(),
+        document_annotation: None,
+        usage_info: Some(json!({"pages_processed": pages_processed})),
+        object: "ocr".into(),
+        extra_fields: Map::new(),
+        provider_native_response: None,
+    })
+}
+
 fn complete_url(base: &str) -> Result<String, crate::ocr::Error> {
     let parsed = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -256,10 +363,21 @@ mod tests {
                         "content":"receipt",
                         "images":[{
                             "id":"image",
-                            "bounding_box":{"top_left_x":1,"bottom_right_x":48},
-                            "bounding_box_normalized":{"top_left_x":0.04,"bottom_right_x":0.15},
+                            "bounding_box":{
+                                "top_left_x":1,
+                                "top_left_y":2,
+                                "bottom_right_x":48,
+                                "bottom_right_y":49
+                            },
+                            "bounding_box_normalized":{
+                                "top_left_x":0.04,
+                                "top_left_y":0.05,
+                                "bottom_right_x":0.15,
+                                "bottom_right_y":0.16
+                            },
                             "description":"scan",
-                            "category":"logo"
+                            "category":"logo",
+                            "provider_extension":"preserved"
                         }]
                     }
                 },
@@ -278,6 +396,10 @@ mod tests {
         );
         assert_eq!(normalized.pages[0]["images"][0]["description"], "scan");
         assert_eq!(normalized.pages[0]["images"][0]["category"], "logo");
+        assert_eq!(
+            normalized.pages[0]["images"][0]["provider_extension"],
+            "preserved"
+        );
         assert_eq!(normalized.pages[1]["index"], 1);
         assert_eq!(normalized.pages[1]["markdown"], "");
         assert_eq!(normalized.pages[1]["blocks"][0]["text"]["content"], "total");
@@ -310,6 +432,66 @@ mod tests {
         .unwrap();
         assert_eq!(normalized.usage_info.unwrap()["pages_processed"], 1);
         assert!(normalized.pages[0]["images"].is_null());
+    }
+
+    #[test]
+    fn response_types_documented_block_variants() {
+        let response = serde_json::from_value(json!({
+            "pages": [{
+                "type": "blocks",
+                "index": 0,
+                "blocks": [
+                    {"type": "text", "text": {"content": "hello"}},
+                    {
+                        "type": "image",
+                        "image": {
+                            "id": "img-0",
+                            "description": "logo",
+                            "category": "logo",
+                            "bounding_box": {
+                                "top_left_x": 1,
+                                "top_left_y": 2,
+                                "bottom_right_x": 3,
+                                "bottom_right_y": 4
+                            },
+                            "bounding_box_normalized": {
+                                "top_left_x": 0.1,
+                                "top_left_y": 0.2,
+                                "bottom_right_x": 0.3,
+                                "bottom_right_y": 0.4
+                            }
+                        }
+                    },
+                    {
+                        "type": "table",
+                        "table": {
+                            "type": "html",
+                            "html": "<table></table>",
+                            "bounding_box": {
+                                "top_left_x": 5,
+                                "top_left_y": 6,
+                                "bottom_right_x": 7,
+                                "bottom_right_y": 8
+                            },
+                            "bounding_box_normalized": {
+                                "top_left_x": 0.5,
+                                "top_left_y": 0.6,
+                                "bottom_right_x": 0.7,
+                                "bottom_right_y": 0.8
+                            },
+                            "title": "Totals"
+                        }
+                    }
+                ]
+            }]
+        }))
+        .unwrap();
+        let normalized = transform_response("parse-v5.0", response).unwrap();
+        let blocks = normalized.pages[0]["blocks"].as_array().unwrap();
+        assert_eq!(blocks[0]["text"]["content"], "hello");
+        assert_eq!(blocks[1]["image"]["category"], "logo");
+        assert_eq!(blocks[2]["table"]["type"], "html");
+        assert_eq!(blocks[2]["table"]["title"], "Totals");
     }
 
     #[test]
