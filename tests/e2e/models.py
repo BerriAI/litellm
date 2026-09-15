@@ -76,6 +76,7 @@ class KeyGenerateBody(BaseModel):
     budget_duration: str | None = None
     user_id: str | None = None
     team_id: str | None = None
+    project_id: str | None = None
     organization_id: str | None = None
     budget_id: str | None = None
     key_alias: str | None = None
@@ -139,6 +140,8 @@ class KeyInfo(BaseModel):
     models: list[str] = []
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    project_id: str | None = None
+    organization_id: str | None = None
     team_id: str | None = None
     blocked: bool | None = None
     spend: float | None = None
@@ -1057,6 +1060,7 @@ class KeyUpdateBody(BaseModel):
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
     key: str
+    project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
     tpm_limit: int | None = None

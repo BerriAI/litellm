@@ -40,6 +40,11 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.carried_budget_state import (
+    OrgBudgetSnapshot,
+    TeamBudgetSnapshot,
+    UserBudgetSnapshot,
+)
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -859,6 +864,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
+        "/user/password/change",  # endpoint only ever writes the caller's own row
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -1301,6 +1307,11 @@ class UpdateKeyRequest(KeyRequestBase):
     auto_rotate: bool | None = None
     rotation_interval: str | None = None
     organization_id: str | None = None
+
+    project_id: str | None = Field(
+        default=None,
+        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1798,6 +1809,17 @@ class NewUserRequest(GenerateRequestBase):
     send_invite_email: bool | None = None
     sso_user_id: str | None = None
     organizations: list[str] | None = None
+    password: str | None = None
+
+    @field_validator("password")
+    @classmethod
+    def password_not_supported(cls, value: str | None) -> str | None:
+        if value is not None:
+            raise ValueError(
+                "password cannot be set via /user/new. Users set their own password through an "
+                "invitation link (POST /invitation/new)."
+            )
+        return value
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1820,7 +1842,8 @@ class NewUserResponse(GenerateKeyResponse):
 
 
 class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with BulkUpdateUserRequest
-    password: str | None = None
+    # repr=False keeps the plaintext out of management-endpoint alerts, which str() the request model
+    password: str | None = Field(default=None, repr=False)
     spend: float | None = None
     metadata: dict | None = None
     user_alias: str | None = None
@@ -1848,6 +1871,16 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+
+class ChangePasswordRequest(LiteLLMPydanticObjectBase):
+    current_password: str = Field(repr=False)
+    new_password: str = Field(repr=False)
+
+
+class ChangePasswordResponse(LiteLLMPydanticObjectBase):
+    user_id: str
+    message: str
 
 
 class DeleteUserRequest(LiteLLMPydanticObjectBase):
@@ -3106,6 +3139,9 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
+    user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
+    org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
@@ -3778,6 +3814,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     )
 
 
+class HTTPExceptionErrorDetail(TypedDict):
+    """The `{"error": <message>}` shape most proxy endpoints raise as `HTTPException.detail`."""
+
+    error: ReadOnly[str]
+
+
 class SpendLogsRouterMetadata(TypedDict):
     """
     Router provenance stamped on spend logs for deployments flagged with
@@ -3869,6 +3911,7 @@ class SpendLogsPayload(TypedDict):
     session_id: str | None
     request_duration_ms: int | None
     status: Literal["success", "failure"]
+    litellm_call_id: ReadOnly[str | None]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -4567,7 +4610,6 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     )
     metadata_doc_str = """Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }"""
     max_parallel_requests_doc_str = """Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x."""
-    soft_budget_doc_str = """Optional[float] - Get alerts when user crosses given budget, doesn't block requests."""
     model_max_budget_doc_str = """Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)"""
     model_rpm_limit_doc_str = """Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
     model_tpm_limit_doc_str = """Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""

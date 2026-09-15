@@ -181,7 +181,9 @@ class TestAgentLaunchArgs:
         assert 'model_providers.litellm.env_key="OPENAI_API_KEY"' in args
         assert 'model_providers.litellm.wire_api="responses"' in args
         assert "model_providers.litellm.supports_websockets=false" in args
-        assert joined.count("-c") == 6
+        assert "model_providers.litellm.requires_openai_auth=false" in args
+        assert "model_providers.litellm.http_headers={}" in args
+        assert joined.count("-c") == 8
 
     def test_codex_uses_basename(self):
         assert agent_launch_args("/usr/local/bin/codex", "http://localhost:4000") == (

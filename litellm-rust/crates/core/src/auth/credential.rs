@@ -9,6 +9,21 @@ use crate::AuthError;
 
 use super::{ResolvedCredential, SecretValue, TokenProviderHandle};
 
+pub fn credential_index(requested: &str, names: &[String]) -> Option<usize> {
+    names.iter().position(|name| name == requested)
+}
+
+pub fn credential_default_fields<'a>(
+    supplied: &[String],
+    credential_fields: &'a [String],
+) -> Vec<&'a str> {
+    credential_fields
+        .iter()
+        .filter(|name| !supplied.contains(name))
+        .map(String::as_str)
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialFileRef {
     Path(PathBuf),
