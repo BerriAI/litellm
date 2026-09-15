@@ -642,6 +642,100 @@ class TestSAPTransformationIntegration:
             )
 
 
+class TestMapOpenaiParams:
+    """Unit tests for GenAIHubOrchestrationConfig.map_openai_params."""
+
+    @pytest.fixture
+    def config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        c = GenAIHubOrchestrationConfig.__new__(GenAIHubOrchestrationConfig)
+        return c
+
+    def test_supported_params_pass_through(self, config):
+        result = config.map_openai_params(
+            non_default_params={"temperature": 0.7, "reasoning_effort": "high", "thinking": {"type": "enabled", "budget_tokens": 2000}, "user": "u1"},
+            optional_params={},
+            model="anthropic--claude-4-sonnet",
+            drop_params=False,
+        )
+        assert result["temperature"] == 0.7
+        assert result["reasoning_effort"] == "high"
+        assert result["thinking"] == {"type": "enabled", "budget_tokens": 2000}
+        assert result["user"] == "u1"
+
+    def test_unsupported_params_are_excluded(self, config):
+        result = config.map_openai_params(
+            non_default_params={"store": True, "service_tier": "auto", "modalities": ["text"]},
+            optional_params={},
+            model="gpt-4o",
+            drop_params=False,
+        )
+        assert result == {}
+
+    def test_reasoning_effort_passes_for_all_sap_model_names(self, config):
+        # SAP model names don't match OpenAI's o-series/gpt-5 patterns;
+        # the override ensures they are not silently dropped by the inherited dispatcher.
+        for model in ("anthropic--claude-4-sonnet", "gpt-4o", "gemini-2.5-flash", "gpt-5", "amazon--titan"):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+            assert "reasoning_effort" in result, f"reasoning_effort dropped for {model}"
+
+    def test_thinking_passes_for_all_sap_model_names(self, config):
+        thinking = {"type": "enabled", "budget_tokens": 2000}
+        for model in ("anthropic--claude-4-sonnet", "gpt-4o", "gemini-2.5-flash"):
+            result = config.map_openai_params(
+                non_default_params={"thinking": thinking},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+            assert "thinking" in result, f"thinking dropped for {model}"
+
+    def test_existing_optional_params_are_preserved(self, config):
+        result = config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={"seed": 42},
+            model="gpt-4o",
+            drop_params=False,
+        )
+        assert result["seed"] == 42
+        assert result["temperature"] == 0.5
+
+
+class TestGetSupportedOpenaiParams:
+    """Unit tests for GenAIHubOrchestrationConfig.get_supported_openai_params."""
+
+    @pytest.fixture
+    def config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        return GenAIHubOrchestrationConfig.__new__(GenAIHubOrchestrationConfig)
+
+    def test_new_params_present_for_standard_models(self, config):
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet", "gemini-2.5-flash"):
+            params = config.get_supported_openai_params(model)
+            assert "user" in params, f"user missing for {model}"
+            assert "reasoning_effort" in params, f"reasoning_effort missing for {model}"
+            assert "thinking" in params, f"thinking missing for {model}"
+
+    def test_response_format_excluded_for_unsupported_models(self, config):
+        for model in ("amazon--titan", "cohere--command", "alephalpha--luminous", "gpt-4"):
+            assert "response_format" not in config.get_supported_openai_params(model)
+
+    def test_tool_choice_excluded_for_gemini_and_amazon(self, config):
+        for model in ("gemini-2.5-flash", "amazon--titan"):
+            assert "tool_choice" not in config.get_supported_openai_params(model)
+
+    def test_tool_choice_present_for_gpt_and_anthropic(self, config):
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet"):
+            assert "tool_choice" in config.get_supported_openai_params(model)
+
+
 class TestNormalizeReasoningContent:
     """Unit tests for GenAIHubOrchestrationConfig._normalize_reasoning_content."""
 
