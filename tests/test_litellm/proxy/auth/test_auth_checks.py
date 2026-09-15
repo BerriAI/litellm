@@ -514,6 +514,31 @@ async def test_can_team_access_model_all_team_models_expands_router_models():
 
 
 @pytest.mark.asyncio
+async def test_can_team_access_model_error_lists_direct_and_access_group_models():
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=["direct-model"],
+        access_group_ids=["ag-1"],
+    )
+
+    with patch(  # test-quality-ok: access-group lookup has no dependency-injection seam
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new=AsyncMock(return_value=["group-model"]),
+    ):
+        assert await can_team_access_model("direct-model", team_object, None) is True
+        assert await can_team_access_model("group-model", team_object, None) is True
+
+        with pytest.raises(ProxyException) as exc_info:
+            await can_team_access_model("blocked-model", team_object, None)
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+    assert "direct-model" in exc_info.value.message
+    assert "group-model" in exc_info.value.message
+
+
+@pytest.mark.asyncio
 async def test_get_key_object_should_reconnect_once_on_db_connection_error():
     mock_prisma_client = MagicMock()
     mock_prisma_client.get_data = AsyncMock(
