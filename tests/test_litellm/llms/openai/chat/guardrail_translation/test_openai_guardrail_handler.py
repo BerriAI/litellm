@@ -2000,6 +2000,32 @@ class TestNoScannableContentRecordsNotRun:
         assert guardrail.last_inputs is None
         assert self._recorded_entries(data) == []
 
+    @pytest.mark.asyncio
+    async def test_scoped_out_text_with_image_records_not_run(self):
+        """Scoping removed text too, so the skip is recorded even though an image sat beside it"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="image-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Describe this picture."},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                    ],
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None
+        entries = self._recorded_entries(data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_response"] == "no scannable content after message scoping"
+
 
 class ToolDroppingTextGuardrail(CustomGuardrail):
     """Answers one text per non-tool message it saw, the way a guardrail that
