@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     ModelInfo,
     ModelResponse,
