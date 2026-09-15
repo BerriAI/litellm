@@ -1,5 +1,7 @@
 """Provider / exporter factory + the Baggage span processor."""
 
+import math
+import os
 import queue
 import threading
 import time
@@ -22,6 +24,7 @@ from opentelemetry.sdk._logs.export import (
     LogExporter,
     SimpleLogRecordProcessor,
 )
+from opentelemetry.sdk.environment_variables import OTEL_METRIC_EXPORT_INTERVAL
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
@@ -815,7 +818,13 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
 
     ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
     and ``otlp_grpc`` export over OTLP with the configured endpoint/headers. The
-    reader exports on a 5s period, matching v1.
+    reader exports on a 5s period, matching v1, unless the operator sets the
+    standard ``OTEL_METRIC_EXPORT_INTERVAL`` (milliseconds). Passing an explicit
+    interval to the SDK reader disables its own reading of that variable, so it
+    is resolved here: a 5s period re-ships every cumulative series the process
+    has ever recorded twelve times a minute, whatever the traffic, and a
+    per-datapoint-billed backend (Azure Monitor, Datadog) has no way to coarsen
+    that from its side.
 
     Histograms keep the SDK's default cumulative temporality. Prometheus-backed
     OTLP receivers (Grafana Cloud / Mimir, and the Prometheus OTLP endpoint)
@@ -857,7 +866,39 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
     else:
         exporter = ConsoleMetricExporter()
 
-    return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+    return PeriodicExportingMetricReader(exporter, export_interval_millis=resolve_metric_export_interval_millis())
+
+
+DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS: Final = 5000
+
+
+def resolve_metric_export_interval_millis() -> float:
+    """The metric export period: ``OTEL_METRIC_EXPORT_INTERVAL`` if set, else 5s.
+
+    The SDK only consults the variable when no explicit interval is passed, so
+    the fallback to litellm's historical 5s has to live here. An unparseable
+    value keeps the default rather than failing the whole OTel bootstrap.
+    """
+    raw: Final = os.environ.get(OTEL_METRIC_EXPORT_INTERVAL)
+    if not raw:
+        return DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS
+    try:
+        interval: Final = float(raw)
+    except ValueError:
+        verbose_logger.warning(
+            "OTEL_METRIC_EXPORT_INTERVAL=%r is not a number; using %sms",
+            raw,
+            DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS,
+        )
+        return DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS
+    if not math.isfinite(interval) or interval <= 0:
+        verbose_logger.warning(
+            "OTEL_METRIC_EXPORT_INTERVAL=%r must be a positive finite number; using %sms",
+            raw,
+            DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS,
+        )
+        return DEFAULT_METRIC_EXPORT_INTERVAL_MILLIS
+    return interval
 
 
 def _otlp_logs_endpoint(endpoint: str | None) -> str | None:

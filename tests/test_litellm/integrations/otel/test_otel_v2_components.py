@@ -730,6 +730,31 @@ def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():
     assert temporality[Histogram] is AggregationTemporality.CUMULATIVE
 
 
+def test_metric_export_interval_defaults_to_5s(monkeypatch):
+    monkeypatch.delenv("OTEL_METRIC_EXPORT_INTERVAL", raising=False)
+    assert providers.resolve_metric_export_interval_millis() == 5000
+
+
+def test_metric_export_interval_honours_otel_metric_export_interval(monkeypatch):
+    """``OTEL_METRIC_EXPORT_INTERVAL`` is the standard knob for the export period.
+
+    The SDK reads it only when no explicit interval is passed, and litellm
+    passes one, so without this the variable is silently dead — and a 5s
+    cumulative export re-ships every series ever recorded twelve times a
+    minute regardless of traffic, which is what a per-datapoint-billed backend
+    charges for.
+    """
+    monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL", "60000")
+    assert providers.resolve_metric_export_interval_millis() == 60000
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "0", "-5", "nan", "inf", "-inf"])
+def test_metric_export_interval_rejects_bad_values(monkeypatch, raw):
+    """A bad value keeps the 5s default; ``inf`` in particular would start no export worker."""
+    monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL", raw)
+    assert providers.resolve_metric_export_interval_millis() == 5000
+
+
 def test_otlp_logs_endpoint_normalization():
     norm = providers._otlp_logs_endpoint
     # A base endpoint gets the signal path appended (the common OTLP env shape).
@@ -906,8 +931,8 @@ def test_error_details_stamped_as_span_attributes_for_labels_ingest():
     attributes so backends that flatten attrs into label indexes (Elastic APM
     ``labels.*``, Datadog span tags) render them. The exception event with the
     full untruncated message stays alongside."""
-    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
     from litellm.integrations.otel.emitter import SpanEmitter
+    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     provider, exporter = providers.in_memory_provider(cfg)
