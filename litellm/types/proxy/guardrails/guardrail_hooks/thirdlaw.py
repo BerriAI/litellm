@@ -36,6 +36,11 @@ class ThirdlawGuardrailRequest(BaseModel):
     request_headers: Mapping[str, str] | None = None
     request_body: Mapping[str, object] | None = None
     response_body: Mapping[str, object] | None = None
+    # The buffered stream beside the assembled body: the events a /v1/responses or chat completions
+    # client received, or the raw SSE text a /v1/messages client received. The service may fold
+    # either side and fall back to the other, without a LiteLLM release in between.
+    response_chunks: Sequence[Mapping[str, object]] | None = None
+    response_sse: str | None = None
     # Text a /v1/responses stream delivered in delta events that its terminal body does not repeat
     # (reasoning summaries, tool-call arguments on some providers). Present only when non-empty.
     streamed_deltas_not_in_body: Sequence[str] | None = None
@@ -72,6 +77,10 @@ class ThirdlawGuardrailConfigModelOptionalParams(BaseModel):
     unscannable_stream_fallback: Literal["fail_closed", "fail_open"] = Field(
         default="fail_closed",
         description="Controls LiteLLM behavior when a streamed response cannot be assembled into a scannable shape (for example /v1/responses and text-completion streams). fail_closed refuses the stream. fail_open forwards it unscanned, which lets a caller pick such an endpoint to bypass response moderation.",
+    )
+    send_stream_chunks: bool | None = Field(
+        default=True,
+        description="If true (default), a finished streamed response is posted both as the assembled provider body in response_body and as the buffered stream beside it: response_chunks for /v1/responses and chat completions, response_sse for /v1/messages. Set to false to post the assembled body alone.",
     )
     streaming_buffer_until_moderated: bool | None = Field(
         default=True,
