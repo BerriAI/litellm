@@ -2288,7 +2288,7 @@ def _batch_rate(
     fallback: float,
 ) -> float:
     rate: Final = model_info.get(key)
-    return fallback if rate is None else cast(float, rate)
+    return fallback if rate is None else rate
 
 
 def batch_cost_calculator(
