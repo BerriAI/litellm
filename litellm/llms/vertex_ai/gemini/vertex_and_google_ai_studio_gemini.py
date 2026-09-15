@@ -184,12 +184,24 @@ def _normalize_gemini_speech_config_item(value: object) -> object:
 def normalize_gemini_speech_config(
     value: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
-    normalized_value: Final = _normalize_gemini_speech_config_item(value)
-    if isinstance(normalized_value, dict):
-        return cast(  # cast-ok: the runtime dict check establishes the normalizer's concrete result shape
-            dict[str, object], normalized_value
-        )
-    return {}  # mutable-ok: provider request serialization requires a concrete empty dict
+    nested_config: Final = value.get("speechConfig", value.get("speech_config"))
+    config: Final = nested_config if isinstance(nested_config, Mapping) else value
+    normalized_value: Final = _normalize_gemini_speech_config_item(config)
+    if not isinstance(normalized_value, dict):
+        return {}  # mutable-ok: provider request serialization requires a concrete empty dict
+    normalized: Final = cast(  # cast-ok: runtime dict check establishes the normalizer's concrete result shape
+        dict[str, object], normalized_value
+    )
+    voice_name: Final = next(
+        (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
+        None,
+    )
+    if voice_name is None or "voiceConfig" in normalized or "multiSpeakerVoiceConfig" in normalized:
+        return normalized
+    return {  # mutable-ok: provider request serialization requires a concrete dict
+        **{key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice", "modelName")},
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}},
+    }
 
 
 class VertexAIBaseConfig:
