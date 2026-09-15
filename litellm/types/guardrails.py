@@ -137,6 +137,7 @@ class SupportedGuardrailIntegrations(Enum):
     COMPRESR = "compresr"
     STRAIKER = "straiker"
     ALICE = "alice"
+    CONDUCT = "conduct"
 
 
 class Role(Enum):
@@ -550,6 +551,16 @@ class BedrockGuardrailConfigModel(BaseModel):
         "call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS "
         "still rejects is bisected automatically, so this value only trades round trips against "
         "batch size and cannot fail a request on its own.",
+    )
+    contextual_grounding_from_messages: bool = Field(
+        default=False,
+        description="ApplyGuardrail: when True, post-call scans of a request with no grounding_source / "
+        "query content parts send the system and developer messages as the grounding source and "
+        "the latest user message as the query, so the guardrail's contextual grounding policy can "
+        "score the response. Bedrock bills contextual grounding units for these scans and rejects "
+        "queries, sources and responses over its contextual grounding length limits, so leave this "
+        "off for guardrails without a contextual grounding policy. Default False: plain messages "
+        "are never sent as grounding context.",
     )
 
 

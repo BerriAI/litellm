@@ -554,6 +554,7 @@ class OpenTelemetryV2(CustomLogger):
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
+            trace_name=call.trace_name,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -984,8 +985,8 @@ def build_otel_v2_logger(
 
 
 def _logger_class(config: OpenTelemetryV2Config) -> type[OpenTelemetryV2]:
-    if "langfuse" not in config.mapper_names or not config.capture_span_content:
+    if "langfuse" not in config.mapper_names:
         return OpenTelemetryV2
-    from litellm.integrations.otel.langfuse_logger import LangfuseOpenTelemetryV2
+    from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2, LangfuseOpenTelemetryV2
 
-    return LangfuseOpenTelemetryV2
+    return LangfuseContentOpenTelemetryV2 if config.capture_span_content else LangfuseOpenTelemetryV2
