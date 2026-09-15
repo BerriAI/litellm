@@ -10,8 +10,9 @@ contract of `base_llm_http_handler.audio_transcriptions`.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, NoReturn
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
@@ -68,7 +69,19 @@ SONIOX_BOOL_PARAMS: Final[frozenset[str]] = frozenset(
 _JSON_CONTAINER: Final = TypeAdapter[dict[str, object] | list[object]](dict[str, object] | list[object])
 
 
-def _decode_form_value(key: str, value: object) -> object:
+@dataclass(frozen=True, slots=True)
+class SonioxInvalidBoolParam:
+    key: str
+    value: str
+
+
+def raise_soniox_form_error(error: SonioxInvalidBoolParam) -> NoReturn:
+    raise SonioxException(
+        message=f"`{error.key}` must be a boolean, got {error.value!r}", status_code=400, headers=None
+    )
+
+
+def _decode_form_value(key: str, value: object) -> object | SonioxInvalidBoolParam:
     if not isinstance(value, str):
         return value
     if key in SONIOX_BOOL_PARAMS:
@@ -77,7 +90,7 @@ def _decode_form_value(key: str, value: object) -> object:
             return True
         if lowered in ("false", "0"):
             return False
-        raise SonioxException(message=f"`{key}` must be a boolean, got {value!r}", status_code=400, headers=None)
+        return SonioxInvalidBoolParam(key=key, value=value)
     if key in SONIOX_JSON_PARAMS and value.lstrip()[:1] in ("{", "["):
         try:
             return _JSON_CONTAINER.validate_json(value)
@@ -88,9 +101,15 @@ def _decode_form_value(key: str, value: object) -> object:
     return value
 
 
-def decode_soniox_form_params(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+def decode_soniox_form_params(
+    optional_params: Mapping[str, object],
+) -> Mapping[str, object] | SonioxInvalidBoolParam:
     """Multipart form fields reach the proxy as strings; restore the JSON types Soniox expects."""
-    return MappingProxyType({key: _decode_form_value(key, value) for key, value in optional_params.items()})
+    decoded: Final = {key: _decode_form_value(key, value) for key, value in optional_params.items()}
+    return next(
+        (value for value in decoded.values() if isinstance(value, SonioxInvalidBoolParam)),
+        MappingProxyType(decoded),
+    )
 
 
 class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
