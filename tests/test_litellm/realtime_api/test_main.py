@@ -267,10 +267,13 @@ async def test_azure_health_check_resolves_stored_credentials(monkeypatch):
             model="gpt-realtime",
             custom_llm_provider="azure",
             api_key=None,
+            realtime_protocol="beta",
             model_params={"model": "azure/gpt-realtime", "litellm_credential_name": "azure-rt"},
         )
     assert connect.kwargs["additional_headers"] == {"api-key": "sk-from-credential"}
-    assert connect.url is not None and connect.url.startswith("wss://example.openai.azure.com")
+    assert connect.url is not None
+    assert connect.url.startswith("wss://example.openai.azure.com")
+    assert "api-version=2025-04-01-preview" in connect.url
 
 
 @pytest.mark.asyncio
