@@ -1150,6 +1150,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
+                      <MountedFormField
+                        className="mt-4"
+                        label={
+                          <span>
+                            Tokens per day Limit (TPD){" "}
+                            <SimpleTooltip content="Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the key's TPM/RPM limits. Online requests keep using TPM/RPM.">
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                            </SimpleTooltip>
+                          </span>
+                        }
+                        name="tpd_limit"
+                        help={`TPD cannot exceed team TPD limit: ${team?.tpd_limit !== null && team?.tpd_limit !== undefined ? team?.tpd_limit : "unlimited"}`}
+                        rules={ceilingRule(
+                          team?.tpd_limit,
+                          (limit) => `TPD limit cannot exceed team TPD limit: ${limit}`,
+                        )}
+                      >
+                        {(control) => (
+                          <NumericalInput
+                            {...control}
+                            value={control.value as number | string | undefined}
+                            step={1}
+                            width={400}
+                          />
+                        )}
+                      </MountedFormField>
                       <Field className="mt-4">
                         <FieldLabel>
                           <span>
@@ -1760,6 +1786,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               "budget_duration",
                               "tpm_limit",
                               "rpm_limit",
+                              "tpd_limit",
                               ...(disableCustomApiKeys ? ["key"] : []),
                             ]}
                           />

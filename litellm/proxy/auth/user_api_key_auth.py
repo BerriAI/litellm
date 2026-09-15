@@ -537,6 +537,9 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.rpm_limit is not None:
         end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
 
+    if budget_info.tpd_limit is not None:
+        end_user_params["end_user_tpd_limit"] = budget_info.tpd_limit
+
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
 
@@ -621,6 +624,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_tpm_limit = end_user_params["end_user_tpm_limit"]
     if end_user_params.get("end_user_rpm_limit") is not None:
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
+    if end_user_params.get("end_user_tpd_limit") is not None:
+        valid_token.end_user_tpd_limit = end_user_params["end_user_tpd_limit"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
@@ -2026,6 +2031,7 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_id = end_user_params.get("end_user_id")
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         if valid_token is not None:
@@ -2302,6 +2308,7 @@ async def _user_api_key_auth_builder(
                         spend=valid_token.team_spend,
                         tpm_limit=valid_token.team_tpm_limit,
                         rpm_limit=valid_token.team_rpm_limit,
+                        tpd_limit=valid_token.team_tpd_limit,
                         blocked=valid_token.team_blocked,
                         models=token_team_models,
                         metadata=valid_token.team_metadata,
@@ -2455,6 +2462,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         spend=valid_token.team_spend,
         tpm_limit=valid_token.team_tpm_limit,
         rpm_limit=valid_token.team_rpm_limit,
+        tpd_limit=valid_token.team_tpd_limit,
         blocked=valid_token.team_blocked,
         models=token_team_models,
         metadata=valid_token.team_metadata,
