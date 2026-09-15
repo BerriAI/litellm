@@ -110,6 +110,7 @@ NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
+NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1891,8 +1892,20 @@ class LiteLLMCompletionResponsesConfig:
         namespace_tool: NamespaceTool,
         nested: bool,
     ) -> ChatCompletionToolParam | None:
-        if nested and namespace_tool.get("type") != "function":
+        tool_type: Final = namespace_tool.get("type")
+        if nested and tool_type not in NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS:
             return None
+
+        raw_description: Final = str(namespace_tool.get("description") or "")
+        description: Final = (
+            f"{namespace_description}{NAMESPACE_DESCRIPTION_SEPARATOR}{raw_description}"
+            if nested and namespace_description and raw_description
+            else namespace_description
+            if nested and namespace_description
+            else raw_description
+        )
+        if nested and tool_type == "custom":
+            return convert_custom_tool_to_function_tool({**namespace_tool, "description": description})
 
         raw_parameters: Final = namespace_tool.get("parameters")
         parameters: Final = (
@@ -1902,14 +1915,6 @@ class LiteLLMCompletionResponsesConfig:
             parameters if parameters and "type" in parameters else MappingProxyType({**parameters, "type": "object"})
         )
         tool_name: Final = str(namespace_tool.get("name") or "")
-        raw_description: Final = str(namespace_tool.get("description") or "")
-        description: Final = (
-            f"{namespace_description}{NAMESPACE_DESCRIPTION_SEPARATOR}{raw_description}"
-            if nested and namespace_description and raw_description
-            else namespace_description
-            if nested and namespace_description
-            else raw_description
-        )
         chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
@@ -2826,6 +2831,22 @@ class LiteLLMCompletionResponsesConfig:
                 if cache_write_tokens is not None
                 else MappingProxyType({})
             )
+            # The cost path reads the grounding counters off the input details, and a realtime
+            # session's usage is rebuilt from its own response.done, so dropping them here bills
+            # no per-query grounding fee at all.
+            grounding_request_counts: Final[Mapping[str, int]] = MappingProxyType(
+                {
+                    counter: count
+                    for counter, count in (
+                        ("web_search_requests", getattr(prompt_details, "web_search_requests", None)),
+                        (
+                            "google_maps_grounding_requests",
+                            getattr(prompt_details, "google_maps_grounding_requests", None),
+                        ),
+                    )
+                    if count is not None
+                }
+            )
             response_usage.input_tokens_details = InputTokensDetails(
                 cached_tokens=prompt_details.cached_tokens if prompt_details.cached_tokens is not None else 0,
                 text_tokens=prompt_details.text_tokens,
@@ -2834,6 +2855,7 @@ class LiteLLMCompletionResponsesConfig:
                     cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
                 ),
                 **cache_write_extra,
+                **grounding_request_counts,
             )
 
         # Translate completion_tokens_details to output_tokens_details

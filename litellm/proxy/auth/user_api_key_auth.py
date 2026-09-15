@@ -878,6 +878,7 @@ async def _auto_register_jwt_mapping(
     # the NOT NULL @id constraint. Every successful key-creation caller (e.g.
     # /key/generate) passes table_name="key" explicitly.
     key_data: Final = await generate_key_helper_fn(
+        llm_router=None,
         request_type="key",
         table_name="key",
         team_id=team_id,
@@ -2489,7 +2490,7 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
-    request_data: dict,
+    request_data: dict[str, object],
     route: str,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper

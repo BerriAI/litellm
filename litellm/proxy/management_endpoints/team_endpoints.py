@@ -112,6 +112,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
+from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
@@ -1288,6 +1289,7 @@ async def new_team(
             create_audit_log_for_update,
             general_settings,
             litellm_proxy_admin_name,
+            llm_router,
             prisma_client,
             user_api_key_cache,
         )
@@ -1460,6 +1462,13 @@ async def new_team(
             team_id=data.team_id,
             team_alias=data.team_alias,
             user_api_key_dict=user_api_key_dict,
+        )
+
+        await validate_router_settings_weights(
+            data.router_settings,
+            team_id=data.team_id,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
         )
 
         ## ADD TO MODEL TABLE
@@ -2073,6 +2082,13 @@ async def update_team(
         await _verify_team_access(
             team_obj=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
             user_api_key_dict=user_api_key_dict,
+        )
+
+        await validate_router_settings_weights(
+            data.router_settings,
+            team_id=data.team_id,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
         )
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
@@ -3309,7 +3325,8 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3446,6 +3463,25 @@ async def team_member_delete(
                     "team_id": data.team_id,
                 }
             )
+
+    await delete_cache_team_object(
+        team_id=data.team_id,
+        team_alias=existing_team_row.team_alias,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(key.token for key in keys_to_delete),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await evict_and_broadcast(cache_keys=tuple(sorted(user_ids_to_delete)), user_api_key_cache=user_api_key_cache)
+    for user_id in sorted(user_ids_to_delete):
+        await invalidate_team_member_spend_state(
+            user_id=user_id,
+            team_id=data.team_id,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     _emit_team_members_metric(existing_team_row)
 
@@ -5668,6 +5704,21 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
+    return await append_team_models(
+        data=data,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def append_team_models(
+    *,
+    data: TeamModelAddRequest,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> "prisma_models.LiteLLM_TeamTable":
     # Atomic array append with dedup at the database level so concurrent
     # BYOK model creates don't overwrite each other's team.models entries.
     # When the team currently has models=[] (unrestricted access), the
