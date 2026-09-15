@@ -129,7 +129,14 @@ class AporiaGuardrail(CustomGuardrail):
             # check if the response was flagged
             _json_response: Final = response.json()
             action: str = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
-            if action == "block":
+            # Only `passthrough` says the content may go out as written.
+            # `modify` and `rephrase` are interventions: Aporia is saying this
+            # should not ship unchanged, and litellm cannot apply either from
+            # this response, so forwarding the original would defeat the
+            # guardrail while reporting success. An unrecognised or missing
+            # action is treated the same way: a guardrail that cannot tell what
+            # it was told must not be the one to decide the content is fine.
+            if action != "passthrough":
                 raise HTTPException(
                     status_code=400,
                     detail={
