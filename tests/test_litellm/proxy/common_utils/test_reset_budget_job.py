@@ -12,7 +12,8 @@ import prisma
 import pytest
 
 
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -3243,3 +3244,124 @@ def test_window_reset_zeroes_counter_when_rollover_disabled(monkeypatch):
 
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-off:window:1d", value=0.0)
     spend_counter_cache.async_get_cache.assert_not_awaited()
+
+class TestBudgetWindowResetAtOffsets:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/37454
+
+    `compute_budget_reset_at` writes `reset_at` in the configured budget
+    timezone, so a proxy on Asia/Shanghai stores `...T00:00:00+08:00`.
+    `_reset_expired_window` dropped that offset with `.replace(tzinfo=None)` and
+    compared the wall-clock reading against a UTC `now`, so the window stayed
+    enforced for another 8 hours after its own boundary.
+    """
+
+    @staticmethod
+    def _window(reset_at: str, budget_duration: str = "24h") -> dict:
+        return {"budget_duration": budget_duration, "max_budget": 100, "reset_at": reset_at}
+
+    @staticmethod
+    async def _expired(window: dict, now: datetime, tz: str = "UTC") -> bool:
+        # The spend-row roll is best effort and wrapped in its own try, so a mock
+        # client here exercises the reset decision without touching a database.
+        return await ResetBudgetJob._reset_expired_window(
+            window,
+            "spend:key:tok-1:window:" + window["budget_duration"],
+            DualCache(),
+            now,
+            BudgetResetSettings(timezone=tz, reset_time_of_day=dt_time(0, 0)),
+            MagicMock(),
+            Litellm_EntityType.KEY,
+            "tok-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_offset_window_is_not_reset_a_minute_early(self):
+        window = self._window("2026-08-20T00:00:00+08:00")
+
+        assert (
+            await self._expired(window, datetime(2026, 8, 19, 15, 59, tzinfo=timezone.utc), tz="Asia/Shanghai") is False
+        )
+        assert window["reset_at"] == "2026-08-20T00:00:00+08:00"
+
+    @pytest.mark.asyncio
+    async def test_offset_window_is_reset_exactly_at_its_own_boundary(self):
+        """2026-08-19 16:00 UTC IS 2026-08-20 00:00+08:00, so the window is due.
+        Reading it as naive 2026-08-20 00:00 delayed this by the 8 hour offset."""
+        window = self._window("2026-08-20T00:00:00+08:00")
+
+        assert (
+            await self._expired(window, datetime(2026, 8, 19, 16, 0, tzinfo=timezone.utc), tz="Asia/Shanghai") is True
+        )
+        assert window["reset_at"] != "2026-08-20T00:00:00+08:00"
+
+    @pytest.mark.asyncio
+    async def test_negative_offset_window_is_not_reset_early(self):
+        """The offset cuts the other way too: a UTC-5 boundary is due later, not
+        sooner, and dropping the offset would fire it 5 hours early."""
+        window = self._window("2026-08-19T00:00:00-05:00")  # 2026-08-19 05:00 UTC
+
+        assert (
+            await self._expired(window, datetime(2026, 8, 19, 4, 59, tzinfo=timezone.utc), tz="America/New_York")
+            is False
+        )
+        assert (
+            await self._expired(window, datetime(2026, 8, 19, 5, 0, tzinfo=timezone.utc), tz="America/New_York") is True
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reset_at", ["2026-08-19T12:00:00Z", "2026-08-19T12:00:00+00:00"])
+    async def test_utc_windows_are_unchanged(self, reset_at):
+        """The shapes that already worked must keep working: this is the control."""
+        assert await self._expired(self._window(reset_at), datetime(2026, 8, 19, 11, 59, tzinfo=timezone.utc)) is False
+        assert await self._expired(self._window(reset_at), datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)) is True
+
+    @pytest.mark.asyncio
+    async def test_legacy_naive_reset_at_is_read_as_utc(self):
+        """Rows written before offsets were stored carry no tzinfo; they always
+        meant UTC, and `_as_utc` keeps reading them that way."""
+        window = self._window("2026-08-19T12:00:00")
+
+        assert await self._expired(window, datetime(2026, 8, 19, 11, 59, tzinfo=timezone.utc)) is False
+        assert (
+            await self._expired(self._window("2026-08-19T12:00:00"), datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc))
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_only_the_expired_window_is_reset(self):
+        """A key with 24h and 30d windows must lose only the 24h counter."""
+        cache = DualCache()
+        settings = BudgetResetSettings(timezone="Asia/Shanghai", reset_time_of_day=dt_time(0, 0))
+        now = datetime(2026, 8, 19, 16, 0, tzinfo=timezone.utc)
+        due = self._window("2026-08-20T00:00:00+08:00", budget_duration="24h")
+        not_due = self._window("2026-09-01T00:00:00+08:00", budget_duration="30d")
+
+        results = [
+            await ResetBudgetJob._reset_expired_window(
+                window,
+                f"spend:key:tok-1:window:{window['budget_duration']}",
+                cache,
+                now,
+                settings,
+                MagicMock(),
+                Litellm_EntityType.KEY,
+                "tok-1",
+            )
+            for window in (due, not_due)
+        ]
+
+        assert results == [True, False]
+        assert cache.in_memory_cache.get_cache("spend:key:tok-1:window:24h") == 0.0
+        assert cache.in_memory_cache.get_cache("spend:key:tok-1:window:30d") is None
+        assert not_due["reset_at"] == "2026-09-01T00:00:00+08:00"
+
+    @pytest.mark.asyncio
+    async def test_the_written_reset_at_keeps_the_configured_offset(self):
+        """The offset this fix reads is one the job writes itself, so a reset
+        window round-trips through the same parser next tick."""
+        window = self._window("2026-08-20T00:00:00+08:00")
+
+        await self._expired(window, datetime(2026, 8, 19, 16, 0, tzinfo=timezone.utc), tz="Asia/Shanghai")
+
+        assert datetime.fromisoformat(window["reset_at"]).tzinfo is not None
