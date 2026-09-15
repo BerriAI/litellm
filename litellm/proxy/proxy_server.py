@@ -664,6 +664,7 @@ from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownMan
 from litellm.proxy.shutdown.scheduled_jobs import (
     AwaitableAsyncIOExecutor,
     cancel_in_flight_scheduler_jobs,
+    pause_scheduled_jobs,
 )
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import (
@@ -1375,6 +1376,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # End of startup event
     yield
+
+    # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
+    if scheduler is not None:
+        pause_scheduled_jobs(scheduler)
 
     # Shutdown event - drain in-flight requests before tearing down dependencies
     # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.

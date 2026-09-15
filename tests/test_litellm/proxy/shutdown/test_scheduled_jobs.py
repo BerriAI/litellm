@@ -1,16 +1,8 @@
-"""
-Tests for cancelling in-flight scheduled jobs at proxy shutdown.
-
-These drive a real AsyncIOScheduler: the point of the helper is the hand-off
-between APScheduler's fire-and-forget cancellation and the lifespan shutdown
-that has to outlive it, and a mocked scheduler would not exercise that.
-"""
-
 import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -19,11 +11,12 @@ import litellm.proxy.shutdown.scheduled_jobs as scheduled_jobs
 from litellm.proxy.shutdown.scheduled_jobs import (
     AwaitableAsyncIOExecutor,
     cancel_in_flight_scheduler_jobs,
+    pause_scheduled_jobs,
 )
 
 
 class _Job:
-    """A scheduled job that blocks until cancelled and records what it observed."""
+    """A scheduled job that blocks until cancelled and records what it observed"""
 
     def __init__(self, swallow_cancellation: bool = False) -> None:
         self.started = asyncio.Event()
@@ -45,7 +38,7 @@ class _Job:
 
 @asynccontextmanager
 async def _running_scheduler(*jobs: _Job) -> AsyncIterator[tuple[AsyncIOScheduler, AwaitableAsyncIOExecutor]]:
-    """A started scheduler with every job in flight; stopped on the way out whatever the test did."""
+    """A started scheduler with every job in flight, stopped on the way out whatever the test did"""
     executor = AwaitableAsyncIOExecutor()
     scheduler = AsyncIOScheduler(executors={"default": executor})
     for index, job in enumerate(jobs):
@@ -66,10 +59,7 @@ async def _running_scheduler(*jobs: _Job) -> AsyncIterator[tuple[AsyncIOSchedule
 
 @pytest.mark.asyncio
 async def test_in_flight_jobs_observe_cancellation_before_shutdown_returns():
-    """
-    The job's own CancelledError handler is what records how a run ended, so
-    shutdown must not return until that handler has run.
-    """
+    """The job's own CancelledError handler records how a run ended, so shutdown must wait for it"""
     job = _Job()
     async with _running_scheduler(job) as (scheduler, executor):
         await cancel_in_flight_scheduler_jobs(scheduler, executor)
@@ -91,10 +81,7 @@ async def test_every_in_flight_job_is_cancelled_not_only_the_first():
 
 @pytest.mark.asyncio
 async def test_a_job_that_ignores_cancellation_is_abandoned_after_the_timeout(monkeypatch, caplog):
-    """
-    A job that swallows CancelledError must not hold the pod past its
-    termination grace period, so shutdown gives up on it and says so.
-    """
+    """A job that swallows CancelledError must not hold the pod past its termination grace period"""
     monkeypatch.setattr(scheduled_jobs, "JOB_CANCEL_TIMEOUT_SECONDS", 0.05)
     job = _Job(swallow_cancellation=True)
     async with _running_scheduler(job) as (scheduler, executor):
@@ -116,10 +103,40 @@ async def test_shutdown_with_nothing_in_flight_still_stops_the_scheduler():
 
 @pytest.mark.asyncio
 async def test_a_scheduler_that_never_started_is_left_alone():
-    """The proxy runs without a scheduler when it has no database; shutdown must not trip on that."""
+    """The proxy runs without a scheduler when it has no database"""
     executor = AwaitableAsyncIOExecutor()
     scheduler = AsyncIOScheduler(executors={"default": executor})
 
     await cancel_in_flight_scheduler_jobs(scheduler, executor)
+
+    assert scheduler.running is False
+
+
+@pytest.mark.asyncio
+async def test_pausing_stops_new_jobs_from_starting_but_leaves_running_ones_alone():
+    """A job due during the shutdown drain would only be cancelled, so it must not start at all"""
+    running = _Job()
+    async with _running_scheduler(running) as (scheduler, executor):
+        late = _Job()
+        scheduler.add_job(late.run, id="late", next_run_time=datetime.now() + timedelta(seconds=0.1))
+
+        pause_scheduled_jobs(scheduler)
+        await asyncio.sleep(0.3)
+
+        assert late.started.is_set() is False
+        assert running.events == []
+        assert scheduler.running is True
+
+        await cancel_in_flight_scheduler_jobs(scheduler, executor)
+
+    assert running.events == ["cancelled", "finished"]
+    assert late.started.is_set() is False
+
+
+@pytest.mark.asyncio
+async def test_pausing_a_scheduler_that_never_started_is_a_no_op():
+    scheduler = AsyncIOScheduler(executors={"default": AwaitableAsyncIOExecutor()})
+
+    pause_scheduled_jobs(scheduler)
 
     assert scheduler.running is False
