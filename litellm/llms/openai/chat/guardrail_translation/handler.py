@@ -211,10 +211,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
 
         elif not images_to_check and not guardrail_to_apply.records_own_guardrail_information:
+            unscoped_texts: Final[list[str]] = []
+            unscoped_tool_calls: Final[list[ChatCompletionToolParam]] = []
+            for unscoped_idx, unscoped_message in enumerate(messages):
+                self._extract_inputs(
+                    message=unscoped_message,
+                    msg_idx=unscoped_idx,
+                    texts_to_check=unscoped_texts,
+                    images_to_check=[],
+                    tool_calls_to_check=unscoped_tool_calls,
+                    text_task_mappings=[],
+                    tool_call_task_mappings=[],
+                )
             guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=(
                     "no scannable content after message scoping"
-                    if skip_system or skip_tool or scan_only_tool_results
+                    if unscoped_texts or unscoped_tool_calls
                     else "no scannable content"
                 ),
                 request_data=data,
