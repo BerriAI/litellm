@@ -11,6 +11,15 @@ _TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
 
 
+class ComponentName(str, Enum):
+    OCR = "ocr"
+    MESSAGES = "messages"
+    CHAT_COMPLETIONS = "chat_completions"
+    TRANSCRIPTION = "transcription"
+    RESPONSES = "responses"
+    TOKEN_COUNTER = "token_counter"
+
+
 class RustImplementationState(str, Enum):
     UNIMPLEMENTED = "unimplemented"
     EXPERIMENTAL = "experimental"
