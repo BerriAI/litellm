@@ -2500,6 +2500,17 @@ class TestCapabilityClassifierConfig:
         with pytest.raises(ValidationError, match="requires classifier_type 'capability'"):
             ComplexityRouterConfig(**config)
 
+    def test_rejects_misspelled_optional_policy_instead_of_using_defaults(self) -> None:
+        with pytest.raises(ValidationError, match="threshold_steps"):
+            CapabilityClassifierConfig.model_validate(
+                {
+                    "efficient_tier": "SIMPLE",
+                    "capable_tier": "REASONING",
+                    "base_threshold": 0.5,
+                    "threshold_steps": 0.2,
+                }
+            )
+
     def test_threshold_defaults_match_switchyard(self):
         config = CapabilityClassifierConfig(efficient_tier=" SIMPLE ", capable_tier=" REASONING ", base_threshold=0.5)
         assert config.efficient_tier == "SIMPLE"
