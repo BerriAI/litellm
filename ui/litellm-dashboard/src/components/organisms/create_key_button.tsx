@@ -80,7 +80,6 @@ import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
-import { simplifyKeyGenerateError } from "./utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const KEY_TYPE_OPTIONS = [
@@ -482,8 +481,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      const simplifiedError = simplifyKeyGenerateError(error);
-      toast.fromError(simplifiedError);
+      toast.fromError(error);
     }
   };
 

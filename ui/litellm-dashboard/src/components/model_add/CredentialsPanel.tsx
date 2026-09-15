@@ -58,7 +58,7 @@ export default function CredentialsPanel() {
       setIsUpdateModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      toast.error("Failed to update credential");
+      toast.fromError(error);
     }
   };
 
@@ -73,7 +73,7 @@ export default function CredentialsPanel() {
       setIsAddModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      toast.error("Failed to add credential");
+      toast.fromError(error);
     }
   };
 
@@ -87,7 +87,7 @@ export default function CredentialsPanel() {
       toast.success("Credential deleted successfully");
       await refetchCredentials();
     } catch (error) {
-      toast.error("Failed to delete credential");
+      toast.fromError(error);
     } finally {
       setCredentialToDelete(null);
       setIsDeleteModalOpen(false);

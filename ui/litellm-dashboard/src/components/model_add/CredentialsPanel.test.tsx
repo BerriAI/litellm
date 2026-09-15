@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialItem, credentialCreateCall, credentialUpdateCall } from "@/components/networking";
+import { ApiError } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 
 import CredentialsPanel from "./CredentialsPanel";
@@ -171,9 +172,40 @@ describe("CredentialsPanel", () => {
     await user.click(screen.getByTestId("credential-modal-add-submit"));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Failed to add credential");
+      expect(toast.fromError).toHaveBeenCalledWith(expect.objectContaining({ message: "network down" }));
     });
     // The modal stays open so the user can retry, and no success toast fired.
+    expect(screen.getByTestId("credential-modal-add-submit")).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the proxy lockout message when credential creation is rejected with a 403", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
+    const lockout = new ApiError(
+      "This functionality is unavailable until the master key has been set. Set LITELLM_MASTER_KEY (or general_settings.master_key) to a strong random key and restart the proxy.",
+      403,
+      {
+        error: {
+          message:
+            "This functionality is unavailable until the master key has been set. Set LITELLM_MASTER_KEY (or general_settings.master_key) to a strong random key and restart the proxy.",
+          type: "auth_error",
+          param: "master_key",
+          code: "403",
+        },
+      },
+    );
+    vi.mocked(credentialCreateCall).mockRejectedValueOnce(lockout);
+
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: /add credential/i }));
+    await user.click(screen.getByTestId("credential-modal-add-submit"));
+
+    await waitFor(() => {
+      expect(toast.fromError).toHaveBeenCalledWith(lockout);
+    });
     expect(screen.getByTestId("credential-modal-add-submit")).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
   });

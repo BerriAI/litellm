@@ -224,6 +224,6 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
     callback && callback();
     form.resetFields();
   } catch (error) {
-    toast.fromError("Failed to add model: " + error);
+    toast.fromError(error);
   }
 };
