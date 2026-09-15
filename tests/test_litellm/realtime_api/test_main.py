@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 
@@ -224,9 +225,11 @@ def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch
 class _CapturingConnect:
     def __init__(self) -> None:
         self.url: str | None = None
+        self.kwargs: dict[str, object] = {}
 
     def __call__(self, url: str, **kwargs: object) -> "_CapturingConnect":
         self.url = url
+        self.kwargs = kwargs
         return self
 
     async def __aenter__(self) -> MagicMock:
@@ -239,6 +242,35 @@ class _CapturingConnect:
         tb: TracebackType | None,
     ) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_azure_health_check_resolves_stored_credentials(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="azure-rt",
+                credential_values={
+                    "api_key": "sk-from-credential",
+                    "api_base": "https://example.openai.azure.com",
+                    "api_version": "2025-04-01-preview",
+                },
+                credential_info={},
+            )
+        ],
+    )
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="azure",
+            api_key=None,
+            model_params={"model": "azure/gpt-realtime", "litellm_credential_name": "azure-rt"},
+        )
+    assert connect.kwargs["additional_headers"] == {"api-key": "sk-from-credential"}
+    assert connect.url is not None and connect.url.startswith("wss://example.openai.azure.com")
 
 
 @pytest.mark.asyncio
