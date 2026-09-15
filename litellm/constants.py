@@ -2027,10 +2027,7 @@ MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
 PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
 PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
-# Per-api_key rollups on the aggregated usage endpoint cover only the top N keys
-# by spend so the result set stops growing with key count. Totals and the
-# model/provider/endpoint rollups still cover every key.
-USAGE_TOP_API_KEYS_LIMIT: Final[int] = 100
+USAGE_TOP_API_KEYS_LIMIT: Final[int] = int(os.getenv("USAGE_TOP_API_KEYS_LIMIT", "100"))
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90

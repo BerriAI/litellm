@@ -170,8 +170,6 @@ class _EntityRollupRow(_GroupingSetsRow):
 
 
 class _AggregatedQueryKwargs(TypedDict):
-    """Filter arguments shared by the three aggregated SQL builders."""
-
     table_name: ReadOnly[str]
     entity_id_field: ReadOnly[str]
     entity_id: ReadOnly[str | list[str] | None]
@@ -749,90 +747,17 @@ def _build_aggregated_sql_query(
     timezone_offset_minutes: int | None = None,
     include_current_utc_day: bool = False,
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
-    """Build the key-free GROUPING SETS query for aggregated daily activity.
+    """Build the GROUPING SETS query for aggregated daily activity.
 
-    Emits the grand total, per-date totals and the per-(date, model), model_group,
-    provider, mcp tool and endpoint rollups. api_key is never a grouping column here,
-    so the row count is bounded by dates x distinct models/providers/endpoints and
-    does not grow with the number of keys. Per-key rollups come from
-    _build_top_api_keys_sql_query. Both queries emit the same 7-bit group_level
-    bitmask (date, api_key, model, model_group, provider, mcp, endpoint); this one
-    hard-codes the api_key bit to "rolled up" so the dispatcher can consume the two
-    result sets as one stream.
+    One statement, two UNION ALL arms over the same WHERE clause. The first arm is
+    key-free: grand total, per-date totals and the (date, model / model_group /
+    provider / mcp / endpoint) rollups, so its row count never grows with the number
+    of keys. The second arm emits the (date, <dimension>, api_key) rollups for the
+    USAGE_TOP_API_KEYS_LIMIT highest-spend keys only. Both arms share the 7-bit
+    group_level bitmask (date, api_key, model, model_group, provider, mcp, endpoint).
 
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
-    """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
-    if pg_table is None:
-        raise ValueError(f"Unknown table name: {table_name}")
-
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
-        start_date, end_date, timezone_offset_minutes, include_current_utc_day
-    )
-
-    where_clause, sql_params = _build_aggregated_where_clause(
-        entity_id_field=entity_id_field,
-        entity_id=entity_id,
-        adjusted_start=adjusted_start,
-        adjusted_end=adjusted_end,
-        model=model,
-        api_key=api_key,
-        exclude_entity_ids=exclude_entity_ids,
-    )
-
-    # TODO: drop the successful_requests/failed_requests aggregates (and the
-    # total_successful_requests metadata they feed) once the admin UI reads SGR
-    # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
-    # api_requests rollups are still served from here.
-    sql_query: Final = f"""
-        SELECT
-            date,
-            NULL::text AS api_key,
-            model,
-            {_MODEL_GROUP_EXPR} AS model_group,
-            custom_llm_provider,
-            mcp_namespaced_tool_name,
-            endpoint,
-            (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
-                | GROUPING(model, {_MODEL_GROUP_EXPR},
-                           custom_llm_provider, mcp_namespaced_tool_name,
-                           endpoint) AS group_level,{_rollup_metric_select(table_name)}
-        FROM "{pg_table}"
-        WHERE {where_clause}
-        GROUP BY GROUPING SETS (
-            (date),
-            (date, model),
-            (date, {_MODEL_GROUP_EXPR}),
-            (date, custom_llm_provider),
-            (date, mcp_namespaced_tool_name),
-            (date, endpoint),
-            ()
-        )
-    """
-
-    return sql_query, sql_params
-
-
-def _build_top_api_keys_sql_query(
-    *,
-    table_name: str,
-    entity_id_field: str,
-    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
-    start_date: str,
-    end_date: str,
-    model: str | None,
-    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
-    exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
-    timezone_offset_minutes: int | None = None,
-    include_current_utc_day: bool = False,
-) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
-    """Per-key companion to _build_aggregated_sql_query.
-
-    Ranks keys by spend over the same WHERE clause, keeps the top
-    USAGE_TOP_API_KEYS_LIMIT (ties broken by api_key so the set is stable across
-    refreshes) and emits the six (date, <dimension>, api_key) rollups for those keys
-    only. The PTU flat-cost sentinel never ranks, so it cannot occupy a visible slot.
     """
     pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
@@ -852,9 +777,38 @@ def _build_top_api_keys_sql_query(
         exclude_entity_ids=exclude_entity_ids,
     )
     sentinel_param: Final = f"${len(where_params) + 1}"
+    metric_select: Final = _rollup_metric_select(table_name)
 
+    # TODO: drop the successful_requests/failed_requests aggregates (and the
+    # total_successful_requests metadata they feed) once the admin UI reads SGR
+    # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
+    # api_requests rollups are still served from here.
     sql_query: Final = f"""
-        WITH top_api_keys AS (
+        (SELECT
+            date,
+            NULL::text AS api_key,
+            model,
+            {_MODEL_GROUP_EXPR} AS model_group,
+            custom_llm_provider,
+            mcp_namespaced_tool_name,
+            endpoint,
+            (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
+                | GROUPING(model, {_MODEL_GROUP_EXPR},
+                           custom_llm_provider, mcp_namespaced_tool_name,
+                           endpoint) AS group_level,{metric_select}
+        FROM "{pg_table}"
+        WHERE {where_clause}
+        GROUP BY GROUPING SETS (
+            (date),
+            (date, model),
+            (date, {_MODEL_GROUP_EXPR}),
+            (date, custom_llm_provider),
+            (date, mcp_namespaced_tool_name),
+            (date, endpoint),
+            ()
+        ))
+        UNION ALL
+        (WITH top_api_keys AS (
             SELECT api_key
             FROM "{pg_table}"
             WHERE {where_clause} AND api_key <> {sentinel_param}
@@ -872,7 +826,7 @@ def _build_top_api_keys_sql_query(
             endpoint,
             GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
                      custom_llm_provider, mcp_namespaced_tool_name,
-                     endpoint) AS group_level,{_rollup_metric_select(table_name)}
+                     endpoint) AS group_level,{metric_select}
         FROM "{pg_table}"
         WHERE {where_clause} AND api_key IN (SELECT api_key FROM top_api_keys)
         GROUP BY GROUPING SETS (
@@ -882,7 +836,7 @@ def _build_top_api_keys_sql_query(
             (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name, api_key),
             (date, endpoint, api_key)
-        )
+        ))
     """
 
     return sql_query, [*where_params, PTU_SENTINEL_API_KEY]
@@ -1432,17 +1386,15 @@ async def get_daily_activity_aggregated(
             timezone_offset_minutes=timezone_offset_minutes,
             include_current_utc_day=include_current_utc_day,
         )
-        key_free_sql, key_free_params = _build_aggregated_sql_query(**query_kwargs)
-        top_keys_sql, top_keys_params = _build_top_api_keys_sql_query(**query_kwargs)
+        sql_query, sql_params = _build_aggregated_sql_query(**query_kwargs)
         entity_query: Final = _build_entity_rollup_sql_query(**query_kwargs) if include_entity_breakdown else None
 
-        raw_key_free_rows, raw_top_key_rows, raw_entity_rows = await asyncio.gather(
-            prisma_client.db.query_raw(key_free_sql, *key_free_params),
-            prisma_client.db.query_raw(top_keys_sql, *top_keys_params),
+        raw_rows, raw_entity_rows = await asyncio.gather(
+            prisma_client.db.query_raw(sql_query, *sql_params),
             _query_raw_optional(prisma_client, entity_query),
         )
 
-        records: Final = [_GroupingSetsRow(**row) for row in (*(raw_key_free_rows or ()), *(raw_top_key_rows or ()))]
+        records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or ())]
 
         # The grouping-sets dispatcher places each row directly in its bucket
         # using the row's GROUPING() bitmask. No Python-side summing needed.
