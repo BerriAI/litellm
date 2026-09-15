@@ -1079,14 +1079,15 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        data: dict,
-        responses: list[str],
+        data: dict[str, object],  # mutable-ok: API message payload
+        responses: Sequence[str],
         scanned: tuple[ScannedText, ...],
     ) -> None:
         """
         Apply guardrail responses back to the top-level system prompt and the input messages.
         """
-        messages: Final[Sequence[_WritableMessage]] = data.get("messages") or ()
+        raw_messages: Final = data.get("messages")
+        messages: Final[Sequence[_WritableMessage]] = raw_messages if isinstance(raw_messages, list) else ()
         for item, guardrail_response in zip(scanned, responses):
             match item.target:
                 case SystemStringTarget():
