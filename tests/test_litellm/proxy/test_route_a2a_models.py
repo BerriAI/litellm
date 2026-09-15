@@ -4,8 +4,6 @@ Test A2A model routing in proxy.
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
 
-
-
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -180,3 +178,89 @@ async def test_route_a2a_model_read_through_recovers_agent_created_on_sibling_re
     assert call_kwargs["model"] == f"a2a/{agent_name}"
     assert call_kwargs["api_base"] == "http://sibling-db-agent.example.com"
     prisma_client.db.litellm_agentstable.find_unique.assert_awaited()
+
+
+def _router_without_a2a_deployment(
+    *,
+    team_model: str | None = None,
+    patterns: tuple[str, ...] = (),
+    default_deployment: dict | None = None,
+) -> Mock:
+    """A router that serves no A2A deployment, optionally tripping one shadowing branch."""
+    router = Mock()
+    router.model_names = ["gpt-4", "gpt-3.5-turbo"]
+    router.deployment_names = []
+    router.has_model_id = Mock(return_value=False)
+    router.is_recognized_model = Mock(return_value=False)
+    router.get_routing_group = Mock(return_value=None)
+    router.model_group_alias = None
+    router.router_general_settings = Mock(pass_through_all_models=False)
+    router.default_deployment = default_deployment
+    router.pattern_router = Mock(patterns=list(patterns))
+    router.map_team_model = Mock(return_value=team_model)
+    return router
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "router_kwargs, extra_data",
+    [
+        pytest.param({}, {}, id="no_shadowing_branch"),
+        pytest.param(
+            {"team_model": "a2a/test-agent"},
+            {"metadata": {"user_api_key_team_id": "team-123"}},
+            id="team_scoped_key",
+        ),
+        pytest.param({"patterns": ("openrouter/*",)}, {}, id="wildcard_model_group"),
+        pytest.param({"default_deployment": {"model_name": "*"}}, {}, id="default_deployment"),
+    ],
+)
+async def test_a2a_model_resolves_before_router_branches(router_kwargs, extra_data):
+    """
+    Regression: an `a2a/` model must reach A2A routing even when a router branch would
+    otherwise claim it.
+
+    `map_team_model` claims the request for any team-scoped key, and the
+    wildcard/default-deployment fallback claims it whenever a pattern model group exists.
+    Both previously shadowed the A2A branch, so the call failed with
+    "no healthy deployments" instead of reaching the agent.
+    """
+    from litellm.types.agents import AgentResponse
+
+    data = {
+        "model": "a2a/test-agent",
+        "messages": [{"role": "user", "content": "Hello"}],
+        **extra_data,
+    }
+
+    mock_agent = AgentResponse(
+        agent_id="test-agent-id",
+        agent_name="test-agent",
+        agent_card_params={"url": "http://agent.example.com"},
+        litellm_params=None,
+    )
+    mock_registry = Mock()
+    mock_registry.get_agent_by_id = Mock(return_value=None)
+    mock_registry.get_agent_by_name = Mock(return_value=mock_agent)
+
+    mock_acompletion = AsyncMock(return_value={"id": "test-response"})
+
+    # The bug is that the request never leaves the router, so there is no HTTP boundary to
+    # fake: which collaborator gets called *is* the behaviour under test. The registry is
+    # Prisma-backed and has no injection seam available to a unit test.
+    with patch("litellm.acompletion", mock_acompletion):  # test-quality-ok: the dispatch target is the assertion
+        with patch(  # test-quality-ok: Prisma-backed registry has no unit-test injection seam
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ):
+            await route_request(
+                data=data,
+                llm_router=_router_without_a2a_deployment(**router_kwargs),
+                user_model=None,
+                route_type="acompletion",
+            )
+
+    mock_acompletion.assert_called_once()
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["model"] == "a2a/test-agent"
+    assert call_kwargs["api_base"] == "http://agent.example.com"
