@@ -46,6 +46,10 @@ def _messages_capability(context: CapabilityContext) -> CapabilityDefinition:
     return _completed_only(context, _EXPERIMENTAL)
 
 
+def _chat_completions_capability(context: CapabilityContext) -> CapabilityDefinition:
+    return _completed_only(context, _EXPERIMENTAL)
+
+
 def _transcription_capability(context: CapabilityContext) -> CapabilityDefinition:
     return _completed_only(context, _RUST_REQUIRED if context.provider == "bedrock" else _PYTHON_ONLY)
 
@@ -76,7 +80,7 @@ COMPONENTS: Final[Mapping[ComponentName, NativeComponent]] = MappingProxyType(
         ),
         ComponentName.CHAT_COMPLETIONS: NativeComponent(
             name=ComponentName.CHAT_COMPLETIONS,
-            capability=_EXPERIMENTAL,
+            capability=_chat_completions_capability,
             exports=("chat_completions", "achat_completions", "chat_completions_decline"),
         ),
         ComponentName.TRANSCRIPTION: NativeComponent(

@@ -71,11 +71,7 @@ def test_release_defaults(name: ComponentName, context: CapabilityContext, expec
         (ComponentName.MESSAGES, CapabilityContext(), ExecutionDecision.RUST_WITH_FALLBACK),
         (ComponentName.MESSAGES, CapabilityContext(delivery=DeliveryMode.STREAMING), ExecutionDecision.PYTHON),
         (ComponentName.CHAT_COMPLETIONS, CapabilityContext(), ExecutionDecision.RUST_WITH_FALLBACK),
-        (
-            ComponentName.CHAT_COMPLETIONS,
-            CapabilityContext(delivery=DeliveryMode.STREAMING),
-            ExecutionDecision.RUST_WITH_FALLBACK,
-        ),
+        (ComponentName.CHAT_COMPLETIONS, CapabilityContext(delivery=DeliveryMode.STREAMING), ExecutionDecision.PYTHON),
         (ComponentName.TOKEN_COUNTER, CapabilityContext(), ExecutionDecision.RUST_WITH_FALLBACK),
         (ComponentName.TRANSCRIPTION, CapabilityContext(provider="openai"), ExecutionDecision.PYTHON),
         (ComponentName.RESPONSES, CapabilityContext(), ExecutionDecision.PYTHON),
