@@ -976,6 +976,7 @@ class LangFuseLogger:
                     client=self.Langfuse,
                     trace_id=resolved_trace_id,
                     parent_observation_id=resolve_observation_id(parent_observation_id),  # pyright: ignore[reportArgumentType]  # metadata value, str or None at runtime
+                    existing_trace=existing_trace_id is not None,
                 )
                 log_provider_specific_information_as_span(
                     client=self.Langfuse,
