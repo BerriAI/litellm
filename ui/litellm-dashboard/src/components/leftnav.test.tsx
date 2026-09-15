@@ -637,9 +637,7 @@ describe("Sidebar (leftnav)", () => {
       error: null,
     });
 
-    renderWithProviders(
-      <Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={["teams"]} />,
-    );
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={["teams"]} />);
 
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
