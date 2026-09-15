@@ -383,7 +383,7 @@ export const handleError = async (errorData: string | any) => {
       clearTokenCookies();
       const browserLocation = getWindowLocation();
       if (browserLocation) {
-        window.location.href = browserLocation.pathname;
+        window.location.href = browserLocation.pathname + browserLocation.search + browserLocation.hash;
       }
     }
     lastErrorTime = currentTime;
