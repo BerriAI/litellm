@@ -3050,6 +3050,18 @@
         },
         "DailySpendMetadata": {
           "properties": {
+            "api_key_limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+              "title": "Api Key Limit"
+            },
             "has_more": {
               "default": false,
               "title": "Has More",
