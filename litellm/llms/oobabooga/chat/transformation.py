@@ -1,5 +1,5 @@
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -11,6 +11,8 @@ from litellm.types.utils import ModelResponse, Usage
 from ..common_utils import OobaboogaError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
@@ -23,7 +25,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Optional[Union[dict, httpx.Headers]] = None,
+        headers: dict | httpx.Headers | None = None,
     ) -> BaseLLMException:
         return OobaboogaError(status_code=status_code, message=error_message, headers=headers)
 
@@ -34,12 +36,12 @@ class OobaboogaConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LoggingClass,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -51,7 +53,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception:
             raise OobaboogaError(message=raw_response.text, status_code=raw_response.status_code)
         if "error" in completion_response:
@@ -61,7 +63,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
             )
         else:
             try:
-                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
+                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]
             except Exception as e:
                 raise OobaboogaError(
                     message=str(e),
@@ -70,7 +72,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=completion_response["usage"]["prompt_tokens"],
             completion_tokens=completion_response["usage"]["completion_tokens"],
             total_tokens=completion_response["usage"]["total_tokens"],
@@ -82,11 +84,11 @@ class OobaboogaConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = {
             "accept": "application/json",

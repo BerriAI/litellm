@@ -7,10 +7,8 @@ client touches requests.* or builds raw dicts; they pass pydantic models here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
-
-from pydantic import BaseModel
 
 import e2e_http
 from e2e_http import (
@@ -21,11 +19,18 @@ from e2e_http import (
     Result,
     StreamingResponse,
 )
+from pydantic import BaseModel
 
 
 class Transport(Protocol):
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def stream(
@@ -58,6 +63,7 @@ class Transport(Protocol):
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def delete[R: BaseModel](
@@ -78,7 +84,7 @@ class Transport(Protocol):
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]: ...
 
-    def probe(self, path: str, *, params: BaseModel) -> ProbeResult: ...
+    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult: ...
 
     def upload[R: BaseModel](
         self,
@@ -89,8 +95,10 @@ class Transport(Protocol):
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]: ...
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse: ...
@@ -104,7 +112,7 @@ class Transport(Protocol):
 @dataclass(frozen=True, slots=True)
 class HttpTransport:
     base_url: str
-    master_key: str
+    master_key: str = field(repr=False)
     request_timeout: float = 60.0
 
     def _url(self, path: str) -> URL:
@@ -118,14 +126,22 @@ class HttpTransport:
         return self.bearer(self.master_key)
 
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
+        """`timeout` overrides the transport-wide request_timeout for this call, for
+        provider operations that legitimately outlive it (image edits, OCR)."""
         return e2e_http.post(
             self._url(path),
             headers=headers,
             json=json,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def get[R: BaseModel](
@@ -135,13 +151,16 @@ class HttpTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
+        """`timeout` overrides the transport-wide request_timeout for this call, for
+        pollers whose own deadline is shorter than it."""
         return e2e_http.get(
             self._url(path),
             headers=headers,
             params=params,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def delete[R: BaseModel](
@@ -225,10 +244,10 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
-    def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
+    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
         return e2e_http.probe(
             self._url(path),
-            headers=self.master,
+            headers=self.master if headers is None else headers,
             params=params,
             timeout=self.request_timeout,
         )
@@ -242,8 +261,10 @@ class HttpTransport:
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return e2e_http.upload(
             self._url(path),
@@ -252,9 +273,10 @@ class HttpTransport:
             filename=filename,
             content=content,
             file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
-            timeout=self.request_timeout,
+            timeout=self.request_timeout if timeout is None else timeout,
         )
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
@@ -272,6 +294,7 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/user",
     "/team",
     "/organization",
+    "/project",
     "/customer",
     "/end_user",
     "/tag",
@@ -320,10 +343,16 @@ class SplitTransport:
         return self.data.master
 
     def post[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).post(
-            path, headers=headers, json=json, response_type=response_type
+            path, headers=headers, json=json, response_type=response_type, timeout=timeout
         )
 
     def get[R: BaseModel](
@@ -333,9 +362,14 @@ class SplitTransport:
         headers: BaseModel,
         params: BaseModel,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).get(
-            path, headers=headers, params=params, response_type=response_type
+            path,
+            headers=headers,
+            params=params,
+            response_type=response_type,
+            timeout=timeout,
         )
 
     def delete[R: BaseModel](
@@ -399,8 +433,8 @@ class SplitTransport:
             path, headers=headers, json=json, params=params, stream=stream
         )
 
-    def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
-        return self._route(path).probe(path, params=params)
+    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
+        return self._route(path).probe(path, params=params, headers=headers)
 
     def upload[R: BaseModel](
         self,
@@ -411,8 +445,10 @@ class SplitTransport:
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
+        timeout: float | None = None,
     ) -> Result[R]:
         return self._route(path).upload(
             path,
@@ -421,8 +457,10 @@ class SplitTransport:
             filename=filename,
             content=content,
             file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
+            timeout=timeout,
         )
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:

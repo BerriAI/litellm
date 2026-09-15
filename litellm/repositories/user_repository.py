@@ -3,61 +3,85 @@ User repository for database operations on LiteLLM_UserTable.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Type
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
-from litellm.models.user import LiteLLM_UserTable
-from litellm.repositories.base_repository import BaseRepository
+from pydantic import TypeAdapter
+
+from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
+from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import Prisma
+    from prisma import models as prisma_models
+
+_JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget"})
+
+_SHADOWING_PLACEHOLDERS_SQL: Final = """
+SELECT p.user_id AS placeholder_user_id,
+       array_agg(r.user_id ORDER BY r.user_id) AS resolved_user_ids,
+       p.teams AS team_ids
+FROM "LiteLLM_UserTable" p
+JOIN "LiteLLM_UserTable" r
+  ON r.user_id <> p.user_id
+ AND (r.sso_user_id = p.user_id OR LOWER(r.user_email) = LOWER(p.user_id))
+WHERE p.sso_user_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" k WHERE k.user_id = p.user_id)
+GROUP BY p.user_id, p.teams
+ORDER BY p.user_id
+"""
+
+_PLACEHOLDER_ROWS_ADAPTER: Final = TypeAdapter(tuple[SCIMPlaceholder, ...])
 
 
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
         return self.prisma_client.db.litellm_usertable
 
     @property
-    def model_class(self) -> Type[LiteLLM_UserTable]:
+    def model_class(self) -> type[LiteLLM_UserTable]:
         return LiteLLM_UserTable
 
-    def _to_model(self, record: Any) -> Optional[LiteLLM_UserTable]:
+    def _to_model(self, record: DbRecord | None) -> LiteLLM_UserTable | None:
         """Convert a database record to a User model."""
         if record is None:
             return None
 
-        data = record.dict() if hasattr(record, "dict") else dict(record)
+        return LiteLLM_UserTable.model_validate(
+            {
+                column: json.loads(value) if column in _JSON_ENCODED_COLUMNS and isinstance(value, str) else value
+                for column, value in record_to_dict(record).items()
+            }
+        )
 
-        json_fields = ["metadata", "model_spend", "model_max_budget"]
-        for field in json_fields:
-            if isinstance(data.get(field), str):
-                data[field] = json.loads(data[field])
+    async def find_by_id(self, id_value: str, id_field: str = "user_id") -> LiteLLM_UserTable | None:
+        return await super().find_by_id(id_value, id_field)
 
-        return LiteLLM_UserTable(**data)
-
-    async def find_by_id(self, user_id: str, id_field: str = "user_id") -> Optional[LiteLLM_UserTable]:
-        return await super().find_by_id(user_id, id_field)
-
-    async def find_by_email(self, user_email: str) -> Optional[LiteLLM_UserTable]:
+    async def find_by_email(self, user_email: str) -> LiteLLM_UserTable | None:
         """Find a user by email."""
-        records = await self.table.find_many(where={"user_email": user_email})
-        if records:
-            return self._to_model(records[0])
-        return None
+        records: Final = await self.find_many(where={"user_email": user_email})
+        return records[0] if records else None
 
-    async def find_by_sso_id(self, sso_user_id: str) -> Optional[LiteLLM_UserTable]:
+    async def find_by_sso_id(self, sso_user_id: str) -> LiteLLM_UserTable | None:
         """Find a user by SSO ID."""
-        record = await self.table.find_unique(where={"sso_user_id": sso_user_id})
-        return self._to_model(record)
+        return await self.find_by_id(sso_user_id, id_field="sso_user_id")
 
-    async def find_by_organization_id(self, organization_id: str) -> List[LiteLLM_UserTable]:
+    async def find_by_organization_id(self, organization_id: str) -> list[LiteLLM_UserTable]:
         """Find all users in an organization."""
-        records = await self.table.find_many(where={"organization_id": organization_id})
-        return self._to_model_list(records)
+        return await self.find_many(where={"organization_id": organization_id})
 
-    async def find_by_team_id(self, team_id: str) -> List[LiteLLM_UserTable]:
+    async def find_by_team_id(self, team_id: str) -> list[LiteLLM_UserTable]:
         """Find all users in a team."""
-        records = await self.table.find_many(where={"teams": {"has": team_id}})
-        return self._to_model_list(records)
+        return await self.find_many(where={"teams": {"has": team_id}})
+
+    async def find_shadowing_placeholders(self, tx: "Prisma") -> tuple[SCIMPlaceholder, ...]:
+        """Users with no SSO id and no virtual keys whose id is another user's SSO id or email."""
+        rows: Final = await tx.query_raw(_SHADOWING_PLACEHOLDERS_SQL)
+        return _PLACEHOLDER_ROWS_ADAPTER.validate_python(rows)
 
     async def count_billable_users(self) -> int:
         """Number of users that count toward the license seat limit.
@@ -69,34 +93,34 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """
         from prisma import Json  # pyright: ignore[reportUnknownVariableType]
 
-        total = await self.count()
-        deactivated = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
+        total: Final = await self.count()
+        deactivated: Final = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
         return max(0, total - deactivated)
 
     async def create_user(
         self,
         user_id: str,
-        user_alias: Optional[str] = None,
-        team_id: Optional[str] = None,
-        sso_user_id: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        password: Optional[str] = None,
-        teams: Optional[List[str]] = None,
-        user_role: Optional[str] = None,
-        max_budget: Optional[float] = None,
-        user_email: Optional[str] = None,
-        models: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        max_parallel_requests: Optional[int] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        budget_duration: Optional[str] = None,
-        allowed_cache_controls: Optional[List[str]] = None,
-        policies: Optional[List[str]] = None,
-        object_permission_id: Optional[str] = None,
+        user_alias: str | None = None,
+        team_id: str | None = None,
+        sso_user_id: str | None = None,
+        organization_id: str | None = None,
+        password: str | None = None,
+        teams: list[str] | None = None,
+        user_role: str | None = None,
+        max_budget: float | None = None,
+        user_email: str | None = None,
+        models: list[str] | None = None,
+        metadata: Mapping[str, object] | None = None,
+        max_parallel_requests: int | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        budget_duration: str | None = None,
+        allowed_cache_controls: list[str] | None = None,
+        policies: list[str] | None = None,
+        object_permission_id: str | None = None,
     ) -> LiteLLM_UserTable:
         """Create a new user."""
-        data: Dict[str, Any] = {"user_id": user_id}
+        data: Final[dict[str, object]] = {"user_id": user_id}
         if user_alias is not None:
             data["user_alias"] = user_alias
         if team_id is not None:
@@ -139,27 +163,27 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
     async def update_user(
         self,
         user_id: str,
-        user_alias: Optional[str] = None,
-        team_id: Optional[str] = None,
-        sso_user_id: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        password: Optional[str] = None,
-        teams: Optional[List[str]] = None,
-        user_role: Optional[str] = None,
-        max_budget: Optional[float] = None,
-        user_email: Optional[str] = None,
-        models: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        max_parallel_requests: Optional[int] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        budget_duration: Optional[str] = None,
-        allowed_cache_controls: Optional[List[str]] = None,
-        policies: Optional[List[str]] = None,
-        object_permission_id: Optional[str] = None,
-    ) -> Optional[LiteLLM_UserTable]:
+        user_alias: str | None = None,
+        team_id: str | None = None,
+        sso_user_id: str | None = None,
+        organization_id: str | None = None,
+        password: str | None = None,
+        teams: list[str] | None = None,
+        user_role: str | None = None,
+        max_budget: float | None = None,
+        user_email: str | None = None,
+        models: list[str] | None = None,
+        metadata: Mapping[str, object] | None = None,
+        max_parallel_requests: int | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        budget_duration: str | None = None,
+        allowed_cache_controls: list[str] | None = None,
+        policies: list[str] | None = None,
+        object_permission_id: str | None = None,
+    ) -> LiteLLM_UserTable | None:
         """Update a user."""
-        data: Dict[str, Any] = {}
+        data: Final[dict[str, object]] = {}
         if user_alias is not None:
             data["user_alias"] = user_alias
         if team_id is not None:
@@ -199,35 +223,42 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
         return await self.update(user_id, data, id_field="user_id")
 
-    async def delete_user(self, user_id: str) -> Optional[LiteLLM_UserTable]:
+    async def backfill_null_user_email(self, user_id: str, user_email: str) -> int:
+        """Set user_email only when the stored value is null, atomically at the database.
+
+        Returns the number of rows updated: 0 means another writer already set an email.
+        """
+        updated_count: Final[int] = await self.table.update_many(
+            where={"user_id": user_id, "user_email": None},  # mutable-ok: Prisma query filters are dict-shaped
+            data={"user_email": user_email},  # mutable-ok: Prisma update payloads are dict-shaped
+        )
+        return updated_count
+
+    async def delete_user(self, user_id: str) -> LiteLLM_UserTable | None:
         """Delete a user."""
         return await self.delete(user_id, id_field="user_id")
 
-    async def update_spend(self, user_id: str, spend: float) -> Optional[LiteLLM_UserTable]:
+    async def update_spend(self, user_id: str, spend: float) -> LiteLLM_UserTable | None:
         """Update user spend."""
         return await self.update(user_id, {"spend": spend}, id_field="user_id")
 
-    async def add_to_team(self, user_id: str, team_id: str) -> Optional[LiteLLM_UserTable]:
+    async def add_to_team(self, user_id: str, team_id: str) -> LiteLLM_UserTable | None:
         """Add a user to a team using atomic array push operation."""
         if not await self.exists(user_id, id_field="user_id"):
             return None
 
-        record = await self.table.update(
-            where={"user_id": user_id},
-            data={"teams": {"push": team_id}},
-        )
-        return self._to_model(record)
+        return await self.update(user_id, {"teams": {"push": team_id}}, id_field="user_id")
 
-    async def remove_from_team(self, user_id: str, team_id: str) -> Optional[LiteLLM_UserTable]:
+    async def remove_from_team(self, user_id: str, team_id: str) -> LiteLLM_UserTable | None:
         """Remove a user from a team.
 
         Note: Prisma doesn't support atomic array removal, so we use a
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        user = await self.find_by_id(user_id)
+        user: Final = await self.find_by_id(user_id)
         if user is None:
             return None
 
-        teams = [t for t in user.teams if t != team_id]
+        teams: Final = [t for t in user.teams if t != team_id]
         return await self.update(user_id, {"teams": teams}, id_field="user_id")

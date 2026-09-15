@@ -48,27 +48,22 @@ def _base_config(**overrides: Any) -> AutorouteConfig:
 class TestParseDiscoveredModels:
     def test_parses_valid_raw_list_into_typed_tuple(self):
         raw = [
-            {
-                "model_group": "gpt-4o",
-                "mode": "chat",
-                "input_cost_per_token": 0.01,
-                "output_cost_per_token": 0.02,
-            },
-            {"model_group": "text-embedding-3-small", "mode": "embedding"},
+            {"id": "gpt-4o", "object": "model", "mode": "chat"},
+            {"id": "text-embedding-3-small", "object": "model", "mode": "embedding"},
         ]
         result = parse_discovered_models(raw)
         assert result == (
-            DiscoveredModel(name="gpt-4o", mode="chat", input_cost_per_token=0.01, output_cost_per_token=0.02),
+            DiscoveredModel(name="gpt-4o", mode="chat"),
             DiscoveredModel(name="text-embedding-3-small", mode="embedding"),
         )
 
     def test_ignores_unknown_extra_fields(self):
-        raw = [{"model_group": "gpt-4o", "mode": "chat", "totally_unknown_field": "whatever"}]
+        raw = [{"id": "gpt-4o", "mode": "chat", "created": 123, "owned_by": "openai", "max_input_tokens": 128000}]
         result = parse_discovered_models(raw)
         assert result == (DiscoveredModel(name="gpt-4o", mode="chat"),)
 
     def test_missing_mode_defaults_to_chat(self):
-        raw = [{"model_group": "gpt-4o"}]
+        raw = [{"id": "gpt-4o", "object": "model"}]
         result = parse_discovered_models(raw)
         assert result[0].mode == "chat"
 
@@ -166,7 +161,13 @@ class TestBuildGeneratedModelList:
         config = _base_config(classifier=HeuristicClassifier(), semantic_matching=NoSemanticMatching())
         autorouter = next(m for m in build_generated_model_list(config) if m["model_name"] == "autorouter")
         router_config = autorouter["litellm_params"]["complexity_router_config"]
-        assert set(router_config.keys()) == {"tiers", "default_model"}
+        assert set(router_config.keys()) == {"tiers", "default_model", "return_raw_model_name"}
+
+    def test_the_generated_router_reports_the_tier_model_it_routed_to(self):
+        # The status line reads the routed model from the response body, which the proxy restamps to the
+        # requested alias unless the deployment opts out; "autorouter" on every line would tell nothing.
+        autorouter = next(m for m in build_generated_model_list(_base_config()) if m["model_name"] == "autorouter")
+        assert autorouter["litellm_params"]["complexity_router_config"]["return_raw_model_name"] is True
 
 
 class TestBuildGeneratedProxyConfig:

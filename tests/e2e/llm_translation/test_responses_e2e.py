@@ -2,7 +2,9 @@
 
 Registers an OpenAI deployment at runtime and drives the Responses API through
 the gateway with the real OpenAI SDK, the client customers actually use
-(LIT-4577), asserting output text came back.
+(LIT-4577), asserting output text came back. Malformed bodies the SDK refuses
+to build stay on the shared transport. Migrated from
+litellm-regression-tests/tests/test_inference_endpoints.py.
 """
 
 from __future__ import annotations
@@ -11,21 +13,28 @@ import json
 from typing import cast
 
 import pytest
+from e2e_config import unique_marker
+from e2e_http import assert_client_error
+from lifecycle import ResourceManager
+from models import LiteLLMParamsBody
 from openai.types.responses import (
     FunctionToolParam,
     Response,
     ResponseFunctionToolCall,
     ResponseInputParam,
 )
-from pydantic import BaseModel
-
-from e2e_config import require_env, unique_marker
-from lifecycle import ResourceManager
-from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
+from pydantic import BaseModel
 from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
+
+
+class _OptionalResponsesBody(BaseModel):
+    model: str | None = None
+    input: str | None = None
+    max_output_tokens: int | None = None
+
 
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 INSTRUCTIONS = "You are a helpful assistant"
@@ -61,8 +70,10 @@ def _bedrock_params() -> LiteLLMParamsBody:
     )
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager, params: LiteLLMParamsBody) -> str:
-    model = f"e2e-responses-{unique_marker()}"
+def _register(
+    proxy: ProxyClient, resources: ResourceManager, params: LiteLLMParamsBody, prefix: str = "e2e-responses"
+) -> str:
+    model = f"{prefix}-{unique_marker()}"
     model_id = proxy.create_model(model, params)
     resources.defer(lambda: proxy.delete_model(model_id))
     return model
@@ -92,9 +103,7 @@ class TestResponses:
         model = _register(proxy, resources, _openai_params())
         client = sdk.openai(resources.key())
 
-        response = client.responses.create(
-            model=model, input="reply with one word", instructions=INSTRUCTIONS
-        )
+        response = client.responses.create(model=model, input="reply with one word", instructions=INSTRUCTIONS)
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.openai.basic.stream.works")
@@ -107,9 +116,9 @@ class TestResponses:
         stream = client.responses.create(
             model=model, input="reply with one word", instructions=INSTRUCTIONS, stream=True
         )
-        events = list(stream)
+        events = tuple(stream)
         assert events, "responses stream returned no events"
-        deltas = [event.delta for event in events if event.type == "response.output_text.delta"]
+        deltas = tuple(event.delta for event in events if event.type == "response.output_text.delta")
         assert any(delta for delta in deltas), "responses stream returned no text deltas"
         assert events[-1].type == "response.completed", (
             f"responses stream did not terminate with response.completed: {events[-1].type}"
@@ -169,10 +178,7 @@ class TestResponses:
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "input_text",
-                        "text": "What animal is shown in this image? Answer in one word",
-                    },
+                    {"type": "input_text", "text": "What animal is shown in this image? Answer in one word"},
                     {"type": "input_image", "image_url": CAT_IMAGE_URL, "detail": "auto"},
                 ],
             }
@@ -191,9 +197,7 @@ class TestResponses:
         model = _register(proxy, resources, _anthropic_params())
         client = sdk.openai(resources.key())
 
-        response = client.responses.create(
-            model=model, input="reply with one word", instructions=INSTRUCTIONS
-        )
+        response = client.responses.create(model=model, input="reply with one word", instructions=INSTRUCTIONS)
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.anthropic.tool_use.nonstream.works")
@@ -215,22 +219,16 @@ class TestResponses:
     def test_responses_bedrock_returns_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = _register(proxy, resources, _bedrock_params())
         client = sdk.openai(resources.key())
 
-        response = client.responses.create(
-            model=model, input="reply with one word", instructions=INSTRUCTIONS
-        )
-        assert response.output_text.strip(), (
-            f"/responses over bedrock returned no output text: {response.output!r}"
-        )
+        response = client.responses.create(model=model, input="reply with one word", instructions=INSTRUCTIONS)
+        assert response.output_text.strip(), f"/responses over bedrock returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.bedrock_converse.tool_use.nonstream.works")
     def test_responses_bedrock_returns_function_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = _register(proxy, resources, _bedrock_params())
         client = sdk.openai(resources.key())
 
@@ -241,3 +239,36 @@ class TestResponses:
             tools=[WEATHER_TOOL],
         )
         _assert_weather_call(response)
+
+    @pytest.mark.skip(reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400")
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_missing_input_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        model = _register(proxy, resources, _openai_params(), prefix="e2e-responses-val")
+        key = resources.key()
+        result = proxy.transport.send(
+            "/v1/responses",
+            headers=proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(model=model),
+        )
+        assert_client_error(result, "responses missing input")
+
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_missing_model_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        key = resources.key()
+        result = proxy.transport.send(
+            "/v1/responses",
+            headers=proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(input="ping"),
+        )
+        assert_client_error(result, "responses missing model")
+
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_empty_input_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        model = _register(proxy, resources, _openai_params(), prefix="e2e-responses-val")
+        key = resources.key()
+        result = proxy.transport.send(
+            "/v1/responses",
+            headers=proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(model=model, input=""),
+        )
+        assert_client_error(result, "responses empty input")

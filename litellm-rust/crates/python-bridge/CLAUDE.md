@@ -5,17 +5,18 @@ Rules for `litellm-rust/crates/python-bridge`.
 ## Responsibility
 
 `python-bridge` is the PyO3 boundary between Python LiteLLM and Rust transforms.
-Keep this crate thin. It adapts Python objects to Rust payloads and returns
-Python-compatible dictionaries.
+Keep this crate thin. It exposes LiteLLM Rust APIs, assembles domain requests,
+maps domain errors to Python exceptions, and delegates generic conversion and
+GIL handling to `litellm-python-interop`.
 
 ## Bridge Shape
 
 - Prefer one stable method per top-level LiteLLM route, for example
-  `ocr(payload)`.
+  `messages(...)`, calling the matching `litellm-core` entrypoint.
 - Do not add one exported PyO3 function per provider helper unless there is a
   measured reason.
-- Provider dispatch belongs in Rust route modules such as
-  `litellm_providers::ocr`, not in this PyO3 crate.
+- Provider dispatch belongs in the `litellm-core` route module (e.g.
+  `litellm_core::messages`), not in this PyO3 crate.
 - Python owns rollout state and fallback. Rust should return errors; Python
   decides whether to raise or fall back. For a rust-only provider/route (no
   Python reference), the Python side is a thin dispatch that calls Rust and

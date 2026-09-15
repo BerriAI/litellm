@@ -9,6 +9,7 @@ emitting that event; the exporter pipeline it rides is built in
 """
 
 from dataclasses import dataclass
+from typing import Final
 
 from opentelemetry._events import Event, EventLogger
 from opentelemetry._logs.severity import SeverityNumber
@@ -32,7 +33,7 @@ class GenAIEventRecorder:
         # ``exception.type`` and ``exception.message`` are the semconv-required
         # pair and always ride the event; only the recommended stacktrace is
         # conditional on the payload carrying one.
-        stacktrace = ((ExceptionEvent.STACKTRACE, stack_trace),) if stack_trace else ()
+        stacktrace: Final = ((ExceptionEvent.STACKTRACE, stack_trace),) if stack_trace else ()
         self.event_logger.emit(
             Event(
                 name=GenAIEvent.OPERATION_EXCEPTION,

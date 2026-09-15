@@ -1,12 +1,9 @@
 import json
-import os
-import sys
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
@@ -182,3 +179,58 @@ def test_guardrail_config_flows_to_headers_not_request_body(model):
     assert headers["X-Amzn-Bedrock-GuardrailIdentifier"] == "ff6ujrregl1q"
     assert headers["X-Amzn-Bedrock-GuardrailVersion"] == "DRAFT"
     assert headers["X-Amzn-Bedrock-Trace"] == "DISABLED"
+
+
+def test_get_error_class_preserves_provider_headers():
+    """The invoke handler path hands real provider headers to get_error_class (LIT-5428)."""
+    error = AmazonInvokeConfig().get_error_class(
+        error_message="Amazon Bedrock is unable to process your request.",
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-invoke-500"},
+    )
+
+    assert isinstance(error, BedrockError)
+    assert error.headers == {"x-amzn-RequestId": "req-invoke-500"}
+    assert error.response.headers["x-amzn-requestid"] == "req-invoke-500"
+
+
+def test_transform_response_hands_json_mode_to_nova():
+    """The invoke dispatcher forwards its json_mode argument to Nova instead of dropping it."""
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_nova_json",
+                            "name": "json_tool_call",
+                            "input": {"city": "Paris", "temperature": 21},
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {"inputTokens": 5, "outputTokens": 4, "totalTokens": 9},
+    }
+    raw_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", "https://bedrock"))
+
+    result = AmazonInvokeConfig().transform_response(
+        model="invoke/amazon.nova-lite-v1:0",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "weather"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+        json_mode=True,
+    )
+
+    assert result.choices[0].message.tool_calls is None
+    assert json.loads(result.choices[0].message.content) == {"city": "Paris", "temperature": 21}

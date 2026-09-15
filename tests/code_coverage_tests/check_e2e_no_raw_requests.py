@@ -2,8 +2,10 @@
 raw HTTP client imports (requests, urllib.request, httpx, aiohttp, http.client) are
 banned in suite code. Importing requests' exception types for catching is fine
 anywhere; a small allowlist grandfathers the files that legitimately make raw calls
-(the transport itself, the root conftest liveness probe, and the claude_code version
-resolver's constant registry URL fetch). Referenced by tests/e2e/CLAUDE.md."""
+(the transport itself, the root conftest liveness probe, the claude_code version
+resolver's constant registry URL fetch, and the mcp OAuth client, whose httpx
+client is the object the official mcp SDK's streamable_http_client requires and so
+cannot go through the sync requests transport). Referenced by tests/e2e/CLAUDE.md."""
 
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ ALLOWED_RAW_CLIENT_FILES = {
     "e2e_http.py": ("requests",),
     "conftest.py": ("requests",),
     "claude_code/pr_gate_version_resolver.py": ("urllib.request",),
+    "mcp/oauth_chat_client.py": ("httpx",),
 }
 
 EXCEPTION_ONLY_NAMES = frozenset({"RequestException", "ConnectionError", "Timeout", "HTTPError"})

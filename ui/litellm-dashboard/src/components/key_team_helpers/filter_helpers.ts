@@ -114,9 +114,15 @@ export const fetchTeamFilterOptions = async (
  * Fetches all teams across all pages
  * @param accessToken The access token for API authentication
  * @param organizationId Optional organization ID to filter teams
+ * @param userID Scopes the list to that user's teams. Required for roles the endpoint
+ *   does not grant a broad list to; see `teamListScopeUserId`
  * @returns Array of all teams
  */
-export const fetchAllTeams = async (accessToken: string | null, organizationId?: string | null): Promise<Team[]> => {
+export const fetchAllTeams = async (
+  accessToken: string | null,
+  organizationId?: string | null,
+  userID?: string | null,
+): Promise<Team[]> => {
   if (!accessToken) return [];
 
   try {
@@ -125,7 +131,7 @@ export const fetchAllTeams = async (accessToken: string | null, organizationId?:
     let hasMorePages = true;
 
     while (hasMorePages) {
-      const response = await teamListCall(accessToken, organizationId || null, null);
+      const response = await teamListCall(accessToken, organizationId || null, userID ?? null);
 
       // Add teams from this page
       allTeams = [...allTeams, ...response];
