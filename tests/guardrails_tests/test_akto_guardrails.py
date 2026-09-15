@@ -222,6 +222,24 @@ def test_build_akto_payload_with_response(
     assert "choices" in resp_body
 
 
+def test_build_akto_payload_with_response_mirrors_request_not_scan_context(
+    akto_ingest, sample_request_data
+):
+    request_messages = [{"role": "user", "content": "What is the capital of France?"}]
+    response_inputs = GenericGuardrailAPIInputs(
+        texts=["Paris."],
+        model="gpt-5.5",
+        structured_messages=[*request_messages, {"role": "assistant", "content": "Paris."}],
+    )
+    payload = akto_ingest.build_akto_payload(
+        response_inputs, {**sample_request_data, "messages": request_messages}, include_response=True
+    )
+    req_body = json.loads(json.loads(payload["requestPayload"])["body"])
+    assert req_body["messages"] == request_messages
+    resp_body = json.loads(json.loads(payload["responsePayload"])["body"])
+    assert resp_body["choices"][0]["message"]["content"] == "Paris."
+
+
 def test_build_akto_payload_custom_account_ids(sample_inputs, sample_request_data):
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",

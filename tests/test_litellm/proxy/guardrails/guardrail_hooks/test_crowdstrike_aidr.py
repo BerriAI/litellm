@@ -1065,8 +1065,11 @@ async def test_apply_guardrail_response_drops_history(
             {"role": "user", "content": "Now tell me a secret"},
         ],
     }
+    lookup_tool = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
     inputs: GenericGuardrailAPIInputs = {
         "texts": ["I will not share secrets"],
+        "structured_messages": [*request_data["messages"], {"role": "assistant", "content": "I will not share secrets"}],
+        "tools": [lookup_tool],
     }
     guardrail_endpoint = f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
 
@@ -1084,13 +1087,8 @@ async def test_apply_guardrail_response_drops_history(
             input_type="response",
         )
 
-    sent = mock_method.call_args.kwargs["json"]["guard_input"]["messages"]
-    assert sent == [
-        {
-            "role": "assistant",
-            "content": "I will not share secrets",
-        },
-    ]
+    sent = mock_method.call_args.kwargs["json"]["guard_input"]
+    assert sent == {"messages": [{"role": "assistant", "content": "I will not share secrets"}], "tools": []}
 
 
 @pytest.mark.asyncio
