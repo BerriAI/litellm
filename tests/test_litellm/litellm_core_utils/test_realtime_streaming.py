@@ -2910,7 +2910,8 @@ def test_store_message_skips_pydantic_for_unlogged_audio_delta():
     assert streaming.messages == []
 
 
-def test_translation_audio_duration_is_finalized_once():
+@pytest.mark.parametrize("event_type", ["session.output_audio.delta", "response.output_audio.delta", "response.audio.delta"])
+def test_translation_audio_duration_is_finalized_once(event_type: str):
     import base64
 
     streaming = RealTimeStreaming(
@@ -2921,7 +2922,7 @@ def test_translation_audio_duration_is_finalized_once():
         translation_session=True,
     )
     payload = base64.b64encode(bytes(48000)).decode()
-    streaming._capture_translation_output_audio({"type": "session.output_audio.delta", "delta": payload})
+    streaming._capture_translation_output_audio({"type": event_type, "delta": payload})
     streaming._finalize_translation_usage()
     streaming._finalize_translation_usage()
 

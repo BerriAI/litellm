@@ -438,7 +438,11 @@ class RealTimeStreaming:
         if not self._is_translation_session:
             return
         self._capture_translation_output_format(event_obj)
-        if event_obj.get("type") != "session.output_audio.delta":
+        if event_obj.get("type") not in (
+            "session.output_audio.delta",
+            "response.output_audio.delta",
+            "response.audio.delta",
+        ):
             return
         delta: Final = event_obj.get("delta")
         if not isinstance(delta, str):
