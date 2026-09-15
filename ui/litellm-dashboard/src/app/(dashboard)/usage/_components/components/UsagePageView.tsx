@@ -30,6 +30,7 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
+import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
@@ -248,6 +249,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [activeAggregated, aggregatedFailed, paginatedResult.data]);
 
   const loading = aggregatedLoading || paginatedResult.loading;
+
+  const spendFetchState = {
+    loading,
+    isFetchingMore: paginatedResult.isFetchingMore,
+    cancelled: paginatedResult.cancelled,
+    failed: paginatedResult.failed,
+  };
+  const exportBlockedReason = getExportBlockedReason(spendFetchState);
 
   // Clear isDateChanging when paginated data starts arriving
   useEffect(() => {
@@ -489,6 +498,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           <PaginationStatusAlerts
             isFetchingMore={paginatedResult.isFetchingMore}
             cancelled={paginatedResult.cancelled}
+            failed={paginatedResult.failed}
             progress={paginatedResult.progress}
             cancel={paginatedResult.cancel}
           />
@@ -525,10 +535,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Sparkles />
                       Ask AI
                     </Button>
-                    <Button variant="outline" onClick={() => setIsGlobalExportModalOpen(true)}>
-                      <Download />
-                      Export Data
-                    </Button>
+                    <span title={exportBlockedReason}>
+                      <Button
+                        variant="outline"
+                        disabled={exportBlockedReason !== undefined}
+                        onClick={() => setIsGlobalExportModalOpen(true)}
+                      >
+                        <Download />
+                        Export Data
+                      </Button>
+                    </span>
                   </div>
                 </div>
                 {/* Cost Panel */}

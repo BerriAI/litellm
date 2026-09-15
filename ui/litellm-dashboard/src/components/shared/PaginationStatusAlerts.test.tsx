@@ -33,6 +33,37 @@ describe("PaginationStatusAlerts", () => {
     expect(screen.getByText("Showing partial spend data (7/42 pages loaded)")).toBeInTheDocument();
   });
 
+  it("calls out a failed page as an error so partial totals do not read as final", () => {
+    render(
+      <PaginationStatusAlerts
+        isFetchingMore={false}
+        cancelled={false}
+        failed={true}
+        progress={{ currentPage: 7, totalPages: 42 }}
+        cancel={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Fetching spend data failed, so the totals below cover only part of the range \(7\/42 pages/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows only the failure when a stopped fetch also failed", () => {
+    render(
+      <PaginationStatusAlerts
+        isFetchingMore={false}
+        cancelled={true}
+        failed={true}
+        progress={{ currentPage: 7, totalPages: 42 }}
+        cancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/Fetching spend data failed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Showing partial spend data/)).not.toBeInTheDocument();
+  });
+
   it("names the subject it is fetching", () => {
     render(
       <PaginationStatusAlerts

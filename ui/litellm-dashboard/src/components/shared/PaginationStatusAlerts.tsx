@@ -9,6 +9,7 @@ interface PaginationStatusAlertsProps {
   progress: { currentPage: number; totalPages: number };
   cancel: () => void;
   subject?: string;
+  failed?: boolean;
 }
 
 const PaginationStatusAlerts = ({
@@ -17,6 +18,7 @@ const PaginationStatusAlerts = ({
   progress,
   cancel,
   subject = "spend data",
+  failed = false,
 }: PaginationStatusAlertsProps) => (
   <>
     {isFetchingMore && (
@@ -38,7 +40,15 @@ const PaginationStatusAlerts = ({
         </AlertDescription>
       </Alert>
     )}
-    {cancelled && (
+    {failed && (
+      <Alert variant="error" className="mb-2">
+        <AlertDescription className="text-inherit">
+          Fetching {subject} failed, so the totals below cover only part of the range ({progress.currentPage}/
+          {progress.totalPages} pages loaded). Reload the page to try again.
+        </AlertDescription>
+      </Alert>
+    )}
+    {cancelled && !failed && (
       <Alert variant="info" className="mb-2">
         <AlertDescription className="text-inherit">
           Showing partial {subject} ({progress.currentPage}/{progress.totalPages} pages loaded)
