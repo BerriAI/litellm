@@ -44,7 +44,7 @@ _DEPLOYMENT_MARKERS: Final = TypeAdapter(list[_DeploymentMarker])
 _ACCESS_CREDENTIAL_ROUTES: Final = (
     "/credentials",
     "/credentials/by_name/{credential_name:path}",
-    "/credentials/by_model",
+    "/credentials/by_model/{model_id}",
     "/model/info",
     "/v1/model/info",
     "/v2/model/info",

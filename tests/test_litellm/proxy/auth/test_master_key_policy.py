@@ -85,7 +85,7 @@ def test_insecure_master_key_warning_survives_redaction():
         ("/model/unblock", "POST", None),
         ("/credentials", "GET", "access_credentials"),
         ("/credentials/by_name/my_creds", "GET", "access_credentials"),
-        ("/credentials/by_model", "GET", "access_credentials"),
+        ("/credentials/by_model/abc123", "GET", "access_credentials"),
         ("/model/info", "GET", "access_credentials"),
         ("/v1/model/info", "GET", "access_credentials"),
         ("/v2/model/info", "GET", "access_credentials"),
