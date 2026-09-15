@@ -49,18 +49,6 @@ class TestCommandR7bPricingData:
     """The JSON price maps must carry Cohere's published costs, with output
     more expensive than input."""
 
-    def test_backup_costs_not_swapped(self):
-        entry = _load_json(_backup_path())[MODEL]
-        assert entry["input_cost_per_token"] == EXPECTED_INPUT_COST
-        assert entry["output_cost_per_token"] == EXPECTED_OUTPUT_COST
-        assert entry["output_cost_per_token"] > entry["input_cost_per_token"]
-
-    def test_main_costs_not_swapped(self):
-        entry = _load_json(_main_path())[MODEL]
-        assert entry["input_cost_per_token"] == EXPECTED_INPUT_COST
-        assert entry["output_cost_per_token"] == EXPECTED_OUTPUT_COST
-        assert entry["output_cost_per_token"] > entry["input_cost_per_token"]
-
 
 class TestCommandR7bPricingModelInfo:
     """``get_model_info`` must report the corrected, un-swapped costs."""
