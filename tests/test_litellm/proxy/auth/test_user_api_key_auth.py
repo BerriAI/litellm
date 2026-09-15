@@ -4252,8 +4252,7 @@ async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
 
 
 def _proxy_admin_world(user_row: LiteLLM_UserTable):
-    """The proxy globals the centralized gate reads, with ``user_row`` already in the
-    user cache so get_user_object resolves it without a DB round trip."""
+    """Same shape as _proxy_attrs_for_centralized_checks, with user_row in the cache."""
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
@@ -4284,14 +4283,7 @@ def _proxy_admin_world(user_row: LiteLLM_UserTable):
 
 @pytest.mark.asyncio
 async def test_centralized_checks_enforce_personal_budget_for_proxy_admin_token():
-    """GH#41226: a proxy admin stays subject to their own personal budget.
-
-    common_checks reads the admin role off user_object rather than off the token, so the
-    gate substitutes an admin user_object whenever the token says PROXY_ADMIN. Rebuilding
-    that object from scratch dropped max_budget, and the personal-budget check returns
-    early on a None budget, so an admin holding an external JWT kept getting completions
-    after their personal budget was spent.
-    """
+    """GH#41226: a proxy admin stays subject to their own personal budget."""
     admin_row = LiteLLM_UserTable(
         user_id="admin-user",
         user_role=LitellmUserRoles.PROXY_ADMIN.value,
@@ -4314,11 +4306,18 @@ async def test_centralized_checks_enforce_personal_budget_for_proxy_admin_token(
 
 
 @pytest.mark.asyncio
-async def test_centralized_checks_keep_admin_role_when_the_db_row_is_not_admin():
-    """The other half of GH#41226: forcing the budget back must not stop the token from
-    forcing the admin role. A JWT or master-key admin whose DB row carries a non-admin
-    user_role still has to reach common_checks as PROXY_ADMIN, or admin-only routes would
-    start rejecting them."""
+def _route_request(route: str):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+    return request
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_keep_admin_route_access_when_the_db_row_is_not_admin():
+    """GH#41226: an admin token still reaches an admin-only route when its row is not admin."""
     demoted_row = LiteLLM_UserTable(
         user_id="admin-user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -4328,20 +4327,25 @@ async def test_centralized_checks_keep_admin_role_when_the_db_row_is_not_admin()
     token = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     with _proxy_admin_world(demoted_row):
-        with patch(  # test-quality-ok: what the substitution hands common_checks IS the subject; no HTTP boundary and no injection seam on that call
-            "litellm.proxy.auth.user_api_key_auth.common_checks",
-            new_callable=AsyncMock,
-        ) as mock_checks:
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=_route_request("/user/new"),
+            request_data={},
+            route="/user/new",
+        )
+
+        non_admin_token = UserAPIKeyAuth(
+            user_id="admin-user", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        with pytest.raises(Exception, match="Only proxy admin can be used") as exc_info:
             await _run_centralized_common_checks(
-                user_api_key_auth_obj=token,
-                request=_chat_request(),
-                request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
-                route="/chat/completions",
+                user_api_key_auth_obj=non_admin_token,
+                request=_route_request("/user/new"),
+                request_data={},
+                route="/user/new",
             )
 
-    seen_user_object = mock_checks.await_args.kwargs["user_object"]
-    assert seen_user_object.user_role == LitellmUserRoles.PROXY_ADMIN
-    assert seen_user_object.max_budget == 500.0
+    assert "internal_user" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
