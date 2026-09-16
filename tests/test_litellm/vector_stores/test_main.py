@@ -7,6 +7,7 @@ executor, and it must never leak into litellm_params/kwargs where logging would
 model_dump() it (the #19550 serialization trap).
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ import litellm.vector_stores.main as vector_stores_main
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.vector_stores.main import search
 
 MOCK_SEARCH_RESPONSE = {
@@ -89,3 +91,26 @@ def test_search_router_not_in_litellm_params():
     litellm_params = mock_handler.call_args.kwargs["litellm_params"]
     assert "router" not in litellm_params.model_dump(exclude_none=True)
     assert getattr(litellm_params, "router", None) is None
+
+
+def test_search_forwards_top_level_user_context_to_bedrock_retrieve():
+    """Regression (LIT-4415): a top-level userContext, the shape the OpenAI SDK's extra_body
+    produces on the proxy path, reaches the Bedrock Retrieve request body."""
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = MagicMock(status_code=200, json=MagicMock(return_value={"retrievalResults": []}))
+
+    search(
+        vector_store_id="kb123",
+        query="q",
+        custom_llm_provider="bedrock",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-key-id",
+        aws_secret_access_key="test-secret-key",
+        userContext={"userId": "alice@example.com"},
+        client=client,
+        litellm_logging_obj=MagicMock(),
+    )
+
+    posted = json.loads(client.post.call_args.kwargs["data"])
+    assert posted["userContext"] == {"userId": "alice@example.com"}
+    assert posted["retrievalQuery"] == {"text": "q"}

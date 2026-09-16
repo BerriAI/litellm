@@ -1902,7 +1902,7 @@ class AmazonConverseConfig(BaseConfig):
             return None
         tokens_5m: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
         tokens_1h: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
-        if tokens_5m + tokens_1h != usage.get("cacheWriteInputTokens", 0):
+        if tokens_5m + tokens_1h != AmazonConverseConfig._cache_write_count(usage):
             return None
         return CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=tokens_5m,
@@ -1933,6 +1933,15 @@ class AmazonConverseConfig(BaseConfig):
                 return int(value)
         return 0
 
+    @staticmethod
+    def _cache_read_count(usage_object: Mapping[str, object]) -> int:
+        """Converse reports ``cacheReadInputTokens``; InvokeModel reports ``cacheReadInputTokenCount``."""
+        return AmazonConverseConfig._usage_count(usage_object, "cacheReadInputTokens", "cacheReadInputTokenCount")
+
+    @staticmethod
+    def _cache_write_count(usage_object: Mapping[str, object]) -> int:
+        return AmazonConverseConfig._usage_count(usage_object, "cacheWriteInputTokens", "cacheWriteInputTokenCount")
+
     def usage_from_batch_output(self, usage_object: Mapping[str, object]) -> Usage:
         """Read a Converse-shaped usage block out of a batch output line.
 
@@ -1942,8 +1951,8 @@ class AmazonConverseConfig(BaseConfig):
         """
         input_tokens: Final = self._usage_count(usage_object, "inputTokens")
         output_tokens: Final = self._usage_count(usage_object, "outputTokens")
-        cache_read: Final = self._usage_count(usage_object, "cacheReadInputTokens", "cacheReadInputTokenCount")
-        cache_write: Final = self._usage_count(usage_object, "cacheWriteInputTokens", "cacheWriteInputTokenCount")
+        cache_read: Final = self._cache_read_count(usage_object)
+        cache_write: Final = self._cache_write_count(usage_object)
         return self.transform_usage(
             ConverseTokenUsageBlock(
                 inputTokens=input_tokens,
@@ -1963,19 +1972,12 @@ class AmazonConverseConfig(BaseConfig):
         thinking_ran: bool = False,
         provider_reasoning_tokens: int | None = None,
     ) -> Usage:
-        input_tokens = usage["inputTokens"]
+        raw_input_tokens: Final = usage["inputTokens"]
         output_tokens: Final = usage["outputTokens"]
-        total_tokens: Final = usage["totalTokens"]
-        cache_creation_input_tokens: int = 0
-        cache_read_input_tokens: int = 0
-
-        raw_input_tokens: Final = input_tokens  # capture before inflation
-        if "cacheReadInputTokens" in usage:
-            cache_read_input_tokens = usage["cacheReadInputTokens"]
-            input_tokens += cache_read_input_tokens
-        if "cacheWriteInputTokens" in usage:
-            cache_creation_input_tokens = usage["cacheWriteInputTokens"]
-            input_tokens += cache_creation_input_tokens
+        cache_read_input_tokens: Final = self._cache_read_count(usage)
+        cache_creation_input_tokens: Final = self._cache_write_count(usage)
+        input_tokens: Final = raw_input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+        total_tokens: Final = usage.get("totalTokens", input_tokens + output_tokens)
 
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,

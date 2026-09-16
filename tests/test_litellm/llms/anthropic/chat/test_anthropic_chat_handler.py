@@ -2381,3 +2381,74 @@ class TestAnthropicChatCompletionPreCallLogging:
             "model": "m",
             "messages": [],
         }
+
+
+def _served_model_stream_chunks(model: str | None) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_served",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+                **({"model": model} if model is not None else {}),
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2},
+        },
+        {"type": "message_stop"},
+    ]
+
+
+def test_message_start_model_is_carried_on_stream_chunks():
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+
+    parsed: Final = [iterator.chunk_parser(chunk) for chunk in _served_model_stream_chunks("claude-served-1")]
+
+    assert all(chunk.model == "claude-served-1" for chunk in parsed)
+
+
+def test_message_start_without_model_leaves_chunk_model_unset():
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+
+    parsed: Final = [iterator.chunk_parser(chunk) for chunk in _served_model_stream_chunks(None)]
+
+    assert all(chunk.model is None for chunk in parsed)
+
+
+def test_served_model_reaches_assembled_stream_through_custom_stream_wrapper():
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    served_model: Final = "claude-served-1"
+    sse_lines: Final = [f"data: {json.dumps(chunk)}\n".encode() for chunk in _served_model_stream_chunks(served_model)]
+    iterator: Final = ModelResponseIterator(iter(sse_lines), sync_stream=True)
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(iterator),
+        model="anthropic/claude-requested",
+        custom_llm_provider="anthropic",
+        logging_obj=MagicMock(),
+    )
+
+    chunks: Final = list(wrapper)
+
+    assert len(chunks) > 1
+    for chunk in chunks[1:]:
+        assert chunk._hidden_params["provider_response_model"] == served_model
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
+    assert assembled._hidden_params["provider_response_model"] == served_model
