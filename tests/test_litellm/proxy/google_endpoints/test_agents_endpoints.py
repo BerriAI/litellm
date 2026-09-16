@@ -1,6 +1,3 @@
-"""The managed-agent proxy endpoints default to Gemini but let ``litellm_params_template``
-name another provider, including on the GET / DELETE routes that carry it as a query parameter."""
-
 import json
 from urllib.parse import quote
 
@@ -78,7 +75,7 @@ def _template(**fields) -> str:
     return quote(json.dumps(fields), safe="")
 
 
-def _anthropic_agent(version: int = 3) -> dict:
+def _anthropic_agent(version: int = 3) -> dict[str, object]:
     return {
         "type": "agent",
         "id": "agent_123",

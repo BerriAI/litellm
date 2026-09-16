@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 
 import httpx
 import pytest
@@ -21,7 +22,7 @@ def _config() -> AnthropicAgentsConfig:
     return AnthropicAgentsConfig()
 
 
-def _response(payload, status_code: int = 200) -> httpx.Response:
+def _response(payload: Mapping[str, object], status_code: int = 200) -> httpx.Response:
     return httpx.Response(
         status_code,
         content=json.dumps(payload).encode(),
@@ -30,7 +31,7 @@ def _response(payload, status_code: int = 200) -> httpx.Response:
     )
 
 
-def _agent_json(**overrides) -> dict:
+def _agent_json(**overrides: object) -> dict[str, object]:
     return {
         "type": "agent",
         "id": AGENT_ID,

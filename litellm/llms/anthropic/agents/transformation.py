@@ -1,14 +1,6 @@
-"""Anthropic Managed Agents: the provider-side agent resource (beta managed-agents-2026-04-01).
-
-  POST /v1/agents                      create
-  GET  /v1/agents                      list
-  GET  /v1/agents/{agent_id}           get (optional ?version=)
-  GET  /v1/agents/{agent_id}/versions  list versions
-
-Anthropic assigns the agent id, so the ``name`` handle of the agents SDK is the agent id
-for every call after create. Agent ``metadata`` is not forwarded: on the proxy that key
-carries LiteLLM's own request metadata. Agents are archived (POST /v1/agents/{agent_id}/archive),
-never deleted, and the agents SDK only issues HTTP DELETE, so delete is refused.
+"""Anthropic Managed Agents (beta managed-agents-2026-04-01). Anthropic assigns agent ids, archives
+agents instead of deleting them, and on the proxy ``metadata`` carries LiteLLM's own request metadata,
+so it is never forwarded as agent metadata.
 """
 
 from collections.abc import Mapping, Sequence
