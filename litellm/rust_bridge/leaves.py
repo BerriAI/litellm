@@ -880,7 +880,7 @@ def dispatch_named_failure(
                 kwargs={  # mutable-ok: logfire receives a private mutable copy
                     key: value for key, value in details.items() if key != "original_response"
                 }
-                | {"exception": exception},
+                | {"exception": exception},  # mutable-ok: merged into the private copy above
                 response_obj=None,
                 start_time=start_time,
                 end_time=end_time,

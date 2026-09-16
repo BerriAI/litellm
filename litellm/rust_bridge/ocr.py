@@ -24,7 +24,7 @@ class OcrLoggingProtocol(Protocol):
 
 
 def _redact(params: Mapping[str, object], secret_fields: Sequence[str]) -> dict[str, object]:
-    return {
+    return {  # mutable-ok: update_from_kwargs takes dict
         name: "****" if name in secret_fields else value
         for name, value in params.items()
         if name != "proxy_server_request"
@@ -44,11 +44,13 @@ def update_logging(
         kwargs=_redact(kwargs, secret_fields),
         model=model,
         optional_params=_redact(optional_params, secret_fields),
-        litellm_params={
+        litellm_params={  # mutable-ok: update_from_kwargs takes dict
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "api_base": url,
-            **{name: kwargs[name] for name in ("logger_fn", "litellm_request_debug") if name in kwargs},
             **{
+                name: kwargs[name] for name in ("logger_fn", "litellm_request_debug") if name in kwargs
+            },  # mutable-ok: splat into the dict above
+            **{  # mutable-ok: splat into the dict above
                 name: kwargs[name]
                 for name in CustomPricingLiteLLMParams.model_fields
                 if name in kwargs and kwargs[name] is not None

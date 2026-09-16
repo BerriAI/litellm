@@ -37,7 +37,7 @@ def _build_document_from_upload(
     )
 
     return convert_file_document_to_url_document(
-        {
+        {  # mutable-ok: OCR file document TypedDict handed to the converter
             "type": "file",
             "file": file_content,
             "mime_type": mime_type or "application/octet-stream",
