@@ -507,6 +507,26 @@ def test_inject_trace_context_uses_ambient_span_without_request_root():
     assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
 
 
+def test_inject_trace_context_replaces_stale_trace_headers():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("ambient") as ambient:
+            headers = {
+                "Traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01",
+                "Tracestate": "vendor=old",
+                "x-keep": "1",
+            }
+            result = ctx_mod.inject_trace_context(headers)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, ambient, propagated
+
+    result, ambient, propagated = ContextVarContext().run(run)
+    assert sum(key.lower() == "traceparent" for key in result) == 1
+    assert not any(key.lower() == "tracestate" for key in result)
+    assert result["x-keep"] == "1"
+    assert propagated.get_span_context().trace_id == ambient.get_span_context().trace_id
+
+
 def test_inject_trace_context_prefers_explicit_parent_span_over_root_and_ambient():
     def run():
         tracer = _test_tracer()

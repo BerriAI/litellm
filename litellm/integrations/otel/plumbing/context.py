@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
+_W3C_TRACE_HEADERS: Final = frozenset(("traceparent", "tracestate"))
 
 # The request's root span — the FastAPI-owned SERVER span — captured ONCE when the
 # proxy first resolves it, so request-level spans (the LLM call, guardrails) can
@@ -334,7 +335,9 @@ def inject_trace_context(headers: Mapping[str, str], parent_span: object = None)
     context: Final = _outgoing_trace_context(parent_span)
     if context is None:
         return dict(headers)  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
-    carrier: Final = dict(headers)  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
+    carrier: Final = {  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
+        key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS
+    }
     _PROPAGATOR.inject(carrier, context=context)
     return carrier
 
