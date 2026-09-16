@@ -23,12 +23,18 @@ from e2e_http import (
     prepare_forward,
     primed_steps,
 )
+from fixture_canonical import MARKER_PATTERN, MARKER_PLACEHOLDER
+from fixture_mode import SESSION_TEST_KEY, current_test_key
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 LIFETIME_SECONDS: Final = 86_400
 MAX_REQUEST_BYTES: Final = 256 * 1024
 MAX_RESPONSE_BYTES: Final = 8 * 1024 * 1024
 UNRECORDED_RESPONSE_HEADERS: Final = frozenset({"set-cookie"})
+SIGNATURE_HEADERS: Final = frozenset(
+    {"authorization", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256"}
+)
+BEDROCK_MOUNT_PREFIX: Final = "bedrock"
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
@@ -56,6 +62,7 @@ class CacheUnavailable:
 
 
 type CacheLookup = CacheHit | CaptureLease | CacheBusy | CacheUnavailable
+type RequestSigner = Callable[[str, str, Mapping[str, str], bytes | None], dict[str, str]]
 
 
 class ResponseStore(Protocol):
@@ -83,28 +90,51 @@ class SignedResponse(BaseModel):
     signature: str
 
 
-def exact_key(secret: bytes, method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> str:
+def canonical_text(value: str) -> str:
+    return MARKER_PATTERN.sub(MARKER_PLACEHOLDER, value)
+
+
+def canonical_body(body: bytes) -> bytes:
+    try:
+        return canonical_text(body.decode("utf-8")).encode("utf-8")
+    except UnicodeDecodeError:
+        return body
+
+
+def request_identity(
+    secret: bytes, test_key: str, method: str, url: str, headers: Mapping[str, str], body: bytes | None,
+) -> str:
     fields: Final = (
-        b"provider-cache-exact-v1", method.encode(), url.encode(),
+        b"provider-cache-canonical-v2", test_key.encode(), method.encode(), canonical_text(url).encode(),
         *(part.encode() for pair in sorted(headers.items()) for part in pair),
-        b"no-body" if body is None else b"body", b"" if body is None else body,
+        b"no-body" if body is None else b"body", b"" if body is None else canonical_body(body),
     )
     encoded: Final = b"".join(len(part).to_bytes(8, "big") + part for part in fields)
     return hmac.new(secret, encoded, hashlib.sha256).hexdigest()
 
 
-def cacheable_endpoint(method: str, url: str, body: bytes | None) -> bool:
-    return (
-        method == "POST"
-        and urlsplit(url).path in {"/v1/chat/completions", "/v1/messages"}
-        and body is not None
-        and len(body) <= MAX_REQUEST_BYTES
-    )
+def slotted_key(secret: bytes, identity: str, slot: int) -> str:
+    return hmac.new(secret, f"{identity}:{slot}".encode(), hashlib.sha256).hexdigest()
 
 
-def successful_response(url: str, status: int, headers: Mapping[str, str], body: bytes) -> bool:
+def is_bedrock(mount: str) -> bool:
+    return mount.partition("/")[0] == BEDROCK_MOUNT_PREFIX
+
+
+def cacheable_endpoint(mount: str, method: str, url: str, body: bytes | None) -> bool:
+    if method != "POST" or body is None or len(body) > MAX_REQUEST_BYTES:
+        return False
+    path: Final = urlsplit(url).path
+    if is_bedrock(mount):
+        return path.startswith("/model/") and path.endswith(("/converse", "/invoke"))
+    return path in {"/v1/chat/completions", "/v1/messages"}
+
+
+def successful_response(mount: str, url: str, status: int, headers: Mapping[str, str], body: bytes) -> bool:
     if not 200 <= status < 300 or len(body) > MAX_RESPONSE_BYTES:
         return False
+    if is_bedrock(mount):
+        return complete_bedrock_response(url, body)
     streaming: Final = "text/event-stream" in headers.get("content-type", "").lower()
     if streaming:
         try:
@@ -147,6 +177,26 @@ def successful_response(url: str, status: int, headers: Mapping[str, str], body:
     )
 
 
+def complete_bedrock_response(url: str, body: bytes) -> bool:
+    """Converse answers with ``output`` plus a ``stopReason``; InvokeModel on an
+    Anthropic model answers the Anthropic message shape. Either way a truncated
+    or error body is missing the terminator field, which is what makes it safe to
+    record. The streaming variants never reach here: they are not cacheable."""
+    try:
+        value: Final = JSON_VALUE.validate_json(body)
+    except ValidationError:
+        return False
+    if not isinstance(value, dict) or "message" in value:
+        return False
+    if urlsplit(url).path.endswith("/converse"):
+        return isinstance(value.get("output"), dict) and isinstance(value.get("stopReason"), str)
+    return (
+        value.get("type") == "message"
+        and isinstance(value.get("content"), list)
+        and isinstance(value.get("stop_reason"), str)
+    )
+
+
 def complete_chat_stream(values: tuple[JsonValue, ...]) -> bool:
     if any(not isinstance(value, dict) or not isinstance(value.get("choices"), list) for value in values):
         return False
@@ -172,7 +222,7 @@ def encode_response(secret: bytes, response: CachedResponse) -> bytes:
     return SignedResponse(response=raw, signature=hmac.new(secret, raw.encode(), hashlib.sha256).hexdigest()).model_dump_json().encode()
 
 
-def decode_response(secret: bytes, key: str, payload: bytes, url: str) -> CachedResponse | None:
+def decode_response(secret: bytes, key: str, payload: bytes, mount: str, url: str) -> CachedResponse | None:
     if len(payload) > 2 * MAX_RESPONSE_BYTES:
         return None
     try:
@@ -183,7 +233,9 @@ def decode_response(secret: bytes, key: str, payload: bytes, url: str) -> Cached
         chunks: Final = tuple(base64.b64decode(chunk, validate=True) for chunk in response.chunks)
     except (ValidationError, ValueError):
         return None
-    if response.request_key != key or not successful_response(url, response.status_code, response.headers, b"".join(chunks)):
+    if response.request_key != key or not successful_response(
+        mount, url, response.status_code, response.headers, b"".join(chunks)
+    ):
         return None
     return response
 
@@ -197,6 +249,24 @@ class CacheCounters:
         with self.lock:
             current: Final = dict(self.counts)
             self.counts = tuple((current | {name: current.get(name, 0) + 1}).items())
+
+
+@dataclass(slots=True)
+class SlotCounter:
+    """FIFO position of a request among the canonically identical ones its test
+    has already sent. Two calls in one test that differ only by ``unique_marker``
+    canonicalize the same, so without this they would share one recording and the
+    second would replay the first's provider response id."""
+
+    counts: tuple[tuple[str, int], ...] = ()
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def take(self, identity: str) -> int:
+        with self.lock:
+            current: Final = dict(self.counts)
+            taken: Final = current.get(identity, 0)
+            self.counts = tuple((current | {identity: taken + 1}).items())
+            return taken
 
 
 @dataclass(slots=True)
@@ -231,9 +301,12 @@ class CacheEdge:
     store: ResponseStore
     secret: bytes = field(repr=False)
     counters: CacheCounters = field(default_factory=CacheCounters)
+    slots: SlotCounter = field(default_factory=SlotCounter)
+    signers: Mapping[str, RequestSigner] = field(default_factory=dict)
     wait_seconds: float = 2.0
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
+    test_key: Callable[[], str] = current_test_key
 
     def lookup(self, key: str) -> CacheLookup:
         deadline: Final = self.clock() + self.wait_seconds
@@ -241,39 +314,71 @@ class CacheEdge:
             self.sleep(min(0.05, max(0, deadline - self.clock())))
         return result
 
-    def forward(self, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float) -> StreamHead | NetworkError:
-        if not cacheable_endpoint(method, url, body):
-            self.counters.increment("bypass")
-            self.counters.increment("upstream_attempts")
-            return forward_stream(method, url, headers=headers, body=body, timeout=timeout)
-        prepared: Final = prepare_forward(method, url, headers, body)
+    def count(self, mount: str, name: str) -> None:
+        self.counters.increment(name)
+        self.counters.increment(f"mount:{mount}:{name}")
+
+    def outbound(self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None) -> dict[str, str]:
+        """The headers actually sent upstream. A signing mount gets a signature
+        minted over the upstream URL, because the edge rewrote the Host the proxy
+        signed and Bedrock verifies it."""
+        signer: Final = self.signers.get(mount)
+        return headers if signer is None else signer(method, url, headers, body)
+
+    def keyed(self, mount: str, headers: Mapping[str, str]) -> Mapping[str, str]:
+        """A signing mount's signature headers are the edge's own and carry a
+        timestamp, so keying on them would make every request a permanent miss.
+        Every other mount keys on its headers whole, credentials included, so a
+        different account can never read another's recording."""
+        if mount not in self.signers:
+            return headers
+        return {name: value for name, value in headers.items() if name.lower() not in SIGNATURE_HEADERS}
+
+    def forward(
+        self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float,
+    ) -> StreamHead | NetworkError:
+        test_key: Final = self.test_key()
+        if test_key == SESSION_TEST_KEY or not cacheable_endpoint(mount, method, url, body):
+            self.count(mount, "bypass")
+            self.count(mount, "upstream_attempts")
+            return forward_stream(
+                method, url, headers=self.outbound(mount, method, url, headers, body), body=body, timeout=timeout,
+            )
+        prepared: Final = prepare_forward(method, url, self.outbound(mount, method, url, headers, body), body)
         if isinstance(prepared, NetworkError):
-            self.counters.increment("rejected")
+            self.count(mount, "rejected")
             return prepared
-        key: Final = exact_key(self.secret, method, url, prepared.headers, body)
+        identity: Final = request_identity(
+            self.secret, test_key, method, url, self.keyed(mount, prepared.headers), body,
+        )
+        key: Final = slotted_key(self.secret, identity, self.slots.take(identity))
         found: Final = self.lookup(key)
         if isinstance(found, CacheHit):
-            response: Final = decode_response(self.secret, key, found.payload, url)
+            response: Final = decode_response(self.secret, key, found.payload, mount, url)
             if response is not None and self.clock() < found.valid_until:
-                self.counters.increment("hits")
+                self.count(mount, "hits")
                 return StreamHead(response.status_code, response.headers, response_steps(response))
-            self.counters.increment("corrupt" if response is None else "expired")
+            self.count(mount, "corrupt" if response is None else "expired")
             self.store.discard(key, found.payload)
         capture_slot: Final = self.lookup(key) if isinstance(found, CacheHit) else found
-        self.counters.increment("misses")
+        self.count(mount, "misses")
         if isinstance(capture_slot, CacheUnavailable):
-            self.counters.increment("cache_errors")
-        self.counters.increment("upstream_attempts")
+            self.count(mount, "cache_errors")
+        self.count(mount, "upstream_attempts")
         head: Final = forward_prepared_stream(prepared, timeout)
         if not isinstance(capture_slot, CaptureLease):
             return head
         if isinstance(head, NetworkError):
             self.store.release(key, capture_slot)
-            self.counters.increment("rejected")
+            self.count(mount, "rejected")
             return head
-        return StreamHead(head.status_code, head.headers, primed_steps(self.capture(key, capture_slot, url, head)))
+        return StreamHead(
+            head.status_code, head.headers, primed_steps(self.capture(mount, key, capture_slot, url, head)),
+        )
 
-    def capture(self, key: str, lease: CaptureLease, url: str, head: StreamHead) -> Generator[StreamStep, None, None]:
+    def capture(
+        self, mount: str, key: str, lease: CaptureLease, url: str, head: StreamHead,
+    ) -> Generator[StreamStep, None, None]:
         capture: Final = ResponseCapture()
         try:
             with closing(head.steps):
@@ -285,15 +390,15 @@ class CacheEdge:
             headers: Final = {
                 name: value for name, value in head.headers.items() if name.lower() not in UNRECORDED_RESPONSE_HEADERS
             }
-            if not capture.eligible or not successful_response(url, head.status_code, headers, b"".join(chunks)):
-                self.counters.increment("rejected")
+            if not capture.eligible or not successful_response(mount, url, head.status_code, headers, b"".join(chunks)):
+                self.count(mount, "rejected")
                 return
             response: Final = CachedResponse(
                 request_key=key, status_code=head.status_code, headers=headers,
                 chunks=tuple(base64.b64encode(chunk).decode("ascii") for chunk in chunks),
             )
             published: Final = self.store.publish(key, lease, encode_response(self.secret, response))
-            self.counters.increment("writes" if published else "write_failures")
+            self.count(mount, "writes" if published else "write_failures")
         finally:
             self.store.release(key, lease)
             capture.buffer.close()
