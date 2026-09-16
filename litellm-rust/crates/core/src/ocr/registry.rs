@@ -1,5 +1,5 @@
 use super::adapters::OcrAdapter;
-use crate::Error;
+use crate::ocr::Error;
 use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
 
 macro_rules! define_adapter_types {

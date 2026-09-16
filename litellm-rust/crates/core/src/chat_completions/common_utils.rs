@@ -1,4 +1,4 @@
-use crate::Error;
+use super::Error;
 use crate::http_utils::string_headers as shared_string_headers;
 use crate::providers::anthropic::chat_completions::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
 use serde_json::{Map, Value};
@@ -12,7 +12,6 @@ pub(super) fn chat_completions_provider_config(
 ) -> Option<&'static dyn ChatCompletionsProviderConfig> {
     match provider {
         "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
-        #[cfg(feature = "bedrock-auth")]
         "bedrock" => Some(
             &crate::providers::bedrock::chat_completions::transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
         ),
@@ -23,5 +22,5 @@ pub(super) fn chat_completions_provider_config(
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
 ) -> Result<Vec<(String, String)>, Error> {
-    shared_string_headers(HEADER_CONTEXT, extra_headers)
+    shared_string_headers(HEADER_CONTEXT, extra_headers).map_err(Error::from)
 }

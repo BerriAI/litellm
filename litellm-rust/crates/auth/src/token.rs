@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use veil::Redact;
 
-use crate::AuthError;
+use crate::Error;
 
 use super::secret::SecretValue;
 
@@ -27,7 +27,7 @@ impl ResolvedCredential {
 }
 
 pub type TokenFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<ResolvedCredential, AuthError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + 'a>>;
 
 pub trait TokenProvider: std::fmt::Debug + Send + Sync {
     fn acquire(&self) -> TokenFuture<'_>;
@@ -41,7 +41,7 @@ impl TokenProviderHandle {
         Self(caller)
     }
 
-    pub async fn acquire(&self) -> Result<ResolvedCredential, AuthError> {
+    pub async fn acquire(&self) -> Result<ResolvedCredential, Error> {
         self.0.acquire().await
     }
 }

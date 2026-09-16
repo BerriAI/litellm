@@ -11,6 +11,12 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 bytes = "1"
 litellm-core = { path = "crates/core" }
+litellm-auth = { path = "crates/auth" }
+litellm-auth-aws = { path = "crates/auth-aws" }
+litellm-auth-azure = { path = "crates/auth-azure" }
+litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-cache = { path = "crates/cache" }
+litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-token-counter = { path = "crates/token-counter" }
 litellm-python-interop = { path = "crates/python-interop" }
 pyo3 = "0.29.2"
@@ -30,9 +36,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
-gcp_auth = "0.12.7"
-azure_core = "1.0.0"
-azure_identity = { version = "1.0.0", features = ["tokio"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
