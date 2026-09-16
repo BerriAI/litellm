@@ -24,12 +24,22 @@ AGENT_CARD_PATH_PARAM: Final = "agent_card_path"
 
 try:
     from a2a.client import A2ACardResolver as _A2ACardResolver
+    from a2a.client.errors import AgentCardResolutionError
     from a2a.utils.constants import (
         AGENT_CARD_WELL_KNOWN_PATH,
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
     )
 except ImportError:
     pass
+
+
+def _discovery_status_code(failures: tuple[tuple[str, Exception], ...]) -> int:
+    statuses: Final = tuple(
+        error.status_code
+        for _, error in failures
+        if isinstance(error, AgentCardResolutionError) and error.status_code is not None and error.status_code != 404
+    )
+    return statuses[0] if statuses else 404
 
 
 def is_localhost_or_internal_url(url: str | None) -> bool:
@@ -151,7 +161,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     Extends the base A2ACardResolver to try, in order:
     - /.well-known/agent-card.json (standard)
     - /.well-known/agent.json (previous/alternative)
-    - /agentCard/v1.0 (Microsoft Foundry agents, which serve no well-known card)
+    - /agentCard/v1.0
     """
 
     async def get_agent_card(
@@ -159,23 +169,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
         relative_card_path: str | None = None,
         http_kwargs: Mapping[str, object] | None = None,
     ) -> "AgentCard":
-        """
-        Fetch the agent card, trying multiple well-known paths.
-
-        First tries the standard path, then the previous path, then Foundry's documented path.
-
-        Args:
-            relative_card_path: Optional path to the agent card endpoint.
-                If None, tries every known path in order.
-            http_kwargs: Optional dictionary of keyword arguments to pass to httpx.get
-
-        Returns:
-            AgentCard from the A2A agent
-
-        Raises:
-            A2AAgentCardDiscoveryError naming every probed path and its error when no path answers
-        """
-        # If a specific path is provided, use the parent implementation
+        """Fetch the agent card, probing every known path when none is given."""
         if relative_card_path is not None:
             return await super().get_agent_card(
                 relative_card_path=relative_card_path,
@@ -191,11 +185,15 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     async def _get_agent_card_from_first_reachable_path(
         self,
         paths: tuple[str, ...],
-        http_kwargs: dict[str, Any] | None,
+        http_kwargs: Mapping[str, object] | None,
         failures: tuple[tuple[str, Exception], ...],
     ) -> "AgentCard":
         if not paths:
-            raise A2AAgentCardDiscoveryError(base_url=self.base_url, failures=failures)
+            raise A2AAgentCardDiscoveryError(
+                base_url=self.base_url,
+                failures=failures,
+                status_code=_discovery_status_code(failures),
+            )
         path: Final = paths[0]
         try:
             verbose_logger.debug("Attempting to fetch agent card from %s%s", self.base_url, path)
