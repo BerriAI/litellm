@@ -156,6 +156,7 @@ interface CreateKeyProps {
   addKey: (data: any) => void;
   autoOpenCreate?: boolean;
   prefillData?: CreateKeyPrefillData;
+  onAutoOpened?: () => void;
 }
 
 interface User {
@@ -215,7 +216,15 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
+const CreateKey: React.FC<CreateKeyProps> = ({
+  team,
+  teams,
+  data,
+  addKey,
+  autoOpenCreate,
+  prefillData,
+  onAutoOpened,
+}) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const canViewPolicies = useCan("viewPolicies");
@@ -379,6 +388,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       // Open the modal
       setIsModalVisible(true);
       setHasPrefilled(true);
+      onAutoOpened?.();
 
       // Apply prefill data if provided
       if (prefillData) {
@@ -419,7 +429,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         }
       }
     }
-  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole]);
+  }, [autoOpenCreate, prefillData, teams, hasPrefilled, form, userRole, onAutoOpened]);
 
   // Check if team selection is required
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
