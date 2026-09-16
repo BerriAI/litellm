@@ -521,6 +521,93 @@ def test_prepare_mcp_server_headers_oauth2_interactive_drops_caller_authorizatio
     assert extra_headers is None
 
 
+def test_prepare_mcp_server_headers_legacy_delegate_strips_admission_authorization():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="legacy-delegate-admission",
+        name="legacy-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer sk-litellm-key"},
+        raw_headers={"authorization": "Bearer sk-litellm-key"},
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+    )
+
+    assert server_auth_header is None
+    assert extra_headers is None
+
+
+def test_prepare_mcp_server_headers_legacy_delegate_preserves_separate_upstream_authorization():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="legacy-delegate-dual-credential",
+        name="legacy-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer upstream-token"},
+        raw_headers={
+            "x-litellm-api-key": "Bearer sk-litellm-key",
+            "authorization": "Bearer upstream-token",
+        },
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+    )
+
+    assert server_auth_header is None
+    assert extra_headers == {"Authorization": "Bearer upstream-token"}
+
+
+def test_prepare_mcp_server_headers_legacy_delegate_strips_repeated_admission_key():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _prepare_mcp_server_headers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="legacy-delegate-repeated-key",
+        name="legacy-delegate",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=None,
+        mcp_auth_header=None,
+        oauth2_headers={"Authorization": "Bearer sk-litellm-key"},
+        raw_headers={
+            "x-litellm-api-key": "Bearer sk-litellm-key",
+            "authorization": "Bearer sk-litellm-key",
+        },
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+    )
+
+    assert server_auth_header is None
+    assert extra_headers is None
+
+
 def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_headers():
     """M2M must not merge caller Authorization from raw_headers when extra_headers lists it."""
     try:
@@ -2003,6 +2090,11 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
         ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
@@ -2488,6 +2580,11 @@ async def test_initialize_request_tracks_active_session_after_response_header():
                 new_callable=AsyncMock,
                 return_value=(owner_auth, None, None, None, None, None),
             ),
+            patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[MagicMock()],
+            ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
                 True,
@@ -2599,6 +2696,11 @@ async def test_initialize_request_with_existing_session_tracks_new_session():
                     {"Authorization": "Bearer new-oauth"},
                     {"x-new-header": "new"},
                 ),
+            ),
+            patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[MagicMock()],
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -5615,6 +5717,78 @@ class TestGatewayCreateInitializationOptions:
         assert server.create_initialization_options().server_name == "litellm-mcp-server"
 
     @pytest.mark.asyncio
+    async def test_initialize_with_no_granted_servers_returns_403(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                    mcp_servers=None,
+                    client_ip=None,
+                    is_initialize=True,
+                ):
+                    pytest.fail("initialize must not proceed when the key grants no MCP servers")
+
+            assert exc_info.value.status_code == 403
+            assert "no MCP servers granted" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_initialize_with_no_granted_scoped_servers_returns_scoped_denial(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                    mcp_servers=["grafana"],
+                    client_ip=None,
+                    is_initialize=True,
+                ):
+                    pytest.fail("scoped initialize must not proceed when nothing resolves")
+
+            assert exc_info.value.status_code == 403
+            assert "grafana" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_non_initialize_request_with_no_granted_servers_is_not_rejected_here(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+            _mcp_gateway_initialize_instructions,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                mcp_servers=None,
+                client_ip=None,
+            ):
+                assert _mcp_gateway_initialize_instructions.get() is None
+
+    @pytest.mark.asyncio
     async def test_sse_handler_scopes_server_name_from_single_server_path(self):
         try:
             from litellm.proxy._experimental.mcp_server import server as mcp_server
@@ -6070,15 +6244,8 @@ def _patch_delegate_resolver(server: MCPServer, *resolvable_names: str):
 
 
 @pytest.mark.asyncio
-async def test_delegate_bad_token_gets_connect_time_401():
-    """Regression (LIT-4194): a rejected upstream token on a delegate-auth server
-    must fail the connect with 401 + ``error="invalid_token"``, not be absorbed
-    into HTTP 200 + an empty tool list by the tools/list handler.
-
-    Delegate-mode clients send only ``Authorization`` (no ``x-litellm-api-key``),
-    so ``_get_forwarded_auth_from_scope`` returns None and, before the fix, the
-    preflight returned early without probing.
-    """
+async def test_legacy_delegate_bare_token_is_not_probed_upstream():  # test-quality-ok: this removed security-sensitive egress has no return value; non-invocation is the contract
+    """A bare bearer is an admission credential and must never reach upstream."""
     from litellm.proxy._experimental.mcp_server.server import (
         _check_passthrough_upstream_auth,
     )
@@ -6098,48 +6265,6 @@ async def test_delegate_bad_token_gets_connect_time_401():
             new=AsyncMock(return_value=(401, 'Bearer realm="upstream", error="invalid_token"')),
         ) as probe,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _check_passthrough_upstream_auth(
-                scope=scope,
-                user_api_key_auth=UserAPIKeyAuth(),
-                mcp_servers=["delegate_test"],
-                client_ip=None,
-            )
-
-    assert exc_info.value.status_code == 401
-    challenge = exc_info.value.headers["www-authenticate"]
-    assert 'error="invalid_token"' in challenge
-    assert (
-        'resource_metadata="http://localhost:4000/.well-known/oauth-protected-resource/mcp/delegate_test"' in challenge
-    )
-    probe.assert_awaited_once()
-    probe_url, probe_auth = probe.call_args.args
-    assert probe_url == "http://upstream:9401/mcp"
-    assert probe_auth == "Bearer bogus-token"
-
-
-@pytest.mark.asyncio
-async def test_delegate_valid_token_passes_preflight():
-    """An upstream-accepted token must not be blocked by the delegate preflight."""
-    from litellm.proxy._experimental.mcp_server.server import (
-        _check_passthrough_upstream_auth,
-    )
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    server = _delegate_auth_mcp_server()
-    scope = _delegate_scope([(b"authorization", b"Bearer good-token")])
-
-    with (
-        _patch_delegate_resolver(server, "delegate_test"),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-            new=AsyncMock(return_value=[server]),
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
-            new=AsyncMock(return_value=(200, None)),
-        ) as probe,
-    ):
         await _check_passthrough_upstream_auth(
             scope=scope,
             user_api_key_auth=UserAPIKeyAuth(),
@@ -6147,43 +6272,103 @@ async def test_delegate_valid_token_passes_preflight():
             client_ip=None,
         )
 
-    probe.assert_awaited_once()
+    probe.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_delegate_valid_token_forbidden_returns_403():
-    """An upstream that accepts the token but forbids the caller (403) must surface
-    as a bare 403 with no ``WWW-Authenticate`` re-auth hint (a fresh token with the
-    same scopes would loop), not as an invalid_token challenge."""
+async def test_legacy_delegate_dual_credentials_are_not_probed_upstream():  # test-quality-ok: this removed security-sensitive egress has no return value; non-invocation is the contract
+    """A separate upstream bearer never triggers the removed legacy probe."""
     from litellm.proxy._experimental.mcp_server.server import (
         _check_passthrough_upstream_auth,
     )
     from litellm.proxy._types import UserAPIKeyAuth
 
     server = _delegate_auth_mcp_server()
-    scope = _delegate_scope([(b"authorization", b"Bearer scoped-out-token")])
+    scope = _delegate_scope(
+        [
+            (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+            (b"authorization", b"Bearer upstream-token"),
+        ]
+    )
 
     with (
-        _patch_delegate_resolver(server, "delegate_test"),
-        patch(
+        patch(  # test-quality-ok: isolate authorized-server resolution so this test targets the preflight boundary
             "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
             new=AsyncMock(return_value=[server]),
         ),
-        patch(
+        patch(  # test-quality-ok: the removed probe call is the security regression under test
             "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
-            new=AsyncMock(return_value=(403, None)),
-        ),
+            new=AsyncMock(),
+        ) as probe,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _check_passthrough_upstream_auth(
+        await _check_passthrough_upstream_auth(
+            scope=scope,
+            user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
+            mcp_servers=["delegate_test"],
+            client_ip=None,
+        )
+
+    probe.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "probe_status, expected_status",
+    [(200, None), (401, 401), (403, 403)],
+)
+@pytest.mark.asyncio
+async def test_oauth_passthrough_preflight_preserves_status_contract(probe_status, expected_status):
+    from litellm.proxy._experimental.mcp_server.server import (
+        _check_passthrough_upstream_auth,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="passthrough-id",
+        name="passthrough_server",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        oauth_passthrough=True,
+        extra_headers=["Authorization"],
+    )
+    scope = _delegate_scope(
+        [
+            (b"x-litellm-api-key", b"sk-litellm-proxy-key"),
+            (b"authorization", b"Bearer upstream-token"),
+        ]
+    )
+
+    with (
+        patch(  # test-quality-ok: isolate authorized-server resolution so this test exercises the preflight contract
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server]),
+        ),
+        patch(  # test-quality-ok: the upstream transport boundary is the behavior being mapped to an HTTP response
+            "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
+            new=AsyncMock(return_value=(probe_status, None)),
+        ) as probe,
+    ):
+        if expected_status is None:
+            result = await _check_passthrough_upstream_auth(
                 scope=scope,
-                user_api_key_auth=UserAPIKeyAuth(),
-                mcp_servers=["delegate_test"],
+                user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
+                mcp_servers=["passthrough_server"],
                 client_ip=None,
             )
+            assert result is None
+        else:
+            with pytest.raises(HTTPException) as exc_info:
+                await _check_passthrough_upstream_auth(
+                    scope=scope,
+                    user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
+                    mcp_servers=["passthrough_server"],
+                    client_ip=None,
+                )
+            assert exc_info.value.status_code == expected_status
+            if expected_status == 401:
+                assert "passthrough_server" in exc_info.value.headers["www-authenticate"]
 
-    assert exc_info.value.status_code == 403
-    assert not (exc_info.value.headers or {})
+    probe.assert_awaited_once_with("https://upstream.example.com/mcp", "Bearer upstream-token")
 
 
 @pytest.mark.asyncio
@@ -6342,123 +6527,6 @@ async def test_delegate_not_probed_when_named_only_via_server_id():
 
 
 @pytest.mark.asyncio
-async def test_delegate_preflight_with_unpatched_probe():
-    """Integration across the preflight and the unpatched ``_probe_upstream_auth``,
-    mocked only at the httpx-client boundary (tests/test_litellm is mocked-only; the
-    real-network proof lives in the PR's live-proxy evidence). The mock honors the
-    ``AsyncHTTPHandler.post`` contract by raising ``httpx.HTTPStatusError`` on the
-    upstream 401, so the production ``except httpx.HTTPStatusError`` branch is the one
-    exercised. A rejected token surfaces as the connect-time 401 challenge; an
-    accepted token passes untouched, and the caller's bearer reaches the delegate URL."""
-    import httpx
-
-    from litellm.proxy._experimental.mcp_server.server import (
-        _check_passthrough_upstream_auth,
-    )
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    accepted = MagicMock()
-    accepted.status_code = 200
-    accepted.headers = {}
-    rejected = MagicMock()
-    rejected.status_code = 401
-    rejected.headers = {"www-authenticate": 'Bearer realm="stub-upstream", error="invalid_token"'}
-
-    async def respond_by_token(url=None, headers=None, json=None, timeout=None, **kwargs):
-        if headers.get("Authorization") == "Bearer good-token":
-            return accepted
-        raise httpx.HTTPStatusError(
-            "401 Unauthorized",
-            request=httpx.Request("POST", url),
-            response=rejected,
-        )
-
-    mock_client = MagicMock()
-    mock_client.post = AsyncMock(side_effect=respond_by_token)
-
-    server = _delegate_auth_mcp_server()
-
-    with (
-        _patch_delegate_resolver(server, "delegate_test"),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-            new=AsyncMock(return_value=[server]),
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
-            return_value=mock_client,
-        ),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _check_passthrough_upstream_auth(
-                scope=_delegate_scope([(b"authorization", b"Bearer bogus-token")]),
-                user_api_key_auth=UserAPIKeyAuth(),
-                mcp_servers=["delegate_test"],
-                client_ip=None,
-            )
-
-        await _check_passthrough_upstream_auth(
-            scope=_delegate_scope([(b"authorization", b"Bearer good-token")]),
-            user_api_key_auth=UserAPIKeyAuth(),
-            mcp_servers=["delegate_test"],
-            client_ip=None,
-        )
-
-    assert exc_info.value.status_code == 401
-    challenge = exc_info.value.headers["www-authenticate"]
-    assert 'error="invalid_token"' in challenge
-    assert (
-        'resource_metadata="http://localhost:4000/.well-known/oauth-protected-resource/mcp/delegate_test"' in challenge
-    )
-    probed_urls = [call.kwargs["url"] for call in mock_client.post.await_args_list]
-    assert probed_urls == ["http://upstream:9401/mcp", "http://upstream:9401/mcp"]
-
-
-@pytest.mark.asyncio
-async def test_delegate_challenge_echoes_requested_alias():
-    """An alias-routed delegate request must be probed, and the challenge must echo
-    the requested alias (not the canonical server name) so the resource_metadata
-    URL matches what the tokenless preemptive challenge emits for the same route."""
-    from litellm.proxy._experimental.mcp_server.server import (
-        _check_passthrough_upstream_auth,
-    )
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    server = _delegate_auth_mcp_server().model_copy(update={"alias": "dt-alias"})
-    scope = {
-        "type": "http",
-        "method": "POST",
-        "path": "/mcp/dt-alias",
-        "scheme": "http",
-        "server": ("localhost", 4000),
-        "headers": [(b"authorization", b"Bearer bogus-token")],
-    }
-
-    with (
-        _patch_delegate_resolver(server, "dt-alias"),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
-            new=AsyncMock(return_value=[server]),
-        ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.server._probe_upstream_auth",
-            new=AsyncMock(return_value=(401, 'Bearer error="invalid_token"')),
-        ),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await _check_passthrough_upstream_auth(
-                scope=scope,
-                user_api_key_auth=UserAPIKeyAuth(),
-                mcp_servers=["dt-alias"],
-                client_ip=None,
-            )
-
-    challenge = exc_info.value.headers["www-authenticate"]
-    assert 'error="invalid_token"' in challenge
-    assert 'resource_metadata="http://localhost:4000/.well-known/oauth-protected-resource/mcp/dt-alias"' in challenge
-
-
-@pytest.mark.asyncio
 async def test_delegate_probe_not_fanned_out_to_access_group_members():
     """A single access-group name passes the one-target route gate but must not fan
     the delegate probe out to group-expanded member servers; the group name resolves
@@ -6489,41 +6557,6 @@ async def test_delegate_probe_not_fanned_out_to_access_group_members():
         )
 
     probe.assert_not_awaited()
-
-
-def test_is_delegate_upstream_probe_target_fails_closed_on_m2m_shape():
-    """An unstamped M2M-shape row (null ``oauth2_flow`` + client credentials)
-    resolves to ``client_credentials`` and must not be probed with the caller's
-    bearer; its stored client credentials drive egress instead."""
-    from litellm.proxy._experimental.mcp_server.server import (
-        _is_delegate_upstream_probe_target,
-    )
-
-    assert _is_delegate_upstream_probe_target(_delegate_auth_mcp_server()) is True
-
-    m2m_shape = MCPServer(
-        server_id="delegate-m2m",
-        name="delegate_m2m",
-        url="http://upstream:9401/mcp",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2,
-        delegate_auth_to_upstream=True,
-        oauth2_flow=None,
-        token_url="http://idp:9000/token",
-        client_id="client",
-        client_secret="secret",
-    )
-    assert _is_delegate_upstream_probe_target(m2m_shape) is False
-
-    non_delegate = MCPServer(
-        server_id="oauth2-plain",
-        name="oauth2_plain",
-        url="http://upstream:9401/mcp",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2,
-        oauth2_flow="authorization_code",
-    )
-    assert _is_delegate_upstream_probe_target(non_delegate) is False
 
 
 @pytest.mark.asyncio

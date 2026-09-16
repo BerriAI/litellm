@@ -1201,6 +1201,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Cast to Any to match the expected union type for tools list items
         tools.append(cast(Any, web_search_tool))
 
+    def transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
+        return self._transform_response_format_to_text_format(response_format)
+
     def _transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
         """
         Transform Chat Completion response_format parameter to Responses API text.format parameter.
