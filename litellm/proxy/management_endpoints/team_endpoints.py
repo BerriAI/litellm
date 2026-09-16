@@ -2330,6 +2330,7 @@ async def update_team(
                 org_id=org_id_to_check,
                 user_api_key_cache=user_api_key_cache,
                 prisma_client=prisma_client,
+                include_budget_table=True,
             )
             if org_table is not None:
                 await _check_org_team_limits(
