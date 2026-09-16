@@ -55,8 +55,8 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
 
         assert response.status_code in [200, 401, 500]
 
-    @patch("litellm.proxy.proxy_server.llm_router")
-    @patch("litellm.proxy.proxy_server.user_api_key_auth")
+    @patch("litellm.proxy.proxy_server.llm_router")  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    @patch("litellm.proxy.proxy_server.user_api_key_auth")  # test-quality-ok: isolate proxy endpoint authentication
     def test_openai_v1_responses_missing_input_raises_400(self, mock_auth, mock_router):
         mock_auth.return_value = MagicMock(
             token="test_token",
