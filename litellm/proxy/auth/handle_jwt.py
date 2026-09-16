@@ -54,7 +54,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
-    client_facing_model_access_denied_message,
+    model_access_denied_client_message,
 )
 from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -1347,7 +1347,7 @@ class JWTAuthManager:
             raise ModelAccessDeniedHTTPException(
                 internal_message=internal_message,
                 status_code=403,
-                detail=client_facing_model_access_denied_message(internal_message=internal_message, model=model),
+                detail=model_access_denied_client_message(model=model),
             )
 
         return True
@@ -1380,11 +1380,7 @@ class JWTAuthManager:
             raise ModelAccessDeniedHTTPException(
                 internal_message=internal_message,
                 status_code=403,
-                detail={
-                    "error": client_facing_model_access_denied_message(
-                        internal_message=internal_message, model=requested_model
-                    )
-                },
+                detail={"error": model_access_denied_client_message(model=requested_model)},
             )
         return
 

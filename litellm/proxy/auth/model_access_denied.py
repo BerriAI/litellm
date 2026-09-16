@@ -2,15 +2,14 @@ from typing import Final
 
 from fastapi import HTTPException
 
-import litellm
-from litellm.constants import MODEL_ACCESS_DENIED_MESSAGE_MODEL_PLACEHOLDER
+MODEL_ACCESS_DENIED_CLIENT_MESSAGE: Final = (
+    "The requested model '{model}' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
 
 
-def client_facing_model_access_denied_message(internal_message: str, model: str | list[str]) -> str:
-    template: Final = litellm.model_access_denied_message
-    if not template:
-        return internal_message
-    return template.replace(MODEL_ACCESS_DENIED_MESSAGE_MODEL_PLACEHOLDER, str(model))
+def model_access_denied_client_message(model: str | list[str]) -> str:
+    return MODEL_ACCESS_DENIED_CLIENT_MESSAGE.format(model=model)
 
 
 class ModelAccessDeniedHTTPException(HTTPException):

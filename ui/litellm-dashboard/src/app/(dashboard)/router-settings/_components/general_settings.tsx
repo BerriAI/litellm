@@ -42,8 +42,6 @@ export interface generalSettingsItem {
 const NUMERIC_INPUT_WIDTH = "w-36";
 
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
-const toStringValue = (raw: string): string | null => (raw === "" ? null : raw);
-const RESETS_WHEN_CLEARED: ReadonlySet<string> = new Set(["Select", "String"]);
 
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
@@ -110,16 +108,6 @@ const SettingValueEditor: React.FC<{
           ))}
         </SelectContent>
       </Select>
-    );
-  }
-  if (setting.field_type === "String") {
-    return (
-      <Input
-        type="text"
-        className="w-96"
-        value={setting.field_value ?? ""}
-        onChange={(event) => onChange(setting.field_name, toStringValue(event.target.value))}
-      />
     );
   }
   return null;
@@ -231,7 +219,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = async (fieldName: string) => {
+  const handleUpdateField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
@@ -240,33 +228,37 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     const fieldValue = setting?.field_value;
 
     if (fieldValue == null) {
-      if (setting && RESETS_WHEN_CLEARED.has(setting.field_type)) await handleResetField(fieldName);
+      if (setting?.field_type === "Select") handleResetField(fieldName);
       return;
     }
     try {
-      await updateConfigFieldSetting(accessToken, fieldName, fieldValue);
-      setGeneralSettings((current) =>
-        current.map((setting) => (setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting)),
+      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+      // update value in state
+
+      const updatedSettings = generalSettings.map((setting) =>
+        setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting,
       );
+      setGeneralSettings(updatedSettings);
     } catch (error) {
       // do something
     }
   };
 
-  const handleResetField = async (fieldName: string) => {
+  const handleResetField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
 
     try {
-      await deleteConfigFieldSetting(accessToken, fieldName);
-      setGeneralSettings((current) =>
-        current.map((setting) =>
-          setting.field_name === fieldName
-            ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
-            : setting,
-        ),
+      deleteConfigFieldSetting(accessToken, fieldName);
+      // update value in state
+
+      const updatedSettings = generalSettings.map((setting) =>
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
+          : setting,
       );
+      setGeneralSettings(updatedSettings);
     } catch (error) {
       // do something
     }

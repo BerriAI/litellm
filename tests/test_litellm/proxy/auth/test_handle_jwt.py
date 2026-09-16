@@ -6972,19 +6972,13 @@ async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_ch
     assert exc_info.value.status_code == 403
 
 
-_JWT_DENIED_MESSAGE_TEMPLATE = "The model `{model}` is unavailable for this identity."
-
-
-@pytest.mark.parametrize(
-    "configured_message, expected_detail",
-    [
-        (None, "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"),
-        ("", "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"),
-        (_JWT_DENIED_MESSAGE_TEMPLATE, "The model `gpt-5.6` is unavailable for this identity."),
-    ],
+_JWT_DENIED_CLIENT_MESSAGE = (
+    "The requested model 'gpt-5.6' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
 )
-def test_can_rbac_role_call_model_denial_honors_configured_message(monkeypatch, configured_message, expected_detail):
-    monkeypatch.setattr(litellm, "model_access_denied_message", configured_message)
+
+
+def test_can_rbac_role_call_model_denial_hides_role_allowlist_from_client():
     general_settings = {
         "role_permissions": [
             RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["gpt-5.6-mini"]),
@@ -6999,23 +6993,13 @@ def test_can_rbac_role_call_model_denial_honors_configured_message(monkeypatch, 
         )
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == expected_detail
+    assert exc_info.value.detail == _JWT_DENIED_CLIENT_MESSAGE
     assert exc_info.value.internal_message == (
         "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"
     )
 
 
-@pytest.mark.parametrize(
-    "configured_message, expected_error",
-    [
-        (None, "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"),
-        ("", "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"),
-        (_JWT_DENIED_MESSAGE_TEMPLATE, "The model `gpt-5.6` is unavailable for this identity."),
-    ],
-)
-def test_check_scope_based_access_denial_honors_configured_message(monkeypatch, configured_message, expected_error):
-    monkeypatch.setattr(litellm, "model_access_denied_message", configured_message)
-
+def test_check_scope_based_access_denial_hides_scope_allowlist_from_client():
     with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
         JWTAuthManager.check_scope_based_access(
             scope_mappings=[ScopeMapping(scope="litellm.api.consumer", models=["gpt-5.6-mini"])],
@@ -7025,5 +7009,5 @@ def test_check_scope_based_access_denial_honors_configured_message(monkeypatch, 
         )
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == {"error": expected_error}
+    assert exc_info.value.detail == {"error": _JWT_DENIED_CLIENT_MESSAGE}
     assert exc_info.value.internal_message == "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"

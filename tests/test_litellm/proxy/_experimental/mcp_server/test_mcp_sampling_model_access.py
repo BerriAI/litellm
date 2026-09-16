@@ -138,11 +138,9 @@ class TestCheckModelAccess:
         assert "claude-3-opus-20240229" in result.message
 
     @pytest.mark.asyncio
-    async def test_should_log_internal_denial_reason_when_client_message_is_configured(self, monkeypatch, caplog):
-        import litellm
+    async def test_should_log_internal_denial_reason_and_hide_allowlist_from_client(self, caplog):
         from litellm.proxy._types import UserAPIKeyAuth
 
-        monkeypatch.setattr(litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key.")
         auth = UserAPIKeyAuth(api_key="sk-test-key", models=["gpt-3.5-turbo"])
 
         with caplog.at_level("WARNING", logger="LiteLLM"):
