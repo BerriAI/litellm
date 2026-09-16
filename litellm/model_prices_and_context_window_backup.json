@@ -3886,7 +3886,6 @@
         "output_cost_per_token": 0.000126,
         "source": "https://cheaperinference.com/docs",
         "supported_endpoints": [
-            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supports_function_calling": true,
