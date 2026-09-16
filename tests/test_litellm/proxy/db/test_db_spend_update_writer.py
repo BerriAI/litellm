@@ -2864,6 +2864,76 @@ async def test_daily_transaction_internal_call_keeps_spend_but_not_request_count
     assert user_sent["successful_requests"] == 1
 
 
+def _response_time_payload(request_duration_ms: object, metadata: dict | None = None) -> dict:
+    return {
+        "request_id": "req-timed-1",
+        "user": "test-user",
+        "startTime": "2026-09-15T00:00:00",
+        "api_key": "test-key",
+        "model": "gpt-5.5",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-5.5",
+        "call_type": "acompletion",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.01,
+        "request_duration_ms": request_duration_ms,
+        "metadata": json.dumps(metadata or {}),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_duration_ms", [1234, 0])
+async def test_daily_transaction_rolls_up_response_time_for_successful_requests(request_duration_ms: int):
+    """A successful user-sent request contributes its request_duration_ms to the daily
+    response-time sum and counts as one timed request, including a 0 ms duration."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=_response_time_payload(request_duration_ms),
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["total_response_time_ms"] == request_duration_ms
+    assert transaction["timed_requests"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_status", "request_duration_ms", "metadata"),
+    [
+        ("failure", 1234, {}),
+        ("success", None, {}),
+        ("success", -5, {}),
+        ("success", "1234", {}),
+        ("success", 1234, {"internal_call_origin": "shadow_eval_judge"}),
+    ],
+    ids=["failed", "missing", "negative", "non_int", "internal_call"],
+)
+async def test_daily_transaction_excludes_untimed_requests_from_response_time(
+    request_status: str, request_duration_ms: object, metadata: dict
+):
+    """Failed, internal, and missing/invalid-duration requests never enter the response-time
+    average: both the duration sum and the timed_requests denominator stay at zero."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value=request_status)
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=_response_time_payload(request_duration_ms, metadata),
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["total_response_time_ms"] == 0
+    assert transaction["timed_requests"] == 0
+
+
 def _deadlock_error():
     from prisma.errors import RawQueryError
 

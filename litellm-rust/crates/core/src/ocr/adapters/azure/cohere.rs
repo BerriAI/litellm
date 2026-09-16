@@ -1,5 +1,5 @@
 use super::super::OcrAdapter;
-use crate::Error;
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::cohere::{
     CohereParams, CohereResponse, transform_request, transform_response, validate_document,
@@ -9,8 +9,8 @@ use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
-use crate::providers::azure_ai::auth::AzureAuthInputs;
 use crate::url_utils::ApiUrl;
+use litellm_auth_azure::AzureAuthInputs;
 
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 

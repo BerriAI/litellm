@@ -7,8 +7,9 @@ use serde_json::Map;
 use super::error::{OcrError, OcrRequestError, OcrResponseError};
 use super::types::{OcrConnection, OcrDocument};
 use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
-use crate::error::{MediaError, TransportError};
+use crate::media::Error as MediaError;
 use crate::media::{DownloadPolicy, MediaFetcher};
+use crate::transport::Error as TransportError;
 
 pub fn encode_file_document(
     bytes: &[u8],

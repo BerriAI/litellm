@@ -689,6 +689,36 @@ async def test_during_call_hook_records_latency_metric(proxy_logging, make_user_
     assert recorded["status"] == "success"
 
 
+class _RecordingApplyGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str, applied: list[str]) -> None:
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook=GuardrailEventHooks.during_call,
+            default_on=True,
+        )
+        self._applied = applied
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        await asyncio.sleep(0)
+        self._applied.append(self.guardrail_name or "")
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_every_unified_guardrail(proxy_logging, make_user_api_key_auth, monkeypatch):
+    applied: list[str] = []
+    guardrails = [_RecordingApplyGuardrail(f"judge-{i}", applied) for i in range(3)]
+    monkeypatch.setattr(litellm, "callbacks", guardrails)
+
+    await proxy_logging.during_call_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "hi"}], "metadata": {}},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+    )
+
+    assert sorted(applied) == ["judge-0", "judge-1", "judge-2"]
+
+
 @pytest.mark.asyncio
 async def test_post_call_success_hook_records_latency_metric(proxy_logging, make_user_api_key_auth, monkeypatch):
     cb = _moderation_guardrail()
