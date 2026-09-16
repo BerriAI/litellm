@@ -44,6 +44,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
@@ -6383,15 +6384,17 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter_models: list[str] = []
 
-        async def run_limiter(**kwargs):
-            limiter_models.append(kwargs["data"]["model"])
+        async def run_limiter(
+            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+        ) -> dict[str, object]:
+            limiter_models.append(str(data["model"]))
             await limiter.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
                 cache=DualCache(),
-                data=kwargs["data"],
-                call_type=kwargs["call_type"],
+                data=data,
+                call_type=call_type,
             )
-            return kwargs["data"]
+            return data
 
         proxy_logging_obj = MagicMock(spec=ProxyLogging)
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=run_limiter)
@@ -6406,11 +6409,18 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         return proxy_logging_obj, router, proxy_server.ProxyConfig(), limiter_models
 
     @staticmethod
-    def _otel_key(**limits) -> ProxyUserAPIKeyAuth:
+    def _otel_key(
+        rpm_limit: int | None = None, model_rpm_limit: dict[str, int] | None = None
+    ) -> ProxyUserAPIKeyAuth:
         from opentelemetry.sdk.trace import TracerProvider
 
         span = TracerProvider().get_tracer("test").start_span("proxy-request")
-        return ProxyUserAPIKeyAuth(api_key="hashed-key", parent_otel_span=span, **limits)
+        return ProxyUserAPIKeyAuth(
+            api_key="hashed-key",
+            parent_otel_span=span,
+            rpm_limit=rpm_limit,
+            metadata={"model_rpm_limit": model_rpm_limit} if model_rpm_limit else {},
+        )
 
     @staticmethod
     def _chat_request() -> Request:
@@ -6418,10 +6428,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     async def _pre_call(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: ProxyUserAPIKeyAuth,
         rig: tuple[ProxyLogging, litellm.Router, ProxyConfig, list[str]],
-    ) -> tuple[ProxyBaseLLMRequestProcessing, tuple[dict, object]]:
+    ) -> tuple[ProxyBaseLLMRequestProcessing, tuple[dict[str, object], LiteLLMLoggingObj]]:
         proxy_logging_obj, router, proxy_config, _ = rig
         processor = ProxyBaseLLMRequestProcessing(data=data)
         result = await processor._pre_call_with_fallbacks(
@@ -6450,10 +6460,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         never deep-copies the span (the ``cannot pickle '_thread.RLock'`` 500)."""
         primary_model = "gpt-4.1"
         fallback_model = "gpt-4.1-mini"
-        key = self._otel_key(metadata={"model_rpm_limit": {primary_model: 1}})
+        key = self._otel_key(model_rpm_limit={primary_model: 1})
         rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
 
-        def client_request() -> dict:
+        def client_request() -> dict[str, object]:
             return {
                 "model": primary_model,
                 "messages": [{"role": "user", "content": "hi"}],
@@ -6520,7 +6530,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         primary_model = "gpt-4.1"
         fallback_model = "gpt-4.1-mini"
         monkeypatch.setattr(litellm, "model_alias_map", {"my-alias": primary_model})
-        key = self._otel_key(metadata={"model_rpm_limit": {primary_model: 1}})
+        key = self._otel_key(model_rpm_limit={primary_model: 1})
         rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
         request = {"model": "my-alias", "messages": [{"role": "user", "content": "hi"}]}
 
