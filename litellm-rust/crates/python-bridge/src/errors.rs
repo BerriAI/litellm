@@ -1,5 +1,5 @@
 use litellm_core::transport::Error as TransportError;
-use litellm_core::{Error, audio_transcription, chat_completions, messages, realtime, responses};
+use litellm_core::{Error, audio_transcription, chat_completions, messages, responses};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -59,16 +59,6 @@ pub(crate) fn core_error_to_pyerr(error: impl Into<Error>) -> PyErr {
             | chat_completions::Error::InvalidType { .. }
             | chat_completions::Error::MissingField(_)
             | chat_completions::Error::Aws(_) => true,
-            _ => false,
-        },
-        Error::Realtime(error) => match error {
-            realtime::Error::Auth(source) => {
-                !matches!(source, litellm_auth::Error::MissingApiKey { .. })
-            }
-            realtime::Error::InvalidProvider(_)
-            | realtime::Error::InvalidRequest(_)
-            | realtime::Error::Params(_)
-            | realtime::Error::Headers(_) => true,
             _ => false,
         },
         Error::Responses(error) => match error {

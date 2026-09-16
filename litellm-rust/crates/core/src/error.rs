@@ -10,6 +10,4 @@ pub enum Error {
     AudioTranscription(#[from] crate::audio_transcription::Error),
     #[error(transparent)]
     Responses(#[from] crate::responses::Error),
-    #[error(transparent)]
-    Realtime(#[from] crate::realtime::Error),
 }

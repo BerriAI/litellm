@@ -13,7 +13,7 @@ use crate::ocr::types::{
     PreparedOcrRequest,
 };
 use crate::params::OpaqueParams;
-use crate::routing_utils::model::{ModelNamespace, ProviderModel, RoutedModel};
+use crate::providers::model::{ModelNamespace, ProviderModel, RoutedModel};
 use crate::url_utils::ApiUrl;
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
