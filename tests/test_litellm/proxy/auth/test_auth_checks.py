@@ -531,12 +531,14 @@ async def test_can_team_access_model_error_lists_direct_and_access_group_models(
         assert await can_team_access_model("direct-model", team_object, None) is True
         assert await can_team_access_model("group-model", team_object, None) is True
 
-        with pytest.raises(ProxyException) as exc_info:
+        with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
             await can_team_access_model("blocked-model", team_object, None)
 
     assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
-    assert "direct-model" in exc_info.value.message
-    assert "group-model" in exc_info.value.message
+    assert "direct-model" in exc_info.value.internal_message
+    assert "group-model" in exc_info.value.internal_message
+    assert "direct-model" not in exc_info.value.message
+    assert "group-model" not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -1676,16 +1678,17 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
 
     # Should raise ProxyException with appropriate error type
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
-    assert "key not allowed to access model" in str(exc_info.value.message)
+    assert "is not available for this API key" in str(exc_info.value.message)
     assert "my-fake-gpt" in str(exc_info.value.message)
 
 
-_DENIED_MESSAGE_TEMPLATE: Final = "The model `{model}` is unavailable for this API key or does not exist."
+_DENIED_MESSAGE_TEMPLATE: Final = (
+    "The requested model '{model}' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
 
 
-def test_can_object_call_model_denial_uses_configured_message_and_keeps_detail_on_exception(monkeypatch, caplog):
-    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
-
+def test_can_object_call_model_denial_hides_allowlist_and_keeps_detail_on_exception(caplog):
     with caplog.at_level("DEBUG", logger="LiteLLM Proxy"):
         with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
             _can_object_call_model(
@@ -1695,9 +1698,8 @@ def test_can_object_call_model_denial_uses_configured_message_and_keeps_detail_o
                 object_type="key",
             )
 
-    assert (
-        exc_info.value.message == "The model `anthropic-sonnet-4-5` is unavailable for this API key or does not exist."
-    )
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="anthropic-sonnet-4-5")
+    assert "internal-models" not in exc_info.value.message
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
     assert exc_info.value.param == "model"
     assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
@@ -1709,10 +1711,9 @@ def test_can_object_call_model_denial_uses_configured_message_and_keeps_detail_o
 
 
 @pytest.mark.asyncio
-async def test_access_group_fallback_grant_does_not_log_a_denial(monkeypatch, caplog):
+async def test_access_group_fallback_grant_does_not_log_a_denial(caplog):
     from litellm.proxy.auth.auth_checks import can_team_access_model
 
-    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
     team_object = LiteLLM_TeamTable(team_id="team-123", models=["direct-model"], access_group_ids=["ag-1"])
 
     with (
@@ -1727,46 +1728,49 @@ async def test_access_group_fallback_grant_does_not_log_a_denial(monkeypatch, ca
     assert "not allowed to access model" not in caplog.text
 
 
-@pytest.mark.parametrize("unset_value", [None, ""])
-def test_can_object_call_model_denial_unchanged_when_message_not_configured(monkeypatch, unset_value):
-    monkeypatch.setattr(litellm, "model_access_denied_message", unset_value)
-
-    with pytest.raises(ProxyException) as exc_info:
+@pytest.mark.parametrize(
+    "object_type, expected_type",
+    [
+        ("team", ProxyErrorTypes.team_model_access_denied),
+        ("user", ProxyErrorTypes.user_model_access_denied),
+        ("org", ProxyErrorTypes.org_model_access_denied),
+    ],
+)
+def test_can_object_call_model_denial_same_client_message_for_every_object_type(object_type, expected_type):
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
         _can_object_call_model(
             model="anthropic-sonnet-4-5",
             llm_router=None,
             models=["internal-models"],
-            object_type="team",
+            object_type=object_type,
         )
 
-    assert exc_info.value.message == (
-        "team not allowed to access model. This team can only access models=['internal-models']. "
-        "Tried to access anthropic-sonnet-4-5"
-    )
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="anthropic-sonnet-4-5")
+    assert exc_info.value.type == expected_type
+    assert f"{object_type} not allowed to access model" in exc_info.value.internal_message
 
 
 @pytest.mark.asyncio
-async def test_can_user_call_model_no_default_models_uses_configured_message(monkeypatch):
+async def test_can_user_call_model_no_default_models_hides_policy_detail():
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import can_user_call_model
 
-    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
     user_object = LiteLLM_UserTable(user_id="test-user", models=[SpecialModelNames.no_default_models.value])
 
-    with pytest.raises(ProxyException) as exc_info:
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
         await can_user_call_model(model="restricted-model", llm_router=None, user_object=user_object)
 
-    assert exc_info.value.message == "The model `restricted-model` is unavailable for this API key or does not exist."
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="restricted-model")
+    assert "only team models allowed" in exc_info.value.internal_message
     assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.asyncio
-async def test_check_team_member_model_access_denied_uses_configured_message(monkeypatch):
+async def test_check_team_member_model_access_denied_hides_member_allowlist():
     from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.auth.auth_checks import _check_team_member_model_access
     from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
-    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
     membership = LiteLLM_TeamMembership(
         user_id="alice",
         team_id="team-a",
@@ -1779,7 +1783,7 @@ async def test_check_team_member_model_access_denied_uses_configured_message(mon
         model_type=LiteLLM_TeamMembership,
     )
 
-    with pytest.raises(ProxyException) as exc_info:
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
         await _check_team_member_model_access(
             model="mock-vision",
             team_object=LiteLLM_TeamTable(team_id="team-a"),
@@ -1790,7 +1794,9 @@ async def test_check_team_member_model_access_denied_uses_configured_message(mon
             proxy_logging_obj=MagicMock(),
         )
 
-    assert exc_info.value.message == "The model `mock-vision` is unavailable for this API key or does not exist."
+    assert exc_info.value.message == _DENIED_MESSAGE_TEMPLATE.format(model="mock-vision")
+    assert "fast-models" not in exc_info.value.message
+    assert "Allowed member models = ['fast-models']" in exc_info.value.internal_message
     assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
 
 

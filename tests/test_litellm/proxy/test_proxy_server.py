@@ -10955,60 +10955,10 @@ def test_validate_max_ui_session_budget_empty_restores_default(empty_value):
     assert _validate_general_settings_ui_litellm_value("max_ui_session_budget", empty_value) == 1.0
 
 
-@pytest.mark.asyncio
-async def test_update_config_field_model_access_denied_message_sets_live_value(monkeypatch):
-    from unittest.mock import AsyncMock, MagicMock
-
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import ConfigFieldUpdate, LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.proxy_server import update_config_general_settings
-
-    save_config = AsyncMock()
-    monkeypatch.setattr(ps.proxy_config, "get_config", AsyncMock(return_value={"litellm_settings": {}}))
-    monkeypatch.setattr(ps.proxy_config, "save_config", save_config)
-    monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(litellm, "store_audit_logs", False)
-    monkeypatch.setattr(litellm, "model_access_denied_message", None)
-
-    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
-    await update_config_general_settings(
-        data=ConfigFieldUpdate(
-            field_name="model_access_denied_message",
-            field_value="Model `{model}` is unavailable for this key.",
-            config_type="general_settings",
-        ),
-        user_api_key_dict=admin,
-    )
-
-    assert litellm.model_access_denied_message == "Model `{model}` is unavailable for this key."
-    save_config.assert_awaited_once()
-    saved_config = save_config.await_args.kwargs["new_config"]
-    assert saved_config["litellm_settings"]["model_access_denied_message"] == (
-        "Model `{model}` is unavailable for this key."
-    )
-
-
-@pytest.mark.parametrize("bad_value", [True, 3, 1.5, ["x"], {"a": "b"}])
-def test_validate_model_access_denied_message_rejects_non_strings(bad_value):
-    from fastapi import HTTPException
-
-    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
-
-    with pytest.raises(HTTPException) as exc_info:
-        _validate_general_settings_ui_litellm_value("model_access_denied_message", bad_value)
-    assert exc_info.value.status_code == 400
-
-
-@pytest.mark.parametrize("empty_value", [None, ""])
-def test_validate_model_access_denied_message_empty_restores_detailed_default(empty_value):
-    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
-
-    assert _validate_general_settings_ui_litellm_value("model_access_denied_message", empty_value) is None
-
-
 def _model_access_denied_proxy_exception():
     return ModelAccessDeniedProxyException(
-        message="The model `gpt-5.6\r\nWARNING forged log line` is unavailable for this API key or does not exist.",
+        message="The requested model 'gpt-5.6\r\nWARNING forged log line' is not available for this API key, "
+        "or the model name is invalid. Check the models available to you and try again.",
         internal_message="key not allowed to access model. This key can only access models=['internal-models']. "
         "Tried to access gpt-5.6\r\nWARNING forged log line",
         type=ProxyErrorTypes.key_model_access_denied,
@@ -11022,11 +10972,7 @@ def _http_request_scope():
 
 
 @pytest.mark.asyncio
-async def test_openai_exception_handler_logs_sanitized_model_access_denial(monkeypatch, caplog):
-    monkeypatch.setattr(
-        litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key or does not exist."
-    )
-
+async def test_openai_exception_handler_logs_sanitized_model_access_denial(caplog):
     with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
         response = await openai_exception_handler(_http_request_scope(), _model_access_denied_proxy_exception())
 
@@ -11042,22 +10988,7 @@ async def test_openai_exception_handler_logs_sanitized_model_access_denial(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("unset_value", [None, ""])
-async def test_openai_exception_handler_no_denial_log_when_message_not_configured(monkeypatch, unset_value, caplog):
-    monkeypatch.setattr(litellm, "model_access_denied_message", unset_value)
-
-    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
-        response = await openai_exception_handler(_http_request_scope(), _model_access_denied_proxy_exception())
-
-    assert response.status_code == 403
-    assert [r for r in caplog.records if r.levelname == "WARNING" and "internal-models" in r.getMessage()] == []
-
-
-@pytest.mark.asyncio
-async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(monkeypatch, caplog):
-    monkeypatch.setattr(
-        litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key or does not exist."
-    )
+async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(caplog):
     denial = ProxyException(
         message="Authentication Error, Invalid proxy server token passed",
         type=ProxyErrorTypes.auth_error,
@@ -11073,10 +11004,7 @@ async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(
 
 
 @pytest.mark.asyncio
-async def test_realtime_model_access_denial_logs_sanitized_internal_message(monkeypatch, caplog):
-    monkeypatch.setattr(
-        litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key or does not exist."
-    )
+async def test_realtime_model_access_denial_logs_sanitized_internal_message(caplog):
     reservation = {"reserved_cost": 0.0, "input_cost": 0.0, "finalized": False, "entries": []}
 
     with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
@@ -11093,43 +11021,6 @@ async def test_realtime_model_access_denial_logs_sanitized_internal_message(monk
     assert len(denial_records) == 1
     assert "\n" not in denial_records[0].getMessage()
     assert "gpt-5.6WARNING forged log line" in denial_records[0].getMessage()
-
-
-@pytest.mark.parametrize("empty_value", [None, ""])
-def test_validate_expose_router_debug_in_errors_empty_restores_true_default(empty_value):
-    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
-
-    assert _validate_general_settings_ui_litellm_value("expose_router_debug_in_errors", empty_value) is True
-    assert _validate_general_settings_ui_litellm_value("expose_router_debug_in_errors", False) is False
-
-
-@pytest.mark.parametrize(
-    "field_name, booted_value, db_value, read_setting",
-    [
-        (
-            "model_access_denied_message",
-            None,
-            "Model `{model}` is unavailable for this key.",
-            lambda: litellm.model_access_denied_message,
-        ),
-        ("expose_router_debug_in_errors", True, False, lambda: litellm.expose_router_debug_in_errors),
-    ],
-)
-def test_model_access_denied_settings_propagate_on_config_reload(
-    monkeypatch, field_name, booted_value, db_value, read_setting
-):
-    import litellm.proxy.proxy_server as ps
-
-    monkeypatch.setattr(litellm, field_name, booted_value)
-    assert read_setting() == booted_value
-
-    ps.ProxyConfig()._update_config_fields(
-        current_config={"litellm_settings": {}},
-        param_name="litellm_settings",
-        db_param_value={field_name: db_value},
-    )
-
-    assert read_setting() == db_value
 
 
 def test_general_settings_ui_defaults_unchanged_for_existing_fields():

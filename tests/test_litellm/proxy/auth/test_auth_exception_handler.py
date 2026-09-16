@@ -26,7 +26,6 @@ from prisma.errors import (
 )
 
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
@@ -991,12 +990,15 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     assert records[0].name == expected_logger_name
 
 
-_DENIED_MESSAGE_TEMPLATE = "The model `{model}` is unavailable for this API key or does not exist."
+_DENIED_CLIENT_MESSAGE = (
+    "The requested model 'gpt-5.6' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
 
 
 def _denied_proxy_exception() -> ModelAccessDeniedProxyException:
     return ModelAccessDeniedProxyException(
-        message="The model `gpt-5.6\r\nWARNING forged log line` is unavailable for this API key or does not exist.",
+        message=_DENIED_CLIENT_MESSAGE,
         internal_message="key not allowed to access model. This key can only access models=['internal-models']. "
         "Tried to access gpt-5.6\r\nWARNING forged log line",
         type=ProxyErrorTypes.key_model_access_denied,
@@ -1010,7 +1012,7 @@ def _denied_jwt_exception() -> ModelAccessDeniedHTTPException:
         internal_message="Role=engineer not allowed to call model=gpt-5.6\r\nWARNING forged log line. "
         "Allowed models=['internal-models']",
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="The model `gpt-5.6` is unavailable for this API key or does not exist.",
+        detail=_DENIED_CLIENT_MESSAGE,
     )
 
 
@@ -1022,10 +1024,7 @@ def _denied_jwt_exception() -> ModelAccessDeniedHTTPException:
         pytest.param(_denied_jwt_exception, id="jwt_http_exception"),
     ],
 )
-async def test_handle_authentication_error_keeps_internal_message_on_model_access_denial(
-    monkeypatch, make_denial, caplog
-):
-    monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
+async def test_handle_authentication_error_keeps_internal_message_on_model_access_denial(make_denial, caplog):
     handler = UserAPIKeyAuthExceptionHandler()
     denial = make_denial()
 
@@ -1054,7 +1053,7 @@ async def test_handle_authentication_error_keeps_internal_message_on_model_acces
 
 
 def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
-    detail = {"error": "The model `gpt-5.6` is unavailable for this API key or does not exist."}
+    detail = {"error": _DENIED_CLIENT_MESSAGE}
     denial = ModelAccessDeniedHTTPException(
         internal_message="model=gpt-5.6 not allowed. Allowed_models=['internal-models']",
         status_code=status.HTTP_403_FORBIDDEN,
@@ -1066,42 +1065,3 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("unset_value", [None, ""])
-async def test_handle_authentication_error_no_extra_denial_log_when_message_not_configured(
-    monkeypatch, unset_value, caplog
-):
-    monkeypatch.setattr(litellm, "model_access_denied_message", unset_value)
-    handler = UserAPIKeyAuthExceptionHandler()
-    denial = ModelAccessDeniedProxyException(
-        message="key not allowed to access model. This key can only access models=['internal-models']. "
-        "Tried to access gpt-5.6",
-        internal_message="key not allowed to access model. This key can only access models=['internal-models']. "
-        "Tried to access gpt-5.6",
-        type=ProxyErrorTypes.key_model_access_denied,
-        param="model",
-        code=status.HTTP_403_FORBIDDEN,
-    )
-
-    with (
-        patch(  # test-quality-ok: handler reads proxy_server globals at call time
-            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        patch(  # test-quality-ok: handler reads proxy_server globals at call time
-            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
-        ),
-        patch(  # test-quality-ok: handler reads proxy_server globals at call time
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": False},
-        ),
-        caplog.at_level("WARNING", logger="LiteLLM Proxy"),
-        pytest.raises(ProxyException) as exc_info,
-    ):
-        await handler._handle_authentication_error(denial, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad-key")
-
-    assert "internal-models" in str(exc_info.value.message)
-    assert [r for r in caplog.records if r.levelname == "WARNING" and "internal-models" in r.getMessage()] == []

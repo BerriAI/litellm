@@ -72,7 +72,7 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
-from litellm.proxy.auth.model_access_denied import client_facing_model_access_denied_message
+from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -4177,7 +4177,7 @@ def _can_object_call_model(
         f"Tried to access {model}"
     )
     raise ModelAccessDeniedProxyException(
-        message=client_facing_model_access_denied_message(internal_message=internal_message, model=model),
+        message=model_access_denied_client_message(model=model),
         internal_message=internal_message,
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
@@ -4808,7 +4808,7 @@ async def can_user_call_model(
             f"Tried to access {model}"
         )
         raise ModelAccessDeniedProxyException(
-            message=client_facing_model_access_denied_message(internal_message=internal_message, model=model),
+            message=model_access_denied_client_message(model=model),
             internal_message=internal_message,
             type=ProxyErrorTypes.key_model_access_denied,
             param="model",
@@ -5415,7 +5415,7 @@ async def _check_team_member_model_access(
             f"Model={model}. Allowed member models = {member_allowed_models}"
         )
         raise ModelAccessDeniedProxyException(
-            message=client_facing_model_access_denied_message(internal_message=internal_message, model=model),
+            message=model_access_denied_client_message(model=model),
             internal_message=internal_message,
             type=ProxyErrorTypes.team_model_access_denied,
             param="model",

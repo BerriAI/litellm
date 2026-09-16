@@ -1053,7 +1053,7 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
         is True
     )
 
-    with pytest.raises(Exception, match="team not allowed to access model"):
+    with pytest.raises(Exception, match="is not available for this API key"):
         await can_team_access_model(
             model=model,
             team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),

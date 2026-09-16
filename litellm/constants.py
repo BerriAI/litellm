@@ -98,7 +98,6 @@ BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
-MODEL_ACCESS_DENIED_MESSAGE_MODEL_PLACEHOLDER: Final = "{model}"
 
 MAX_STRING_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", 4096)
 
@@ -1801,8 +1800,6 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "max_ui_session_budget",
     "budget_rollover",
     "mcp_tool_search",
-    "model_access_denied_message",
-    "expose_router_debug_in_errors",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
