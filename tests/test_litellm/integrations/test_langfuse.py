@@ -1,5 +1,6 @@
 import datetime
 import json
+import os
 import sys
 import types
 import unittest
@@ -1805,3 +1806,111 @@ def test_langfuse_deployment_environment_fallback_never_raises(monkeypatch, env_
         langfuse_host="https://test.langfuse.com",
     )
     assert logger.langfuse_environment == expected
+
+
+class TestLangfuseTurnOffMessageLogging(unittest.TestCase):
+    """
+    Langfuse must never receive raw message content when message logging is
+    turned off - including streaming, where the upstream redaction does not
+    always run before the Langfuse callback (e.g. proxy streaming path).
+    Uses the real log_event_on_langfuse with a mocked transport.
+    """
+
+    def setUp(self):
+        self.env_patcher = patch.dict(
+            "os.environ",
+            {
+                "LANGFUSE_SECRET_KEY": "test-secret-key",
+                "LANGFUSE_PUBLIC_KEY": "test-public-key",
+                "LANGFUSE_HOST": "https://test.langfuse.com",
+            },
+        )
+        self.env_patcher.start()
+
+        mock_langfuse_module = MagicMock()
+        mock_langfuse_module.version.__version__ = "3.0.0"
+        # langfuse.model is imported by the prompt-management helper; fake the
+        # third-party boundary so no real SDK is needed
+        self.langfuse_module_patcher = patch.dict(
+            "sys.modules",
+            {"langfuse": mock_langfuse_module, "langfuse.model": MagicMock()},
+        )
+        self.langfuse_module_patcher.start()
+
+        self.logger = LangFuseLogger()
+        self.logger.langfuse_sdk_version = "3.0.0"
+        # Route to the v2 implementation without the real SDK
+        self.logger._is_langfuse_v2 = lambda: True  # noqa: E731
+
+        self.mock_generation = MagicMock()
+        self.mock_generation.trace_id = "test-trace-id"
+        self.mock_trace = MagicMock()
+        self.mock_trace.generation.return_value = self.mock_generation
+        self.mock_client = MagicMock()
+        self.mock_client.trace.return_value = self.mock_trace
+        self.logger.Langfuse = self.mock_client
+
+    def tearDown(self):
+        self.logger.Langfuse = None
+        del self.logger
+        self.env_patcher.stop()
+        self.langfuse_module_patcher.stop()
+
+    @staticmethod
+    def _streaming_kwargs(turn_off_message_logging, messages=None):
+        return {
+            "model": "gpt-4",
+            "messages": messages
+            if messages is not None
+            else [{"role": "user", "content": "secret-prompt"}],
+            "litellm_params": {"metadata": {}},
+            "optional_params": {},
+            "litellm_call_id": "test-call-id",
+            "call_type": "completion",
+            "stream": True,
+            "standard_callback_dynamic_params": {
+                "turn_off_message_logging": turn_off_message_logging
+            },
+        }
+
+    @staticmethod
+    def _streaming_response():
+        return litellm.ModelResponse(
+            id="test-generation-id",
+            choices=[{"message": {"role": "assistant", "content": "secret-answer"}}],
+        )
+
+    def _log_stream(self, turn_off_message_logging, messages=None):
+        start_time = datetime.datetime.now()
+        self.logger.log_event_on_langfuse(
+            kwargs=self._streaming_kwargs(turn_off_message_logging, messages),
+            response_obj=self._streaming_response(),
+            start_time=start_time,
+            end_time=start_time + datetime.timedelta(seconds=1),
+        )
+        trace_kwargs = self.mock_client.trace.call_args.kwargs
+        generation_kwargs = self.mock_trace.generation.call_args.kwargs
+        return trace_kwargs, generation_kwargs
+
+    def test_streaming_redacted_when_logging_turned_off_bool(self):
+        # input/messages are already redacted upstream - only the assembled
+        # streaming output reaches Langfuse unredacted
+        redacted_messages = [{"role": "user", "content": "redacted-by-litellm"}]
+        trace_kwargs, generation_kwargs = self._log_stream(True, redacted_messages)
+        self.assertEqual(trace_kwargs["input"], {"messages": redacted_messages})
+        self.assertEqual(generation_kwargs["input"], {"messages": redacted_messages})
+        self.assertEqual(trace_kwargs["output"], "redacted-by-litellm")
+        self.assertEqual(generation_kwargs["output"], "redacted-by-litellm")
+
+    def test_streaming_redacted_when_logging_turned_off_str(self):
+        # team-level config arrives as the string "true" via the proxy
+        redacted_messages = [{"role": "user", "content": "redacted-by-litellm"}]
+        trace_kwargs, generation_kwargs = self._log_stream("true", redacted_messages)
+        self.assertEqual(trace_kwargs["input"], {"messages": redacted_messages})
+        self.assertEqual(trace_kwargs["output"], "redacted-by-litellm")
+        self.assertEqual(generation_kwargs["output"], "redacted-by-litellm")
+
+    def test_streaming_logged_when_logging_enabled(self):
+        trace_kwargs, generation_kwargs = self._log_stream(False)
+        self.assertIn("secret-prompt", str(trace_kwargs["input"]))
+        self.assertIn("secret-answer", str(generation_kwargs["output"]))

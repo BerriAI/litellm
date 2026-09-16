@@ -14,7 +14,7 @@ from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
+from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS, REDACTED_BY_LITELLM
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
@@ -27,7 +27,10 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
 )
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.litellm_core_utils.redact_messages import (
+    redact_user_api_key_info,
+    should_redact_message_logging,
+)
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -393,6 +396,11 @@ class LangFuseLogger:
                 level=level,
                 status_message=status_message,
             )
+            if should_redact_message_logging(kwargs):
+                # The assembled streaming response can reach Langfuse
+                # unredacted (input/messages are already redacted upstream),
+                # so force-redact the output here.
+                output = REDACTED_BY_LITELLM
             verbose_logger.debug("OUTPUT IN LANGFUSE: %s; original: %s", output, response_obj)
             trace_id = None
             generation_id = None
@@ -709,15 +717,15 @@ class LangFuseLogger:
 
                 # Special keys that are found in the function arguments and not the metadata
                 if "input" in update_trace_keys:
-                    trace_params["input"] = masked_input if not mask_input else "redacted-by-litellm"
+                    trace_params["input"] = masked_input if not mask_input else REDACTED_BY_LITELLM
                 if "output" in update_trace_keys:
-                    trace_params["output"] = masked_output if not mask_output else "redacted-by-litellm"
+                    trace_params["output"] = masked_output if not mask_output else REDACTED_BY_LITELLM
             else:  # don't overwrite an existing trace
                 trace_params = {
                     "id": resolved_trace_id,
                     "name": trace_name,
                     "session_id": session_id,
-                    "input": masked_input if not mask_input else "redacted-by-litellm",
+                    "input": masked_input if not mask_input else REDACTED_BY_LITELLM,
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
@@ -729,7 +737,7 @@ class LangFuseLogger:
                 if level == "ERROR":
                     trace_params["status_message"] = masked_output
                 else:
-                    trace_params["output"] = masked_output if not mask_output else "redacted-by-litellm"
+                    trace_params["output"] = masked_output if not mask_output else REDACTED_BY_LITELLM
 
             if debug is True or (isinstance(debug, str) and debug.lower() == "true"):
                 debug_metadata: Final = {
@@ -860,8 +868,8 @@ class LangFuseLogger:
                 "end_time": end_time,
                 "model": model_name,
                 "model_parameters": optional_params,
-                "input": masked_input if not mask_input else "redacted-by-litellm",
-                "output": masked_output if not mask_output else "redacted-by-litellm",
+                "input": masked_input if not mask_input else REDACTED_BY_LITELLM,
+                "output": masked_output if not mask_output else REDACTED_BY_LITELLM,
                 "usage": usage,
                 "usage_details": usage_details,
                 "metadata": {
