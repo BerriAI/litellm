@@ -3,7 +3,7 @@ from collections.abc import Coroutine, Mapping, Sequence
 from typing import Literal, Never, TypeAlias, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.ocr import LiteLLMOcrRequest
+from litellm.rust_bridge.ocr.native import LiteLLMOcrRequest
 
 _InputSource: TypeAlias = Literal["request", "deployment", "environment"]
 

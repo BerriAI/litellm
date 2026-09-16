@@ -1434,7 +1434,7 @@ from .skills.main import (
     adelete_skill,
 )
 from .containers.main import *
-from .ocr.main import *
+from .ocr.rust import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *

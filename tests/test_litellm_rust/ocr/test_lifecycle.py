@@ -580,7 +580,7 @@ async def test_retained_argument_aliases_and_body_roots_survive_envelope_replace
 
 
 def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_server: RecordingServer) -> None:
-    from litellm.ocr.main import _public_request
+    from litellm.ocr.rust import _public_request
     from litellm.rust_bridge import _native
 
     ocr_server.expected_requests = 0

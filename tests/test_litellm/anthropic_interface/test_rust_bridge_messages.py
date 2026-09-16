@@ -14,7 +14,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.router import GenericLiteLLMParams
 
-rust_messages = importlib.import_module("litellm.rust_bridge.messages")
+rust_messages = importlib.import_module("litellm.rust_bridge.messages.native")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
 
 FAKE_MESSAGES_RESPONSE: dict[str, object] = {

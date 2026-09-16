@@ -16,8 +16,8 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
-from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
+from litellm.rust_bridge.chat_completions import native as rust_chat_completions_bridge
+from litellm.rust_bridge.chat_completions.native import rust_chat_completions_accepts
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 

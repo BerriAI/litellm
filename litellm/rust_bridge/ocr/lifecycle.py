@@ -6,7 +6,7 @@ from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamicall
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.ocr import LiteLLMOcrRequest
+from litellm.rust_bridge.ocr.native import LiteLLMOcrRequest
 
 
 class NativeOcrLifecycle(Protocol):

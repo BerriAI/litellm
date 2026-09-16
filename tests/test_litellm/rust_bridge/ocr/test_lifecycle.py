@@ -6,10 +6,10 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.ocr import legacy
+from litellm.ocr import main as python_ocr
 from litellm.rust_bridge import bindings, configuration, runtime
-from litellm.rust_bridge.ocr import LiteLLMOcrRequest
-from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
+from litellm.rust_bridge.ocr.lifecycle import NATIVE_OCR_LIFECYCLE
+from litellm.rust_bridge.ocr.native import LiteLLMOcrRequest
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +26,7 @@ def isolated_ocr_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[Non
 async def test_unavailable_native_uses_legacy(monkeypatch: pytest.MonkeyPatch, asynchronous: bool) -> None:
     response: Final = OCRResponse(pages=[], model="mistral-ocr-latest")
     fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(legacy, "aocr" if asynchronous else "ocr", fallback)
+    monkeypatch.setattr(python_ocr, "aocr" if asynchronous else "ocr", fallback)
     NATIVE_OCR_LIFECYCLE.override(None)
     document: Final = {"type": "document_url", "document_url": "https://example.com"}
 
@@ -150,7 +150,7 @@ async def test_environment_opt_out_never_loads_native(
     monkeypatch.setenv("LITELLM_RUST", "0")
     response: Final = OCRResponse(pages=[], model="mistral-ocr-latest")
     fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(legacy, "aocr" if asynchronous else "ocr", fallback)
+    monkeypatch.setattr(python_ocr, "aocr" if asynchronous else "ocr", fallback)
     load: Final = Mock(side_effect=AssertionError("native must not be loaded"))
     monkeypatch.setattr(bindings, "get_native_bridge", load)
     litellm.rust(enabled)
@@ -179,7 +179,7 @@ async def test_native_is_enabled_by_default(
     native: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
     NATIVE_OCR_LIFECYCLE.override(native)
     fallback: Final = Mock(side_effect=AssertionError("legacy must not run"))
-    monkeypatch.setattr(legacy, "aocr" if asynchronous else "ocr", fallback)
+    monkeypatch.setattr(python_ocr, "aocr" if asynchronous else "ocr", fallback)
 
     result: Final = (
         await litellm.aocr("mistral/mistral-ocr-latest", {})
@@ -212,7 +212,7 @@ async def test_only_native_declines_replay_on_legacy(
     monkeypatch.setattr(runtime, "native_exception_types", lambda: (Declined, Upstream))
     response: Final = OCRResponse(pages=[], model="mistral-ocr-latest")
     fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(legacy, "aocr" if asynchronous else "ocr", fallback)
+    monkeypatch.setattr(python_ocr, "aocr" if asynchronous else "ocr", fallback)
     document: Final = {"type": "file", "file": b"pdf"}
 
     async def call() -> object:

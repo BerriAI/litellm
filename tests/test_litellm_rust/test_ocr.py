@@ -8,7 +8,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.ocr import native as rust_ocr_bridge
 
 pytestmark = pytest.mark.requires_rust_extension
 

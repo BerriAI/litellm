@@ -75,9 +75,9 @@ def _native_helpers_selected() -> bool:
 def get_mime_type(file_path: str) -> str:
     native: Final = _MIME_TYPE.load() if _native_helpers_selected() else None
     if native is None:
-        from litellm.ocr import legacy
+        from litellm.ocr import main
 
-        return legacy.get_mime_type(file_path)
+        return main.get_mime_type(file_path)
     return native(file_path)
 
 
@@ -91,9 +91,9 @@ def get_max_file_bytes() -> int:
 def convert_file_document_to_url_document(document: FileDocument) -> dict[str, str]:
     native: Final = _FILE_DOCUMENT.load() if _native_helpers_selected() else None
     if native is None:
-        from litellm.ocr import legacy
+        from litellm.ocr import main
 
-        return legacy.convert_file_document_to_url_document(document)
+        return main.convert_file_document_to_url_document(document)
     return native(document)
 
 
@@ -102,17 +102,17 @@ def convert_upload_to_url_document(
 ) -> dict[str, str]:
     native: Final = _UPLOAD_DOCUMENT.load() if _native_helpers_selected() else None
     if native is None:
-        from litellm.ocr import legacy
+        from litellm.ocr import main
 
         if len(file_content) > _PYTHON_MAX_FILE_BYTES:
             raise ValueError("OCR file exceeds the size limit")
         content_mime: Final = content_type.split(";")[0].strip() if content_type else None
         mime_type: Final = (
-            legacy.get_mime_type(filename)
+            main.get_mime_type(filename)
             if filename and (not content_mime or content_mime == "application/octet-stream")
             else content_mime or "application/octet-stream"
         )
-        return legacy.convert_file_document_to_url_document(
+        return main.convert_file_document_to_url_document(
             {"type": "file", "file": file_content, "mime_type": mime_type}
         )
     return native(file_content, filename, content_type)

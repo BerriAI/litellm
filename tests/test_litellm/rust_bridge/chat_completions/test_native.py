@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge import chat_completions as bridge
+from litellm.rust_bridge.chat_completions import native as bridge
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE = {

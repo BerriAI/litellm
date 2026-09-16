@@ -14,9 +14,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging, use_custom_prici
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.ocr.legacy import _prepare_ocr_request
+from litellm.ocr.main import _prepare_ocr_request
 from litellm.rust_bridge import bindings, configuration, runtime
-from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
+from litellm.rust_bridge.ocr.lifecycle import NATIVE_OCR_LIFECYCLE
 
 
 @pytest.fixture

@@ -2339,7 +2339,7 @@ class TestRustChatCompletionsHook:
 
     @pytest.fixture(autouse=True)
     def _reset_bridge(self, monkeypatch):
-        from litellm.rust_bridge import chat_completions as bridge
+        from litellm.rust_bridge.chat_completions import native as bridge
         from litellm.rust_bridge import configuration
 
         monkeypatch.setenv("LITELLM_RUST", "1")
@@ -2376,7 +2376,7 @@ class TestRustChatCompletionsHook:
 
     @staticmethod
     def _inject():
-        from litellm.rust_bridge import chat_completions as bridge
+        from litellm.rust_bridge.chat_completions import native as bridge
 
         seen = {"gate": [], "call": []}
 
