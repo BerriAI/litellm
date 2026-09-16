@@ -6503,3 +6503,41 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
     assert snapshot["litellm_call_id"]
     assert snapshot["response_cost"] is not None
     assert snapshot["api_base"]
+
+
+@pytest.mark.parametrize(
+    "provider, expected_class_name",
+    [
+        (LlmProviders.FIREWORKS_AI, "FireworksAIConfig"),
+        (LlmProviders.OPENAI, "OpenAIGPTConfig"),
+        (LlmProviders.GEMINI, "GeminiModelInfo"),
+        (LlmProviders.VERTEX_AI, "VertexAIModelInfo"),
+        (LlmProviders.LITELLM_PROXY, "LiteLLMProxyChatConfig"),
+        (LlmProviders.TOPAZ, "TopazModelInfo"),
+        (LlmProviders.ANTHROPIC, "AnthropicModelInfo"),
+        (LlmProviders.XAI, "XAIModelInfo"),
+        (LlmProviders.OPPER, "OpperConfig"),
+        (LlmProviders.OLLAMA, "OllamaModelInfo"),
+        (LlmProviders.OLLAMA_CHAT, "OllamaModelInfo"),
+        (LlmProviders.VLLM, "VLLMModelInfo"),
+        (LlmProviders.HOSTED_VLLM, "VLLMModelInfo"),
+        (LlmProviders.LEMONADE, "LemonadeChatConfig"),
+        (LlmProviders.CLARIFAI, "ClarifaiConfig"),
+        (LlmProviders.BEDROCK, "BedrockModelInfo"),
+        (LlmProviders.AZURE_AI, "AzureFoundryModelInfo"),
+    ],
+)
+def test_get_provider_model_info_resolves_every_mapped_provider(provider, expected_class_name):
+    """Every provider with dynamic model info keeps resolving to its own class."""
+    from litellm.utils import ProviderConfigManager
+
+    model_info = ProviderConfigManager.get_provider_model_info(model="some-model", provider=provider)
+
+    assert model_info is not None
+    assert type(model_info).__name__ == expected_class_name
+
+
+def test_get_provider_model_info_returns_none_for_unmapped_provider():
+    from litellm.utils import ProviderConfigManager
+
+    assert ProviderConfigManager.get_provider_model_info(model="some-model", provider=LlmProviders.DEEPSEEK) is None
