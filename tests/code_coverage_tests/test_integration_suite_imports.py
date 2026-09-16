@@ -11,7 +11,9 @@ import pytest
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 INTEGRATION_ROOT: Final = REPO_ROOT / "tests" / "integration"
-COLLECTED_COUNT: Final = re.compile(r"^(\d+) tests? collected", re.MULTILINE)
+COLLECTION_SUMMARY: Final = re.compile(
+    r"^(?P<collected>\d+) tests? collected(?:, (?P<errors>\d+) errors?)?", re.MULTILINE
+)
 
 
 def _integration_test_files() -> tuple[Path, ...]:
@@ -31,15 +33,20 @@ def _collect_without_injected_pythonpath(target: str) -> subprocess.CompletedPro
 
 
 def _assert_collected(result: subprocess.CompletedProcess[str], target: str) -> None:
-    # The exit code cannot carry this: tests/integration/conftest.py raises a UsageError
-    # under GITHUB_ACTIONS to keep these contracts owned by CircleCI, so a healthy
-    # collection and a failed import both exit 4. Only the summary line separates them.
-    match: Final = COLLECTED_COUNT.search(result.stdout)
+    # Both a healthy collection and a failed import exit 4 here, because conftest.py's
+    # CircleCI-ownership guard fires under GITHUB_ACTIONS; only the summary separates them.
+    match: Final = COLLECTION_SUMMARY.search(result.stdout)
     assert match is not None, (
         f"{target} never reached a collection summary, so its imports did not resolve\n"
         f"{result.stdout}\n{result.stderr}"
     )
-    assert int(match.group(1)) > 0, f"{target} collected nothing, so nothing was verified\n{result.stdout}"
+    assert int(match.group("collected")) > 0, (
+        f"{target} collected nothing, so nothing was verified\n{result.stdout}"
+    )
+    # One broken file among many still reports a count: "83 tests collected, 1 error".
+    assert match.group("errors") is None, (
+        f"{target} reported {match.group('errors')} collection error(s)\n{result.stdout}\n{result.stderr}"
+    )
 
 
 def test_the_integration_suite_still_has_files_to_guard() -> None:
