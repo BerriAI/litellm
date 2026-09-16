@@ -1963,7 +1963,17 @@ class ContentFilterGuardrail(CustomGuardrail):
                 exception_str=exception_str,
             )
 
-    def _trim_streamed_choice_buffer(self, state: _StreamedChoiceState, masked_text: str) -> _StreamedChoiceState:
+    def _streamed_scan_context_chars(self) -> int:
+        """Retained tail length: the default context, widened to the longest configured keyword."""
+        longest_keyword: Final = max(
+            map(len, (*self.blocked_words, *self.category_keywords, *self.always_block_category_keywords)),
+            default=0,
+        )
+        return max(CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, longest_keyword)
+
+    def _trim_streamed_choice_buffer(
+        self, state: _StreamedChoiceState, masked_text: str, scan_context_chars: int
+    ) -> _StreamedChoiceState:
         """
         Bound the per-choice buffer rescanned on every streamed chunk.
 
@@ -1974,10 +1984,10 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         Detections found in the dropped prefix move to the state's committed detections.
         """
-        if len(state.buffered_text) <= 2 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS:
+        if len(state.buffered_text) <= 2 * scan_context_chars:
             return state
-        head: Final = state.buffered_text[:-CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS]
-        tail: Final = state.buffered_text[-CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS:]
+        head: Final = state.buffered_text[:-scan_context_chars]
+        tail: Final = state.buffered_text[-scan_context_chars:]
         head_detections: Final[list[ContentFilterDetection]] = []  # mutable-ok: filled by _filter_single_text
         try:
             masked_head: Final = self._filter_single_text(head, detections=head_detections)
@@ -2016,6 +2026,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         contract.
         """
         state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
+        scan_context_chars: Final = self._streamed_scan_context_chars()
 
         start_time: Final = datetime.now()
         scan_seconds: float = 0.0  # rebind-ok: accumulates per-chunk scan time across the stream
@@ -2085,7 +2096,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                             continue
 
                         trim_started = time.perf_counter()
-                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text)
+                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(
+                            next_state, masked_text, scan_context_chars
+                        )
                         scan_seconds += time.perf_counter() - trim_started
 
                     yield item
