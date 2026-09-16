@@ -2511,6 +2511,70 @@ def test_usage_only_chunk_not_dropped_when_finish_reason_already_set(
     assert result.usage is not None
 
 
+def test_chunk_creator_preserves_dict_usage_prompt_cache_details(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    from types import SimpleNamespace
+
+    initialized_custom_stream_wrapper.custom_llm_provider = "openai"
+    initialized_custom_stream_wrapper.send_stream_usage = True
+
+    chunk = SimpleNamespace(
+        id="chatcmpl-cache",
+        choices=[],
+        system_fingerprint=None,
+        usage={
+            "prompt_tokens": 9888,
+            "completion_tokens": 1,
+            "total_tokens": 9889,
+            "prompt_tokens_details": {"cached_tokens": 6752, "audio_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        },
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    assert result is not None
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 9888
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 6752
+    assert result.usage.completion_tokens_details is not None
+    assert result.usage.completion_tokens_details.reasoning_tokens == 0
+
+
+def test_chunk_creator_preserves_openai_like_generic_usage_cache_details(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    from litellm.llms.databricks.streaming_utils import ModelResponseIterator
+
+    initialized_custom_stream_wrapper.custom_llm_provider = "openai_like"
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    parsed = ModelResponseIterator(streaming_response=None, sync_stream=True).chunk_parser(
+        chunk={
+            "id": "chatcmpl-cache",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "m",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 9888,
+                "completion_tokens": 1,
+                "total_tokens": 9889,
+                "prompt_tokens_details": {"cached_tokens": 6752},
+                "completion_tokens_details": {"reasoning_tokens": 0},
+            },
+        }
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=parsed)
+
+    assert result is not None
+    assert result.usage is not None
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 6752
+
+
 def _run_dispatch(wrapper: CustomStreamWrapper, chunk):
     model_response = wrapper.model_response_creator()
     completion_obj = {"content": ""}

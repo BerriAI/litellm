@@ -3253,6 +3253,46 @@ def test_translate_streaming_openai_response_to_anthropic_cache_tokens_from_prom
     assert message_delta["usage"]["cache_creation_input_tokens"] == 20
 
 
+def test_openai_like_stream_usage_chunk_keeps_cache_read_in_anthropic_delta():
+    from unittest.mock import MagicMock
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.databricks.streaming_utils import ModelResponseIterator
+
+    parsed = ModelResponseIterator(streaming_response=None, sync_stream=True).chunk_parser(
+        chunk={
+            "id": "chatcmpl-cache",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "m",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 50,
+                "total_tokens": 170,
+                "prompt_tokens_details": {"cached_tokens": 30, "audio_tokens": 0},
+            },
+        }
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="m",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai_like",
+    )
+    wrapper.received_finish_reason = "stop"
+    usage_chunk = wrapper.chunk_creator(chunk=parsed)
+    assert usage_chunk is not None
+    assert usage_chunk.usage is not None
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    usage_delta = adapter._translate_openai_usage_to_anthropic_usage_delta(usage_chunk.usage)
+
+    assert usage_delta["input_tokens"] == 90
+    assert usage_delta["output_tokens"] == 50
+    assert usage_delta["cache_read_input_tokens"] == 30
+
+
 def test_translate_streaming_openai_response_to_anthropic_cache_tokens_from_hidden_params_usage():
     from litellm.types.utils import PromptTokensDetailsWrapper
 
