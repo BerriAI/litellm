@@ -1127,6 +1127,45 @@ async def test_success_callback_running_during_pre_header_increment_does_not_dou
     assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
 
 
+class _FailingFirstIncrementCache(DualCache):
+    def __init__(self) -> None:
+        super().__init__(in_memory_cache=InMemoryCache())
+        self.increment_calls = 0
+
+    async def async_increment_cache_pipeline(
+        self,
+        increment_list: list[RedisPipelineIncrementOperation],
+        local_only: bool = False,
+        parent_otel_span: object = None,
+        **kwargs: object,
+    ) -> list[float] | None:
+        self.increment_calls += 1
+        if self.increment_calls == 1:
+            raise RuntimeError("cache unavailable")
+        return await super().async_increment_cache_pipeline(
+            increment_list, local_only=local_only, parent_otel_span=parent_otel_span, **kwargs
+        )
+
+
+@pytest.mark.asyncio
+async def test_success_callback_counts_fully_when_pre_header_increment_fails():
+    router = _rpm_tpm_router("lit-3058-recover")
+    cache = _FailingFirstIncrementCache()
+    router.cache = cache
+
+    response = await router.acompletion(
+        model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong"
+    )
+
+    expected = (response.usage.total_tokens, 1)
+    for _ in range(50):
+        if await router.get_model_group_usage("gpt-5-mini") == expected:
+            break
+        await asyncio.sleep(0.1)
+    assert await router.get_model_group_usage("gpt-5-mini") == expected
+    assert cache.increment_calls == 2
+
+
 @pytest.mark.asyncio
 async def test_increment_deployment_usage_for_response_skips_session_wrappers():
     router = _rpm_tpm_router("lit-3058-ws")
