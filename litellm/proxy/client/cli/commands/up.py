@@ -2,34 +2,37 @@ import atexit
 import contextlib
 import json
 import os
-import shlex
-import shutil
 import signal
 import sys
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import IO, Iterator, Mapping
+from typing import IO, Final
 
 import click
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.cli_keyring import SecretVault
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import load_token, login
+from .auth import CliContextObj, context_secret_vault, get_stored_api_key, load_token, login
+from .claude_settings import (
+    BACKUP_PATH,
+    CLAUDE_SETTINGS_PATH,
+    ClaudeSettingsError,
+    StaticToken,
+    install_statusline_script,
+    load_json_or_empty,
+    merge_claude_settings,
+    write_claude_settings,
+)
 
-ENV_KEY = "env"
-API_KEY_HELPER_KEY = "apiKeyHelper"
-ANTHROPIC_BASE_URL_KEY = "ANTHROPIC_BASE_URL"
-ANTHROPIC_API_KEY_KEY = "ANTHROPIC_API_KEY"
 
-CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
-BACKUP_PATH = Path.home() / ".litellm" / "claude_settings_backup.json"
-
-
-class UpError(Exception):
+class UpError(ClaudeSettingsError):
     """Raised for any user-actionable failure while starting/stopping interception."""
 
 
@@ -41,38 +44,7 @@ class BackupRecord:
     content: dict[str, JsonValue] | None
 
 
-_SETTINGS_ADAPTER = TypeAdapter(dict[str, JsonValue])
-_BACKUP_RECORD_ADAPTER = TypeAdapter(BackupRecord)
-
-
-def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
-    if not path.exists():
-        return {}
-    with open(path, "r") as f:
-        content = f.read()
-    if not content.strip():
-        return {}
-    try:
-        return _SETTINGS_ADAPTER.validate_json(content)
-    except ValidationError:
-        raise UpError(f"{path} contains invalid JSON (or its root is not an object); cannot proceed safely.")
-
-
-def merge_claude_settings(
-    settings: Mapping[str, JsonValue], base_url: str, api_key_helper: str
-) -> dict[str, JsonValue]:
-    """Return a new settings dict wired to route Claude Code through the proxy.
-
-    Only env.ANTHROPIC_BASE_URL and the top-level apiKeyHelper are overridden; a
-    stray env.ANTHROPIC_API_KEY is dropped so it cannot outrank the helper-issued
-    token (same reasoning as build_agent_env in agents.py). Every other key is
-    preserved untouched.
-    """
-    raw_env = settings.get(ENV_KEY, {})
-    base_env = raw_env if isinstance(raw_env, dict) else {}
-    env = {**base_env, ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/")}
-    env.pop(ANTHROPIC_API_KEY_KEY, None)
-    return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
+_BACKUP_RECORD_ADAPTER: Final = TypeAdapter(BackupRecord)
 
 
 @contextlib.contextmanager
@@ -87,9 +59,9 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
     untouched. `os.fchmod` right after opening -- before a single byte of the new content is
     written -- covers both cases.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd: Final = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)
-    f: IO[str] = os.fdopen(fd, "w")
+    f: Final[IO[str]] = os.fdopen(fd, "w")
     try:
         yield f
     finally:
@@ -97,18 +69,18 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
 
 
 def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
-    path = backup_path if backup_path is not None else BACKUP_PATH
-    path.parent.mkdir(exist_ok=True)
+    path: Final = backup_path if backup_path is not None else BACKUP_PATH
+    ensure_private_dir(path.parent)
     with secure_create(path) as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
 
 
 def read_backup(backup_path: Path | None = None) -> BackupRecord | None:
-    path = backup_path if backup_path is not None else BACKUP_PATH
+    path: Final = backup_path if backup_path is not None else BACKUP_PATH
     if not path.exists():
         return None
     with open(path, "r") as f:
-        content = f.read()
+        content: Final = f.read()
     try:
         return _BACKUP_RECORD_ADAPTER.validate_json(content)
     except ValidationError:
@@ -120,62 +92,58 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
 
     Returns the restored record, or None if there was nothing to restore.
     """
-    resolved_settings_path = settings_path if settings_path is not None else CLAUDE_SETTINGS_PATH
-    resolved_backup_path = backup_path if backup_path is not None else BACKUP_PATH
-    record = read_backup(resolved_backup_path)
+    resolved_settings_path: Final = settings_path if settings_path is not None else CLAUDE_SETTINGS_PATH
+    resolved_backup_path: Final = backup_path if backup_path is not None else BACKUP_PATH
+    record: Final = read_backup(resolved_backup_path)
     if record is None:
         return None
     if record.existed and record.content is not None:
         resolved_settings_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(resolved_settings_path, "w") as f:
-            json.dump(record.content, f, indent=2)
+        write_claude_settings(resolved_settings_path, record.content)
     elif resolved_settings_path.exists():
         resolved_settings_path.unlink()
     resolved_backup_path.unlink()
     return record
 
 
-def resolve_api_key_helper(base_url: str) -> str:
-    """Build the shell command Claude Code should run for its apiKeyHelper.
-
-    Resolves `lite` to an absolute path so the helper works regardless of the
-    PATH visible to whatever subprocess Claude Code spawns it from. Passing
-    --base-url explicitly (rather than relying on the bare invocation Claude
-    Code would otherwise use) makes `print-token` enforce that the cached
-    token was actually issued for this proxy -- without it, a token minted
-    for a different, previously-logged-into proxy would be handed to
-    whichever server `up` currently points at.
-    """
-    lite_path = shutil.which("lite")
-    if lite_path is None:
-        raise UpError(
-            "Could not find `lite` on your PATH. Claude Code's apiKeyHelper needs "
-            "an absolute path to it, so `lite up` cannot continue."
-        )
-    return f"{shlex.quote(lite_path)} auth print-token --base-url {shlex.quote(base_url)}"
+def _usable_login(api_key: str | None, vault: SecretVault) -> bool:
+    if api_key is None:
+        return False
+    token_data: Final = load_token(vault=vault)
+    return token_data is not None and is_cli_token_fresh(token_data)
 
 
-def _ensure_fresh_login(ctx: click.Context) -> None:
-    base_url = ctx.obj["base_url"].rstrip("/")
-    token_data = load_token()
-    if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
+def _key_resolved_on_the_way_in(ctx_obj: CliContextObj, base_url: str, vault: SecretVault) -> str | None:
+    if ctx_obj.get("api_key_from_token_file"):
+        return ctx_obj.get("api_key")
+    return get_stored_api_key(expected_base_url=base_url, vault=vault)
+
+
+def _stored_login_is_pkce(vault: SecretVault) -> bool:
+    token_data: Final = load_token(vault=vault)
+    return token_data is not None and token_data.get("refresh_token") is not None
+
+
+def ensure_fresh_login(ctx: click.Context) -> None:
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"].rstrip("/")
+    vault: Final = context_secret_vault(ctx)
+    if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
+    pkce: Final = _stored_login_is_pkce(vault)
+    login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
-        raise UpError(
-            "No fresh LiteLLM login found for this proxy. Run `lite login` first (apiKeyHelper "
-            "reads this token on every Claude Code request)."
-        )
+        raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
-    ctx.invoke(login)
-    token_data = load_token()
-    if not token_data or token_data.get("base_url") != base_url or not is_cli_token_fresh(token_data):
-        raise UpError("Login did not produce a usable token; cannot start `lite up`.")
+    ctx.invoke(login, config_claude=False, pkce=pkce)
+    if not _usable_login(get_stored_api_key(expected_base_url=base_url, vault=vault), vault):
+        raise UpError("Login did not produce a usable token.")
 
 
 def _restore_and_report() -> None:
-    record = restore_claude_settings()
+    record: Final = restore_claude_settings()
     if record is None:
         click.echo("Nothing to restore.")
         return
@@ -191,16 +159,18 @@ def up(ctx: click.Context) -> None:
     """Route every Claude Code session through your LiteLLM proxy until stopped.
 
     Patches ~/.claude/settings.json so Claude Code picks up the proxy on its own
-    next startup, from any terminal -- no need to launch it through `lite`.
+    next startup, from any terminal -- no need to launch it through `lite`. The
+    key written is the one this command resolved (your fresh `lite login`, or an
+    explicit --api-key), copied in as a static token for as long as `up` runs.
     Press Ctrl-C to stop and restore your original settings. Assumes the proxy
     is already running (this does not start one for you). Cursor is not
     supported: it has no equivalent file-based config to patch.
     """
-    base_url = ctx.obj["base_url"]
+    base_url: Final = ctx.obj["base_url"]
 
     try:
-        _ensure_fresh_login(ctx)
-        api_key = resolve_api_key(ctx)
+        ensure_fresh_login(ctx)
+        api_key: Final = resolve_api_key(ctx)
         verify_proxy_key(base_url, api_key)
 
         if BACKUP_PATH.exists():
@@ -209,9 +179,9 @@ def up(ctx: click.Context) -> None:
                 "running (or crashed without cleanup). Run `lite down` first."
             )
 
-        api_key_helper = resolve_api_key_helper(base_url)
-        original_existed = CLAUDE_SETTINGS_PATH.exists()
-        original_settings = load_json_or_empty(CLAUDE_SETTINGS_PATH)
+        status_line: Final = install_statusline_script()
+        original_existed: Final = CLAUDE_SETTINGS_PATH.exists()
+        original_settings: Final = load_json_or_empty(CLAUDE_SETTINGS_PATH)
         write_backup(
             BackupRecord(
                 existed=original_existed,
@@ -220,17 +190,18 @@ def up(ctx: click.Context) -> None:
         )
 
         CLAUDE_SETTINGS_PATH.parent.mkdir(exist_ok=True)
-        merged = merge_claude_settings(original_settings, base_url, api_key_helper)
-        with open(CLAUDE_SETTINGS_PATH, "w") as f:
-            json.dump(merged, f, indent=2)
-    except (AgentRunError, UpError) as e:
+        merged: Final = merge_claude_settings(
+            original_settings, base_url, StaticToken(api_key), status_line=status_line
+        )
+        write_claude_settings(CLAUDE_SETTINGS_PATH, merged)
+    except (AgentRunError, ClaudeSettingsError) as e:
         raise click.ClickException(str(e))
 
     click.echo(f"litellm: routing Claude Code through proxy at {base_url.rstrip('/')}")
     click.echo("Press Ctrl-C to stop and restore your original settings.")
 
-    stop_event = threading.Event()
-    restored = threading.Lock()
+    stop_event: Final = threading.Event()
+    restored: Final = threading.Lock()
 
     def _handle_signal(_signum: int, _frame: FrameType | None) -> None:
         stop_event.set()
@@ -240,7 +211,7 @@ def up(ctx: click.Context) -> None:
             return
         try:
             _restore_and_report()
-        except UpError as e:
+        except ClaudeSettingsError as e:
             # Runs from atexit/a signal handler, outside Click's own exception
             # handling -- raising here would only produce an unhandled-exception
             # warning on stderr, not a clean message.
@@ -263,7 +234,7 @@ def down() -> None:
     """
     try:
         _restore_and_report()
-    except UpError as e:
+    except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
 
 
@@ -271,12 +242,12 @@ __all__ = [
     "BACKUP_PATH",
     "CLAUDE_SETTINGS_PATH",
     "BackupRecord",
+    "ClaudeSettingsError",
     "UpError",
     "down",
     "load_json_or_empty",
     "merge_claude_settings",
     "read_backup",
-    "resolve_api_key_helper",
     "restore_claude_settings",
     "up",
     "write_backup",

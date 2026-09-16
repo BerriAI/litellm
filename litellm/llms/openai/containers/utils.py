@@ -1,5 +1,7 @@
 """Shared helpers for OpenAI-compatible container API URL construction."""
 
+from typing import Final
+
 import httpx
 
 
@@ -13,6 +15,6 @@ def join_container_api_base_path(api_base: str, path_suffix: str) -> str:
     """
     if not path_suffix.startswith("/"):
         path_suffix = f"/{path_suffix}"
-    parsed = httpx.URL(api_base)
-    new_path = f"{parsed.path.rstrip('/')}{path_suffix}"
+    parsed: Final = httpx.URL(api_base)
+    new_path: Final = f"{parsed.path.rstrip('/')}{path_suffix}"
     return str(parsed.copy_with(path=new_path))

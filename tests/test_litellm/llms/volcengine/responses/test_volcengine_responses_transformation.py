@@ -2,15 +2,12 @@
 Tests for Volcengine Responses API transformation.
 """
 
-import os
-import sys
 from typing import List, Literal, Optional, Union
 
 import httpx
 import pytest
 from pydantic import BaseModel, Field
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.volcengine.responses.transformation import (
@@ -137,7 +134,7 @@ class TestVolcengineResponsesAPITransformation:
         monkeypatch.delenv("ARK_API_KEY", raising=False)
         monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='Volcengine API key is required\\. Set ARK_API_KEY /'):
             config.validate_environment(headers={}, model="volcengine/demo", litellm_params={})
 
     def test_unsupported_params_are_dropped_with_extra_body(self):
@@ -478,6 +475,29 @@ class TestVolcengineStreamingFieldFill:
         )
 
         validated = _FillEnvelope.model_validate(filled)
+        assert isinstance(validated.payload, _FillWidget)
+        assert validated.payload.count == 0
+        assert validated.payload.parts == []
+        assert validated.payload.label is None
+
+
+class _Pep604Envelope(BaseModel):
+    payload: _FillWidget | _FillGadget
+    note: str | None
+    values: list[str] | str
+
+
+class TestVolcenginePep604FieldFill:
+    def test_fill_handles_pep604_union_spellings(self):
+        filled = VolcEngineResponsesAPIConfig._fill_missing_fields(
+            {"payload": {"type": "widget"}},
+            _Pep604Envelope,
+        )
+
+        assert filled["note"] is None
+        assert filled["values"] == []
+
+        validated = _Pep604Envelope.model_validate(filled)
         assert isinstance(validated.payload, _FillWidget)
         assert validated.payload.count == 0
         assert validated.payload.parts == []
