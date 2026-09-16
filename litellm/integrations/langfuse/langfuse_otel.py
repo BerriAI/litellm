@@ -196,19 +196,25 @@ class LangfuseOtelLogger(OpenTelemetry):
                                 "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
                             }
                         )
-                    elif item_type == "function_call":
-                        arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = (
-                            safe_json_loads(arguments_str, default={})
-                            if isinstance(arguments_str, str)
-                            else arguments_str
-                        )
+                    elif item_type in ("function_call", "custom_tool_call"):
+                        if item_type == "custom_tool_call":
+                            payload_key, payload_value = "input", getattr(item, "input", "")
+                        else:
+                            tool_arguments = getattr(item, "arguments", "{}")
+                            payload_key, payload_value = (
+                                "arguments",
+                                (
+                                    safe_json_loads(tool_arguments, default={})
+                                    if isinstance(tool_arguments, str)
+                                    else tool_arguments
+                                ),
+                            )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
                             "call_id": getattr(item, "call_id", ""),
-                            "type": "function_call",
-                            "arguments": arguments_obj,
+                            "type": item_type,
+                            payload_key: payload_value,
                         }
                         output_items_data.append(langfuse_tool_call)
             if output_items_data:

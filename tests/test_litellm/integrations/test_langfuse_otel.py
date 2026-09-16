@@ -1005,6 +1005,45 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["name"] == "get_weather"
             assert output_data[0]["arguments"] == {}
 
+    @pytest.mark.parametrize("redact", (False, True))
+    def test_responses_api_with_custom_tool_calls(self, redact):
+        from litellm.litellm_core_utils.redact_messages import perform_redaction
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from litellm.types.responses.main import CustomToolCallOutputItem
+
+        response = ResponsesAPIResponse(
+            id="response-custom-tool",
+            created_at=1625247700,
+            output=[
+                CustomToolCallOutputItem(
+                    id="ctc-123",
+                    type="custom_tool_call",
+                    name="exec",
+                    call_id="call-def",
+                    input="console.log('hello')",
+                    status="completed",
+                )
+            ],
+        )
+        span = MagicMock()
+        LangfuseOtelLogger._set_observation_output(span, perform_redaction({}, response) if redact else response)
+        output_calls = [
+            call
+            for call in span.set_attribute.call_args_list
+            if call.args[0] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+        ]
+
+        assert len(output_calls) == 1
+        assert json.loads(output_calls[0].args[1]) == [
+            {
+                "id": "ctc-123",
+                "name": "exec",
+                "call_id": "call-def",
+                "type": "custom_tool_call",
+                "input": "redacted-by-litellm" if redact else "console.log('hello')",
+            }
+        ]
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
