@@ -6,14 +6,13 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.rust_bridge.catalog import Context, Delivery, Route
+from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import bind, optional_bool, optional_mapping, optional_str, signature
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
     NATIVE_RESPONSES,
     LiteLLMResponsesRequest,
-    NativeAresponses,
 )
-from litellm.rust_bridge.runtime import arun, run
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 __all__ = ("aresponses", "responses")
@@ -61,33 +60,42 @@ def _public_request(
     )
 
 
+_DISPATCH: Final = PublicDispatch(
+    route=Route.RESPONSES,
+    request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
+    context=lambda request: _context(request),
+    bypass=lambda request: request.kwargs.get("aresponses") is True,
+)
+
+_ADISPATCH: Final = PublicDispatch(
+    route=Route.RESPONSES,
+    request=lambda args, kwargs: _public_request(_ARESPONSES, args, kwargs),
+    context=lambda request: _context(request),
+)
+
+
 def responses(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Responses call shape
 ) -> ResponsesResult | Coroutine[object, object, ResponsesResult]:
     python: Final = _python_responses()
-    request: Final = _public_request(_RESPONSES, args, kwargs)
-    if request is None or request.kwargs.get("aresponses") is True:
-        return python(*args, **kwargs)
-    return run(
-        _context(request),
+    return _DISPATCH.run(
+        args,
+        kwargs,
+        python=python,
         binding=NATIVE_RESPONSES,
-        native=lambda hook: hook(request, args, kwargs),
-        python=lambda: python(*args, **kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 
 async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwargs-ok: preserve the public call shape
     python: Final = _python_aresponses()
-    request: Final = _public_request(_ARESPONSES, args, kwargs)
-    if request is None:
-        return await python(*args, **kwargs)
-
-    async def native(hook: NativeAresponses) -> ResponsesResult:
-        return await hook(request, args, kwargs)
-
-    return await arun(
-        _context(request), binding=NATIVE_ARESPONSES, native=native, python=lambda: python(*args, **kwargs)
+    return await _ADISPATCH.arun(
+        args,
+        kwargs,
+        python=python,
+        binding=NATIVE_ARESPONSES,
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 

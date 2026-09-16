@@ -46,9 +46,9 @@ def run(
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], ResultT],
     python: Callable[[], ResultT],
-    rules: Rules = RULES,
+    rules: Rules | None = None,
 ) -> ResultT:
-    selected: Final = decision(context, rules)
+    selected: Final = decision(context, RULES if rules is None else rules)
     match selected:
         case Decision.PYTHON:
             return python()
@@ -74,9 +74,9 @@ async def arun(
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], Awaitable[ResultT]],
     python: Callable[[], Awaitable[ResultT]],
-    rules: Rules = RULES,
+    rules: Rules | None = None,
 ) -> ResultT:
-    selected: Final = decision(context, rules)
+    selected: Final = decision(context, RULES if rules is None else rules)
     match selected:
         case Decision.PYTHON:
             return await python()

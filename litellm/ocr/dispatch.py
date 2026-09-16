@@ -7,8 +7,8 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import main
 from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
 from litellm.rust_bridge.catalog import Context, Route
-from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest, NativeAocr
-from litellm.rust_bridge.runtime import arun, run
+from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest
 
 __all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
 
@@ -35,41 +35,54 @@ def _bind_request(
     )
 
 
-def _public_request(name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> LiteLLMOcrRequest:
+def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> LiteLLMOcrRequest:
     try:
         return _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
     except TypeError as error:
         raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
 
 
+_DISPATCH: Final = PublicDispatch(
+    route=Route.OCR,
+    request=lambda args, kwargs: _public_request("ocr", args, kwargs),
+    context=lambda request: _context(request),
+    bypass=lambda request: request.kwargs.get("aocr") is True,
+)
+
+_ADISPATCH: Final = PublicDispatch(
+    route=Route.OCR,
+    request=lambda args, kwargs: _public_request("aocr", args, kwargs),
+    context=lambda request: _context(request),
+)
+
+
 def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-    request: Final = _public_request("ocr", args, kwargs)
     python_ocr: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
         Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], main.ocr
     )
-    if request.kwargs.get("aocr") is True:
-        return python_ocr(*args, **kwargs)
-    return run(
-        _context(request),
+    return _DISPATCH.run(
+        args,
+        kwargs,
+        python=python_ocr,
         binding=NATIVE_OCR,
-        native=lambda hook: hook(request, args, kwargs),
-        python=lambda: python_ocr(*args, **kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
-    request: Final = _public_request("aocr", args, kwargs)
     fallback: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
         Callable[..., Awaitable[OCRResponse]], main.aocr
     )
-
-    async def native(hook: NativeAocr) -> OCRResponse:
-        return await hook(request, args, kwargs)
-
-    return await arun(_context(request), binding=NATIVE_AOCR, native=native, python=lambda: fallback(*args, **kwargs))
+    return await _ADISPATCH.arun(
+        args,
+        kwargs,
+        python=fallback,
+        binding=NATIVE_AOCR,
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+    )
 
 
 def _context(request: LiteLLMOcrRequest) -> Context:
