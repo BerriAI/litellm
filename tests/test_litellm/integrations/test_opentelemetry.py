@@ -5423,6 +5423,65 @@ class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
         self.assertIsNone(detected_span)
 
 
+class TestInboundTraceContextKeepsCallerTracestate(unittest.TestCase):
+    """The request span built from inbound W3C headers must carry the caller's
+    tracestate so outbound propagation (passthrough) re-emits it instead of
+    dropping it alongside the stripped stale header."""
+
+    CALLER_TRACEPARENT = "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
+    CALLER_TRACESTATE = "vendor=abc,other=xyz"
+
+    def _otel(self):
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        otel = OpenTelemetry()
+        otel.tracer = provider.get_tracer(__name__)
+        return otel
+
+    def test_request_span_propagates_caller_tracestate_downstream(self):
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+        from litellm.integrations.otel.plumbing.context import inject_trace_context
+
+        inbound = {"traceparent": self.CALLER_TRACEPARENT, "tracestate": self.CALLER_TRACESTATE}
+        span = self._otel().create_litellm_proxy_request_started_span(
+            start_time=datetime.now(timezone.utc), headers=inbound
+        )
+        outbound = inject_trace_context(inbound, parent_span=span)
+        span.end()
+
+        propagated = trace.get_current_span(TraceContextTextMapPropagator().extract(outbound)).get_span_context()
+        self.assertEqual(outbound["tracestate"], self.CALLER_TRACESTATE)
+        self.assertEqual(propagated.trace_id, span.get_span_context().trace_id)
+        self.assertEqual(propagated.span_id, span.get_span_context().span_id)
+        self.assertNotEqual(outbound["traceparent"], self.CALLER_TRACEPARENT)
+
+    def test_request_span_without_caller_tracestate_emits_none(self):
+        from litellm.integrations.otel.plumbing.context import inject_trace_context
+
+        inbound = {"traceparent": self.CALLER_TRACEPARENT}
+        span = self._otel().create_litellm_proxy_request_started_span(
+            start_time=datetime.now(timezone.utc), headers=inbound
+        )
+        outbound = inject_trace_context(inbound, parent_span=span)
+        span.end()
+
+        self.assertNotIn("tracestate", outbound)
+        self.assertNotEqual(outbound["traceparent"], self.CALLER_TRACEPARENT)
+
+    def test_span_context_from_header_keeps_caller_tracestate(self):
+        kwargs = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "headers": {"traceparent": self.CALLER_TRACEPARENT, "tracestate": self.CALLER_TRACESTATE}
+                }
+            }
+        }
+        ctx, detected_span = self._otel()._get_span_context(kwargs)
+        self.assertIsNone(detected_span)
+        self.assertEqual(trace.get_current_span(ctx).get_span_context().trace_state.to_header(), self.CALLER_TRACESTATE)
+
+
 class TestEndProxySpanLitellmMetadataFallback(unittest.TestCase):
     """
     Tests for _end_proxy_span_from_kwargs() falling back to litellm_metadata.

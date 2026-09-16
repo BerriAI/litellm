@@ -2932,16 +2932,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
 
         propagator: Final = TraceContextTextMapPropagator()
-        carrier: Final = {"traceparent": _traceparent}
+        carrier: Final = {key: headers[key] for key in ("traceparent", "tracestate") if headers.get(key) is not None}
         _parent_context: Final = propagator.extract(carrier=carrier)
 
         return _parent_context
 
     def _get_span_context(self, kwargs, default_span: Span | None = None):
         from opentelemetry import context, trace
-        from opentelemetry.trace.propagation.tracecontext import (
-            TraceContextTextMapPropagator,
-        )
 
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
         proxy_server_request: Final = litellm_params.get("proxy_server_request", {}) or {}
@@ -2965,11 +2962,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Priority 2: HTTP traceparent header
         if traceparent is not None:
             verbose_logger.debug("OpenTelemetry: Using traceparent header for context propagation")
-            carrier: Final = {"traceparent": traceparent}
-            return (
-                TraceContextTextMapPropagator().extract(carrier=carrier),
-                None,
-            )
+            return self.get_traceparent_from_header(headers=headers), None
 
         # Priority 3: Active span from global context (auto-detection)
         try:
