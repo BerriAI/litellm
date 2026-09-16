@@ -356,7 +356,7 @@ class BaseResponsesAPIStreamingIterator:
                     _delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_delta, str):
                         self._generated_content += _delta
-                elif _event_type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA:
+                elif _event_type in _TOOL_ARGUMENTS_DELTA_EVENTS:
                     _args_delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_args_delta, str):
                         self._generated_tool_arguments += _args_delta
@@ -1356,6 +1356,15 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return ResponseAPIUsage.model_validate(usage)
     except ValidationError:
         return None
+
+
+_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA,
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
+    }
+)
 
 
 def _estimate_usage_from_text(
