@@ -1279,14 +1279,29 @@ class TestApiBaseSeam:
             )
 
     def test_unknown_mount_raises_naming_the_known_mounts(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="unknown provider mount 'bedrock'"):
+        with pytest.raises(ValueError, match="unknown provider mount 'cohere'"):
             provider_edge_api_base(
-                "bedrock",
+                "cohere",
                 mode_raw="record",
                 bundle_dir=tmp_path / "bundle",
                 bind_host="127.0.0.1",
                 advertise_host="127.0.0.1",
             )
+
+    @pytest.mark.parametrize("mode_raw", ["record", "replay"])
+    def test_bedrock_never_wires_a_bundle_because_the_edge_cannot_sign_into_one(
+        self, tmp_path: Path, mode_raw: str,
+    ) -> None:
+        """Record and replay serve from a bundle without re-signing, so a Bedrock
+        deployment pointed at that edge would send the proxy's signature over a
+        rewritten Host. It keeps its direct route in both modes."""
+        assert provider_edge_api_base(
+            "bedrock/us-east-1",
+            mode_raw=mode_raw,
+            bundle_dir=tmp_path / "bundle",
+            bind_host="127.0.0.1",
+            advertise_host="127.0.0.1",
+        ) is None
 
     def test_record_mode_boots_one_shared_edge_and_prepares_the_bundle(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"

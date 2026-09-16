@@ -164,7 +164,6 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 )
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
-from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
@@ -982,7 +981,6 @@ class ProxyLogging:
             dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
         )
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
-        self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: list[str] | None = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
@@ -3580,7 +3578,7 @@ class ProxyLogging:
         caps: Final = ProxyLogging._callback_capabilities()
         post_call_pipelines: Final = _streamable_post_call_pipelines(request_data, user_api_key_dict)
         # Fast path: no real overrides. Internal proxy CustomLogger callbacks
-        # (e.g. _PROXY_MaxBudgetLimiter, ManagedFiles) inherit the default
+        # (e.g. _PROXY_CacheControlCheck, ManagedFiles) inherit the default
         # ``async for chunk: yield chunk`` body, so wrapping the iterator
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
@@ -4340,6 +4338,7 @@ class PrismaClient:
                             v.*,
                             t.spend AS team_spend,
                             t.max_budget AS team_max_budget,
+                            t.model_max_budget AS team_model_max_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.tpd_limit AS team_tpd_limit
@@ -4779,6 +4778,7 @@ class PrismaClient:
                             t.spend AS team_spend, 
                             t.max_budget AS team_max_budget,
                             t.soft_budget AS team_soft_budget,
+                            t.model_max_budget AS team_model_max_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.tpd_limit AS team_tpd_limit,

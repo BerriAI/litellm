@@ -145,6 +145,7 @@ WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 PROMPT_CACHING_OPT_IN_ENV = "E2E_PROMPT_CACHING_STACK"
 REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
+<<<<<<< HEAD
 # The cost_calculation suite needs a proxy booted with LITELLM_MODEL_COST_MAP_URL
 # pointing at tests/e2e/cost_map.json (its whole map is test-owned rates) plus a
 # scripted-provider sidecar; deselected unless the opt-in env var is set.
@@ -161,6 +162,10 @@ SCRIPTED_PROVIDER_CONTROL_URL = os.environ.get(
 SCRIPTED_PROVIDER_PROXY_BASE = os.environ.get(
     "E2E_SCRIPTED_PROVIDER_PROXY_BASE", SCRIPTED_PROVIDER_CONTROL_URL
 ).rstrip("/")
+||||||| 930ec9643a
+=======
+CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
+CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))

@@ -951,6 +951,7 @@ class LiteLLMParamsBody(BaseModel):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
