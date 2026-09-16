@@ -1,8 +1,13 @@
 "use client";
 
-import { functionalUpdate, type ExpandedState, type OnChangeFn, type SortingState } from "@tanstack/react-table";
+import {
+  functionalUpdate,
+  type ExpandedState,
+  type OnChangeFn,
+  type PaginationState,
+  type SortingState,
+} from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import { parseAsStringLiteral, useQueryStates } from "nuqs";
 import React, { useCallback, useMemo } from "react";
 
 import { DataTable } from "@/components/shared/DataTable";
@@ -10,7 +15,11 @@ import { DataTable } from "@/components/shared/DataTable";
 import { RoutingGroupUsagePanel } from "./RoutingGroupUsagePanel";
 import { getRoutingGroupsTableColumns } from "./RoutingGroupsTableColumns";
 import type { RoutingGroup } from "./types";
-import { useExpandedRoutingGroups } from "./useExpandedRoutingGroups";
+import {
+  ROUTING_GROUP_SORT_COLUMNS,
+  useExpandedRoutingGroups,
+  useRoutingGroupsTableUrlState,
+} from "./routingGroupsUrlState";
 
 interface RoutingGroupsTableProps {
   groups: RoutingGroup[];
@@ -19,13 +28,6 @@ interface RoutingGroupsTableProps {
   onDelete: (group: RoutingGroup) => void;
   proxyBaseUrl?: string;
 }
-
-const SORTABLE_COLUMNS = ["group_name", "routing_strategy"] as const;
-
-const SORT_URL_STATE = {
-  sort_by: parseAsStringLiteral(SORTABLE_COLUMNS),
-  sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault("asc"),
-};
 
 const resolveBaseUrl = (proxyBaseUrl?: string): string => {
   if (proxyBaseUrl && proxyBaseUrl.trim()) return proxyBaseUrl;
@@ -54,7 +56,8 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
   onDelete,
   proxyBaseUrl,
 }) => {
-  const [{ sort_by: sortBy, sort_order: sortOrder }, setSort] = useQueryStates(SORT_URL_STATE);
+  const [{ sort_by: sortBy, sort_order: sortOrder, page, page_size: pageSize }, setTableState] =
+    useRoutingGroupsTableUrlState();
   const [expandedGroups, setExpandedGroups] = useExpandedRoutingGroups();
   const baseUrl = resolveBaseUrl(proxyBaseUrl);
 
@@ -66,10 +69,20 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
   const onSortingChange = useCallback<OnChangeFn<SortingState>>(
     (updaterOrValue) => {
       const active = functionalUpdate(updaterOrValue, sorting)[0];
-      const column = SORTABLE_COLUMNS.find((id) => id === active?.id) ?? null;
-      void setSort({ sort_by: column, sort_order: column && active?.desc ? "desc" : null });
+      const column = ROUTING_GROUP_SORT_COLUMNS.find((id) => id === active?.id) ?? null;
+      void setTableState({ sort_by: column, sort_order: column && active?.desc ? "desc" : null, page: null });
     },
-    [setSort, sorting],
+    [setTableState, sorting],
+  );
+
+  const pagination = useMemo<PaginationState>(() => ({ pageIndex: page - 1, pageSize }), [page, pageSize]);
+
+  const onPaginationChange = useCallback<OnChangeFn<PaginationState>>(
+    (updaterOrValue) => {
+      const next = functionalUpdate(updaterOrValue, pagination);
+      void setTableState({ page: next.pageIndex + 1, page_size: next.pageSize });
+    },
+    [pagination, setTableState],
   );
 
   const expanded = useMemo<ExpandedState>(
@@ -107,6 +120,8 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
     <DataTable
       data={groups}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(group) => group.group_name}
       sortingMode="client"

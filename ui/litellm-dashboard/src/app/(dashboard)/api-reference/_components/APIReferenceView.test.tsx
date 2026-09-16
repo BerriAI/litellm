@@ -100,6 +100,15 @@ describe("APIReferenceView", () => {
     expect(screen.getByRole("tabpanel")).toHaveTextContent(/from langchain.chat_models import ChatOpenAI/);
   });
 
+  it("falls back to the OpenAI SDK for an unknown sdk in the URL", () => {
+    renderWithProviders(<APIReferenceView proxySettings={{ PROXY_BASE_URL: "https://proxy.litellm.test" }} />, {
+      searchParams: "?sdk=rust",
+    });
+
+    expect(screen.getByRole("tab", { name: "OpenAI Python SDK" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(/import openai/);
+  });
+
   it("writes the selected SDK to the URL and removes it for the default SDK", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();

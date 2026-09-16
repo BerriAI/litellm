@@ -368,6 +368,18 @@ describe("AccessGroupsPage", () => {
       expect(renderedGroupIds()).toEqual(["ag-2", "ag-1"]);
     });
 
+    it("sorts oldest first when the URL asks for createdAt ascending", () => {
+      mockUseAccessGroups.mockReturnValue({ data: [mockAccessGroups[0], mockAccessGroups[1]], isLoading: false });
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?sort_by=createdAt&sort_order=asc" });
+      expect(renderedGroupIds()).toEqual(["ag-2", "ag-1"]);
+    });
+
+    it("sorts by name in the default descending order when only sort_by is in the URL", () => {
+      mockUseAccessGroups.mockReturnValue({ data: [mockAccessGroups[0], mockAccessGroups[1]], isLoading: false });
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?sort_by=name" });
+      expect(renderedGroupIds()).toEqual(["ag-2", "ag-1"]);
+    });
+
     it("falls back to newest first when the URL names an unsortable column", () => {
       mockUseAccessGroups.mockReturnValue({ data: [mockAccessGroups[1], mockAccessGroups[0]], isLoading: false });
       renderWithProviders(<AccessGroupsPage />, { searchParams: "?sort_by=bogus" });

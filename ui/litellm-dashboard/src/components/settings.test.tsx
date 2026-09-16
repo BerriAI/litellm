@@ -538,6 +538,23 @@ describe("Settings", () => {
       expect(lastUrl(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
     });
 
+    it("selects every tab that is clicked", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<Settings {...defaultProps} />);
+
+      const tabs = await screen.findAllByRole("tab");
+      expect(tabs).toHaveLength(6);
+      for (const tab of tabs) {
+        await user.click(tab);
+        expect(tab).toHaveAttribute("aria-selected", "true");
+      }
+    });
+
+    it("falls back to Logging Callbacks for an unknown tab in the URL", async () => {
+      renderWithProviders(<Settings {...defaultProps} />, { searchParams: "?tab=billing" });
+      expect(await screen.findByRole("tab", { name: "Logging Callbacks" })).toHaveAttribute("aria-selected", "true");
+    });
+
     it("opens the edit dialog for the callback and mode in the URL", async () => {
       mockLangfuseRows();
       renderWithProviders(<Settings {...defaultProps} />, { searchParams: "?callback=langfuse&callback_mode=failure" });

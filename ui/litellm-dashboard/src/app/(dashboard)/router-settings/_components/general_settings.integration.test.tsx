@@ -180,6 +180,26 @@ describe("GeneralSettings tabs", () => {
     await user.click(screen.getByRole("tab", { name: "Loadbalancing" }));
     expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("tab")).toBe(false);
   });
+
+  it("selects every tab that is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="proxy_admin" userID="u" />);
+
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs).toHaveLength(5);
+    for (const tab of tabs) {
+      await user.click(tab);
+      expect(tab).toHaveAttribute("aria-selected", "true");
+    }
+  });
+
+  it("falls back to Loadbalancing for an unknown tab in the URL", async () => {
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="proxy_admin" userID="u" />, {
+      searchParams: "?tab=bogus",
+    });
+
+    expect(await screen.findByRole("tab", { name: "Loadbalancing" })).toHaveAttribute("aria-selected", "true");
+  });
 });
 
 it("should delete only the Default setting and retain explicit false and zero", async () => {

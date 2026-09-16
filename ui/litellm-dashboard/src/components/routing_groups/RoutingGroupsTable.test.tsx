@@ -24,6 +24,13 @@ describe("RoutingGroupsTable", () => {
     routing_strategy: "simple-shuffle",
   };
 
+  const manyGroups: RoutingGroup[] = Array.from({ length: 30 }, (_, index) => ({
+    group_name: `group-${String(index).padStart(2, "0")}`,
+    models: ["gpt-4o"],
+    routing_strategy: "simple-shuffle",
+  }));
+  const groupNames = manyGroups.map((group) => group.group_name);
+
   const defaultProps = {
     groups: [] as RoutingGroup[],
     onEdit,
@@ -160,11 +167,17 @@ describe("RoutingGroupsTable", () => {
       expect(namesInOrder()).toEqual(["prod-group", "dev-group"]);
     });
 
-    it("keeps the incoming order when the URL names a column that cannot be sorted", () => {
-      renderWithProviders(<RoutingGroupsTable {...defaultProps} groups={[prodGroup, devGroup]} />, {
-        searchParams: "?sort_by=models&sort_order=asc",
-      });
-      expect(namesInOrder()).toEqual(["prod-group", "dev-group"]);
+    it("ignores a sort_by that is not a sortable column instead of handing it to the table", () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        renderWithProviders(<RoutingGroupsTable {...defaultProps} groups={[prodGroup, devGroup]} />, {
+          searchParams: "?sort_by=bogus&sort_order=desc",
+        });
+        expect(namesInOrder()).toEqual(["prod-group", "dev-group"]);
+        expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining("Column with id 'bogus' does not exist"));
+      } finally {
+        consoleError.mockRestore();
+      }
     });
 
     it("writes header sort clicks to sort_by and sort_order", async () => {
@@ -180,6 +193,58 @@ describe("RoutingGroupsTable", () => {
       expect(lastUrl(onUrlUpdate)?.get("sort_by")).toBe("group_name");
       expect(lastUrl(onUrlUpdate)?.get("sort_order")).toBe("desc");
       expect(namesInOrder()).toEqual(["prod-group", "dev-group"]);
+    });
+
+    it("shows the page and page size from the URL", () => {
+      renderWithProviders(<RoutingGroupsTable {...defaultProps} groups={manyGroups} />, {
+        searchParams: "?page=2",
+      });
+      expect(namesInOrder()).toEqual(groupNames.slice(25));
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    });
+
+    it("shows every row when page_size in the URL covers them", () => {
+      renderWithProviders(<RoutingGroupsTable {...defaultProps} groups={manyGroups} />, {
+        searchParams: "?page_size=50",
+      });
+      expect(namesInOrder()).toEqual(groupNames);
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
+    });
+
+    it("opens an expanded group that sits on the page named in the URL", async () => {
+      renderWithProviders(<RoutingGroupsTable {...defaultProps} groups={manyGroups} />, {
+        searchParams: "?page=2&expanded=group-27",
+      });
+      expect(await screen.findAllByText("How routing works for this group")).toHaveLength(1);
+      expect(namesInOrder()).toContain("group-27");
+    });
+
+    it("writes page changes to page and drops it on the first page", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<RoutingGroupsTable {...defaultProps} groups={manyGroups} />, { onUrlUpdate });
+
+      await user.click(screen.getByRole("button", { name: "Go to next page" }));
+      expect(lastUrl(onUrlUpdate)?.get("page")).toBe("2");
+      expect(namesInOrder()).toEqual(groupNames.slice(25));
+
+      await user.click(screen.getByRole("button", { name: "Go to previous page" }));
+      expect(lastUrl(onUrlUpdate)?.has("page")).toBe(false);
+      expect(namesInOrder()).toEqual(groupNames.slice(0, 25));
+    });
+
+    it("returns to the first page when the sort changes", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<RoutingGroupsTable {...defaultProps} groups={manyGroups} />, {
+        searchParams: "?page=2",
+        onUrlUpdate,
+      });
+
+      await user.click(screen.getByTestId("sort-header-group_name"));
+      expect(lastUrl(onUrlUpdate)?.get("sort_by")).toBe("group_name");
+      expect(lastUrl(onUrlUpdate)?.has("page")).toBe(false);
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
     });
 
     it("opens the usage panel for every group named in expanded", async () => {

@@ -50,10 +50,12 @@ const devGroup: RoutingGroup = {
   routing_strategy: "simple-shuffle",
 };
 
-const setup = (overrides: { mutateAsync?: ReturnType<typeof vi.fn>; isPending?: boolean } = {}) => {
+const setup = (
+  overrides: { mutateAsync?: ReturnType<typeof vi.fn>; isPending?: boolean; groups?: RoutingGroup[] } = {},
+) => {
   const mutateAsync = overrides.mutateAsync ?? vi.fn().mockResolvedValue(undefined);
   vi.mocked(useRoutingGroups).mockReturnValue({
-    data: { routingGroups: [prodGroup, devGroup], availableStrategies: [] },
+    data: { routingGroups: overrides.groups ?? [prodGroup, devGroup], availableStrategies: [] },
     isLoading: false,
     refetch: vi.fn(),
     isFetching: false,
@@ -180,6 +182,26 @@ describe("RoutingGroups URL state", () => {
     await user.click(screen.getByRole("button", { name: "Clear search" }));
     await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("group_search")).toBe(false));
     expect(visibleGroupNames()).toEqual(["prod-group", "dev-group"]);
+  });
+
+  it("returns the table to the first page when the search changes", async () => {
+    setup({
+      groups: Array.from({ length: 30 }, (_, index) => ({
+        group_name: `group-${String(index).padStart(2, "0")}`,
+        models: ["gpt-4o"],
+        routing_strategy: "simple-shuffle",
+      })),
+    });
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<RoutingGroups />, { searchParams: "?page=2&sort_by=group_name", onUrlUpdate });
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+
+    fireEvent.change(screen.getByPlaceholderText("Search groups..."), { target: { value: "group" } });
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("group_search")).toBe("group"));
+    const params = onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+    expect(params?.has("page")).toBe(false);
+    expect(params?.get("sort_by")).toBe("group_name");
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
   });
 
   it("drops expanded names that no longer match a routing group", async () => {

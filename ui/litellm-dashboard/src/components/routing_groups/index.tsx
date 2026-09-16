@@ -1,6 +1,5 @@
 "use client";
 
-import { parseAsString, useQueryState } from "nuqs";
 import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +14,7 @@ import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
 import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
-import { useExpandedRoutingGroups } from "./useExpandedRoutingGroups";
+import { useExpandedRoutingGroups, useRoutingGroupsSearchUrlState } from "./routingGroupsUrlState";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
@@ -26,7 +25,7 @@ const RoutingGroups: React.FC = () => {
   const proxySettings = useProxySettings(accessToken);
   const saveMutation = useSaveRoutingGroups();
 
-  const [searchQuery, setSearchQuery] = useQueryState("group_search", parseAsString.withDefault(""));
+  const [{ group_search: searchQuery }, setSearchState] = useRoutingGroupsSearchUrlState();
   const [expandedGroups, setExpandedGroups] = useExpandedRoutingGroups();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
@@ -66,6 +65,8 @@ const RoutingGroups: React.FC = () => {
     const names = records.map((r) => r.model_group).filter((n): n is string => Boolean(n));
     return Array.from(new Set(names));
   }, [modelHub]);
+
+  const setSearchQuery = (value: string) => void setSearchState({ group_search: value || null, page: null });
 
   const openCreate = () => {
     setDrawerMode("create");
@@ -122,11 +123,11 @@ const RoutingGroups: React.FC = () => {
               <InputGroupInput
                 placeholder="Search groups..."
                 value={searchQuery}
-                onChange={(e) => void setSearchQuery(e.target.value)}
+                onChange={(e) => setSearchQuery(e.target.value)}
               />
               {searchQuery && (
                 <InputGroupAddon align="inline-end">
-                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => void setSearchQuery("")}>
+                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchQuery("")}>
                     <X />
                   </InputGroupButton>
                 </InputGroupAddon>

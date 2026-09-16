@@ -380,6 +380,15 @@ describe("AccessGroupDetail", () => {
       expect(screen.queryByText("model-1")).not.toBeInTheDocument();
     });
 
+    it("falls back to Models for an unknown detail_tab", () => {
+      renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />, {
+        searchParams: "?detail_tab=keys",
+      });
+
+      expect(screen.getByRole("tab", { name: /Models/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("model-1")).toBeInTheDocument();
+    });
+
     it("writes the clicked tab to detail_tab and drops it for Models", async () => {
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
