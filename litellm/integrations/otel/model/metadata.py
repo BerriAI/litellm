@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
 LANGFUSE_TRACE_NAME_HEADER: Final = "langfuse_trace_name"
+REQUESTER_METADATA_PATH: Final = "requester_metadata."
 
 
 @dataclass(frozen=True)

@@ -1684,7 +1684,7 @@ def test_pre_call_hook_promotes_nested_request_metadata_key():
     assert spans["redis set"].attributes[key] == "abc"
     assert data == {"model": "gpt-4o", "metadata": {"requester_metadata": {"trace_id": "abc", "nested": {"deep": "x"}}}}
     assert not any(
-        k.startswith(f"{LiteLLM.METADATA_PREFIX}requester_metadata") or k == f"{LiteLLM.METADATA_PREFIX}deep"
+        k.startswith(f"{LiteLLM.METADATA_PREFIX}requester_metadata") or k.endswith("deep")
         for s in spans.values()
         for k in s.attributes
     )
