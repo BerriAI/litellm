@@ -50,7 +50,7 @@ def validate_static_credential(
         )
     )
     values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
-    if values and all(_usable_credential_value(server.auth_type, name, value) for name, value in values):
+    if any(_usable_credential_value(server.auth_type, name, value) for name, value in values):
         return Ok(None)
     return Error(CredError.of_misconfigured(f"{server.auth_type} requires a usable upstream credential"))
 
