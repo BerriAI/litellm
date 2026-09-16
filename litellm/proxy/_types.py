@@ -3026,6 +3026,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_alias: str | None = None
     team_tpm_limit: int | None = None
     team_rpm_limit: int | None = None
+    team_max_parallel_requests: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_models: list = []
@@ -3045,6 +3046,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_id: str | None = None
     end_user_tpm_limit: int | None = None
     end_user_rpm_limit: int | None = None
+    end_user_max_parallel_requests: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: dict | None = None
 
@@ -3094,6 +3096,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
 
     api_key: str | None = None
     user_role: LitellmUserRoles | None = None
+    user_max_parallel_requests: int | None = None
     allowed_model_region: AllowedModelRegion | None = None
     parent_otel_span: Span | None = None
     rpm_limit_per_model: dict[str, int] | None = None

@@ -407,6 +407,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_rpm_limit is None:
                 user_rpm_limit = sys.maxsize
 
+            user_max_parallel_requests = getattr(user_api_key_dict, "user_max_parallel_requests", sys.maxsize)
+            if user_max_parallel_requests is None:
+                user_max_parallel_requests = sys.maxsize
+
             request_count_api_key = f"{user_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
             await self.check_key_in_limits(
@@ -414,7 +418,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
+                max_parallel_requests=user_max_parallel_requests, #TODO:Support max parallel requests for a user(has been implemented)
                 current=cache_objects["request_count_user_id"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=user_tpm_limit,
@@ -435,6 +439,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if team_rpm_limit is None:
                 team_rpm_limit = sys.maxsize
 
+            team_max_parallel_requests = getattr(user_api_key_dict, "team_max_parallel_requests", sys.maxsize)
+            if team_max_parallel_requests is None:
+                team_max_parallel_requests = sys.maxsize
+
             request_count_api_key = f"{team_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
             await self.check_key_in_limits(
@@ -442,7 +450,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a team
+                max_parallel_requests=team_max_parallel_requests,  # TODO: Support max parallel requests for a team(has been implemented)
                 current=cache_objects["request_count_team_id"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=team_tpm_limit,
@@ -462,6 +470,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if end_user_rpm_limit is None:
                 end_user_rpm_limit = sys.maxsize
 
+            end_user_max_parallel_requests = getattr(user_api_key_dict, "end_user_max_parallel_requests", sys.maxsize)
+            if end_user_max_parallel_requests is None:
+                end_user_max_parallel_requests = sys.maxsize
+
             # now do the same tpm/rpm checks
             request_count_api_key = f"{user_api_key_dict.end_user_id}::{precise_minute}::request_count"
 
@@ -471,7 +483,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for an End-User
+                max_parallel_requests=end_user_max_parallel_requests,  # TODO: Support max parallel requests for an End-User(has been implemented)
                 request_count_api_key=request_count_api_key,
                 current=cache_objects["request_count_end_user_id"],
                 tpm_limit=end_user_tpm_limit,
@@ -762,6 +774,58 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     ttl=60,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )  # save in cache for up to 1 min.
+
+                user_api_key_user_id = _metadata.get("user_api_key_user_id", None)
+                if user_api_key_user_id is not None:
+                    request_count_user = f"{user_api_key_user_id}::{precise_minute}::request_count"
+                    current_user = await self.internal_usage_cache.async_get_cache(
+                        key=request_count_user,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    ) or {"current_requests": 1, "current_tpm": 0, "current_rpm": 0}
+                    new_val_user = {
+                        "current_requests": max(current_user["current_requests"] - 1, 0),
+                        "current_tpm": current_user["current_tpm"],
+                        "current_rpm": current_user["current_rpm"],
+                    }
+                    await self.internal_usage_cache.async_set_cache(
+                        request_count_user, new_val_user, ttl=60,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
+
+                user_api_key_team_id = _metadata.get("user_api_key_team_id", None)
+                if user_api_key_team_id is not None:
+                    request_count_team = f"{user_api_key_team_id}::{precise_minute}::request_count"
+                    current_team = await self.internal_usage_cache.async_get_cache(
+                        key=request_count_team,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    ) or {"current_requests": 1, "current_tpm": 0, "current_rpm": 0}
+                    new_val_team = {
+                        "current_requests": max(current_team["current_requests"] - 1, 0),
+                        "current_tpm": current_team["current_tpm"],
+                        "current_rpm": current_team["current_rpm"],
+                    }
+                    await self.internal_usage_cache.async_set_cache(
+                        request_count_team, new_val_team, ttl=60,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
+
+                user_api_key_end_user_id = _metadata.get("user_api_key_end_user_id", None)
+                if user_api_key_end_user_id is not None:
+                    request_count_end_user = f"{user_api_key_end_user_id}::{precise_minute}::request_count"
+                    current_end_user = await self.internal_usage_cache.async_get_cache(
+                        key=request_count_end_user,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    ) or {"current_requests": 1, "current_tpm": 0, "current_rpm": 0}
+                    new_val_end_user = {
+                        "current_requests": max(current_end_user["current_requests"] - 1, 0),
+                        "current_tpm": current_end_user["current_tpm"],
+                        "current_rpm": current_end_user["current_rpm"],
+                    }
+                    await self.internal_usage_cache.async_set_cache(
+                        request_count_end_user, new_val_end_user, ttl=60,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
+                    
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 
