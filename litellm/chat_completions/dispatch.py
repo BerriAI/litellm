@@ -41,8 +41,10 @@ def _python_acompletion() -> PythonAcompletion:
     )
 
 
-_COMPLETION: Final = signature(_python_completion())
-_ACOMPLETION: Final = signature(_python_acompletion())
+_PYTHON_COMPLETION: Final = _python_completion()
+_COMPLETION: Final = signature(_PYTHON_COMPLETION)
+_PYTHON_ACOMPLETION: Final = _python_acompletion()
+_ACOMPLETION: Final = signature(_PYTHON_ACOMPLETION)
 
 
 def _public_request(
@@ -86,7 +88,7 @@ def completion(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public chat completions call shape
 ) -> ChatResult | Coroutine[object, object, ChatResult]:
-    python: Final = _python_completion()
+    python: Final = _PYTHON_COMPLETION
     return _DISPATCH.run(
         args,
         kwargs,
@@ -97,7 +99,7 @@ def completion(
 
 
 async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-ok: preserve the public call shape
-    python: Final = _python_acompletion()
+    python: Final = _PYTHON_ACOMPLETION
     return await _ADISPATCH.arun(
         args,
         kwargs,
@@ -116,7 +118,7 @@ def _context(request: LiteLLMChatCompletionsRequest) -> Context:
     )
 
 
-completion.__doc__ = _python_completion().__doc__
-completion.__wrapped__ = _python_completion()  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
-acompletion.__doc__ = _python_acompletion().__doc__
-acompletion.__wrapped__ = _python_acompletion()  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
+completion.__doc__ = _PYTHON_COMPLETION.__doc__
+completion.__wrapped__ = _PYTHON_COMPLETION  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
+acompletion.__doc__ = _PYTHON_ACOMPLETION.__doc__
+acompletion.__wrapped__ = _PYTHON_ACOMPLETION  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
