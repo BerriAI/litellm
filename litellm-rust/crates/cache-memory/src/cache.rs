@@ -154,7 +154,7 @@ impl<V: Clone> InMemoryCache<V> {
         while let Some(Reverse((expiration, key))) = state.expiration_heap.peek().cloned() {
             if state.expirations.get(&key).copied() != Some(expiration) {
                 state.expiration_heap.pop();
-            } else if expiration < now {
+            } else if expiration <= now {
                 state.expiration_heap.pop();
                 Self::remove(state, &key);
             } else {
