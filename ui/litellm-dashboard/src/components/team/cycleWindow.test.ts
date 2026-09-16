@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { describeCycleWindow } from "./cycleWindow";
 
 const formatDate = (iso: string): string => `formatted:${iso}`;
@@ -14,8 +14,13 @@ describe("describeCycleWindow", () => {
     ).toBe("Never resets");
   });
 
-  it("describes a budget without a reset date as never resetting", () => {
-    expect(describeCycleWindow({ budget_duration: "30d", budget_reset_at: null }, formatDate)).toBe("Never resets");
+  it("describes a budget with a pending reset date", () => {
+    const formatDateSpy = vi.fn(formatDate);
+
+    expect(describeCycleWindow({ budget_duration: "30d", budget_reset_at: null }, formatDateSpy)).toBe(
+      "Resets every 30d",
+    );
+    expect(formatDateSpy).not.toHaveBeenCalled();
   });
 
   it("describes the reset date and duration", () => {
