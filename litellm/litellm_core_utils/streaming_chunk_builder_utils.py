@@ -5,7 +5,6 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
 
-from pydantic import BaseModel
 from typing_extensions import ReadOnly, Required
 
 from litellm._logging import verbose_logger
@@ -974,12 +973,10 @@ class ChunkProcessor:
                 return None
 
     @staticmethod
-    def _chunk_choices(chunk: "_UsageBearingChunk | BaseModel") -> Sequence[object]:
+    def _chunk_choices(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Sequence[object]:
         if isinstance(chunk, dict):
             return chunk.get("choices", ())
-        if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-            return chunk.choices
-        return ()
+        return getattr(chunk, "choices", ())
 
     @staticmethod
     def _saw_finish_reason(chunks: Sequence["_UsageBearingChunk | ModelResponse"]) -> bool:
@@ -1099,19 +1096,22 @@ class ChunkProcessor:
 
         if reasoning_tokens is not None:
             if returned_usage.completion_tokens_details is None:
+                capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
                 returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
-                    reasoning_tokens=reasoning_tokens,
-                    text_tokens=max(0, returned_usage.completion_tokens - reasoning_tokens),
+                    reasoning_tokens=capped_reasoning_tokens,
+                    text_tokens=returned_usage.completion_tokens - capped_reasoning_tokens,
                 )
             elif (
                 returned_usage.completion_tokens_details is not None
                 and returned_usage.completion_tokens_details.reasoning_tokens is None
             ):
-                capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
-                returned_usage.completion_tokens_details.reasoning_tokens = capped_reasoning_tokens
+                existing_capped_reasoning_tokens: Final = min(
+                    max(0, reasoning_tokens), returned_usage.completion_tokens
+                )
+                returned_usage.completion_tokens_details.reasoning_tokens = existing_capped_reasoning_tokens
                 if returned_usage.completion_tokens_details.text_tokens is None:
                     returned_usage.completion_tokens_details.text_tokens = (
-                        returned_usage.completion_tokens - capped_reasoning_tokens
+                        returned_usage.completion_tokens - existing_capped_reasoning_tokens
                     )
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
