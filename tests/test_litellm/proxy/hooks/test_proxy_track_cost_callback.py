@@ -266,6 +266,43 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/guardrails/apply_guardrail", "/apply_guardrail"])
+async def test_async_post_call_failure_hook_writes_failure_row_for_blocked_apply_guardrail(route):
+    """A direct apply_guardrail call blocked by the guardrail must land as a failure spend
+    row billed with the guardrail cost, like a blocked chat completion does."""
+    logger = _ProxyDBLogger()
+    request_data = {
+        "guardrail_name": "bedrock-guard",
+        "metadata": {
+            "standard_logging_guardrail_information": [
+                {
+                    "guardrail_name": "bedrock-guard",
+                    "guardrail_status": "guardrail_intervened",
+                    "guardrail_cost": 0.0003,
+                }
+            ]
+        },
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Violated guardrail policy"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route=route),
+        )
+
+        call_args = mock_update_database.call_args[1]
+        assert call_args["response_cost"] == pytest.approx(0.0003)
+        metadata = call_args["kwargs"]["litellm_params"]["metadata"]
+        assert metadata["status"] == "failure"
+        assert metadata["standard_logging_guardrail_information"][0]["guardrail_status"] == "guardrail_intervened"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_releases_budget_reservation_before_route_skip():
     logger = _ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}

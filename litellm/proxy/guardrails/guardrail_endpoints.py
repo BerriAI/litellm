@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2243,6 +2244,19 @@ class _GuardrailProxyLogging(Protocol):
     def post_call_success_hook(self) -> "Callable[..., Awaitable[object]]": ...
 
 
+def _build_guardrail_request_data(data: dict, request: ApplyGuardrailRequest) -> dict:
+    """Proxy request dict (carries `litellm_logging_obj` and proxy metadata, so the guardrail's
+    `standard_logging_guardrail_information` reaches spend logs) with the caller's messages and
+    metadata layered on top."""
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(data)
+    proxy_metadata: Final = data.get(metadata_key)
+    return {
+        **data,
+        **({"messages": request.messages} if request.messages is not None else {}),
+        metadata_key: {**(proxy_metadata if isinstance(proxy_metadata, dict) else {}), **(request.metadata or {})},
+    }
+
+
 def _patch_logging_obj_for_guardrail(litellm_logging_obj: _GuardrailLoggingObj, request: ApplyGuardrailRequest) -> None:
     """Configure the logging object so Langfuse/OTEL extract input and output correctly."""
     litellm_logging_obj.call_type = "pass_through_endpoint"
@@ -2377,20 +2391,17 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: Final[dict] = {
-            **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
-        }
+        data = _build_guardrail_request_data(data, request)
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
-            request_data=request_data,
+            request_data=data,
             input_type=_input_type,
         )
         response_text: Final = guardrailed_inputs.get("texts", [])
         response = ApplyGuardrailResponse(response_text=response_text[0] if response_text else request.text)
     except Exception as e:
-        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+        if litellm_logging_obj is not None:
             try:
                 await litellm_logging_obj.async_failure_handler(
                     exception=e,

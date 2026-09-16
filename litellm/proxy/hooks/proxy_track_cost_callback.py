@@ -155,7 +155,9 @@ class _ProxyDBLogger(CustomLogger):
             _ProxyDBLogger._should_track_errors_in_db() is False
             or request_route is not None
             and not (
-                RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
+                RouteChecks.is_llm_api_route(route=request_route)
+                or RouteChecks.is_info_route(route=request_route)
+                or RouteChecks.is_apply_guardrail_route(route=request_route)
             )
         ):
             return

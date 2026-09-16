@@ -464,6 +464,10 @@ class RouteChecks:
         return route in LiteLLMRoutes.info_routes.value
 
     @staticmethod
+    def is_apply_guardrail_route(route: str) -> bool:
+        return route in LiteLLMRoutes.apply_guardrail_routes.value
+
+    @staticmethod
     def _is_azure_openai_route(route: str) -> bool:
         """
         Check if route is a route from AzureOpenAI SDK client

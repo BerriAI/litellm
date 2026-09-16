@@ -1559,6 +1559,67 @@ async def test_apply_guardrail_execution_error(mocker):
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_blocked_by_guardrail_runs_failure_logging(mocker):
+    """A guardrail block surfaces as HTTPException; it must still reach the LiteLLM failure
+    handlers and hand post_call_failure_hook the request data the guardrail stamped
+    guardrail information onto, so the block lands as a failure spend row."""
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    guardrail_info = {"guardrail_name": "test-guardrail", "guardrail_status": "guardrail_intervened"}
+
+    async def _block(inputs, request_data, input_type):
+        request_data["metadata"]["standard_logging_guardrail_information"] = [guardrail_info]
+        raise HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+
+    mock_guardrail = mocker.Mock()
+    mock_guardrail.apply_guardrail = AsyncMock(side_effect=_block)
+    mock_registry = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
+    )
+
+    mock_logging_obj = mocker.Mock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
+    mock_logging_obj.model_call_details = {}
+    mock_processor = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=(
+            {"guardrail_name": "test-guardrail", "metadata": {"user_api_key_hash": "hash-1"}},
+            mock_logging_obj,
+        )
+    )
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mock_executor = mocker.Mock()
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor", mock_executor)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await apply_guardrail(
+            fastapi_request=mocker.Mock(),
+            request=ApplyGuardrailRequest(guardrail_name="test-guardrail", text="blocked text"),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    assert str(exc_info.value.code) == "400"
+    mock_logging_obj.async_failure_handler.assert_awaited_once()
+    assert isinstance(mock_logging_obj.async_failure_handler.await_args.kwargs["exception"], HTTPException)
+    mock_executor.submit.assert_called_once()
+    assert mock_executor.submit.call_args.args[0] is mock_logging_obj.failure_handler
+    hook_request_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    assert hook_request_data["metadata"]["standard_logging_guardrail_information"] == [guardrail_info]
+    assert hook_request_data["metadata"]["user_api_key_hash"] == "hash-1"
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     mock_guardrail = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["masked"]})
@@ -1612,7 +1673,7 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
-def _patch_apply_guardrail_env(mocker, guardrail_result):
+def _patch_apply_guardrail_env(mocker, guardrail_result, pre_call_data=None):
     mock_guardrail = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
 
@@ -1627,7 +1688,10 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     mock_logging_obj.model_call_details = {}
     mock_processor = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+        return_value=(
+            pre_call_data if pre_call_data is not None else {"guardrail_name": "test-guardrail"},
+            mock_logging_obj,
+        )
     )
     mocker.patch(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
@@ -1662,11 +1726,11 @@ async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["What are tax loopholes?"]},
-        request_data={"metadata": {"forbidden_topics": ["tax"]}},
-        input_type="request",
-    )
+    kwargs = mock_guardrail.apply_guardrail.await_args.kwargs
+    assert kwargs["inputs"] == {"texts": ["What are tax loopholes?"]}
+    assert kwargs["input_type"] == "request"
+    assert kwargs["request_data"]["metadata"] == {"forbidden_topics": ["tax"]}
+    assert "messages" not in kwargs["request_data"]
 
 
 @pytest.mark.asyncio
@@ -1688,33 +1752,39 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["What are tax loopholes?"]},
-        request_data={
-            "messages": messages,
-            "metadata": {"forbidden_topics": ["tax"]},
-        },
-        input_type="request",
-    )
+    request_data = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]
+    assert request_data["messages"] == messages
+    assert request_data["metadata"] == {"forbidden_topics": ["tax"]}
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
-    """Without metadata, request_data stays empty (backward-compatible)."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+async def test_apply_guardrail_request_data_carries_proxy_metadata_and_logging_obj(mocker):
+    """The guardrail must see the proxy request data (logging obj + proxy metadata) so the
+    standard_logging_guardrail_information it stamps reaches spend logs; caller metadata
+    is layered on top without dropping proxy keys."""
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker,
+        {"texts": ["ok"]},
+        pre_call_data={
+            "guardrail_name": "test-guardrail",
+            "metadata": {"user_api_key_hash": "hash-1", "route": "/apply_guardrail"},
+            "litellm_logging_obj": "logging-obj-sentinel",
+        },
+    )
 
-    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail", text="hello", metadata={"route": "caller-wins"}
+    )
     await apply_guardrail(
         fastapi_request=mocker.Mock(),
         request=request,
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["hello"]},
-        request_data={},
-        input_type="request",
-    )
+    request_data = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]
+    assert request_data["litellm_logging_obj"] == "logging-obj-sentinel"
+    assert request_data["metadata"] == {"user_api_key_hash": "hash-1", "route": "caller-wins"}
+    assert "messages" not in request_data
 
 
 @pytest.mark.asyncio
@@ -1735,11 +1805,9 @@ async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(moc
         user_api_key_dict=UserAPIKeyAuth(),
     )
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["hello"]},
-        request_data={"messages": [], "metadata": {}},
-        input_type="request",
-    )
+    request_data = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]
+    assert request_data["messages"] == []
+    assert request_data["metadata"] == {}
 
 
 @pytest.mark.asyncio
