@@ -38,6 +38,7 @@ from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.utils import (
     CallTypes,
+    Choices,
     Delta,
     LlmProviders,
     ModelResponse,
@@ -4443,17 +4444,19 @@ async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_ob
 class _RewritingSuccessDeploymentHook(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.seen_responses: list[object] = []
+        self.seen_responses: tuple[object, ...] = ()
 
     async def async_post_call_success_deployment_hook(
         self, request_data: dict[str, object], response: object, call_type: CallTypes | None
     ) -> ModelResponse | None:
-        self.seen_responses.append(response)
+        self.seen_responses = (*self.seen_responses, response)
         if not isinstance(response, ModelResponse):
             return None
-        rewritten: Final = response.model_copy(deep=True)
-        rewritten.choices[0].message.content = "rewritten by deployment hook"
-        return rewritten
+        choice: Final = response.choices[0]
+        if not isinstance(choice, Choices):
+            return None
+        rewritten_message: Final = choice.message.model_copy(update={"content": "rewritten by deployment hook"})
+        return response.model_copy(update={"choices": [choice.model_copy(update={"message": rewritten_message})]})
 
 
 @pytest.mark.asyncio
@@ -4503,7 +4506,7 @@ async def test_converted_chat_stream_hook_skips_unhandled_wrappers(
         result=wrapper, request_data={"model": "gpt-5.6"}, call_type=call_type
     )
 
-    assert hook.seen_responses == []
+    assert hook.seen_responses == ()
     assert wrapper.completion_stream is completion_stream
 
 
@@ -4532,7 +4535,7 @@ async def test_wrapper_async_leaves_success_deployment_hook_off_requested_fake_s
     assert isinstance(response.completion_stream, MockResponseIterator)
     chunks: Final = [chunk async for chunk in response]
 
-    assert hook.seen_responses == []
+    assert hook.seen_responses == ()
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "plain stream body"
 
 
