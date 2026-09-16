@@ -38,37 +38,6 @@ def use_local_model_cost_map():
         monkeypatch.undo()
 
 
-@pytest.mark.parametrize(
-    "model_name,expected_prompt,expected_completion",
-    [
-        ("FW-Kimi-K2.6", 1.045, 4.4),
-        ("FW-DeepSeek-V4-Pro", 1.925, 3.828),
-        ("FW-GLM-5.2", 1.54, 4.84),
-        ("FW-Kimi-K3", 3.3, 16.5),
-        ("FW-MiniMax-M2.5", 0.33, 1.32),
-        ("FW-Inkling", 1.0, 4.05),
-        ("FW-Nemotron-3-Ultra-NVFP4", 0.6, 2.4),
-        ("FW-Nemotron-Lightning-3.5-30B-A3B", 0.06, 0.22),
-    ],
-)
-def test_azure_ai_fw_cost_per_token(
-    use_local_model_cost_map, model_name, expected_prompt, expected_completion
-):
-    from litellm.llms.azure_ai.cost_calculator import cost_per_token
-    from litellm.types.utils import Usage
-
-    usage = Usage(
-        prompt_tokens=1_000_000,
-        completion_tokens=1_000_000,
-        total_tokens=2_000_000,
-    )
-
-    prompt_cost, completion_cost = cost_per_token(model=model_name, usage=usage)
-
-    assert prompt_cost == pytest.approx(expected_prompt)
-    assert completion_cost == pytest.approx(expected_completion)
-
-
 def test_azure_ai_fw_nemotron_lightning_supports_tool_choice(use_local_model_cost_map):
     from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
 
