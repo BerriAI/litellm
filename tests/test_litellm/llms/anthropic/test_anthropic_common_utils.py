@@ -1886,6 +1886,105 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert out[1]["content"][0]["tool_use_id"] == "functions_Bash_0"
         assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
+    def test_sanitize_tool_use_ids_skips_non_anthropic_api_base(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "functions.Bash:0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "functions.Bash:0",
+                        "content": "ok",
+                    }
+                ],
+            },
+        ]
+        out = sanitize_tool_use_ids_in_anthropic_messages(
+            msgs, api_base="http://127.0.0.1:8000/v1", custom_llm_provider="anthropic"
+        )
+        assert out is msgs
+        assert out[0]["content"][0]["id"] == "functions.Bash:0"
+        assert out[1]["content"][0]["tool_use_id"] == "functions.Bash:0"
+
+    def test_sanitize_tool_use_ids_uses_url_hostname_not_query_string(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "functions.Bash:0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            }
+        ]
+        out = sanitize_tool_use_ids_in_anthropic_messages(
+            msgs,
+            api_base="http://vllm:8000/v1?x=api.anthropic.com",
+            custom_llm_provider="anthropic",
+        )
+        assert out is msgs
+        assert out[0]["content"][0]["id"] == "functions.Bash:0"
+
+    def test_sanitize_tool_use_ids_still_runs_for_anthropic_hosts(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "functions.Bash:0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            }
+        ]
+        still_sanitize = (
+            ("anthropic", "", None),
+            ("anthropic", "https://api.anthropic.com", None),
+            ("azure_ai", "https://myres.services.ai.azure.com/anthropic", None),
+            ("github_copilot", "https://api.githubcopilot.com", None),
+            ("bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com", None),
+            ("vertex_ai", "https://us-east5-aiplatform.googleapis.com", None),
+            (None, "https://myres.services.ai.azure.com/anthropic", "azure_ai/claude-sonnet-4-5"),
+            (None, "https://api.githubcopilot.com", "github_copilot/claude-sonnet-4-5"),
+        )
+        for custom_llm_provider, api_base, model in still_sanitize:
+            out = sanitize_tool_use_ids_in_anthropic_messages(
+                msgs,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+            )
+            assert out[0]["content"][0]["id"] == "functions_Bash_0", (custom_llm_provider, api_base, model)
+            assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
     def test_normalize_anthropic_tool_use_id_strips_thought_signature(self):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             THOUGHT_SIGNATURE_SEPARATOR,
