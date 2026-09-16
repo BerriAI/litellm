@@ -2023,10 +2023,23 @@ def test_stream_spend_prices_vertex_anthropic_cache_read_tokens():
     assert token_total > 0
 
     # A leftover usage.cost=0 must not override token-based stream spend.
+    # Production path: stream_chunk_builder stamps hidden response_cost from usage.cost.
     usage.cost = 0
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(
-        complete_response, "vertex_ai"
+    logging_for_builder = Logging(
+        model="claude-opus-5",
+        messages=[{"role": "user", "content": "count to five"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="stream-spend-cache-read-builder",
+        function_id="1245",
     )
+    logging_for_builder.model_call_details["custom_llm_provider"] = "vertex_ai"
+    logging_for_builder.optional_params = {}
+    from litellm.main import _set_stream_builder_response_cost
+
+    _set_stream_builder_response_cost(complete_response, logging_for_builder)
+    assert complete_response._hidden_params.get("response_cost") is None
     assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
 
     stream_spend = _stream_spend_via_logging(
