@@ -69,6 +69,7 @@ class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
     """Audit record for deleted keys; mirrors the token plus deletion metadata."""
 
     id: str | None = None
+    organization_id: str | None = None
     deleted_at: datetime | None = None
     deleted_by: str | None = None
     deleted_by_api_key: str | None = None
