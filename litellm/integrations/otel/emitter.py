@@ -1,15 +1,18 @@
 """The span engine: dedup, start, run the mapper chain, set status, end."""
 
 from collections import OrderedDict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from opentelemetry.context import Context
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.mappers import resolve_mappers
-from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
+from litellm.integrations.otel.mappers.base import AttributeMapper, AttrValue, SpanData
+from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
@@ -52,25 +55,32 @@ _NAME_BUILDERS: Final[dict[SpanRole, Callable[..., str]]] = {
 _DEDUP_CACHE_MAX: Final = 10_000
 
 
-def _stamp_otel_error_attributes(span: Span, error_type: str, resolved_message: str) -> None:
-    """Stamp the OTel-semconv error attributes (``error.type`` + ``error.message``).
-    ``error_type`` and ``resolved_message`` are ``finish_span``'s already-computed
-    fallback chains, so the pair on the status, event, and attributes stays in
-    lockstep."""
-    span.set_attribute(Error.TYPE, error_type)
-    span.set_attribute(Error.MESSAGE, resolved_message)
+def _resolve_error(error: SpanError) -> tuple[str, str] | None:
+    """The ``(error_type, message)`` fallback chain shared by the status, the event and the attributes, or
+    ``None`` when ``error`` carries neither a type nor a message."""
+    if not (error.error_type or error.message):
+        return None
+    return error.error_type or "error", error.message or error.error_type or "error"
 
 
-def _stamp_litellm_error_attributes(span: Span, error: SpanError) -> None:
-    """Stamp litellm-specific error detail attributes. Emitted only when the
-    corresponding field is populated so guardrail-shape errors carrying only a
-    message aren't polluted with empty detail keys."""
-    if error.code:
-        span.set_attribute(LiteLLMError.CODE, error.code)
-    if error.stack_trace:
-        span.set_attribute(LiteLLMError.STACK_TRACE, error.stack_trace)
-    if error.llm_provider:
-        span.set_attribute(LiteLLMError.LLM_PROVIDER, error.llm_provider)
+_NO_ATTRIBUTES: Final[Mapping[str, AttrValue]] = MappingProxyType({})
+
+
+def error_attributes(error: SpanError) -> Mapping[str, AttrValue]:
+    """The v2 error attribute set: the OTel-semconv ``error.*`` pair plus the litellm detail keys that are
+    populated, so guardrail-shape errors carrying only a message aren't polluted with empty detail keys."""
+    resolved: Final = _resolve_error(error)
+    if resolved is None:
+        return _NO_ATTRIBUTES
+    error_type, message = resolved
+    pairs: Final = (
+        (Error.TYPE, error_type),
+        (Error.MESSAGE, message),
+        (LiteLLMError.CODE, error.code),
+        (LiteLLMError.STACK_TRACE, error.stack_trace),
+        (LiteLLMError.LLM_PROVIDER, error.llm_provider),
+    )
+    return MappingProxyType({key: value for key, value in pairs if value})
 
 
 def stamp_error(
@@ -93,12 +103,12 @@ def stamp_error(
     ``set_status`` are opt-outs for callers whose span lifecycle (``use_span``) or
     owner (the FastAPI instrumentor) already records the event or the status.
     """
-    if not (error.error_type or error.message):
+    resolved: Final = _resolve_error(error)
+    if resolved is None:
         return None
-    error_type: Final = error.error_type or "error"
-    message: Final = error.message or error.error_type or "error"
-    _stamp_otel_error_attributes(span, error_type, message)
-    _stamp_litellm_error_attributes(span, error)
+    error_type, message = resolved
+    for key, value in error_attributes(error).items():
+        span.set_attribute(key, value)
     if set_status:
         span.set_status(Status(StatusCode.ERROR, message))
     if record_event:
@@ -116,10 +126,14 @@ class SpanEmitter:
         config: OpenTelemetryV2Config,
         mappers: Sequence[AttributeMapper] | None = None,
         event_recorder: GenAIEventRecorder | None = None,
+        span_attribute_limit: int | None = None,
     ) -> None:
         self._tracer = tracer
         self._config = config
         self._event_recorder = event_recorder
+        self._span_attribute_limit: int | None = (
+            SpanLimits().max_span_attributes if span_attribute_limit is None else span_attribute_limit
+        )
         # The mapper chain is the sole source of span attributes. When not
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
@@ -238,9 +252,6 @@ class SpanEmitter:
         data, since the boundary opener only has a provisional name.
         """
         span.update_name(_NAME_BUILDERS[role](data))
-        for mapper in self._mappers:
-            for key, value in mapper.map(data).items():
-                span.set_attribute(key, value)
         error: Final = (
             data.error
             if isinstance(
@@ -255,6 +266,12 @@ class SpanEmitter:
             )
             else None
         )
+        mapped: Final = MappingProxyType(
+            {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
+        )
+        reserved: Final = len(error_attributes(error)) if error else 0
+        for key, value in fit_indexed_messages(mapped, self._attribute_budget(span, reserved)).items():
+            span.set_attribute(key, value)
         if error:
             stamped: Final = stamp_error(span, error)
             if stamped is not None and self._event_recorder is not None and role is SpanRole.LLM_CALL:
@@ -271,3 +288,10 @@ class SpanEmitter:
         # span-level health signal litellm doesn't actually evaluate. Only a
         # genuine error sets a status.
         span.end(end_time=end_time_ns)
+
+    def _attribute_budget(self, span: Span, reserved: int) -> int | None:
+        """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more."""
+        if self._span_attribute_limit is None:
+            return None
+        on_span: Final = len(span.attributes or ()) if isinstance(span, ReadableSpan) else 0
+        return self._span_attribute_limit - on_span - reserved

@@ -7,6 +7,7 @@ import pytest
 
 pytest.importorskip("opentelemetry")
 
+from opentelemetry.sdk.trace import SpanLimits  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
@@ -19,10 +20,7 @@ from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
-from litellm.integrations.otel.mappers.utils import (  # noqa: E402
-    MAX_MESSAGE_ATTRS_PER_SPAN,
-    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
-)
+from litellm.integrations.otel.mappers.utils import MAX_TOOL_DEFINITION_ATTRS_PER_SPAN  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
@@ -127,9 +125,7 @@ def test_llm_call_span_golden():
 
 def test_legacy_dual_emit_on():
     engine, exporter = _engine(legacy_compat=True)
-    engine.emit(
-        SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload())
-    )
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload()))
     (span,) = exporter.get_finished_spans()
     # canonical AND legacy keys are both present
     assert span.attributes[GenAI.USAGE_OUTPUT_TOKENS] == 5
@@ -139,9 +135,7 @@ def test_legacy_dual_emit_on():
 
 def test_legacy_dual_emit_off():
     engine, exporter = _engine(legacy_compat=False)
-    engine.emit(
-        SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload())
-    )
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload()))
     (span,) = exporter.get_finished_spans()
     # canonical present, legacy absent
     assert span.attributes[GenAI.USAGE_OUTPUT_TOKENS] == 5
@@ -155,9 +149,7 @@ def test_error_span_sets_status_and_error_type():
         status="failure",
         error_information={"error_class": "RateLimitError", "error_message": "429"},
     )
-    engine.emit(
-        SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload)
-    )
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload))
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["error.type"] == "RateLimitError"
@@ -209,15 +201,11 @@ def test_hierarchy_and_kinds_match_registry():
     root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
     root_ctx = ctx_mod.context_from_span(root)
     engine.emit(SpanRole.LLM_CALL, data, parent_context=root_ctx)
-    engine.emit(
-        SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx
-    )
+    engine.emit(SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx)
     # An outbound datastore call (DB_CALL) and an internal service call differ in
     # span kind; both are named "{service} {call_type}".
     engine.emit(SpanRole.DB_CALL, ServiceSpanData("redis", call_type="set"), root_ctx)
-    engine.emit(
-        SpanRole.SERVICE, ServiceSpanData("router", call_type="acompletion"), root_ctx
-    )
+    engine.emit(SpanRole.SERVICE, ServiceSpanData("router", call_type="acompletion"), root_ctx)
     root.end()
 
     by_name = {s.name: s for s in exporter.get_finished_spans()}
@@ -255,9 +243,7 @@ def test_dedup_cache_is_bounded(monkeypatch):
     for i in range(10):
         engine.emit(
             SpanRole.LLM_CALL,
-            LLMCallSpanData.from_standard_logging_payload(
-                _payload(litellm_call_id=f"call_{i}")
-            ),
+            LLMCallSpanData.from_standard_logging_payload(_payload(litellm_call_id=f"call_{i}")),
         )
     assert len(engine._emitted) <= 3
 
@@ -268,9 +254,7 @@ def test_service_error_span():
     engine, exporter = _engine()
     engine.emit(
         SpanRole.SERVICE,
-        ServiceSpanData(
-            "postgres", call_type="query", error=SpanError("DBError", "boom")
-        ),
+        ServiceSpanData("postgres", call_type="query", error=SpanError("DBError", "boom")),
     )
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
@@ -305,9 +289,7 @@ def test_guardrail_success_span_is_unset():
     engine, exporter = _engine()
     engine.emit(
         SpanRole.GUARDRAIL,
-        GuardrailSpanData.from_logging_entry(
-            {"guardrail_name": "g", "guardrail_status": "success"}
-        ),
+        GuardrailSpanData.from_logging_entry({"guardrail_name": "g", "guardrail_status": "success"}),
     )
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.UNSET
@@ -396,11 +378,7 @@ def _tool_span(mapper_names, tool_count):
 
 
 def _tool_definition_keys(attributes):
-    return [
-        key
-        for key in attributes
-        if key.startswith(("gen_ai.tool.", "llm.request.functions.", "llm.tools."))
-    ]
+    return [key for key in attributes if key.startswith(("gen_ai.tool.", "llm.request.functions.", "llm.tools."))]
 
 
 @pytest.mark.parametrize(
@@ -479,37 +457,49 @@ def _conversation_span(mapper_names, payload, legacy_compat=False):
     return span
 
 
-def _indexed_message_count(attributes, prefix):
-    return len({key.split(".")[2] for key in attributes if key.startswith(f"{prefix}.")})
+def _indexed_messages(attributes, prefix):
+    return sorted({int(key.split(".")[2]) for key in attributes if key.startswith(f"{prefix}.")})
 
 
-@pytest.mark.parametrize("turns", [60, 200])
-def test_long_conversation_does_not_evict_core_attributes(turns):
-    """Per-message OpenInference attributes must never crowd core telemetry off the span."""
-    span = _conversation_span(["genai", "openinference"], _conversation_payload(turns))
+def _assert_core_intact(span):
     a = span.attributes
-
     assert span.dropped_attributes == 0
     assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
     assert a[GenAI.PROVIDER_NAME] == "openai"
     assert a[GenAI.USAGE_INPUT_TOKENS] == 10
     assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
-    assert a[GenAI.RESPONSE_FINISH_REASONS] == ("stop",)
+    assert set(a[GenAI.RESPONSE_FINISH_REASONS]) == {"stop"}
     assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
 
-    assert a["llm.input_messages.0.message.content"] == "turn 0"
-    assert a["llm.output_messages.0.message.content"] == "reply 0"
+
+@pytest.mark.parametrize("turns", [60, 200])
+def test_long_conversation_does_not_evict_core_attributes(turns):
+    """Per-message OpenInference attributes fill the span's headroom and never crowd core telemetry off it."""
+    span = _conversation_span(["genai", "openinference"], _conversation_payload(turns))
+    _assert_core_intact(span)
+    a = span.attributes
+    limit = SpanLimits().max_span_attributes
+
+    assert limit - 1 <= len(a) <= limit
+    indexed = _indexed_messages(a, "llm.input_messages")
+    assert 1 < len(indexed) < turns
+    assert indexed[0] == 0
+    assert indexed[1:] == list(range(indexed[1], turns))
     assert a[f"llm.input_messages.{turns - 1}.message.content"] == f"turn {turns - 1}"
-    assert f"llm.input_messages.{turns // 2}.message.role" not in a
+    assert a["llm.output_messages.0.message.content"] == "reply 0"
     assert len(json.loads(a["input.value"])) == turns
     assert len(json.loads(a["output.value"])) == 1
     assert len(json.loads(a[GenAI.INPUT_MESSAGES])) == turns
 
 
-def test_short_conversation_keeps_every_message_indexed():
-    """Below the cap nothing is truncated in either direction."""
-    a = _conversation_span(["genai", "openinference"], _conversation_payload(4, choices=2)).attributes
-    for idx in range(4):
+@pytest.mark.parametrize("turns", [4, 8, 40])
+def test_conversation_that_fits_the_span_keeps_every_message_indexed(turns):
+    """No per-index message is shed while the span has room for all of them."""
+    span = _conversation_span(["genai", "openinference"], _conversation_payload(turns, choices=2))
+    _assert_core_intact(span)
+    a = span.attributes
+    for idx in range(turns):
+        assert a[f"llm.input_messages.{idx}.message.role"] == ("user", "assistant")[idx % 2]
         assert a[f"llm.input_messages.{idx}.message.content"] == f"turn {idx}"
     for idx in range(2):
         assert a[f"llm.output_messages.{idx}.message.content"] == f"reply {idx}"
@@ -535,28 +525,105 @@ def test_indexed_prompt_keeps_opener_and_latest_turns_under_a_value_length_limit
     assert a["llm.input_messages.59.message.role"] == "user"
     assert a["llm.input_messages.59.message.content"] == "LATEST-TURN"
     assert a["llm.output_messages.0.message.content"] == "reply 0"
-    assert [int(key.split(".")[2]) for key in a if key.endswith("message.content") and key.startswith("llm.input_")] == [
-        0,
-        *range(54, 60),
-    ]
+    indexed = _indexed_messages(a, "llm.input_messages")
+    assert indexed[0] == 0 and indexed[-1] == 59 and len(indexed) < 60
+    assert indexed[1:] == list(range(indexed[1], 60))
 
 
-def test_message_cap_is_shared_across_input_and_output():
-    """One span-wide allowance covers both directions, and the response always keeps a share."""
+def test_prompt_turns_are_shed_before_response_choices():
+    """Under pressure the middle of the prompt goes first; every response choice keeps its keys."""
     long_prompt = _conversation_span(["genai", "openinference"], _conversation_payload(60, choices=1)).attributes
-    many_choices = _conversation_span(["genai", "openinference"], _conversation_payload(60, choices=20)).attributes
+    many_choices = _conversation_span(["genai", "openinference"], _conversation_payload(60, choices=20))
+    _assert_core_intact(many_choices)
 
-    single_reply_indexed = _indexed_message_count(long_prompt, "llm.output_messages")
-    assert single_reply_indexed == 1
-    assert _indexed_message_count(long_prompt, "llm.input_messages") + single_reply_indexed == (
-        MAX_MESSAGE_ATTRS_PER_SPAN // 2
+    assert _indexed_messages(long_prompt, "llm.output_messages") == [0]
+    assert _indexed_messages(many_choices.attributes, "llm.output_messages") == list(range(20))
+    assert (
+        1
+        < len(_indexed_messages(many_choices.attributes, "llm.input_messages"))
+        < len(_indexed_messages(long_prompt, "llm.input_messages"))
     )
 
-    assert _indexed_message_count(many_choices, "llm.input_messages") > 0
-    assert _indexed_message_count(many_choices, "llm.output_messages") > single_reply_indexed
-    assert _indexed_message_count(many_choices, "llm.input_messages") + _indexed_message_count(
-        many_choices, "llm.output_messages"
-    ) == (MAX_MESSAGE_ATTRS_PER_SPAN // 2)
+
+def test_indexed_messages_respect_a_lower_span_attribute_count_limit(monkeypatch):
+    """The budget follows the SDK's configured limit, not a hardcoded default."""
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "48")
+    span = _conversation_span(["genai", "openinference"], _conversation_payload(60))
+    _assert_core_intact(span)
+    a = span.attributes
+    assert 47 <= len(a) <= 48
+    assert a["llm.input_messages.0.message.content"] == "turn 0"
+    assert a["llm.input_messages.59.message.content"] == "turn 59"
+    assert a["llm.output_messages.0.message.content"] == "reply 0"
+
+
+def test_a_tight_span_keeps_the_reply_and_newest_turn_before_the_opener(monkeypatch):
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    full = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    unindexed = [key for key in full if not key.startswith(("llm.input_messages.", "llm.output_messages."))]
+
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(unindexed) + 4))
+    a = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    assert _indexed_messages(a, "llm.output_messages") == [0]
+    assert _indexed_messages(a, "llm.input_messages") == [5]
+
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(unindexed) + 2))
+    a = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    assert _indexed_messages(a, "llm.output_messages") == [0]
+    assert _indexed_messages(a, "llm.input_messages") == []
+
+
+def test_shedding_stops_exactly_at_the_limit(monkeypatch):
+    """A span that fits exactly sheds nothing, and shedding never takes one pair more than the excess needs."""
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    full = dict(_conversation_span(["genai", "openinference"], _conversation_payload(30)).attributes)
+    assert _indexed_messages(full, "llm.input_messages") == list(range(30))
+
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(full)))
+    exact = _conversation_span(["genai", "openinference"], _conversation_payload(30))
+    assert exact.dropped_attributes == 0
+    assert dict(exact.attributes) == full
+
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(full) - 2))
+    tight = _conversation_span(["genai", "openinference"], _conversation_payload(30))
+    assert tight.dropped_attributes == 0
+    assert len(tight.attributes) == len(full) - 2
+    assert _indexed_messages(tight.attributes, "llm.input_messages") == [0, *range(2, 30)]
+
+
+def test_error_and_pre_stamped_attributes_keep_their_room_on_a_long_conversation():
+    """Attributes already on the span and the error set stamped after mapping both count against the budget."""
+    cfg = OpenTelemetryV2Config(exporter="in_memory", mapper_names=["genai", "openinference"])
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span = engine.start_span(SpanRole.LLM_CALL, "chat")
+    for idx in range(10):
+        span.set_attribute(f"litellm.metadata.baggage_{idx}", f"value {idx}")
+    payload = _conversation_payload(
+        60,
+        status="failure",
+        error_information={
+            "error_class": "RateLimitError",
+            "error_message": "429",
+            "error_code": "429",
+            "llm_provider": "openai",
+            "traceback": "tb",
+        },
+    )
+    engine.finish_span(
+        SpanRole.LLM_CALL, span, LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+    )
+    (s,) = exporter.get_finished_spans()
+    a = s.attributes
+
+    assert s.dropped_attributes == 0
+    assert len(a) <= SpanLimits().max_span_attributes
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a["litellm.metadata.baggage_0"] == "value 0"
+    assert a["error.type"] == "RateLimitError"
+    assert a["litellm.provider.error.stack_trace"] == "tb"
+    assert a["llm.input_messages.0.message.content"] == "turn 0"
+    assert a["llm.input_messages.59.message.content"] == "turn 59"
 
 
 def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_limit():
