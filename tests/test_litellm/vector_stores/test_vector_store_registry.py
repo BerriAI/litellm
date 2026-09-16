@@ -11,9 +11,13 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import litellm
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    IndexCreateLiteLLMParams,
+    LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
+)
 from litellm.vector_stores.main import search
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +73,40 @@ def test_get_credentials_for_vector_store():
     # Test getting credentials for non-existent vector store
     result = registry.get_credentials_for_vector_store("non_existent_id")
     assert result == {}
+
+
+def test_vector_store_registries_do_not_share_default_list():
+    first = VectorStoreRegistry()
+    second = VectorStoreRegistry()
+
+    first.vector_stores.append(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="first",
+            custom_llm_provider="openai",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+
+    assert second.vector_stores == []
+
+
+def test_vector_store_index_registries_do_not_share_default_list():
+    first = VectorStoreIndexRegistry()
+    second = VectorStoreIndexRegistry()
+
+    first.vector_store_indexes.append(
+        LiteLLM_ManagedVectorStoreIndex(
+            id="first",
+            index_name="first",
+            litellm_params=IndexCreateLiteLLMParams(
+                vector_store_index="first",
+                vector_store_name="first",
+            ),
+        )
+    )
+
+    assert second.vector_store_indexes == []
 
 
 def test_add_vector_store_to_registry():
