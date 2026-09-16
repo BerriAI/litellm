@@ -10322,57 +10322,60 @@ class Router:
         """Refresh token limits advertised by configured OpenAI-compatible deployments."""
         for raw_deployment in tuple(self.model_list):
             try:
-                deployment: Final = Deployment.model_validate(raw_deployment)
-                params: Final = LiteLLM_Params.model_validate(
-                    MappingProxyType(
-                        {
-                            **deployment.litellm_params.model_dump(exclude_none=True),
-                            **(
-                                self.get_deployment_credentials_with_provider(deployment.model_info.id or "")
-                                or MappingProxyType({})
-                            ),
-                        }
-                    )
-                )
-                model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-                    model=params.model, litellm_params=params
-                )
-                if provider not in ("hosted_vllm", "openai", "text-completion-openai", "openai_like"):
-                    continue
-                if api_base is None or "*" in model or params.get("use_clientside_credentials"):
-                    continue
-                api_key: Final = params.api_key or dynamic_api_key
-                headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
-                    params.get("extra_headers") or params.get("headers") or MappingProxyType({})
-                )
-                auth_headers: Final = (
-                    MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
-                )
-                limits: Final = await get_openai_compatible_model_info(
-                    model=model,
-                    api_base=api_base,
-                    headers=MappingProxyType(
-                        {
-                            **auth_headers,
-                            **MappingProxyType({key.lower(): value for key, value in headers.items()}),
-                        }
-                    ),
-                    client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
-                    cache=self.cache.in_memory_cache,
-                )
-                model_id: Final = deployment.model_info.id
-                if not limits or model_id is None or self.get_model_info(model_id) is not raw_deployment:
-                    continue
-                litellm.register_model(
-                    model_cost={  # mutable-ok: register_model requires a concrete dict at its public boundary
-                        model_id: MappingProxyType({**limits, **self._deployment_model_cost_payload(deployment)}),
-                    },
-                    persist_across_reloads=False,
-                    warning_display_name=params.model,
-                )
-                self._invalidate_model_group_info_cache()
+                await self._arefresh_deployment_model_info(raw_deployment, client=client)
             except Exception:  # noqa: BLE001  # one invalid deployment must not prevent refreshing the others
                 verbose_router_logger.debug("Could not refresh deployment model info")
+
+    async def _arefresh_deployment_model_info(
+        self, raw_deployment: Mapping[str, object], *, client: AsyncHTTPHandler | None
+    ) -> None:
+        deployment: Final = Deployment.model_validate(raw_deployment)
+        params: Final = LiteLLM_Params.model_validate(
+            MappingProxyType(
+                {
+                    **deployment.litellm_params.model_dump(exclude_none=True),
+                    **(
+                        self.get_deployment_credentials_with_provider(deployment.model_info.id or "")
+                        or MappingProxyType({})
+                    ),
+                }
+            )
+        )
+        model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
+        if provider not in ("hosted_vllm", "openai", "text-completion-openai", "openai_like"):
+            return
+        if api_base is None or "*" in model or params.get("use_clientside_credentials"):
+            return
+        api_key: Final = params.api_key or dynamic_api_key
+        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
+            params.get("extra_headers") or params.get("headers") or MappingProxyType({})
+        )
+        auth_headers: Final = (
+            MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
+        )
+        limits: Final = await get_openai_compatible_model_info(
+            model=model,
+            api_base=api_base,
+            headers=MappingProxyType(
+                {
+                    **auth_headers,
+                    **MappingProxyType({key.lower(): value for key, value in headers.items()}),
+                }
+            ),
+            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
+            cache=self.cache.in_memory_cache,
+        )
+        model_id: Final = deployment.model_info.id
+        if not limits or model_id is None or self.get_model_info(model_id) is not raw_deployment:
+            return
+        litellm.register_model(
+            model_cost={  # mutable-ok: register_model requires a concrete dict at its public boundary
+                model_id: MappingProxyType({**limits, **self._deployment_model_cost_payload(deployment)}),
+            },
+            persist_across_reloads=False,
+            warning_display_name=params.model,
+        )
+        self._invalidate_model_group_info_cache()
 
     def get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
         """
