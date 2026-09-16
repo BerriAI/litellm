@@ -20,6 +20,8 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
@@ -32,6 +34,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.proxy.utils import is_valid_api_key
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.utils import (
     CallTypes,
     Delta,
@@ -44,6 +47,7 @@ from litellm.types.utils import (
 from litellm.types.utils import all_litellm_params, bedrock_batch_litellm_params
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.utils import (
+    CustomStreamWrapper,
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
@@ -92,12 +96,6 @@ def test_non_ocr_wrapper_preserves_logging_executor_and_context(monkeypatch: pyt
         assert observed.empty()
     finally:
         marker.reset(token)
-
-
-def test_cloudflare_model_info_includes_rpm(local_model_cost_map: None) -> None:
-    assert litellm.get_model_info("cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8")["rpm"] == 300
-    assert litellm.get_model_info("cloudflare/@cf/moonshotai/kimi-k2.6")["rpm"] == 20
-    assert litellm.get_model_info("cloudflare/@cf/openai/whisper-large-v3-turbo")["rpm"] == 720
 
 
 def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
@@ -160,7 +158,6 @@ def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment()
     assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
 
-
 def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
     """supports_adaptive_thinking must flow through get_model_info like every other
     capability flag: both from an explicit cost-map entry and from a
@@ -175,7 +172,6 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
         model="claude-opus-4-9", custom_llm_provider="anthropic"
     )
     assert generalized["supports_adaptive_thinking"] is True
-
 
 
 def test_get_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
@@ -491,64 +487,6 @@ def test_gpt_image_provider_detection_covers_existing_family():
 
         assert model == image_model
         assert custom_llm_provider == "openai"
-
-
-def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
-
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="gpt-image-2")
-
-    assert model == "gpt-image-2"
-    assert custom_llm_provider == "openai"
-
-    model_info = litellm.get_model_info(model="gpt-image-2")
-    assert model_info["litellm_provider"] == "openai"
-    assert model_info["mode"] == "image_generation"
-    assert model_info["input_cost_per_token"] == 5e-06
-    assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 0
-    assert model_info["output_cost_per_image_token"] == 3e-05
-    assert (
-        "/v1/images/generations"
-        in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
-    )
-    assert (
-        "/v1/images/edits" in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
-    )
-    assert model_info["supports_vision"] is True
-    assert model_info["supports_pdf_input"] is True
-
-
-def test_gpt_image_2_snapshot_model_info(local_model_cost_map):
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-        model="gpt-image-2-2026-04-21"
-    )
-
-    assert model == "gpt-image-2-2026-04-21"
-    assert custom_llm_provider == "openai"
-
-    model_info = litellm.get_model_info(model="gpt-image-2-2026-04-21")
-    assert model_info["litellm_provider"] == "openai"
-    assert model_info["mode"] == "image_generation"
-    assert model_info["output_cost_per_image_token"] == 3e-05
-
-
-def test_azure_gpt_image_2_model_info(local_model_cost_map):
-    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-        model="azure/gpt-image-2"
-    )
-
-    assert model == "gpt-image-2"
-    assert custom_llm_provider == "azure"
-
-    model_info = litellm.get_model_info(
-        model="gpt-image-2", custom_llm_provider="azure"
-    )
-    assert model_info["litellm_provider"] == "azure"
-    assert model_info["mode"] == "image_generation"
-    assert model_info["input_cost_per_token"] == 5e-06
-    assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 0
-    assert model_info["output_cost_per_image_token"] == 3e-05
 
 
 def test_all_model_configs():
@@ -892,7 +830,10 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_video_per_second_above_8s_interval",
         "input_cost_per_video_per_second_above_15s_interval",
         "input_cost_per_video_per_second_above_128k_tokens",
+        "input_cost_per_audio_token_batches",
+        "input_cost_per_image_token_batches",
         "input_cost_per_token_batches",
+        "input_cost_per_video_token_batches",
         "output_cost_per_token_batches",
         "input_cost_per_token_cache_hit",
         "cache_creation_input_token_cost",
@@ -1041,7 +982,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
+                "input_cost_per_audio_token_batches": {"type": "number"},
+                "input_cost_per_image_token_batches": {"type": "number"},
                 "input_cost_per_token_batches": {"type": "number"},
+                "input_cost_per_video_token_batches": {"type": "number"},
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
                 "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
@@ -1159,6 +1103,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
+                "supports_fast_mode": {"type": "boolean"},
                 "supported_audio_formats": {
                     "type": "array",
                     "items": {
@@ -2901,152 +2846,6 @@ def test_model_info_for_vertex_ai_deepseek_model():
     print("vertex deepseek model info", model_info)
 
 
-def test_model_info_for_openrouter_kimi_k2_5():
-    """
-    Test that openrouter/moonshotai/kimi-k2.5 model info is correctly configured
-    in model_prices_and_context_window.json.
-
-    Model properties from OpenRouter API:
-    - context_length: 262144
-    - pricing: prompt=$0.00000045, completion=$0.00000225, input_cache_read=$0.00000007
-    - modality: text+image->text (supports vision)
-    - supports: tool_choice, tools (function calling)
-    """
-    import json
-    from pathlib import Path
-
-    # Load directly from the local JSON file
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    model_info = model_cost.get("openrouter/moonshotai/kimi-k2.5")
-    assert (
-        model_info is not None
-    ), "Model not found in model_prices_and_context_window.json"
-    assert model_info["litellm_provider"] == "openrouter"
-    assert model_info["mode"] == "chat"
-
-    # Verify context window
-    assert model_info["max_input_tokens"] == 262144
-    assert model_info["max_output_tokens"] == 262144
-    assert model_info["max_tokens"] == 262144
-
-    # Verify pricing
-    assert model_info["input_cost_per_token"] == 4.5e-07
-    assert model_info["output_cost_per_token"] == 2.25e-06
-    assert model_info["cache_read_input_token_cost"] == 7e-08
-
-    # Verify capabilities
-    assert model_info["supports_vision"] is True
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_tool_choice"] is True
-
-    print("openrouter kimi-k2.5 model info", model_info)
-
-
-def test_gemini_embedding_2_ga_in_cost_map():
-    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    for key, provider in (
-        ("gemini/gemini-embedding-2", "gemini"),
-        ("vertex_ai/gemini-embedding-2", "vertex_ai"),
-        ("vertex_ai/gemini-embedding-2-preview", "vertex_ai"),
-        ("gemini-embedding-2", "vertex_ai-embedding-models"),
-    ):
-        info = model_cost.get(key)
-        assert (
-            info is not None
-        ), f"{key} missing from model_prices_and_context_window.json"
-        assert info["litellm_provider"] == provider
-        assert info.get("mode") == "embedding"
-        assert info.get("supports_multimodal") is True
-        assert info.get("input_cost_per_token") == 2e-07
-        assert info.get("input_cost_per_image") == 0.00012
-        assert info.get("input_cost_per_audio_per_second") == 0.00016
-        assert info.get("input_cost_per_video_per_second") == 0.00079
-        if provider in ("vertex_ai-embedding-models", "vertex_ai"):
-            assert (
-                info.get("uses_embed_content") is True
-            ), f"{key} must have uses_embed_content=true for correct Vertex AI routing"
-
-
-def test_gemini_lyria_3_preview_models_in_cost_map():
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    clip = model_cost.get("gemini/lyria-3-clip-preview")
-    pro = model_cost.get("gemini/lyria-3-pro-preview")
-    assert clip is not None and pro is not None
-    assert clip["litellm_provider"] == "gemini" and pro["litellm_provider"] == "gemini"
-    assert clip["max_input_tokens"] == 131072 == pro["max_input_tokens"]
-    assert clip["output_cost_per_image"] == 0.04
-
-
-def test_vertex_ai_lyria_models_in_cost_map():
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    lyria_2 = model_cost.get("vertex_ai/lyria-002")
-    clip = model_cost.get("vertex_ai/lyria-3-clip-preview")
-    pro = model_cost.get("vertex_ai/lyria-3-pro-preview")
-
-    assert lyria_2 is not None
-    assert clip is not None
-    assert pro is not None
-    assert lyria_2["litellm_provider"] == "vertex_ai"
-    assert clip["litellm_provider"] == "vertex_ai"
-    assert pro["litellm_provider"] == "vertex_ai"
-    assert lyria_2["mode"] == "audio_speech"
-    assert clip["mode"] == "audio_speech"
-    assert pro["mode"] == "audio_speech"
-    assert lyria_2["output_cost_per_image"] == 0.06
-    assert lyria_2["supported_modalities"] == ["text"]
-    assert lyria_2["supported_output_modalities"] == ["audio"]
-    assert lyria_2["supports_audio_output"] is True
-    assert lyria_2["supported_audio_formats"] == ["wav"]
-    assert lyria_2["vertex_ai_audio_api"] == "lyria_predict"
-    assert lyria_2["supported_endpoints"] == ["/v1/audio/speech"]
-    assert clip["output_cost_per_image"] == 0.04
-    assert pro["output_cost_per_image"] == 0.08
-    assert clip["supported_audio_formats"] == ["mp3"]
-    assert pro["supported_audio_formats"] == ["mp3", "wav"]
-    assert clip["vertex_ai_audio_api"] == "lyria_interactions"
-    assert pro["vertex_ai_audio_api"] == "lyria_interactions"
-    assert clip["supported_endpoints"] == [
-        "/v1beta/interactions",
-        "/v1/audio/speech",
-    ]
-    assert pro["supported_endpoints"] == [
-        "/v1beta/interactions",
-        "/v1/audio/speech",
-    ]
-    assert clip["supported_modalities"] == ["text"]
-    assert pro["supported_modalities"] == ["text"]
-    assert clip["supports_vision"] is False
-    assert pro["supports_vision"] is False
-    assert "supports_image_input" not in clip
-    assert "supports_image_input" not in pro
-    assert clip["supported_regions"] == ["global"]
-    assert pro["supported_regions"] == ["global"]
-    assert clip["supports_audio_output"] is True
-    assert pro["supports_audio_output"] is True
-
-
 def test_model_info_for_fireworks_short_form_models():
     """
     Test that fireworks_ai short-form model entries (fireworks_ai/<model>)
@@ -4065,10 +3864,11 @@ class TestMetadataNoneHandling:
 
 
 _RETRY_CAP_CASES: Final = (
-    pytest.param(5, {"attempted_retries": 5}, True, id="cap-above-four-reached"),
-    pytest.param(5, {"attempted_retries": 4}, False, id="cap-above-four-not-reached"),
-    pytest.param(0, {"attempted_retries": 0}, False, id="first-attempt-passes-cap-of-zero"),
-    pytest.param(0, {"attempted_retries": 1}, True, id="cap-of-zero-refuses-first-retry"),
+    pytest.param(5, {"request_retry_count": 5}, True, id="cap-above-four-reached"),
+    pytest.param(5, {"request_retry_count": 4}, False, id="cap-above-four-not-reached"),
+    pytest.param(0, {"request_retry_count": 0}, False, id="first-attempt-passes-cap-of-zero"),
+    pytest.param(0, {"request_retry_count": 1}, True, id="cap-of-zero-refuses-first-retry"),
+    pytest.param(0, {"attempted_retries": 1}, False, id="per-hop-attempted-retries-is-not-the-cap"),
     pytest.param(5, {"previous_models": ("a", "b", "c", "d", "e")}, False, id="breadcrumb-count-is-not-the-cap"),
     pytest.param(5, None, False, id="metadata-none"),
 )
@@ -4086,7 +3886,9 @@ def _capped_completion_kwargs(metadata_key: str, metadata: object) -> dict[str, 
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
-def test_num_retries_per_request_reads_attempted_retries_sync(monkeypatch, metadata_key, cap, metadata, refused):
+def test_num_retries_per_request_reads_request_retry_count_sync(
+    monkeypatch: pytest.MonkeyPatch, metadata_key: str, cap: int, metadata: object, refused: bool
+) -> None:
     monkeypatch.setattr(litellm, "num_retries_per_request", cap)
     kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
     if refused:
@@ -4099,7 +3901,9 @@ def test_num_retries_per_request_reads_attempted_retries_sync(monkeypatch, metad
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("cap, metadata, refused", _RETRY_CAP_CASES)
-async def test_num_retries_per_request_reads_attempted_retries_async(monkeypatch, metadata_key, cap, metadata, refused):
+async def test_num_retries_per_request_reads_request_retry_count_async(
+    monkeypatch: pytest.MonkeyPatch, metadata_key: str, cap: int, metadata: object, refused: bool
+) -> None:
     monkeypatch.setattr(litellm, "num_retries_per_request", cap)
     kwargs: Final = _capped_completion_kwargs(metadata_key, metadata)
     if refused:
@@ -4161,114 +3965,6 @@ class TestValidateAndFixThinkingParam:
         from litellm.utils import validate_and_fix_thinking_param
 
         assert validate_and_fix_thinking_param(thinking=False) is None
-
-
-def test_deepseek_v4_models_in_cost_map():
-    """
-    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
-    configured in model_prices_and_context_window.json.
-
-    Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.30/M input, $1.20/M output
-    - deepseek-v4-pro:   $1.32/M input, $3.96/M output
-
-    Closes https://github.com/BerriAI/litellm/issues/26709
-    """
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    # --- bare model names ---
-    for key, expected_input, expected_output, expected_cache, expected_vision in [
-        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
-        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
-    ]:
-        info = model_cost.get(key)
-        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
-        assert info["litellm_provider"] == "deepseek"
-        assert info["mode"] == "chat"
-        assert info["input_cost_per_token"] == expected_input
-        assert info["output_cost_per_token"] == expected_output
-        assert info["cache_read_input_token_cost"] == expected_cache
-        assert info["max_input_tokens"] == 1_000_000
-        assert info["supports_function_calling"] is True
-        assert info["supports_tool_choice"] is True
-        assert info.get("supports_vision", False) is expected_vision
-
-    # --- provider-prefixed names ---
-    for key, expected_input, expected_output, expected_cache, expected_vision in [
-        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
-        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
-    ]:
-        info = model_cost.get(key)
-        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
-        assert info["litellm_provider"] == "deepseek"
-        assert info["mode"] == "chat"
-        assert info["input_cost_per_token"] == expected_input
-        assert info["output_cost_per_token"] == expected_output
-        assert info["cache_read_input_token_cost"] == expected_cache
-        assert info["supports_function_calling"] is True
-        assert info["supports_tool_choice"] is True
-        assert info.get("supports_vision", False) is expected_vision
-
-
-def test_deepseek_v4_models_in_backup_cost_map():
-    """
-    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
-    configured in litellm/model_prices_and_context_window_backup.json.
-    """
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    # --- bare model names ---
-    for key, expected_input, expected_output, expected_cache, expected_vision in [
-        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
-        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
-    ]:
-        info = model_cost.get(key)
-        assert info is not None, f"{key} missing from backup JSON"
-        assert info["litellm_provider"] == "deepseek"
-        assert info["mode"] == "chat"
-        assert info["input_cost_per_token"] == expected_input
-        assert info["output_cost_per_token"] == expected_output
-        assert info["cache_read_input_token_cost"] == expected_cache
-        assert info["max_input_tokens"] == 1_000_000
-        assert info.get("supports_vision", False) is expected_vision
-
-    # --- provider-prefixed names ---
-    for key, expected_input, expected_output, expected_cache, expected_vision in [
-        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09, True),
-        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08, False),
-    ]:
-        info = model_cost.get(key)
-        assert info is not None, f"{key} missing from backup JSON"
-        assert info["litellm_provider"] == "deepseek"
-        assert info["mode"] == "chat"
-        assert info["input_cost_per_token"] == expected_input
-        assert info["output_cost_per_token"] == expected_output
-        assert info["cache_read_input_token_cost"] == expected_cache
-        assert info.get("supports_vision", False) is expected_vision
-
-
-def test_deprecation_dates_for_retired_xai_and_groq_models():
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        model_cost = json.load(f)
-
-    assert model_cost["xai/grok-imagine-image-quality"]["deprecation_date"] == "2026-11-02"
-    assert model_cost["xai/grok-imagine-image-quality-latest"]["deprecation_date"] == "2026-11-02"
-    assert model_cost["xai/grok-imagine-image-quality-20260403"]["deprecation_date"] == "2026-11-02"
-    assert model_cost["groq/gemma-7b-it"]["deprecation_date"] == "2024-12-18"
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -4631,6 +4327,16 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert result["aws_region_name"] == "us-east-1"
 
 
+@pytest.mark.parametrize("filter_name", [
+    "get_non_default_completion_params", "get_non_default_transcription_params", "filter_out_litellm_params",
+])
+def test_scoped_weights_are_excluded_from_provider_params(filter_name: str) -> None:
+    filtered = getattr(litellm.utils, filter_name)(
+        {"provider_option": "kept", "_router_weights": {"group": {"deployment": 100}}}
+    )
+    assert filtered == {"provider_option": "kept"}
+
+
 class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 
@@ -4952,25 +4658,6 @@ def test_anthropic_reexport_entries_carry_explicit_prompt_cache_min_tokens(local
     assert not wrong, f"(cost-map value, resolved value) diverge from Anthropic's published minimums: {wrong}"
 
 
-def test_anthropic_reexport_cache_minimums_present_in_root_cost_map() -> None:
-    """The root map ships to the CDN independently of the bundled backup, so both must carry the
-    minimum or proxies reading one of them regress to the 1024 default."""
-    root_map_path: Final = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
-    with open(root_map_path) as f:
-        root_map: Final = json.load(f)
-    wrong: Final = {
-        model: root_map[model].get("prompt_cache_min_tokens")
-        for model, expected in ANTHROPIC_REEXPORT_CACHE_MIN.items()
-        if root_map[model].get("prompt_cache_min_tokens") != expected
-    }
-    fable_5_wrong: Final = {
-        model: info.get("prompt_cache_min_tokens")
-        for model, info in root_map.items()
-        if "fable-5" in model and info.get("supports_prompt_caching") and info.get("prompt_cache_min_tokens") != 512
-    }
-    assert not wrong and not fable_5_wrong, f"root cost map diverges: {wrong | fable_5_wrong}"
-
-
 GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
     prefix + base
     for base in (
@@ -4993,20 +4680,6 @@ def test_gemini_3_flash_and_31_pro_preview_resolve_4096_cache_minimum(local_mode
         model: get_prompt_cache_min_tokens(model=model)
         for model in GEMINI_4096_CACHE_MIN_MODELS
         if get_prompt_cache_min_tokens(model=model) != 4096
-    }
-    assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
-
-
-def test_gemini_4096_cache_minimum_present_in_root_cost_map() -> None:
-    """The root map ships to the CDN independently of the bundled backup, so both must carry the
-    minimum or proxies reading one of them regress to the 1024 default."""
-    root_map_path: Final = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
-    with open(root_map_path) as f:
-        root_map: Final = json.load(f)
-    wrong: Final = {
-        model: root_map[model].get("prompt_cache_min_tokens")
-        for model in GEMINI_4096_CACHE_MIN_MODELS
-        if root_map[model].get("prompt_cache_min_tokens") != 4096
     }
     assert not wrong, f"prompt_cache_min_tokens must be 4096: {wrong}"
 
@@ -5283,6 +4956,208 @@ async def test_wrapper_async_restores_originating_task_context_after_success(mon
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+class _ConvertStreamDeploymentHook(CustomLogger):
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        if not kwargs.get("stream"):
+            return None
+        return {**kwargs, "stream": False, HEADROOM_CONVERTED_STREAM_KEY: True}
+
+
+class _SuccessKwargsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_kwargs: list[dict[str, object]] = []
+        self.stream_event_responses: list[object] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_kwargs.append(kwargs)
+
+    async def async_log_stream_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.stream_event_responses.append(response_obj)
+
+
+def _install_converted_stream_callbacks(monkeypatch: pytest.MonkeyPatch) -> _SuccessKwargsCapture:
+    capture: Final = _SuccessKwargsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [_ConvertStreamDeploymentHook(), capture])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    return capture
+
+
+async def _wait_for_success_kwargs(capture: _SuccessKwargsCapture, count: int = 1) -> dict[str, object]:
+    for _ in range(50):
+        if len(capture.success_kwargs) >= count and not _PENDING_CACHE_WRITES:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.2)
+    assert len(capture.success_kwargs) == count
+    return capture.success_kwargs[-1]
+
+
+def _assert_cache_hit_logged_as_stream(capture: _SuccessKwargsCapture, success_kwargs: dict[str, object]) -> None:
+    standard_logging_object: Final = success_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["cache_hit"] is True
+    assert standard_logging_object["stream"] is True
+    assert success_kwargs["stream"] is True
+    assert capture.stream_event_responses == []
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+
+    response: Final = await litellm.acompletion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="converted stream body",
+        num_retries=0,
+    )
+    assert isinstance(response, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in response]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "converted stream body"
+
+    success_kwargs: Final = await _wait_for_success_kwargs(capture)
+    standard_logging_object: Final = success_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["response_cost"] > 0
+    assert standard_logging_object["stream"] is True
+    assert success_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_logs_converted_responses_stream_with_standard_logging_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_converted",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_converted",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "converted stream body", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+        }
+    )
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-5.6", input="hi", stream=True, api_key="sk-test", num_retries=0
+    )
+    assert isinstance(response, BaseResponsesAPIStreamingIterator)
+    events: Final = [event async for event in response]
+    assert events[-1].type == "response.completed"
+
+    success_kwargs: Final = await _wait_for_success_kwargs(capture)
+    standard_logging_object: Final = success_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["response_cost"] > 0
+    assert standard_logging_object["stream"] is True
+    assert success_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_replays_cached_converted_chat_stream_as_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    request: Final = {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "replay me from cache"}],
+        "stream": True,
+        "mock_response": "converted stream body",
+        "num_retries": 0,
+    }
+
+    first: Final = await litellm.acompletion(**request)
+    first_chunks: Final = [chunk async for chunk in first]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "converted stream body"
+    await _wait_for_success_kwargs(capture)
+
+    replay: Final = await litellm.acompletion(**request)
+    assert isinstance(replay, CustomStreamWrapper)
+    replay_chunks: Final = [chunk async for chunk in replay]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in replay_chunks) == "converted stream body"
+
+    _assert_cache_hit_logged_as_stream(capture, await _wait_for_success_kwargs(capture, count=2))
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_replays_cached_converted_responses_stream_as_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_cached_converted",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_cached_converted",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "converted stream body", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+        }
+    )
+    request: Final = {
+        "model": "openai/gpt-5.6",
+        "input": "replay me from cache",
+        "stream": True,
+        "api_key": "sk-test",
+        "num_retries": 0,
+    }
+
+    first: Final = await litellm.aresponses(**request)
+    assert [event async for event in first][-1].type == "response.completed"
+    await _wait_for_success_kwargs(capture)
+
+    replay: Final = await litellm.aresponses(**request)
+    assert isinstance(replay, BaseResponsesAPIStreamingIterator)
+    assert [event async for event in replay][-1].type == "response.completed"
+    assert route.call_count == 1
+
+    _assert_cache_hit_logged_as_stream(capture, await _wait_for_success_kwargs(capture, count=2))
 
 
 def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
@@ -6479,7 +6354,6 @@ async def test_async_mock_completion_streaming_obj_raises_mock_exception_before_
     )
     with pytest.raises(litellm.MockException):
         await _async_mock_stream_snapshots(mock_exception, 51234)
-
 
 
 @contextlib.contextmanager

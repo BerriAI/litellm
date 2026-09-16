@@ -41,6 +41,27 @@ describe("UsageExportHeader", () => {
     expect(screen.getByTestId("export-modal")).toBeInTheDocument();
   });
 
+  it("blocks the export while the data on screen does not cover the range", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        exportBlockedReason="Spend data is still loading, so an export would under-report. Wait for it to finish."
+      />,
+    );
+
+    const exportButton = screen.getByRole("button", { name: /export data/i });
+    expect(exportButton).toBeDisabled();
+    await user.click(exportButton);
+    expect(screen.queryByTestId("export-modal")).not.toBeInTheDocument();
+  });
+
+  it("explains why the export is blocked on hover", () => {
+    renderWithProviders(<UsageExportHeader {...defaultProps} exportBlockedReason="Spend data is still loading" />);
+
+    expect(screen.getByTitle("Spend data is still loading")).toBeInTheDocument();
+  });
+
   it("should close the export modal when onClose is called", async () => {
     const user = userEvent.setup();
     renderWithProviders(<UsageExportHeader {...defaultProps} />);

@@ -2915,6 +2915,25 @@ jobs:
               exit 1
             fi
 
+  provider_replay_harness:
+    docker:
+      - *python312_image
+    working_directory: ~/project
+    resource_class: medium
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Test provider replay harness
+          command: |
+            mkdir -p test-results/provider-replay-harness
+            uv run --no-sync pytest -q --noconftest -o addopts= -o pythonpath=tests/e2e -p no:rerunfailures \
+              --junitxml=test-results/provider-replay-harness/junit.xml \
+              tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
+              tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py \
+              tests/code_coverage_tests/test_provider_replay_harness.py
+      - store_test_results:
+          path: test-results/provider-replay-harness
+
   integration_contracts:
     parameters:
       suite:
@@ -2967,6 +2986,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - provider_replay_harness
       - base_sdk_install:
           filters: *main_branches
       - local_testing_part1:

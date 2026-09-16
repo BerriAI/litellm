@@ -56,6 +56,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         merged: Final = self._update_headers_with_anthropic_beta(
             headers=normalized,
             optional_params=optional_params,
+            messages=messages,
         )
         return merged, api_base
 

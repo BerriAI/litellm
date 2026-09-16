@@ -117,3 +117,13 @@ class BaseRepository(ABC, Generic[T]):
         """Check if a record exists."""
         record: Final = await self.table.find_unique(where={id_field: id_value})
         return record is not None
+
+
+def is_unique_violation(exc: BaseException) -> bool:
+    try:
+        from prisma.errors import UniqueViolationError
+    except ImportError:
+        return "P2002" in str(exc) or "unique constraint" in str(exc).lower()
+    if isinstance(exc, UniqueViolationError):
+        return True
+    return getattr(exc, "code", None) == "P2002"

@@ -96,6 +96,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
@@ -613,6 +614,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata.update(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
+        _request_state: Final = getattr(request, "state", None)
+        deployment_model_info: Final = getattr(
+            _request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, None
+        )
+        if isinstance(deployment_model_info, Mapping):
+            _metadata["model_info"] = dict(deployment_model_info)
 
         kwargs: Final = {
             "litellm_params": {
@@ -2002,6 +2009,8 @@ def create_pass_through_route(
                         delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
                     if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
                         delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
+                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
+                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on
@@ -2088,6 +2097,22 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if rewritten_model == setup_model:
         return text_data
     return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})  # mutable-ok: one-shot json payload
+
+
+def _resolved_vertex_live_setup(
+    setup_data: Mapping[str, object], setup_model_rewriter: Callable[[str], str] | None
+) -> Mapping[str, object]:
+    """
+    Give the model extractor the same fully qualified path the upstream will receive.
+
+    Clients may name a bare gateway alias, which the rewriter turns into a ``projects/...`` path before
+    it reaches Vertex. The extractor only reads a path containing ``/models/``, so running it on the raw
+    frame logs the session as ``unknown`` at no cost, which is precisely the supported client form
+    """
+    setup_model: Final = setup_data.get("model")
+    if setup_model_rewriter is None or not isinstance(setup_model, str):
+        return setup_data
+    return {**setup_data, "model": setup_model_rewriter(setup_model)}
 
 
 def _truncated_close_reason(reason: str) -> str:
@@ -2314,7 +2339,9 @@ async def websocket_passthrough_request(
                                             setup_data,
                                         )
                                         if isinstance(setup_data, dict) and "model" in setup_data:
-                                            extracted_model = _extract_model_from_vertex_ai_setup(setup_data)
+                                            extracted_model = _extract_model_from_vertex_ai_setup(
+                                                _resolved_vertex_live_setup(setup_data, setup_model_rewriter)
+                                            )
                                             if extracted_model:
                                                 kwargs["model"] = extracted_model
                                                 kwargs["custom_llm_provider"] = "vertex_ai-language-models"

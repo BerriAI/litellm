@@ -7,6 +7,7 @@ import { CircleHelp } from "lucide-react";
 import { FormField } from "@/components/shared/form/FormField";
 import { toast } from "@/lib/toast";
 import AgentSelector from "../agent_management/AgentSelector";
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import NumericalInput from "../shared/numerical_input";
 import SkillSelector from "../skills/SkillSelector";
 import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
@@ -60,6 +61,51 @@ export const KeyTypeSelect = ({
 
 const SKILLS_HINT =
   "Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here.";
+
+const TPD_HINT =
+  "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the key's TPM/RPM limits. Online requests keep using TPM/RPM.";
+
+export const KeyRateLimitFields = ({ control }: { control: Control<KeyEditFormValues> }) => (
+  <>
+    <FormField control={control} name="tpm_limit" label="TPM Limit">
+      {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
+    </FormField>
+
+    <FormField control={control} name="tpm_limit_type">
+      {({ value, onChange, id }) => (
+        <RateLimitTypeFormItem
+          id={id}
+          type="tpm"
+          name="tpm_limit_type"
+          showDetailedDescriptions={false}
+          value={value as string | null}
+          onChange={onChange}
+        />
+      )}
+    </FormField>
+
+    <FormField control={control} name="rpm_limit" label="RPM Limit">
+      {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
+    </FormField>
+
+    <FormField control={control} name="rpm_limit_type">
+      {({ value, onChange, id }) => (
+        <RateLimitTypeFormItem
+          id={id}
+          type="rpm"
+          name="rpm_limit_type"
+          showDetailedDescriptions={false}
+          value={value as string | null}
+          onChange={onChange}
+        />
+      )}
+    </FormField>
+
+    <FormField control={control} name="tpd_limit" label={labelWithHint("TPD Limit (batch)", TPD_HINT)}>
+      {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
+    </FormField>
+  </>
+);
 
 export const KeyAgentAndSkillFields = ({
   control,
