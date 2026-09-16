@@ -141,9 +141,11 @@ describe("useResourceList", () => {
     expect(result.current.rowCount).toBe(3);
   });
 
-  it("does not fetch while disabled", async () => {
+  it("keeps reporting loading without fetching while disabled, so a table never treats the empty list as settled", async () => {
     const { result } = renderList({ enabled: false });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () => {});
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.rowCount).toBe(0);
     expect(calls).toHaveLength(0);
   });
 
@@ -205,6 +207,12 @@ describe("useResourceList", () => {
 
     act(() => result.current.onColumnFiltersChange([]));
     await waitFor(() => expect(lastCall()).not.toHaveProperty("filter[colour][in]"));
+  });
+
+  it("sends the consumer's default page size", async () => {
+    renderList({ defaultPageSize: 20 });
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].page_size).toBe(20);
   });
 
   it("sends the requested page size", async () => {
@@ -296,6 +304,20 @@ describe("useResourceList", () => {
       act(() => result.current.onSearchChange("old"));
       await waitFor(() => expect(lastUrl(onUrlUpdate).get("archived_q")).toBe("old"));
       expect(lastUrl(onUrlUpdate).get("page")).toBe("7");
+    });
+
+    it("renames individual keys through urlKeys", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const urlState: ResourceListUrlState = { ...URL_STATE, urlKeys: { search: "budget_q", page: "budget_page" } };
+      const { result } = renderList({ urlState }, { searchParams: "?budget_page=2&budget_q=x&page=9", onUrlUpdate });
+
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toMatchObject({ page: 2, q: "x" });
+
+      act(() => result.current.onSearchChange("y"));
+      await waitFor(() => expect(lastUrl(onUrlUpdate).get("budget_q")).toBe("y"));
+      expect(lastUrl(onUrlUpdate).has("q")).toBe(false);
+      expect(lastUrl(onUrlUpdate).get("page")).toBe("9");
     });
 
     it("hands array filters from the URL to the serializer as arrays", async () => {

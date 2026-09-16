@@ -28,11 +28,6 @@ export interface ResourceListPage<TRow> {
 
 type FilterCodec = (filters: ColumnFiltersState) => ColumnFiltersState;
 
-/**
- * URL keys: `q`, `sort_by`, `sort_order`, `page`, `page_size` and one `filter_<column>` per `filterColumns` entry.
- * `arrayFilterColumns` are stored comma separated. `toUrlFilters`/`fromUrlFilters` spread a filter that does not
- * fit one string (a range) over several `filterColumns`; they see arrays, never the joined form.
- */
 export interface ResourceListUrlState {
   sortFields: readonly string[];
   filterColumns: readonly string[];
@@ -161,7 +156,7 @@ export function useResourceList<TRow>(options: UseResourceListOptions<TRow>): Re
     enabled,
     placeholderData: (previous) => previous,
   };
-  const { data, isLoading, isPlaceholderData, isFetching, error, refetch: refetchQuery } = useQuery(queryOptions);
+  const { data, isPending, isPlaceholderData, isFetching, error, refetch: refetchQuery } = useQuery(queryOptions);
 
   const onSortingChange = useCallback<OnChangeFn<SortingState>>(
     (updater) => setUrlSorting(functionalUpdate(updater, sorting)),
@@ -182,7 +177,7 @@ export function useResourceList<TRow>(options: UseResourceListOptions<TRow>): Re
   return {
     rows,
     rowCount: data?.meta.total_count ?? 0,
-    isLoading: isLoading || isPlaceholderData,
+    isLoading: isPending || isPlaceholderData,
     isFetching,
     error,
     refetch,

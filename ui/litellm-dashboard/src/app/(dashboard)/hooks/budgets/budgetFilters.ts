@@ -12,7 +12,7 @@ export const BUDGET_DURATION_FILTER_OPTIONS: readonly { value: string; label: st
   { value: BUDGET_DURATION_UNSET, label: "Not set" },
 ];
 
-export const BUDGET_SORTABLE_FIELDS: readonly string[] = [
+const BUDGET_SORTABLE_FIELDS: readonly string[] = [
   "budget_id",
   "max_budget",
   "tpm_limit",
@@ -142,8 +142,9 @@ const valueOf = (filters: ColumnFiltersState, id: string): unknown => filters.fi
 
 const DURATION_VALUES = BUDGET_DURATION_FILTER_OPTIONS.map((option) => option.value);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const DECIMAL_PATTERN = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 
-const amountOrBlank = (value: string): string => (value !== "" && Number.isFinite(Number(value)) ? value : "");
+const amountOrBlank = (value: string): string => (DECIMAL_PATTERN.test(value) ? value : "");
 
 const dayOrBlank = (value: string): string =>
   DAY_PATTERN.test(value) && isoAt(value, "00:00:00.000") !== "" ? value : "";

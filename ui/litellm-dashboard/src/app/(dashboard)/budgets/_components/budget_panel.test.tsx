@@ -189,6 +189,22 @@ describe("Budget Panel", () => {
     expect(lastUrl(onUrlUpdate).has("filter_duration")).toBe(false);
   });
 
+  it("removes one filter chip and keeps the other filters", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderPanel("?filter_duration=7d&filter_max_min=10&filter_created_from=2026-01-05", onUrlUpdate);
+    await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+    await user.click(screen.getByTestId("filter-chip-remove-budget_duration"));
+
+    await waitFor(() => expect(lastQuery()).not.toHaveProperty("filter[budget_duration][in]"));
+    expect(lastQuery()["filter[max_budget][gte]"]).toBe("10");
+    expect(lastQuery()["filter[created_at][gte]"]).toBe(new Date("2026-01-05T00:00:00.000").toISOString());
+    expect(lastUrl(onUrlUpdate).has("filter_duration")).toBe(false);
+    expect(lastUrl(onUrlUpdate).get("filter_max_min")).toBe("10");
+    expect(lastUrl(onUrlUpdate).get("filter_created_from")).toBe("2026-01-05");
+  });
+
   it("filters by budgets with no reset duration", async () => {
     const user = userEvent.setup();
     renderPanel();

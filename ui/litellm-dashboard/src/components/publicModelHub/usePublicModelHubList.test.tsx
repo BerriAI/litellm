@@ -1,8 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import React, { type PropsWithChildren } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
+import { DataTable } from "@/components/shared/DataTable";
 
 import { PUBLIC_MODEL_HUB_PATH, usePublicModelHubList } from "./usePublicModelHubList";
 
@@ -19,9 +23,9 @@ const queries = (): QueryRecord[] =>
     .filter((call) => call[0] === PUBLIC_MODEL_HUB_PATH)
     .map((call) => (call[1] as { query: QueryRecord }).query);
 
-const renderList = (searchParams: string, onUrlUpdate?: OnUrlUpdateFunction) => {
+const wrapperFor = (searchParams: string, onUrlUpdate?: OnUrlUpdateFunction) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const wrapper = ({ children }: PropsWithChildren) => (
+  const Wrapper = ({ children }: PropsWithChildren) => (
     <NuqsTestingAdapter
       searchParams={searchParams}
       onUrlUpdate={onUrlUpdate}
@@ -31,7 +35,30 @@ const renderList = (searchParams: string, onUrlUpdate?: OnUrlUpdateFunction) => 
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     </NuqsTestingAdapter>
   );
-  return renderHook(() => usePublicModelHubList(true), { wrapper });
+  return Wrapper;
+};
+
+const renderList = (searchParams: string, onUrlUpdate?: OnUrlUpdateFunction) =>
+  renderHook(() => usePublicModelHubList(true), { wrapper: wrapperFor(searchParams, onUrlUpdate) });
+
+const MODEL_COLUMNS: ColumnDef<ModelGroupInfo>[] = [{ id: "model_group", accessorKey: "model_group" }];
+
+const HubTable = ({ enabled }: { enabled: boolean }) => {
+  const models = usePublicModelHubList(enabled);
+  return (
+    <DataTable
+      data={models.rows}
+      columns={MODEL_COLUMNS}
+      sortingMode="server"
+      sorting={models.sorting}
+      onSortingChange={models.onSortingChange}
+      paginationMode="server"
+      pagination={models.pagination}
+      onPaginationChange={models.onPaginationChange}
+      rowCount={models.rowCount}
+      isLoading={models.isLoading}
+    />
+  );
 };
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>): URLSearchParams => {
@@ -69,6 +96,18 @@ describe("usePublicModelHubList", () => {
     expect(result.current.featureValues).toEqual(["vision"]);
     expect(result.current.searchValue).toBe("gpt");
     expect(result.current.hasActiveQuery).toBe(true);
+  });
+
+  it("keeps a shared page while the list waits for the proxy config before fetching", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { rerender } = render(<HubTable enabled={false} />, { wrapper: wrapperFor("?page=4", onUrlUpdate) });
+    await act(async () => {});
+
+    rerender(<HubTable enabled />);
+
+    await waitFor(() => expect(queries()).toHaveLength(1));
+    expect(queries()[0].page).toBe(4);
+    expect(onUrlUpdate).not.toHaveBeenCalled();
   });
 
   it("sorts by model name when the link names a field the endpoint cannot sort on", async () => {

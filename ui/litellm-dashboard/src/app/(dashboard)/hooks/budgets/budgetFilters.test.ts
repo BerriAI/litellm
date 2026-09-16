@@ -158,6 +158,19 @@ describe("budgetFiltersFromUrl", () => {
       ]),
     ).toEqual([{ id: "max_budget", value: { max: "20" } }]);
   });
+
+  it.each(["0x10", "0b1", "0o7", "Infinity", "1_000", "1e", "."])(
+    "drops the amount %s, which the route cannot parse as a decimal",
+    (amount) => {
+      expect(budgetFiltersFromUrl([{ id: "max_min", value: amount }])).toEqual([]);
+    },
+  );
+
+  it.each(["0", "99.5", ".5", "7.", "1e3", "-2"])("keeps the decimal amount %s", (amount) => {
+    expect(budgetFiltersFromUrl([{ id: "max_min", value: amount }])).toEqual([
+      { id: "max_budget", value: { min: amount } },
+    ]);
+  });
 });
 
 describe("budget filters through the URL", () => {
