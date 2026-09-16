@@ -142,6 +142,7 @@ async def test_mcp_server_tool_call_forwards_client_headers_to_logging():
         raw_headers={
             "x-nuid": "nuid-1",
             "x-app-id": "app-1",
+            "x-litellm-tags": "application:orders, service:checkout",
             "content-length": "42",
             "x-forwarded-for": "9.9.9.9",
         },
@@ -170,6 +171,7 @@ async def test_mcp_server_tool_call_forwards_client_headers_to_logging():
 
     assert captured_headers.get("x-nuid") == "nuid-1"
     assert captured_headers.get("x-app-id") == "app-1"
+    assert captured_headers.get("x-litellm-tags") == "application:orders, service:checkout"
     assert "content-length" not in captured_headers
     assert captured_headers.get("x-forwarded-for") == "1.2.3.4"
 
@@ -4991,6 +4993,193 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     assert spend_meta["allowed_server_count"] == 1
     assert spend_meta["per_server_tool_counts"]["server_a"] == 1
     assert spend_meta["per_server_list_outcomes"] == {"server_a": {"status": "ok", "tool_count": 1}}
+
+
+@pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_takes_list_tools_tags_from_x_litellm_tags_header():
+    """A gateway that stamps `x-litellm-tags` on proxied traffic gets per-application attribution on
+    LLM routes; list_tools must read the same header so MCP usage is not stuck under the shared key.
+    Nothing populated `request_tags`, so the header was the only source and it was being dropped."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+        from mcp.types import Tool as MCPTool
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    server_a = MagicMock(name="server_a_obj")
+    server_a.name = "server_a"
+    server_a.alias = "server_a"
+    server_a.server_name = "server_a"
+    server_a.server_id = "a"
+    server_a.auth_type = None
+    server_a.extra_headers = None
+
+    tool_1 = MCPTool(name="server_a-tool_1", description="test tool", inputSchema={"type": "object"})
+
+    dummy_logging_obj = MagicMock()
+    dummy_logging_obj.model_call_details = {"metadata": {"spend_logs_metadata": {}}}
+    dummy_logging_obj.async_success_handler = AsyncMock()
+    function_setup_kwargs = {}
+
+    def _capture_function_setup(*_args, **kwargs):
+        function_setup_kwargs.update(kwargs)
+        return dummy_logging_obj, None
+
+    with (
+        patch(  # test-quality-ok: server allowlist is a module-level function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server_a]),
+        ),
+        patch(  # test-quality-ok: header prep is a module-level function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch(  # test-quality-ok: manager is a module-level singleton; patching it is the suite established seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(  # test-quality-ok: tool filter is a module-level function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+            side_effect=lambda tools, _server: tools,
+        ),
+        patch(  # test-quality-ok: permission filter is a module-level async function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+            new=AsyncMock(side_effect=lambda tools, **_: tools),
+        ),
+        patch(  # test-quality-ok: logging setup is a module-level function; patched to capture spend-log metadata kwargs
+            "litellm.proxy._experimental.mcp_server.server.function_setup",
+            side_effect=_capture_function_setup,
+        ),
+    ):
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+
+        listing = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["server_a"],
+            mcp_server_auth_headers=None,
+            raw_headers={"X-LiteLLM-Tags": "application:orders, service:checkout"},
+            log_list_tools_to_spendlogs=True,
+            list_tools_log_source="mcp_protocol",
+        )
+
+    assert listing.tools == [tool_1]
+    assert function_setup_kwargs["metadata"]["tags"] == ["application:orders", "service:checkout"]
+
+
+@pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_prefers_explicit_request_tags_over_the_header():
+    """`request_tags` is the resolved value a caller passes in; a header must not override it.
+    An explicit empty list resolves to no tags rather than falling back to the header."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+        from mcp.types import Tool as MCPTool
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    server_a = MagicMock(name="server_a_obj")
+    server_a.name = "server_a"
+    server_a.alias = "server_a"
+    server_a.server_name = "server_a"
+    server_a.server_id = "a"
+    server_a.auth_type = None
+    server_a.extra_headers = None
+
+    tool_1 = MCPTool(name="server_a-tool_1", description="test tool", inputSchema={"type": "object"})
+
+    dummy_logging_obj = MagicMock()
+    dummy_logging_obj.model_call_details = {"metadata": {"spend_logs_metadata": {}}}
+    dummy_logging_obj.async_success_handler = AsyncMock()
+    function_setup_kwargs = {}
+
+    def _capture_function_setup(*_args, **kwargs):
+        function_setup_kwargs.update(kwargs)
+        return dummy_logging_obj, None
+
+    with (
+        patch(  # test-quality-ok: server allowlist is a module-level function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server_a]),
+        ),
+        patch(  # test-quality-ok: header prep is a module-level function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch(  # test-quality-ok: manager is a module-level singleton; patching it is the suite established seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        ) as mock_manager,
+        patch(  # test-quality-ok: tool filter is a module-level function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_allowed_tools",
+            side_effect=lambda tools, _server: tools,
+        ),
+        patch(  # test-quality-ok: permission filter is a module-level async function; the suite has no injection seam
+            "litellm.proxy._experimental.mcp_server.server.filter_tools_by_key_team_permissions",
+            new=AsyncMock(side_effect=lambda tools, **_: tools),
+        ),
+        patch(  # test-quality-ok: logging setup is a module-level function; patched to capture spend-log metadata kwargs
+            "litellm.proxy._experimental.mcp_server.server.function_setup",
+            side_effect=_capture_function_setup,
+        ),
+    ):
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+
+        await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["server_a"],
+            mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-tags": "from-header"},
+            log_list_tools_to_spendlogs=True,
+            list_tools_log_source="mcp_protocol",
+            request_tags=["explicit"],
+        )
+        explicit_metadata = dict(function_setup_kwargs["metadata"])
+
+        await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_auth,
+            mcp_auth_header=None,
+            mcp_servers=["server_a"],
+            mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-tags": "from-header"},
+            log_list_tools_to_spendlogs=True,
+            list_tools_log_source="mcp_protocol",
+            request_tags=[],
+        )
+        empty_metadata = dict(function_setup_kwargs["metadata"])
+
+    assert explicit_metadata["tags"] == ["explicit"]
+    assert "tags" not in empty_metadata
+
+
+@pytest.mark.parametrize(
+    "raw_headers, expected",
+    [
+        (None, None),
+        ({"mcp-session-id": "abc"}, None),
+        ({"x-litellm-tags": ""}, None),
+        ({"X-LiteLLM-Tags": "application:orders, service:checkout"}, ["application:orders", "service:checkout"]),
+    ],
+)
+def test_request_tags_from_raw_headers_only_reads_the_tag_header(raw_headers, expected):
+    """Only `x-litellm-tags` carries tags, whatever its casing, and an empty value is not a tag.
+    A request whose headers are unrelated must attribute nothing rather than the first value seen."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _request_tags_from_raw_headers,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    assert _request_tags_from_raw_headers(raw_headers) == expected
 
 
 @pytest.mark.asyncio
