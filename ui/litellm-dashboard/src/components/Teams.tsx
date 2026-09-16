@@ -2,8 +2,10 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
 import TeamInfoView from "@/components/team/TeamInfo";
+import { useTeamSelection } from "@/components/team/useTeamDetailUrlState";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -23,7 +25,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { parseAsString, useQueryState } from "nuqs";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import MetadataKeyValueFields, {
@@ -257,9 +258,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const watchedMcpSelection = form.watch("allowed_mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
 
-  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
-  const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
-  const [editTeam, setEditTeam] = useState<boolean>(false);
+  const { teamId: selectedTeamId, openTeam, editTeam, closeTeam } = useTeamSelection();
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -569,19 +568,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
   const onCreateSubmit = (values: TeamCreateFormValues) => handleCreate(mountedCreateValues(values));
 
-  const is_team_admin = (team: any) => {
-    if (team == null || team.members_with_roles == null) {
-      return false;
-    }
-    for (let i = 0; i < team.members_with_roles.length; i++) {
-      let member = team.members_with_roles[i];
-      if (member.user_id == userID && member.role == "admin") {
-        return true;
-      }
-    }
-    return false;
-  };
-
   const tabItems = [
     {
       key: "your-teams",
@@ -592,16 +578,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           <TeamsTable
             userRole={userRole}
             userID={userID}
-            onSelectTeam={(team) => {
-              setSelectedTeam(team);
-              void setSelectedTeamId(team.team_id);
-              setEditTeam(false);
-            }}
-            onEditTeam={(team) => {
-              setSelectedTeam(team);
-              void setSelectedTeamId(team.team_id);
-              setEditTeam(true);
-            }}
+            onSelectTeam={(team) => openTeam(team.team_id)}
+            onEditTeam={(team) => editTeam(team.team_id)}
             onDeleteTeam={handleDelete}
           />
 
@@ -650,6 +628,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         ]
       : []),
   ];
+  const [activeTab, setActiveTab] = useUrlTab(
+    tabItems.map((item) => item.key),
+    tabItems[0].key,
+  );
 
   return (
     <main className={selectedTeamId ? "px-12 py-6" : "flex h-full flex-col p-8"}>
@@ -659,20 +641,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           onUpdate={() => {
             refreshTeams();
           }}
-          onClose={() => {
-            setSelectedTeam(null);
-            void setSelectedTeamId(null);
-            setEditTeam(false);
-          }}
+          onClose={closeTeam}
           accessToken={accessToken}
-          is_team_admin={is_team_admin(selectedTeam?.team_id === selectedTeamId ? selectedTeam : null)}
           is_proxy_admin={userRole == "Admin"}
           userModels={userModels}
-          editTeam={editTeam}
           premiumUser={premiumUser}
         />
       ) : (
-        <Tabs defaultValue={tabItems[0].key} className="min-h-0 flex-1 gap-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-0 flex-1 gap-6">
           <PageHeader
             icon={<Users />}
             title="Teams"

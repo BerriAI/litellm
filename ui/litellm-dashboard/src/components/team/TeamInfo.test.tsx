@@ -1,8 +1,11 @@
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactElement, ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, Mock, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { toast } from "@/lib/toast";
 import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpServers";
@@ -210,6 +213,10 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/keys/useKeyInfo", () => ({
+  useKeyInfo: vi.fn().mockReturnValue({ data: undefined, isError: false }),
+}));
+
 vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchTeamFilterOptions: vi.fn().mockResolvedValue({
     keyAliases: [],
@@ -222,7 +229,7 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
 
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useOrganization, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
@@ -2850,5 +2857,194 @@ describe("TeamInfo MCP permission retention", () => {
     );
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
     errorToast.mockRestore();
+  });
+});
+
+describe("TeamInfoView URL state", () => {
+  const viewerProps = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_proxy_admin: false,
+    userModels: ["gpt-4"],
+  };
+
+  const lastUrlUpdate = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => {
+    const event = onUrlUpdate.mock.calls.at(-1)?.[0];
+    if (!event) throw new Error("no URL update was emitted");
+    return event;
+  };
+
+  const renderKeepingMountUpdates = (ui: ReactElement, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+    render(ui, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <NuqsTestingAdapter
+          searchParams={searchParams}
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+        </NuqsTestingAdapter>
+      ),
+    });
+
+  const organizationsResult = (data: object[] | undefined, isLoading: boolean) =>
+    ({ data, isLoading }) as unknown as ReturnType<typeof useOrganizations>;
+
+  const teamWithSessionUserAsAdmin = () =>
+    createMockTeamData({
+      members_with_roles: [{ user_id: "user-1", user_email: "admin@test.com", role: "admin", spend: 0 }],
+    });
+
+  beforeEach(seedDefaultMocks);
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(useOrganizations).mockReturnValue(organizationsResult([], false));
+    authState.userRole = "Admin";
+  });
+
+  it("opens the tab named by team_tab", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...viewerProps} is_proxy_admin />, {
+      searchParams: { team_tab: "members" },
+    });
+
+    const membersTab = await screen.findByRole("tab", { name: "Members" });
+    expect(membersTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: "Add Member" })).toBeInTheDocument();
+  });
+
+  it("writes the clicked tab to team_tab and drops it again for Overview", async () => {
+    const user = userEvent.setup({ delay: null });
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...viewerProps} is_proxy_admin />, {
+      searchParams: { team: "123" },
+      onUrlUpdate,
+    });
+
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("team_tab")).toBe("settings"));
+    expect(screen.getByText("Team Settings")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("team_tab")).toBe(false));
+    expect(lastUrlUpdate(onUrlUpdate).searchParams.get("team")).toBe("123");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("falls back to Overview and clears team_tab when the user cannot see the linked tab", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderKeepingMountUpdates(<TeamInfoView {...viewerProps} />, "?team_tab=settings&other=1", onUrlUpdate);
+
+    const overviewTab = await screen.findByRole("tab", { name: "Overview" });
+    expect(overviewTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("team_tab")).toBe(false));
+    expect(lastUrlUpdate(onUrlUpdate).searchParams.get("other")).toBe("1");
+  });
+
+  it("keeps a linked Settings tab for a team admin whose role only shows up once the team loads", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamWithSessionUserAsAdmin());
+
+    renderKeepingMountUpdates(<TeamInfoView {...viewerProps} />, "?team_tab=settings", onUrlUpdate);
+
+    const settingsTab = await screen.findByRole("tab", { name: "Settings" });
+    expect(settingsTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Team Settings")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a linked Settings tab for an org admin while the organizations list is still loading", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ organization_id: "org-1" }));
+    vi.mocked(useOrganizations).mockReturnValue(organizationsResult(undefined, true));
+
+    const ui = <TeamInfoView {...viewerProps} />;
+    const { rerender } = renderKeepingMountUpdates(ui, "?team_tab=settings", onUrlUpdate);
+
+    await screen.findByRole("tab", { name: "Overview" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+
+    const orgWithSessionUserAsAdmin = {
+      organization_id: "org-1",
+      members: [{ user_id: "user-1", user_role: "org_admin" }],
+    };
+    vi.mocked(useOrganizations).mockReturnValue(organizationsResult([orgWithSessionUserAsAdmin], false));
+    rerender(<TeamInfoView {...viewerProps} />);
+
+    expect(await screen.findByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
+  it("opens the Virtual Keys tab for a linked key when team_tab is missing", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderKeepingMountUpdates(<TeamInfoView {...viewerProps} />, "?key=sk-1", onUrlUpdate);
+
+    expect(await screen.findByRole("tab", { name: "Virtual Keys" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Loading key...")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a visited tab mounted after switching away from it", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...viewerProps} is_proxy_admin />);
+
+    await user.click(await screen.findByRole("tab", { name: "Members" }));
+    expect(await screen.findByRole("button", { name: "Add Member" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.queryByRole("button", { name: "Add Member" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Member", hidden: true })).toBeInTheDocument();
+  });
+
+  it("clears the team detail params when going back, leaving unrelated params alone", async () => {
+    const user = userEvent.setup({ delay: null });
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const onClose = vi.fn();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...viewerProps} is_proxy_admin onClose={onClose} />, {
+      searchParams: {
+        team_tab: "members",
+        key: "sk-1",
+        key_tab: "settings",
+        key_savings_view: "per-interval",
+        keys_search: "abc",
+        keys_sort_by: "spend",
+        keys_sort_order: "asc",
+        keys_page: "2",
+        keys_page_size: "25",
+        keys_filter_user: "user-9",
+        keys_filter_key_id: "abc123",
+        other: "1",
+      },
+      onUrlUpdate,
+    });
+
+    await user.click(await screen.findByRole("button", { name: /back to teams/i }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    const params = lastUrlUpdate(onUrlUpdate).searchParams;
+    expect([...params.keys()]).toEqual(["other"]);
   });
 });

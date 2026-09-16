@@ -1383,9 +1383,6 @@
     }
   },
   "src/components/Teams.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 3
-    },
     "max-lines": {
       "count": 1
     },
@@ -1393,7 +1390,7 @@
       "count": 2
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/TeamsPage/teamTableColumns.tsx": {
@@ -2064,11 +2061,6 @@
   },
   "src/components/team/TeamMemberTab.tsx": {
     "local/no-complex-jsx-arrow": {
-      "count": 1
-    }
-  },
-  "src/components/team/TeamVirtualKeysTable.tsx": {
-    "no-nested-ternary": {
       "count": 1
     }
   },

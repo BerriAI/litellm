@@ -1,8 +1,11 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, MockedFunction, vi } from "vitest";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactNode } from "react";
+import { beforeEach, describe, expect, it, Mock, MockedFunction, vi } from "vitest";
 
-import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
 import { TeamsResponse, useTeamsTable } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsTable";
@@ -85,23 +88,46 @@ const teamsResult = (teams: Team[], data: Partial<TeamsResponse> = {}, extra: Re
 
 const noop = () => {};
 
-const renderTable = (props: Partial<React.ComponentProps<typeof TeamsTable>> = {}) =>
-  renderWithProviders(
-    <TeamsTable
-      userRole="Admin"
-      userID="admin-1"
-      onSelectTeam={noop}
-      onEditTeam={noop}
-      onDeleteTeam={noop}
-      {...props}
-    />,
-  );
+const adminTable = (props: Partial<React.ComponentProps<typeof TeamsTable>> = {}) => (
+  <TeamsTable userRole="Admin" userID="admin-1" onSelectTeam={noop} onEditTeam={noop} onDeleteTeam={noop} {...props} />
+);
+
+interface UrlOptions {
+  searchParams?: Record<string, string>;
+  onUrlUpdate?: OnUrlUpdateFunction;
+}
+
+const renderTable = (props: Partial<React.ComponentProps<typeof TeamsTable>> = {}, urlOptions: UrlOptions = {}) =>
+  renderWithProviders(adminTable(props), urlOptions);
+
+const renderTableKeepingMountUpdates = ({ searchParams, onUrlUpdate }: UrlOptions) =>
+  render(adminTable(), {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <NuqsTestingAdapter
+        searchParams={searchParams}
+        onUrlUpdate={onUrlUpdate}
+        hasMemory
+        resetUrlUpdateQueueOnMount={false}
+      >
+        <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+      </NuqsTestingAdapter>
+    ),
+  });
+
+const lastUrlParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => {
+  const event = onUrlUpdate.mock.calls.at(-1)?.[0];
+  if (!event) throw new Error("no URL update was emitted");
+  return event.searchParams;
+};
+
+const COLUMN_STORAGE_KEY = "litellm_table_columns_teams";
 
 const openFilters = () => fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 const lastOptions = () => mockUseTeamsTable.mock.calls[mockUseTeamsTable.mock.calls.length - 1][2] ?? {};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.removeItem(COLUMN_STORAGE_KEY);
   mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam]));
 });
 
@@ -163,7 +189,8 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
 
   it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {
     renderTable();
-    expect(screen.queryByText("Spend / Budget").closest("button")).toBeNull();
+    expect(screen.getByText("Spend / Budget")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Spend / Budget" })).not.toBeInTheDocument();
     // Team and Created are the only sortable headers.
     expect(screen.getByText("Team").closest("button")).not.toBeNull();
     expect(screen.getByText("Created").closest("button")).not.toBeNull();
@@ -370,5 +397,135 @@ describe("hidden-by-default columns", () => {
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByText("Rate Limits")).toBeInTheDocument();
     expect(within(menu).getByText("Updated")).toBeInTheDocument();
+  });
+
+  it("remembers toggled columns across mounts", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderTable();
+
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByTestId("view-option-rate_limits"));
+
+    expect(await screen.findByRole("columnheader", { name: /Rate Limits/ })).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(COLUMN_STORAGE_KEY) ?? "{}")).toMatchObject({ rate_limits: true });
+
+    unmount();
+    renderTable();
+    expect(screen.getByRole("columnheader", { name: /Rate Limits/ })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /Updated/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("URL state", () => {
+  it("drives the query from the URL keys and ignores the generic ones", () => {
+    mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam], { total: 100 }));
+
+    renderTable(
+      {},
+      {
+        searchParams: {
+          team_search: "platform",
+          page: "2",
+          page_size: "25",
+          sort_by: "team_alias",
+          sort_order: "asc",
+          filter_org: "org-1",
+          filter_alias: "acme",
+          filter_team_id: "team-xyz",
+          search: "ignored",
+          filter_org_id: "org-ignored",
+        },
+      },
+    );
+
+    const expectedQuery = {
+      search: "platform",
+      sortBy: "team_alias",
+      sortOrder: "asc",
+      organizationID: "org-1",
+      team_alias: "acme",
+      teamID: "team-xyz",
+    };
+    expect(mockUseTeamsTable).toHaveBeenLastCalledWith(2, 25, expect.objectContaining(expectedQuery));
+    expect(screen.getByTestId("datatable-search")).toHaveValue("platform");
+    expect(screen.getByTestId("filter-chip-org_id")).toHaveTextContent("Test Organization");
+  });
+
+  it("falls back to the default sort for a column the backend cannot sort and caps page_size", () => {
+    renderTable({}, { searchParams: { sort_by: "spend", sort_order: "asc", page_size: "500" } });
+
+    expect(mockUseTeamsTable).toHaveBeenLastCalledWith(
+      1,
+      100,
+      expect.objectContaining({ sortBy: "created_at", sortOrder: "asc" }),
+    );
+  });
+
+  it("writes the search box to team_search and resets the page", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam], { total: 100 }));
+    renderTable({}, { searchParams: { page: "2" }, onUrlUpdate });
+
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "platform" } });
+
+    await waitFor(() => expect(lastUrlParams(onUrlUpdate).get("team_search")).toBe("platform"));
+    expect(lastUrlParams(onUrlUpdate).has("page")).toBe(false);
+    expect(lastUrlParams(onUrlUpdate).has("search")).toBe(false);
+  });
+
+  it("writes sort and page changes to sort_by, sort_order and page", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam], { total: 100 }));
+    renderTable({}, { onUrlUpdate });
+
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastUrlParams(onUrlUpdate).get("page")).toBe("2"));
+
+    await user.click(screen.getByTestId("sort-header-team_alias"));
+    await waitFor(() => expect(lastUrlParams(onUrlUpdate).get("sort_by")).toBe("team_alias"));
+    const params = lastUrlParams(onUrlUpdate);
+    expect(params.get("sort_order")).toMatch(/^(asc|desc)$/);
+    expect(params.has("page")).toBe(false);
+  });
+
+  it("writes applied filters to filter_org, filter_alias and filter_team_id", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTable({}, { onUrlUpdate });
+
+    openFilters();
+    const drawer = await screen.findByTestId("filter-drawer-body");
+    await chooseSelectOption(user, within(drawer).getByRole("combobox"), /Test Organization/);
+    fireEvent.change(within(drawer).getByPlaceholderText(/Enter team alias/), { target: { value: " acme " } });
+    fireEvent.change(within(drawer).getByPlaceholderText(/Enter team ID/), { target: { value: "team-xyz" } });
+    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => expect(lastUrlParams(onUrlUpdate).get("filter_org")).toBe("org-1"));
+    const params = lastUrlParams(onUrlUpdate);
+    expect(params.get("filter_alias")).toBe("acme");
+    expect(params.get("filter_team_id")).toBe("team-xyz");
+    expect(params.has("filter_org_id")).toBe(false);
+  });
+
+  it("pulls an out-of-range page back once the list has loaded", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    mockUseTeamsTable.mockReturnValue(teamsResult([], { total: 0 }));
+
+    renderTableKeepingMountUpdates({ searchParams: { page: "3" }, onUrlUpdate });
+
+    await waitFor(() => expect(mockUseTeamsTable).toHaveBeenLastCalledWith(1, 50, expect.anything()));
+    expect(lastUrlParams(onUrlUpdate).has("page")).toBe(false);
+  });
+
+  it("keeps the linked page while the list request is failing", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    mockUseTeamsTable.mockReturnValue(teamsResult([], {}, { data: undefined, isError: true }));
+
+    renderTableKeepingMountUpdates({ searchParams: { page: "3" }, onUrlUpdate });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(mockUseTeamsTable).toHaveBeenLastCalledWith(3, 50, expect.anything());
+    expect(onUrlUpdate).not.toHaveBeenCalled();
   });
 });

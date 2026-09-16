@@ -1,4 +1,5 @@
 "use client";
+import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import {
@@ -15,6 +16,7 @@ import {
   DataTableFilterField,
   DataTableSortHeader,
   DataTableToolbar,
+  useUrlTableState,
 } from "@/components/shared/DataTable";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -22,7 +24,7 @@ import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
 import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
-import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -31,6 +33,7 @@ import { deriveKeyModelScope } from "../key_scope";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
+import { TEAM_KEYS_TABLE_STATE_OPTIONS, type TeamKeysFilterColumn, useSelectedTeamKey } from "./useTeamDetailUrlState";
 
 interface TeamVirtualKeysTableProps {
   teamId: string;
@@ -38,54 +41,44 @@ interface TeamVirtualKeysTableProps {
   organization: Organization | null;
 }
 
-/**
- * TeamVirtualKeysTable – variant of VirtualKeysTable scoped to a single team.
- * Displays all virtual keys belonging to the team with same format and styling.
- */
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const appliedFilter = (filters: ColumnFiltersState, column: TeamKeysFilterColumn): string | undefined => {
+  const value = filters.find((filter) => filter.id === column)?.value;
+  return typeof value === "string" ? value : undefined;
+};
 
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
-  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
-  const [tablePagination, setTablePagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 50,
-  });
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const { keyId: selectedKeyId, openKey, closeKey, replaceKey } = useSelectedTeamKey();
+  const {
+    search: searchInput,
+    setSearch,
+    sorting,
+    onSortingChange,
+    pagination,
+    onPaginationChange,
+    columnFilters,
+    onColumnFiltersChange,
+  } = useUrlTableState(TEAM_KEYS_TABLE_STATE_OPTIONS);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [searchInput, setSearchInput] = useState("");
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchInput(value);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
-  const getFilterValue = useCallback(
-    (columnId: string): string | undefined => {
-      const entry = columnFilters.find((filter) => filter.id === columnId);
-      return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
-    },
-    [columnFilters],
-  );
-
-  const sortBy = sorting.length > 0 ? sorting[0].id : "created_at";
-  const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : "desc";
-
-  const pageIndex = tablePagination.pageIndex;
-  const pageSize = tablePagination.pageSize;
-
+  const [activeSort] = sorting;
   const keyListOptions = {
     teamID: teamId,
     search: searchQuery.trim() || undefined,
-    userID: getFilterValue("user_id"),
-    keyHash: getFilterValue("key_hash"),
-    sortBy: sortBy || undefined,
-    sortOrder: sortOrder || undefined,
+    userID: appliedFilter(columnFilters, "user_id"),
+    keyHash: appliedFilter(columnFilters, "key_hash"),
+    sortBy: activeSort.id,
+    sortOrder: activeSort.desc ? "desc" : "asc",
     expand: "user",
   };
 
-  const { data: keys, isPending: isLoading, isFetching, refetch } = useKeys(pageIndex + 1, pageSize, keyListOptions);
+  const {
+    data: keys,
+    isPending: isLoading,
+    isFetching,
+    isError,
+    refetch,
+  } = useKeys(pagination.pageIndex + 1, pagination.pageSize, keyListOptions);
 
   const displayKeys = useMemo(() => {
     const kList = keys?.keys || [];
@@ -98,6 +91,29 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   }, [keys?.keys, organization?.organization_id]);
 
   const rowCount = keys?.total_count ?? 0;
+
+  const selectedKeyFromList = useMemo(
+    () => displayKeys.find((key: KeyResponse) => key.token === selectedKeyId),
+    [displayKeys, selectedKeyId],
+  );
+  const { data: fetchedSelectedKey, isError: selectedKeyLoadFailed } = useKeyInfo(selectedKeyId, {
+    enabled: !selectedKeyFromList,
+  });
+  const [rotatedKey, setRotatedKey] = useState<KeyResponse>();
+  const selectedKey =
+    selectedKeyFromList ?? fetchedSelectedKey ?? (rotatedKey?.token === selectedKeyId ? rotatedKey : undefined);
+
+  const handleSelectedKeyDataUpdate = useCallback(
+    (updated: Partial<KeyResponse>) => {
+      const rotatedToken = updated.token ?? updated.token_id;
+      if (!rotatedToken || rotatedToken === selectedKeyId) return;
+      setRotatedKey(selectedKey && { ...selectedKey, ...updated, token: rotatedToken });
+      replaceKey(rotatedToken);
+      void refetch();
+    },
+    [refetch, replaceKey, selectedKey, selectedKeyId],
+  );
+
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   const currentTeam: Team = useMemo(
@@ -127,11 +143,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [handleStorageChange]);
 
-  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
-    setColumnFilters(updaterOrValue);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
   const columns: ColumnDef<KeyResponse>[] = useMemo(
     () => [
       {
@@ -142,7 +153,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         size: 120,
         enableSorting: true,
         cell: (info) => (
-          <IdCell value={info.getValue() as string | null} onClick={() => setSelectedKey(info.row.original)} />
+          <IdCell value={info.getValue() as string | null} onClick={() => openKey(info.row.original.token)} />
         ),
       },
       {
@@ -420,87 +431,92 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         },
       },
     ],
-    [expandedAccordions],
+    [expandedAccordions, openKey],
   );
 
-  const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {
-    setSorting(updaterOrValue);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
+  if (selectedKeyId) {
+    return (
+      <div className="w-full">
+        {selectedKey || selectedKeyLoadFailed ? (
+          <KeyInfoView
+            keyId={selectedKeyId}
+            onClose={closeKey}
+            keyData={selectedKey}
+            teams={[currentTeam]}
+            onDelete={refetch}
+            onKeyDataUpdate={handleSelectedKeyDataUpdate}
+          />
+        ) : (
+          <div className="p-4 text-sm text-muted-foreground">Loading key...</div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="w-full">
-      {selectedKey ? (
-        <KeyInfoView
-          keyId={selectedKey.token}
-          onClose={() => setSelectedKey(null)}
-          keyData={selectedKey}
-          teams={[currentTeam]}
-          onDelete={refetch}
+      <div className="py-4">
+        <DataTable
+          data={displayKeys}
+          columns={columns}
+          sortingMode="server"
+          sorting={sorting}
+          onSortingChange={onSortingChange}
+          paginationMode="server"
+          pagination={pagination}
+          onPaginationChange={onPaginationChange}
+          rowCount={rowCount}
+          isError={isError}
+          filterMode="server"
+          columnFilters={columnFilters}
+          onColumnFiltersChange={onColumnFiltersChange}
+          enableColumnResizing
+          columnResizeMode="onChange"
+          isLoading={isLoading || isFetching}
+          loadingMessage="Loading keys..."
+          size="compact"
+          toolbar={(table) => (
+            <>
+              <DataTableToolbar
+                table={table}
+                searchValue={searchInput}
+                onSearchChange={setSearch}
+                searchPlaceholder="Search by key alias or ID…"
+                onRefresh={() => refetch?.()}
+                isRefreshing={isFetching}
+                onOpenFilters={() => setFiltersOpen(true)}
+                filterLabels={{ user_id: "User ID", key_hash: "Key ID" }}
+              />
+              <DataTableFilterDrawer
+                table={table}
+                open={filtersOpen}
+                onOpenChange={setFiltersOpen}
+                title="Filters"
+                description={`Narrow down keys for ${teamAlias ?? "this team"}`}
+              >
+                {({ get, set }) => (
+                  <>
+                    <DataTableFilterField label="User ID">
+                      <Input
+                        value={(get("user_id") as string) ?? ""}
+                        onChange={(event) => set("user_id", event.target.value)}
+                        placeholder="Filter by user ID…"
+                      />
+                    </DataTableFilterField>
+                    <DataTableFilterField label="Key ID">
+                      <Input
+                        value={(get("key_hash") as string) ?? ""}
+                        onChange={(event) => set("key_hash", event.target.value)}
+                        placeholder="Enter Key ID…"
+                      />
+                    </DataTableFilterField>
+                  </>
+                )}
+              </DataTableFilterDrawer>
+            </>
+          )}
         />
-      ) : (
-        <div className="py-4">
-          <DataTable
-            data={displayKeys}
-            columns={columns}
-            sortingMode="server"
-            sorting={sorting}
-            onSortingChange={handleSortingChange}
-            paginationMode="server"
-            pagination={tablePagination}
-            onPaginationChange={setTablePagination}
-            rowCount={rowCount}
-            filterMode="server"
-            columnFilters={columnFilters}
-            onColumnFiltersChange={handleColumnFiltersChange}
-            enableColumnResizing
-            columnResizeMode="onChange"
-            isLoading={isLoading || isFetching}
-            loadingMessage="Loading keys..."
-            size="compact"
-            toolbar={(table) => (
-              <>
-                <DataTableToolbar
-                  table={table}
-                  searchValue={searchInput}
-                  onSearchChange={handleSearchChange}
-                  searchPlaceholder="Search by key alias or ID…"
-                  onRefresh={() => refetch?.()}
-                  isRefreshing={isFetching}
-                  onOpenFilters={() => setFiltersOpen(true)}
-                  filterLabels={{ user_id: "User ID", key_hash: "Key ID" }}
-                />
-                <DataTableFilterDrawer
-                  table={table}
-                  open={filtersOpen}
-                  onOpenChange={setFiltersOpen}
-                  title="Filters"
-                  description={`Narrow down keys for ${teamAlias ?? "this team"}`}
-                >
-                  {({ get, set }) => (
-                    <>
-                      <DataTableFilterField label="User ID">
-                        <Input
-                          value={(get("user_id") as string) ?? ""}
-                          onChange={(event) => set("user_id", event.target.value)}
-                          placeholder="Filter by user ID…"
-                        />
-                      </DataTableFilterField>
-                      <DataTableFilterField label="Key ID">
-                        <Input
-                          value={(get("key_hash") as string) ?? ""}
-                          onChange={(event) => set("key_hash", event.target.value)}
-                          placeholder="Enter Key ID…"
-                        />
-                      </DataTableFilterField>
-                    </>
-                  )}
-                </DataTableFilterDrawer>
-              </>
-            )}
-          />
-        </div>
-      )}
+      </div>
     </div>
   );
 }

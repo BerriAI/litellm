@@ -41,7 +41,6 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
@@ -102,14 +101,10 @@ import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_c
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import MyUserTab from "./MyUserTab";
-import {
-  getTeamInfoDefaultTab,
-  getTeamInfoVisibleTabs,
-  TEAM_INFO_TAB_KEYS,
-  TEAM_INFO_TAB_LABELS,
-} from "./tabVisibilityUtils";
+import { TEAM_INFO_TAB_KEYS, TEAM_INFO_TAB_LABELS } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+import { useTeamDetailUrlState } from "./useTeamDetailUrlState";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -313,11 +308,11 @@ export interface TeamInfoProps {
   onUpdate: (data: any) => void;
   onClose: () => void;
   accessToken: string | null;
-  is_team_admin: boolean;
+  is_team_admin?: boolean;
   is_proxy_admin: boolean;
   is_org_admin?: boolean;
   userModels: string[];
-  editTeam: boolean;
+  editTeam?: boolean;
   premiumUser?: boolean;
 }
 
@@ -529,11 +524,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
   accessToken,
-  is_team_admin,
+  is_team_admin = false,
   is_proxy_admin,
   is_org_admin = false,
   userModels,
-  editTeam,
+  editTeam = false,
   premiumUser = false,
   onUpdate,
 }) => {
@@ -581,7 +576,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
-  const { data: userOrganizations = [] } = useOrganizations();
+  const { data: userOrganizations = [], isLoading: userOrganizationsLoading } = useOrganizations();
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
 
@@ -625,9 +620,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
-  const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
-  const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
-  const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
+  const permissionsResolved = !loading && !userOrganizationsLoading;
+  const detailUrlOptions = { canEditTeam, editTeam, permissionsResolved, onClose };
+  const { visibleTabs, tab, selectTab, hasVisited, close } = useTeamDetailUrlState(detailUrlOptions);
 
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
@@ -2201,7 +2196,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button variant="ghost" onClick={onClose} className="mb-4">
+          <Button variant="ghost" onClick={close} className="mb-4">
             <ArrowLeftIcon className="h-4 w-4" />
             Back to Teams
           </Button>
@@ -2224,7 +2219,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue={defaultTabKey} className="mb-4" onValueChange={onTabChange}>
+      <Tabs value={tab} className="mb-4" onValueChange={selectTab}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           {tabItems.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">

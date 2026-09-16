@@ -1,8 +1,9 @@
 import * as networking from "@/components/networking";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, Mock, vi } from "vitest";
 import AvailableTeamsPanel from "./AvailableTeamsPanel";
 import type { AvailableTeam } from "./AvailableTeamsTableColumns";
 
@@ -19,6 +20,33 @@ const team = (overrides: Partial<AvailableTeam> = {}): AvailableTeam => ({
   members_with_roles: [{ user_id: "user-1", user_email: "user1@test.com", role: "admin" }],
   ...overrides,
 });
+
+const teamWithMembers = (alias: string, memberCount: number): AvailableTeam =>
+  team({
+    team_id: alias,
+    team_alias: alias,
+    members_with_roles: Array.from({ length: memberCount }, (_, index) => ({
+      user_id: `${alias}-user-${index}`,
+      role: "user",
+    })),
+  });
+
+const pagedTeams = Array.from({ length: 30 }, (_, index) => {
+  const alias = `Team ${String(index + 1).padStart(2, "0")}`;
+  return team({ team_id: alias, team_alias: alias });
+});
+
+const renderedAliases = () =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => within(row).getAllByRole("cell")[0].textContent);
+
+const lastUrlParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => {
+  const event = onUrlUpdate.mock.calls.at(-1)?.[0];
+  if (!event) throw new Error("no URL update was emitted");
+  return event.searchParams;
+};
 
 describe("AvailableTeamsPanel", () => {
   afterEach(() => {
@@ -128,6 +156,63 @@ describe("AvailableTeamsPanel", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/No available teams to join/i)).toBeInTheDocument();
+    });
+  });
+
+  describe("URL state", () => {
+    const sortableTeams = [teamWithMembers("Alpha", 1), teamWithMembers("Bravo", 3), teamWithMembers("Charlie", 2)];
+
+    it("sorts by team name by default", async () => {
+      vi.mocked(networking.availableTeamListCall).mockResolvedValue(sortableTeams);
+
+      renderWithProviders(<AvailableTeamsPanel accessToken="token-123" userID="user-123" />);
+
+      await screen.findByText("Alpha");
+      expect(renderedAliases()).toEqual(["Alpha", "Bravo", "Charlie"]);
+    });
+
+    it("orders rows by the available_ sort params", async () => {
+      vi.mocked(networking.availableTeamListCall).mockResolvedValue(sortableTeams);
+
+      renderWithProviders(<AvailableTeamsPanel accessToken="token-123" userID="user-123" />, {
+        searchParams: { available_sort_by: "members", available_sort_order: "desc", sort_by: "team_alias" },
+      });
+
+      await screen.findByText("Alpha");
+      expect(renderedAliases()).toEqual(["Bravo", "Charlie", "Alpha"]);
+    });
+
+    it("opens the page named by available_page and ignores the list's page param", async () => {
+      vi.mocked(networking.availableTeamListCall).mockResolvedValue(pagedTeams);
+
+      renderWithProviders(<AvailableTeamsPanel accessToken="token-123" userID="user-123" />, {
+        searchParams: { available_page: "2", page: "1" },
+      });
+
+      await screen.findByText("Team 26");
+      expect(renderedAliases()).toEqual(["Team 26", "Team 27", "Team 28", "Team 29", "Team 30"]);
+    });
+
+    it("writes header sorts and page changes to the available_ params", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      vi.mocked(networking.availableTeamListCall).mockResolvedValue(pagedTeams);
+
+      renderWithProviders(<AvailableTeamsPanel accessToken="token-123" userID="user-123" />, {
+        searchParams: { page: "4" },
+        onUrlUpdate,
+      });
+
+      await screen.findByText("Team 01");
+      await user.click(screen.getByTestId("pagination-next"));
+      await waitFor(() => expect(lastUrlParams(onUrlUpdate).get("available_page")).toBe("2"));
+      expect(lastUrlParams(onUrlUpdate).get("page")).toBe("4");
+      expect(await screen.findByText("Team 26")).toBeInTheDocument();
+
+      await user.click(screen.getByTestId("sort-header-members"));
+      await waitFor(() => expect(lastUrlParams(onUrlUpdate).get("available_sort_by")).toBe("members"));
+      expect(lastUrlParams(onUrlUpdate).has("available_page")).toBe(false);
+      expect(lastUrlParams(onUrlUpdate).has("sort_by")).toBe(false);
     });
   });
 });
