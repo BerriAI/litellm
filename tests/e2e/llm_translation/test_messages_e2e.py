@@ -21,15 +21,20 @@ from e2e_http import assert_client_error, require_successful_call, unwrap
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
 from models import (
+    AnthropicAssistantTurn,
+    AnthropicContentBlock,
     AnthropicCustomTool,
     AnthropicMessagesBody,
+    AnthropicToolChoice,
+    AnthropicToolResultBlock,
+    AnthropicToolResultTurn,
     ChatMessage,
     JsonSchemaProperty,
     LiteLLMParamsBody,
     SpendLogRow,
     ToolInputSchema,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
@@ -160,6 +165,7 @@ class TestAnthropicMessages:
         )
 
     @pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
+    @pytest.mark.provider_live
     def test_messages_streams_completion(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
@@ -284,8 +290,139 @@ class TestAnthropicMessages:
         result = endpoints_client.proxy.transport.send(
             "/v1/messages",
             headers=endpoints_client.proxy.transport.bearer(key),
-            json=_OptionalMessagesBody(
-                messages=[ChatMessage(role="user", content="hi")], max_tokens=50
-            ),
+            json=_OptionalMessagesBody(messages=[ChatMessage(role="user", content="hi")], max_tokens=50),
         )
         assert_client_error(result, "messages missing model")
+
+
+class _BridgeDelta(BaseModel):
+    type: str | None = None
+    partial_json: str | None = None
+    stop_reason: str | None = None
+
+
+class _BridgeEvent(BaseModel):
+    type: str
+    index: int | None = None
+    content_block: AnthropicContentBlock | None = None
+    delta: _BridgeDelta | None = None
+
+
+class _ParcelInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    parcel: str
+    shelf: int
+
+
+def _tool_from_stream(events: tuple[_BridgeEvent, ...]) -> AnthropicContentBlock:
+    starts: Final = tuple(
+        event
+        for event in events
+        if event.type == "content_block_start"
+        and event.content_block is not None
+        and event.content_block.type == "tool_use"
+    )
+    assert len(starts) == 1, "expected exactly one tool call"
+    start: Final = starts[0]
+    block: Final = start.content_block
+    assert block is not None and block.id and start.index is not None
+    fragments: Final = tuple(
+        event
+        for event in events
+        if event.type == "content_block_delta" and event.delta is not None and event.delta.type == "input_json_delta"
+    )
+    assert fragments, "tool stream contained no argument fragments"
+    assert all(event.index == start.index for event in fragments), "tool fragments changed index"
+    positions: Final = tuple(i for i, event in enumerate(events) if event in fragments)
+    stops: Final = tuple(
+        i for i, event in enumerate(events) if event.type == "content_block_stop" and event.index == start.index
+    )
+    assert len(stops) == 1 and events.index(start) < positions[0] <= positions[-1] < stops[0]
+    assert tuple(
+        event.delta.stop_reason for event in events if event.type == "message_delta" and event.delta is not None
+    ) == ("tool_use",)
+    terminal_positions: Final = tuple(i for i, event in enumerate(events) if event.type == "message_delta")
+    assert len(terminal_positions) == 1 and stops[0] < terminal_positions[0] < len(events) - 1
+    assert tuple(i for i, event in enumerate(events) if event.type == "message_stop") == (len(events) - 1,), (
+        "tool stream did not terminate exactly once"
+    )
+    arguments: Final = _ParcelInput.model_validate_json(
+        "".join(event.delta.partial_json or "" for event in fragments if event.delta is not None)
+    )
+    return AnthropicContentBlock(type="tool_use", id=block.id, name=block.name, input=arguments.model_dump())
+
+
+def _parcel_result(tool: AnthropicContentBlock, result: AnthropicToolResultBlock) -> AnthropicToolResultTurn:
+    assert tool.id and result.tool_use_id == tool.id, "tool result ID does not match the emitted call"
+    return AnthropicToolResultTurn(content=[result])
+
+
+def _request_tool(
+    client: EndpointsClient, key: str, request: AnthropicMessagesBody, stream: bool
+) -> AnthropicContentBlock:
+    if stream:
+        response: Final = client.proxy.messages_stream(key, request)
+        require_successful_call(response)
+        assert response.is_streaming and not response.stream_error
+        return _tool_from_stream(tuple(_BridgeEvent.model_validate_json(event) for event in response.stream_events))
+    response_body: Final = unwrap(client.proxy.messages(key, request))
+    blocks: Final = tuple(block for block in response_body.content or () if block.type == "tool_use")
+    assert len(blocks) == 1
+    return blocks[0]
+
+
+class TestOpenAIMessagesToolContinuation:
+    @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
+    def test_required_tool_arguments_and_correlated_result(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager, stream: bool
+    ) -> None:
+        model: Final = f"e2e-bridge-tool-{unique_marker()}"
+        base: Final = provider_edge_base("openai")
+        model_id: Final = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(
+                model="openai/gpt-5.6", api_key="os.environ/OPENAI_API_KEY", api_base=f"{base}/v1" if base else None
+            ),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key: Final = resources.key(models=[model])
+        tool: Final = AnthropicCustomTool(
+            name="locate_parcel",
+            description="Look up the receipt for a parcel on a shelf. Return the receipt verbatim.",
+            input_schema=ToolInputSchema(
+                properties={"parcel": JsonSchemaProperty(type="string"), "shelf": JsonSchemaProperty(type="integer")},
+                required=["parcel", "shelf"],
+            ),
+        )
+        question: Final = ChatMessage(
+            role="user",
+            content="Call locate_parcel with parcel exactly amber-kite and shelf exactly 7. After the tool result, reply with only the receipt returned by the tool.",
+        )
+        request: Final = AnthropicMessagesBody(
+            model=model,
+            max_tokens=2048,
+            messages=[question],
+            tools=[tool],
+            tool_choice=AnthropicToolChoice(type="tool", name=tool.name),
+            stream=stream,
+        )
+        emitted: Final = _request_tool(endpoints_client, key, request, stream)
+        assert emitted.id and emitted.name == "locate_parcel"
+        assert emitted.input == {"parcel": "amber-kite", "shelf": 7}, "required tool arguments were lost or changed"
+        receipt: Final = f"receipt-{unique_marker()}"
+        result_turn: Final = _parcel_result(emitted, AnthropicToolResultBlock(tool_use_id=emitted.id, content=receipt))
+        continuation: Final = unwrap(
+            endpoints_client.proxy.messages(
+                key,
+                AnthropicMessagesBody(
+                    model=model,
+                    max_tokens=2048,
+                    tools=[tool],
+                    tool_choice=AnthropicToolChoice(type="none"),
+                    messages=[question, AnthropicAssistantTurn(content=[emitted]), result_turn],
+                ),
+            )
+        )
+        answer: Final = "".join(block.text or "" for block in continuation.content or ())
+        assert answer.strip() == receipt, "continuation did not consume the correlated tool result"
+        assert all(block.type != "tool_use" for block in continuation.content or ())

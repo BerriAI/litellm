@@ -137,6 +137,21 @@ async def test_update_budget_success(client_and_mocks, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_new_and_update_budget_persist_tpd_limit(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post("/budget/new", json={"budget_id": "budget_tpd", "tpd_limit": 250000})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tpd_limit"] == 250000
+    assert mock_table.create.await_args.kwargs["data"]["tpd_limit"] == 250000
+
+    resp = client.post("/budget/update", json={"budget_id": "budget_tpd", "tpd_limit": 500000})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tpd_limit"] == 500000
+    assert mock_table.update.await_args.kwargs["data"]["tpd_limit"] == 500000
+
+
+@pytest.mark.asyncio
 async def test_update_budget_missing_id(client_and_mocks, monkeypatch):
     client, mock_prisma, mock_table = client_and_mocks
 
@@ -340,7 +355,8 @@ async def test_update_budget_recomputes_reset_at_when_duration_changes(
 
 
 @pytest.mark.asyncio
-async def test_update_budget_preserves_explicit_reset_at(client_and_mocks):
+@pytest.mark.parametrize("budget_duration", ["1d", None])
+async def test_update_budget_preserves_explicit_reset_at(client_and_mocks, budget_duration):
     """An explicit budget_reset_at from the caller always wins over recompute."""
     client, _, mock_table = client_and_mocks
     captured = _capture_update_data(mock_table)
@@ -350,7 +366,7 @@ async def test_update_budget_preserves_explicit_reset_at(client_and_mocks):
         "/budget/update",
         json={
             "budget_id": "budget_explicit_reset",
-            "budget_duration": "1d",
+            "budget_duration": budget_duration,
             "budget_reset_at": explicit.isoformat(),
         },
     )
@@ -377,8 +393,7 @@ async def test_update_budget_without_duration_leaves_reset_at_untouched(
 
 
 @pytest.mark.asyncio
-async def test_update_budget_duration_none_does_not_recompute(client_and_mocks):
-    """Clearing budget_duration (explicit null) must not recompute against a None duration."""
+async def test_update_budget_duration_none_clears_obsolete_reset(client_and_mocks):
     client, _, mock_table = client_and_mocks
     captured = _capture_update_data(mock_table)
 
@@ -389,7 +404,7 @@ async def test_update_budget_duration_none_does_not_recompute(client_and_mocks):
     assert resp.status_code == 200, resp.text
 
     assert "budget_duration" in captured and captured["budget_duration"] is None
-    assert "budget_reset_at" not in captured
+    assert captured["budget_reset_at"] is None
 
 
 @pytest.mark.asyncio

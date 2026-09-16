@@ -6236,3 +6236,406 @@ async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
     )
 
     assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+
+class _OpenBreakerRedis:
+    def async_register_script(self, script: str):
+        async def refused(keys, args):
+            from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+            raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+        return refused
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warning(caplog):
+    from litellm.types.caching import RedisPipelineIncrementOperation
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await handler.async_increment_tokens_with_ttl_preservation(
+            pipeline_operations=[RedisPipelineIncrementOperation(key="quiet_key", increment_value=10.0, ttl=60)]
+        )
+
+    assert await handler.internal_usage_cache.dual_cache.async_get_cache("quiet_key") == 10.0
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_a_warning(caplog):
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        values = await handler._execute_redis_batch_rate_limiter_script(
+            ["{quiet}:window", "{quiet}:counter"], now_int=int(time.time())
+        )
+
+    assert isinstance(values, list)
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "limits, request_data, counter_scope",
+    [
+        ({"rpm_limit": 1}, {}, "api_key"),
+        ({"user_id": "u", "user_rpm_limit": 1}, {}, "user"),
+        ({"team_id": "t", "team_rpm_limit": 1}, {}, "team"),
+        (
+            {"team_id": "t", "user_id": "u", "team_member_rpm_limit": 1},
+            {},
+            "team_member",
+        ),
+        ({"end_user_id": "e", "end_user_rpm_limit": 1}, {}, "end_user"),
+        (
+            {"metadata": {"model_rpm_limit": {"test-model": 1}}},
+            {},
+            "model_per_key",
+        ),
+        (
+            {"metadata": {"tag_rpm_limit": {"test-tag": 1}}},
+            {"metadata": {"tags": ["test-tag"]}},
+            "tag_per_key",
+        ),
+        (
+            {
+                "team_id": "t",
+                "metadata": {"model_rpm_limit": {"other-model": 100}},
+                "team_metadata": {"model_rpm_limit": {"test-model": 1}},
+            },
+            {},
+            "model_per_team",
+        ),
+        (
+            {"project_id": "p", "project_metadata": {"model_rpm_limit": {"test-model": 1}}},
+            {},
+            "model_per_project",
+        ),
+        ({"org_id": "o", "organization_rpm_limit": 1}, {}, "organization"),
+        (
+            {"org_id": "o", "organization_metadata": {"model_rpm_limit": {"test-model": 1}}},
+            {},
+            "model_per_organization",
+        ),
+    ],
+)
+@pytest.mark.parametrize("request_kind", ["count", "generation"])
+@pytest.mark.asyncio
+async def test_request_capacity_enforces_shared_rpm_scopes(
+    limits, request_data, counter_scope, request_kind
+):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-count-rpm"), **limits)
+    async def request():
+        if request_kind == "generation":
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth,
+                cache=cache,
+                data={**request_data, "model": "test-model"},
+                call_type="acompletion",
+            )
+            return
+        async with handler.request_capacity(auth, "test-model", request_data=request_data):
+            pass
+
+    await request()
+    with pytest.raises(HTTPException) as exc:
+        await request()
+    assert exc.value.status_code == 429
+    assert counter_scope in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_request_capacity_keeps_dynamic_rpm_policy(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    router = Router(model_list=[{
+        "model_name": "test-model",
+        "litellm_params": {"model": "openai/gpt-test", "api_key": "test-key"},
+        "model_info": {"id": "test-deployment"},
+    }])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-count-dynamic"),
+        rpm_limit=1,
+        metadata={"rpm_limit_type": "dynamic"},
+    )
+    for _ in range(2):
+        async with handler.request_capacity(auth, "test-model"):
+            pass
+    router.cache.set_cache("test-deployment:fails", 100, ttl=60, local_only=True)
+    async with handler.request_capacity(auth, "test-model"):
+        pass
+    with pytest.raises(HTTPException) as exc:
+        async with handler.request_capacity(auth, "test-model"):
+            pytest.fail("dynamic RPM must enforce after deployment failures")
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_request_capacity_skips_tokens_and_preserves_parent_stash():
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-count-tpm"),
+        rpm_limit=5,
+        tpm_limit=1,
+        max_parallel_requests=1,
+        project_id="p",
+        project_metadata={
+            "model_tpm_limit": {"test-model": 1},
+            "model_itpm_limit": {"test-model": 1},
+            "model_otpm_limit": {"test-model": 1},
+        },
+    )
+    token_scopes = (
+        ("api_key", auth.api_key),
+        ("model_per_project", "p:test-model"),
+        ("model_per_project_itpm", "p:test-model"),
+        ("model_per_project_otpm", "p:test-model"),
+    )
+    for scope, value in token_scopes:
+        token_key = handler.create_rate_limit_keys(scope, value, "tokens")
+        await cache.async_set_cache(token_key, 100, ttl=60)
+        await cache.async_set_cache(f"{{{scope}:{value}}}:window", int(time.time()), ttl=60)
+    parent = get_or_create_request_stash()
+    parent.reserved_tokens = 123
+    parent.parallel_slot = ParallelSlotAcquisition(slot_id="parent", counter_keys=["parent-gauge"])
+    for _ in range(2):
+        async with handler.request_capacity(auth, "test-model"):
+            assert get_request_stash() is parent
+            assert parent.parallel_slot["slot_id"] == "parent"
+    assert parent.reserved_tokens == 123
+    for scope, value in token_scopes:
+        assert await cache.async_get_cache(handler.create_rate_limit_keys(scope, value, "tokens")) == 100
+
+
+@pytest.mark.parametrize("exit_mode", ["success", "failure", "cancel"])
+@pytest.mark.asyncio
+async def test_request_capacity_releases_exact_parallel_slot(exit_mode):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-count-parallel"), max_parallel_requests=1)
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def provider():
+        async with handler.request_capacity(auth, "test-model"):
+            entered.set()
+            await finish.wait()
+            if exit_mode == "failure":
+                raise RuntimeError("provider failed")
+
+    task = asyncio.create_task(provider())
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    try:
+        for _ in range(2):
+            with pytest.raises(HTTPException) as exc:
+                async with handler.request_capacity(auth, "test-model"):
+                    pytest.fail("rejected request freed the occupied slot")
+            assert exc.value.status_code == 429
+    finally:
+        if exit_mode == "cancel":
+            task.cancel()
+        else:
+            finish.set()
+    if exit_mode == "success":
+        await task
+    else:
+        with pytest.raises(asyncio.CancelledError if exit_mode == "cancel" else RuntimeError):
+            await task
+    async with handler.request_capacity(auth, "test-model"):
+        pass
+
+
+class _DelayedCapacityUsageCache:
+    def __init__(self):
+        self.delegate = InternalUsageCache(DualCache())
+        self.dual_cache = self.delegate.dual_cache
+        self.acquired = asyncio.Event()
+        self.finish_admission = asyncio.Event()
+        self.releasing = asyncio.Event()
+        self.finish_release = asyncio.Event()
+
+    async def async_get_cache(self, *args, **kwargs):
+        return await self.delegate.async_get_cache(*args, **kwargs)
+
+    async def async_batch_get_cache(self, *args, **kwargs):
+        return await self.delegate.async_batch_get_cache(*args, **kwargs)
+
+    async def async_set_cache(self, key, value, **kwargs):
+        await self.delegate.async_set_cache(key=key, value=value, **kwargs)
+        if not key.endswith(":max_parallel_requests"):
+            return
+        if value:
+            self.acquired.set()
+            await self.finish_admission.wait()
+        else:
+            self.releasing.set()
+            await self.finish_release.wait()
+
+
+@pytest.mark.asyncio
+async def test_request_capacity_finishes_admission_and_release_despite_repeated_cancel():
+    cache = _DelayedCapacityUsageCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-count-cancel-admission"), max_parallel_requests=1)
+
+    async def provider():
+        async with handler.request_capacity(auth, "test-model"):
+            pytest.fail("cancelled admission entered provider body")
+
+    task = asyncio.create_task(provider())
+    await asyncio.wait_for(cache.acquired.wait(), timeout=2)
+    task.cancel()
+    await asyncio.sleep(0)
+    cache.finish_admission.set()
+    await asyncio.wait_for(cache.releasing.wait(), timeout=2)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    cache.finish_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+    async with handler.request_capacity(auth, "test-model"):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_request_capacity_rejection_keeps_existing_redis_mirror():
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-count-mirror"), max_parallel_requests=1)
+    counter_key = handler.create_rate_limit_keys("api_key", auth.api_key, "max_parallel_requests")
+    await cache.async_set_cache(counter_key, 1, ttl=60, local_only=True)
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc:
+            async with handler.request_capacity(auth, "test-model"):
+                pytest.fail("rejection released another request's mirrored slot")
+        assert exc.value.status_code == 429
+        assert await cache.async_get_cache(counter_key, local_only=True) == 1
+
+
+@pytest.mark.parametrize(
+    "key_limits",
+    [
+        {"metadata": {"model_rpm_limit": {"test-model": 3}}},
+        {"model_max_budget": {"test-model": {"rpm_limit": 3}}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_takes_precedence_over_team_model_rpm_limit(key_limits):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-override"),
+        team_id="t",
+        team_metadata={"model_rpm_limit": {"test-model": 1}},
+        **key_limits,
+    )
+
+    async def request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth, cache=cache, data={"model": "test-model"}, call_type="acompletion"
+        )
+
+    for _ in range(3):
+        await request()
+    with pytest.raises(HTTPException) as exc:
+        await request()
+    assert exc.value.status_code == 429
+    assert "model_per_key" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize(
+    "key_limits, override_key_gets_through",
+    [
+        ({"model_rpm_limit": {"test-model": 10}}, False),
+        ({"model_rpm_limit": {"test-model": 10}, "model_tpm_limit": {"test-model": 5000}}, True),
+    ],
+    ids=["rpm_only_override_still_shares_team_tpm", "rpm_and_tpm_override_leaves_team_tpm"],
+)
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_keeps_team_model_tpm_limit(key_limits, override_key_gets_through):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    team_metadata = {"model_rpm_limit": {"test-model": 5}, "model_tpm_limit": {"test-model": 500}}
+    sibling_key = UserAPIKeyAuth(api_key=hash_token("sk-sibling"), team_id="t", team_metadata=team_metadata)
+    override_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-override"), team_id="t", metadata=key_limits, team_metadata=team_metadata
+    )
+
+    async def request(auth):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 300},
+            call_type="acompletion",
+        )
+
+    await request(sibling_key)
+    if override_key_gets_through:
+        await request(override_key)
+        return
+    with pytest.raises(HTTPException) as exc:
+        await request(override_key)
+    assert exc.value.status_code == 429
+    assert "model_per_team" in str(exc.value.detail)
+    assert exc.value.headers["rate_limit_type"] == "tokens"
+
+
+@pytest.mark.parametrize(
+    "key_metadata, charges_team_model_pool",
+    [
+        ({}, True),
+        ({"model_rpm_limit": {"test-model": 10}}, True),
+        ({"model_tpm_limit": {"test-model": 5000}}, False),
+        ({"model_tpm_limit": {"other-model": 5000}}, True),
+    ],
+    ids=["no_override", "rpm_only_override", "tpm_override", "tpm_override_on_other_model"],
+)
+def test_success_tpm_accounting_skips_team_model_pool_when_key_owns_model_tpm_limit(
+    key_metadata, charges_team_model_pool
+):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    response = ModelResponse(
+        id="team-pool-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="test-model",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-pool"), "user_api_key_team_id": "t"}},
+        "litellm_params": {
+            "metadata": {
+                "model_group": "test-model",
+                "user_api_key_metadata": key_metadata,
+                "user_api_key_team_metadata": {"model_tpm_limit": {"test-model": 500}},
+            }
+        },
+        "model": "test-model",
+    }
+
+    ops = handler._build_success_event_pipeline_operations(kwargs=kwargs, response_obj=response, rate_limit_type="output")
+
+    charged_keys = {op["key"] for op in ops}
+    assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-pool')}:test-model", "tokens") in charged_keys
+    team_pool_key = handler.create_rate_limit_keys("model_per_team", "t:test-model", "tokens")
+    assert (team_pool_key in charged_keys) is charges_team_model_pool

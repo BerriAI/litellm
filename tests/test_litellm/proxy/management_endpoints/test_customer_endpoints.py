@@ -743,6 +743,7 @@ _EXPECTED_CUSTOMER = {
         "max_parallel_requests": None,
         "tpm_limit": None,
         "rpm_limit": None,
+        "tpd_limit": None,
         "model_max_budget": None,
         "budget_duration": "30d",
         "allowed_models": [],
@@ -763,6 +764,7 @@ _EXPECTED_CUSTOMER = {
         "blocked_tools": [],
         "search_tools": [],
         "mcp_tool_search_enabled": None,
+        "skills": None,
     },
 }
 

@@ -1076,7 +1076,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
             )
         )
 
-        keys_list = list(StandardLoggingPayload.__annotations__.keys())
+        keys_list = list(StandardLoggingPayload.__required_keys__)
 
         for k in keys_list:
             assert (
@@ -1190,7 +1190,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
             )
         )
 
-        keys_list = list(StandardLoggingPayload.__annotations__.keys())
+        keys_list = list(StandardLoggingPayload.__required_keys__)
 
         for k in keys_list:
             assert (

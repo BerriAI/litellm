@@ -26,6 +26,7 @@ from fixture_bundle import (
     check_freshness,
     format_age,
 )
+from fixture_profile import match_profile
 
 type FixtureMode = Literal["live", "record", "replay"]
 
@@ -82,6 +83,7 @@ def fixture_mode_collection_error(mode_raw: str, bundle_dir: Path, *, now: datet
     Called at collection time (conftest pytest_sessionstart) so a stale or missing
     bundle fails the whole run up front, naming the bundle age, instead of failing
     every test individually."""
+    match_profile()
     mode = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode(value=value):
@@ -89,7 +91,7 @@ def fixture_mode_collection_error(mode_raw: str, bundle_dir: Path, *, now: datet
         case "live" | "record":
             return None
         case "replay":
-            freshness = check_freshness(bundle_dir, now=now)
+            freshness = check_freshness(bundle_dir, now=now, profile=match_profile())
             match freshness:
                 case FreshBundle():
                     return None
@@ -110,6 +112,7 @@ def fixture_mode_collection_error(mode_raw: str, bundle_dir: Path, *, now: datet
 def fixture_report_lines(mode_raw: str, bundle_dir: Path, *, now: datetime) -> list[str]:
     """pytest report-header lines; empty in live mode so an unset
     E2E_FIXTURE_MODE keeps today's output byte-identical."""
+    match_profile()
     mode = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode() | "live":
@@ -117,7 +120,7 @@ def fixture_report_lines(mode_raw: str, bundle_dir: Path, *, now: datetime) -> l
         case "record":
             return [f"e2e fixture mode: record -> {bundle_dir}"]
         case "replay":
-            freshness = check_freshness(bundle_dir, now=now)
+            freshness = check_freshness(bundle_dir, now=now, profile=match_profile())
             match freshness:
                 case FreshBundle(manifest=manifest):
                     return [

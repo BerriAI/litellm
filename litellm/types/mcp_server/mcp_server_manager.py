@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import Self
 
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -36,6 +37,26 @@ class MCPOAuthMetadata(BaseModel):
     """True when the metadata came from guessing the resource origin as its authorization
     server rather than from an RFC 9728/8414-advertised document. Guessed endpoints are
     usable in memory but must never be persisted as configuration."""
+
+
+class MCPOAuthIdentityBinding(BaseModel):
+    """Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
+
+    When enabled for an interactive oauth2 server, the token relay validates the upstream OIDC
+    ``id_token`` (signature via the pinned issuer's JWKS, issuer, audience, expiry, nonce) and compares its
+    principal claim to the LiteLLM caller's trusted identity before the token is returned, stored,
+    or cached. ``audit`` logs mismatches without changing behavior; ``enforce`` fails closed with
+    403 ``oauth_principal_mismatch`` and disables the direct ``oauth-user-credential`` POST, which
+    would otherwise bypass validation with an arbitrary opaque token.
+    """
+
+    mode: Literal["disabled", "audit", "enforce"] = "disabled"
+    issuer: str
+    jwks_url: str | None = None
+    audiences: list[str] = Field(min_length=1)  # mutable-ok: public Pydantic schema requires list values
+    principal_claim: str = "email"
+    caller_field: Literal["user_email", "user_id"] = "user_email"
+    require_email_verified: bool = True
 
 
 class MCPServer(BaseModel):
@@ -134,11 +155,9 @@ class MCPServer(BaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Explicit opt-in to upstream-delegated authentication for ``oauth2``
-    # servers. When ``auth_type == oauth2`` and this is ``True``, MCP requests
-    # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client
-    # completes PKCE directly with the upstream MCP server. See
-    # ``MCPRequestHandler._target_servers_delegate_auth_to_upstream``.
+    # Legacy opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. LiteLLM admission still applies; use ``oauth_delegate`` for the
+    # supported client-forwarded OAuth flow.
     #
     # Honored only for ``auth_type == oauth2``; ignored for any other
     # ``auth_type``. OAuth pass-through for non-oauth2 servers
@@ -173,6 +192,7 @@ class MCPServer(BaseModel):
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
     token_validation: dict[str, Any] | None = None
+    oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     # Optional TTL override (seconds) for the Redis per-user token cache, capped
     # at the token's expires_in minus the expiry buffer so a cached entry never
     # outlives the token. Defaults to the token's expires_in minus the expiry
@@ -224,6 +244,14 @@ class MCPServer(BaseModel):
         breaking regression introduced with the M2M feature.
         """
         return self.oauth2_flow == "client_credentials"
+
+    @model_validator(mode="after")
+    def validate_identity_binding_mode(self) -> Self:
+        binding: Final = self.oauth_identity_binding
+        if binding is not None and binding.mode != "disabled":
+            if not self.needs_user_oauth_token or self.delegate_auth_to_upstream:
+                raise ValueError("oauth_identity_binding requires gateway-managed per-user OAuth2 credentials")
+        return self
 
     @property
     def needs_user_oauth_token(self) -> bool:

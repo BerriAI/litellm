@@ -1,9 +1,12 @@
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.models.verification_token import LiteLLM_VerificationToken
+from litellm.proxy._types import GenerateKeyRequest, RegenerateKeyRequest, UpdateKeyRequest
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 
 
@@ -123,3 +126,24 @@ class BulkUpdateTeamKeysRequest(BaseModel):
         if not has_key_ids and not self.all_keys_in_team:
             raise ValueError("Must provide either `key_ids` (non-empty) or `all_keys_in_team=True`.")
         return self
+
+
+CustomKeyPolicyOperation: TypeAlias = Literal["generate", "update", "regenerate"]
+
+
+class CustomKeyPolicyRequest(LiteLLMPydanticObjectBase):
+    """What `general_settings.custom_key_policy` receives.
+
+    `effective_key` is the verification token row as it will be written: the existing row overlaid with the
+    requested changes, with `duration` resolved to `expires` and `budget_duration` to `budget_reset_at`. Values the
+    proxy fills in after the policy stay at their defaults: `token`, `key_name`, `created_by`, `updated_by` and the
+    soft-budget `budget_id` on generate, the rotated token on regenerate, and the `object_permission` relation on
+    every operation (`object_permission_id` is set; read `request.object_permission` for the requested change).
+    """
+
+    model_config = ConfigDict(protected_namespaces=(), frozen=True)
+
+    operation: CustomKeyPolicyOperation
+    existing_key: LiteLLM_VerificationToken | None
+    effective_key: LiteLLM_VerificationToken
+    request: GenerateKeyRequest | UpdateKeyRequest | RegenerateKeyRequest

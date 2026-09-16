@@ -153,8 +153,8 @@ export function ModelMaxBudgetEditor({
               <label className="block text-xs font-medium text-muted-foreground mb-1">Model</label>
               <SearchSelect
                 options={modelOptions.map((model) => ({ label: model, value: model }))}
-                value={entry.model ?? ""}
-                onValueChange={(model) => updateEntry(entry.id, { model: model === "" ? null : model })}
+                value={entry.model}
+                onValueChange={(model) => updateEntry(entry.id, { model })}
                 placeholder="Select model"
                 emptyText="No models found"
                 disabled={!premiumUser}

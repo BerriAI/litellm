@@ -89,6 +89,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
+import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
@@ -263,6 +264,7 @@ export interface TeamData {
     metadata: Record<string, any>;
     tpm_limit: number | null;
     rpm_limit: number | null;
+    tpd_limit?: number | null;
     max_budget: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
@@ -329,10 +331,14 @@ const teamUpdateFieldsSchema = z.object({
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
+  tpd_limit: numericInputSchema,
   modelLimits: z
     .array(
       z.object({
-        model: z.string().min(1, "Missing model"),
+        model: z
+          .string()
+          .nullable()
+          .refine((model) => Boolean(model), "Missing model"),
         tpm: z.number().nullish(),
         rpm: z.number().nullish(),
       }),
@@ -371,6 +377,7 @@ const teamUpdateFieldsSchema = z.object({
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
+  object_permission_skills: z.array(z.string()).optional(),
   organization_id: z.string().nullish(),
   logging_settings: z.array(z.unknown()).optional(),
   secret_manager_settings: z.string().optional(),
@@ -406,6 +413,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
+  tpd_limit: undefined,
   modelLimits: [],
   default_estimated_output_tokens: undefined,
   default_estimated_output_tokens_per_model: "",
@@ -419,6 +427,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   mcp_tool_permissions: {},
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
+  object_permission_skills: [],
   organization_id: null,
   logging_settings: [],
   secret_manager_settings: "",
@@ -454,6 +463,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   budget_duration: info.budget_duration,
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
+  tpd_limit: info.tpd_limit,
   modelLimits: Array.from(
     new Set([
       ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -485,6 +495,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     accessGroups: info.object_permission?.agent_access_groups || [],
   },
   object_permission_search_tools: info.object_permission?.search_tools || [],
+  object_permission_skills: info.object_permission?.skills || [],
   organization_id: info.organization_id,
   logging_settings: info.metadata?.logging || [],
   secret_manager_settings: info.metadata?.secret_manager_settings
@@ -911,6 +922,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         models: normalizeTeamModelSelection(values.models),
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
+        tpd_limit: sanitizeNumeric(values.tpd_limit),
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
         max_budget: values.max_budget,
@@ -1047,6 +1059,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.object_permission.search_tools = values.object_permission_search_tools;
       }
 
+      if (Array.isArray(values.object_permission_skills)) {
+        updateData.object_permission.skills = values.object_permission_skills;
+      }
+
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
         updateData.access_group_ids = values.access_group_ids;
@@ -1157,6 +1173,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <div className="mt-2">
               <p>TPM: {info.tpm_limit ?? "Unlimited"}</p>
               <p>RPM: {info.rpm_limit ?? "Unlimited"}</p>
+              <p>TPD (batch): {info.tpd_limit ?? "Unlimited"}</p>
               {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
               {(() => {
                 const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
@@ -1456,7 +1473,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               showNeverResets
                               placeholder="Inherit team reset period"
                               value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
-                              onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next)}
+                              onChange={(next) =>
+                                onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)
+                              }
                             />
                           )}
                         </FormField>
@@ -1522,6 +1541,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </FormField>
 
                   <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
+                    {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="tpd_limit"
+                    label={labelWithHint(
+                      "Tokens per day Limit (TPD)",
+                      "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
+                    )}
+                  >
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
 
@@ -1848,12 +1878,30 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </CollapsibleContent>
                   </Collapsible>
 
+                  <FormField
+                    control={form.control}
+                    name="object_permission_skills"
+                    label={labelWithHint(
+                      "Skills",
+                      "Enabled skills are visible to every team. Grant disabled (private) Claude Code plugins to this team here.",
+                    )}
+                  >
+                    {({ value, onChange }) => (
+                      <SkillSelector
+                        onChange={onChange}
+                        value={value}
+                        accessToken={accessToken || ""}
+                        placeholder="Select skills (optional)"
+                      />
+                    )}
+                  </FormField>
+
                   <FormField control={form.control} name="organization_id" label="Organization">
                     {({ id, value, onChange }) => (
                       <SearchSelect
                         inputId={id}
                         value={value ?? ""}
-                        onValueChange={(next) => onChange(next === "" ? null : next)}
+                        onValueChange={onChange}
                         options={userOrganizations.map((org) => ({
                           value: org.organization_id ?? "",
                           label: org.organization_alias || org.organization_id || "",
@@ -1966,6 +2014,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Rate Limits</p>
                 <div>TPM: {info.tpm_limit ?? "Unlimited"}</div>
                 <div>RPM: {info.rpm_limit ?? "Unlimited"}</div>
+                <div>TPD (batch): {info.tpd_limit ?? "Unlimited"}</div>
                 {(() => {
                   const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                   const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
