@@ -27,7 +27,11 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
-import { listGuardrailSubmissions } from "@/components/networking";
+import {
+  approveGuardrailSubmission,
+  listGuardrailSubmissions,
+  rejectGuardrailSubmission,
+} from "@/components/networking";
 
 const pendingSubmission = {
   guardrail_id: "guard-1",
@@ -190,6 +194,7 @@ describe("TeamGuardrailsTab URL state", () => {
     fireEvent.change(screen.getByPlaceholderText("Search guardrails..."), { target: { value: "toxic" } });
 
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sub_q")).toBe("toxic"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("submitted");
     await waitFor(() =>
       expect(listGuardrailSubmissions).toHaveBeenLastCalledWith("test-token", { status: undefined, search: "toxic" }),
     );
@@ -203,6 +208,7 @@ describe("TeamGuardrailsTab URL state", () => {
 
     fireEvent.change(statusSelect, { target: { value: "rejected" } });
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sub_status")).toBe("rejected"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("submitted");
     await waitFor(() =>
       expect(listGuardrailSubmissions).toHaveBeenLastCalledWith("test-token", {
         status: "rejected",
@@ -230,13 +236,50 @@ describe("TeamGuardrailsTab URL state", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Review" }));
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("submission")).toBe("guard-1"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("submitted");
     expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("push");
     expect(await screen.findByText("Forward LiteLLM API Key")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close detail panel" }));
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("submission")).toBe(false));
     expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sub_status")).toBe("pending");
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("submitted");
     expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("replace");
     expect(screen.queryByText("Forward LiteLLM API Key")).not.toBeInTheDocument();
+  });
+
+  it("keeps ?tab=submitted in a non-admin's submission link, whose default tab an admin does not share", async () => {
+    mockUseAuthorized.mockReturnValue({ ...baseAuth, userRole: "Internal User" });
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />, { onUrlUpdate });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("submission")).toBe("guard-1"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("submitted");
+  });
+
+  it.each([
+    { action: "approve", request: approveGuardrailSubmission },
+    { action: "reject", request: rejectGuardrailSubmission },
+  ])("closes the open submission after it is confirmed with $action", async ({ action, request }) => {
+    vi.mocked(request).mockResolvedValue({ guardrail_id: "guard-1", status: action, message: "ok" });
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />, {
+      searchParams: "?tab=submitted&submission=guard-1",
+      onUrlUpdate,
+    });
+    await screen.findByText("Forward LiteLLM API Key");
+    const actionButton = () => screen.getAllByRole("button", { name: new RegExp(`^${action}$`, "i") }).at(-1)!;
+
+    fireEvent.click(actionButton());
+    await screen.findByText(`Are you sure you want to ${action}`, { exact: false });
+    fireEvent.click(actionButton());
+
+    await waitFor(() => expect(request).toHaveBeenCalledWith("test-token", "guard-1"));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("submission")).toBe(false));
+    expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("replace");
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("submitted");
+    await waitFor(() => expect(screen.queryByText("Forward LiteLLM API Key")).not.toBeInTheDocument());
   });
 });

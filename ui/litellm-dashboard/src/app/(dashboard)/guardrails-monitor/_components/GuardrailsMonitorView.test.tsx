@@ -1,14 +1,14 @@
 import moment from "moment";
-import { type UrlUpdateEvent } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import GuardrailsMonitorView from "./GuardrailsMonitorView";
 import * as networking from "@/components/networking";
-import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
+import { fireEvent, render, renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsUsageLogs: vi.fn(),
-  formatDate: vi.fn((d: Date) => d.toISOString().slice(0, 10)),
 }));
 
 const mockUseGuardrailsUsageOverview = vi.fn();
@@ -156,6 +156,15 @@ describe("GuardrailsMonitorView", () => {
       const [options] = mockUseGuardrailsUsageOverview.mock.calls.at(-1) as [{ startDate: string; endDate: string }];
       return { startDate: options.startDate, endDate: options.endDate };
     };
+    const daysAgo = (days: number) => moment().subtract(days, "days").format("YYYY-MM-DD");
+    const defaultRange = () => ({ startDate: daysAgo(7), endDate: daysAgo(0) });
+    const lastParams = (onUrlUpdate: ReturnType<typeof vi.fn<(event: UrlUpdateEvent) => void>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+    const applyRange = (triggerName: string, choose: () => void) => {
+      fireEvent.click(screen.getByRole("button", { name: triggerName }));
+      choose();
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    };
     afterEach(() => {
       vi.unstubAllGlobals();
     });
@@ -183,19 +192,32 @@ describe("GuardrailsMonitorView", () => {
     it("should default to a seven day range ending today when the URL has none", () => {
       renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />);
 
-      const { startDate, endDate } = lastOverviewRange();
-      expect(endDate).toBe(moment().format("YYYY-MM-DD"));
-      expect(moment(endDate).diff(moment(startDate), "days")).toBe(7);
+      expect(lastOverviewRange()).toEqual(defaultRange());
     });
 
-    it("should ignore a malformed date and keep the other one", () => {
-      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, {
-        searchParams: "?start_date=2026-02-30&end_date=2026-01-20",
+    it.each([
+      ["a malformed start date", "?start_date=2026-02-30&end_date=2026-01-20"],
+      ["an end date before the start date", "?start_date=2026-03-01&end_date=2026-01-01"],
+      ["only one end of the range", "?end_date=2026-01-20"],
+    ])("should use the default range and clear the dates from the URL for %s", async (_, searchParams) => {
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      render(<GuardrailsMonitorView accessToken="test-token" />, {
+        wrapper: ({ children }) => (
+          <NuqsTestingAdapter
+            searchParams={`${searchParams}&other=1`}
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+          </NuqsTestingAdapter>
+        ),
       });
 
-      const { startDate, endDate } = lastOverviewRange();
-      expect(endDate).toBe("2026-01-20");
-      expect(startDate).toBe(moment().subtract(7, "days").format("YYYY-MM-DD"));
+      expect(lastOverviewRange()).toEqual(defaultRange());
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("start_date")).toBe(false));
+      expect(lastParams(onUrlUpdate)?.has("end_date")).toBe(false);
+      expect(lastParams(onUrlUpdate)?.get("other")).toBe("1");
     });
 
     it("should write the applied range to the URL and request usage for it", async () => {
@@ -211,10 +233,59 @@ describe("GuardrailsMonitorView", () => {
       fireEvent.change(screen.getByDisplayValue("2026-01-20"), { target: { value: "2026-03-15" } });
       fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
-      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("start_date")).toBe("2026-03-01"));
-      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("end_date")).toBe("2026-03-15");
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.get("start_date")).toBe("2026-03-01"));
+      expect(lastParams(onUrlUpdate)?.get("end_date")).toBe("2026-03-15");
       expect(lastOverviewRange()).toEqual({ startDate: "2026-03-01", endDate: "2026-03-15" });
       expect(screen.getByRole("button", { name: "1 Mar, 00:00 - 15 Mar, 23:59" })).toBeInTheDocument();
+    });
+
+    it("should keep both dates in the URL when only the start matches the default range", async () => {
+      vi.stubGlobal("requestIdleCallback", (callback: () => void) => setTimeout(callback, 0));
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, {
+        searchParams: "?start_date=2026-01-05&end_date=2026-01-20",
+        onUrlUpdate,
+      });
+
+      applyRange("5 Jan, 00:00 - 20 Jan, 23:59", () => {
+        fireEvent.change(screen.getByDisplayValue("2026-01-05"), { target: { value: daysAgo(7) } });
+        fireEvent.change(screen.getByDisplayValue("2026-01-20"), { target: { value: daysAgo(3) } });
+      });
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.get("end_date")).toBe(daysAgo(3)));
+      expect(lastParams(onUrlUpdate)?.get("start_date")).toBe(daysAgo(7));
+      expect(lastOverviewRange()).toEqual({ startDate: daysAgo(7), endDate: daysAgo(3) });
+    });
+
+    it("should keep both dates in the URL for a preset that ends today", async () => {
+      vi.stubGlobal("requestIdleCallback", (callback: () => void) => setTimeout(callback, 0));
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, { onUrlUpdate });
+      const defaultTrigger = `${moment().subtract(7, "days").format("D MMM")}, 00:00 - ${moment().format("D MMM")}, 23:59`;
+
+      applyRange(defaultTrigger, () => fireEvent.click(screen.getByRole("button", { name: /Last 30 days/ })));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.get("start_date")).toBe(daysAgo(30)));
+      expect(lastParams(onUrlUpdate)?.get("end_date")).toBe(daysAgo(0));
+      expect(lastOverviewRange()).toEqual({ startDate: daysAgo(30), endDate: daysAgo(0) });
+    });
+
+    it("should drop both dates from the URL when the default range is applied", async () => {
+      vi.stubGlobal("requestIdleCallback", (callback: () => void) => setTimeout(callback, 0));
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, {
+        searchParams: "?start_date=2026-01-05&end_date=2026-01-20&other=1",
+        onUrlUpdate,
+      });
+
+      applyRange("5 Jan, 00:00 - 20 Jan, 23:59", () =>
+        fireEvent.click(screen.getByRole("button", { name: /Last 7 days/ })),
+      );
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("start_date")).toBe(false));
+      expect(lastParams(onUrlUpdate)?.has("end_date")).toBe(false);
+      expect(lastParams(onUrlUpdate)?.get("other")).toBe("1");
+      expect(lastOverviewRange()).toEqual(defaultRange());
     });
   });
 });

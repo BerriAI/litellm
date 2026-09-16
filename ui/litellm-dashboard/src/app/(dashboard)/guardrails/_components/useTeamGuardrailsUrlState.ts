@@ -1,24 +1,34 @@
-import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
+import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 
 const STATUS_FILTERS = ["all", "pending", "active", "rejected"] as const;
+const SUBMITTED_TAB = "submitted";
 
-const searchParser = parseAsString.withDefault("");
 const statusParser = parseAsStringLiteral(STATUS_FILTERS).withDefault("all");
-const submissionParser = parseAsString.withOptions({ history: "push" });
+
+const parsers = {
+  sub_q: parseAsString.withDefault(""),
+  sub_status: statusParser,
+  submission: parseAsString.withOptions({ history: "push" }),
+  tab: parseAsStringLiteral([SUBMITTED_TAB] as const),
+};
 
 export function useTeamGuardrailsUrlState() {
-  const [search, setSearchParam] = useQueryState("sub_q", searchParser);
-  const [statusFilter, setStatusParam] = useQueryState("sub_status", statusParser);
-  const [selectedId, setSelectedParam] = useQueryState("submission", submissionParser);
+  const [{ sub_q: search, sub_status: statusFilter, submission: selectedId }, setParams] = useQueryStates(parsers);
 
-  const setSearch = useCallback((value: string) => void setSearchParam(value), [setSearchParam]);
+  const setSearch = useCallback((value: string) => void setParams({ sub_q: value, tab: SUBMITTED_TAB }), [setParams]);
   const setStatusFilter = useCallback(
-    (value: string) => void setStatusParam(statusParser.parse(value)),
-    [setStatusParam],
+    (value: string) => void setParams({ sub_status: statusParser.parse(value), tab: SUBMITTED_TAB }),
+    [setParams],
   );
-  const openSubmission = useCallback((id: string) => void setSelectedParam(id), [setSelectedParam]);
-  const closeSubmission = useCallback(() => void setSelectedParam(null, { history: "replace" }), [setSelectedParam]);
+  const openSubmission = useCallback(
+    (id: string) => void setParams({ submission: id, tab: SUBMITTED_TAB }),
+    [setParams],
+  );
+  const closeSubmission = useCallback(
+    () => void setParams({ submission: null, tab: SUBMITTED_TAB }, { history: "replace" }),
+    [setParams],
+  );
 
   return { search, setSearch, statusFilter, setStatusFilter, selectedId, openSubmission, closeSubmission };
 }

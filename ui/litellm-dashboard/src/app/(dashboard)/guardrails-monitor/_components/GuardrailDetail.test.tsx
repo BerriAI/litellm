@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import type { UrlUpdateEvent } from "nuqs/adapters/testing";
-import { renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
+import { render, renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 import type { GuardrailUsageDetail } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
 import type { LogViewerState } from "@/components/GuardrailsMonitor/useLogViewerState";
 import { GuardrailDetail } from "./GuardrailDetail";
@@ -209,6 +210,26 @@ describe("GuardrailDetail", () => {
 
       expect(await screen.findByRole("tab", { name: "Logs" })).toHaveAttribute("aria-selected", "true");
       expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("should fall back to Overview and drop an unknown ?tab=", async () => {
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      render(<GuardrailDetail {...defaultProps} />, {
+        wrapper: ({ children }) => (
+          <NuqsTestingAdapter
+            searchParams="?tab=garden&guardrail=pii-detector"
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+          </NuqsTestingAdapter>
+        ),
+      });
+
+      expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false));
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("guardrail")).toBe("pii-detector");
     });
 
     it("should write the clicked tab to ?tab= and drop it for the overview", async () => {

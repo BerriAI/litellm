@@ -204,7 +204,7 @@ describe("GuardrailsPanel", () => {
       expect(await screen.findByTestId("guardrail-info-view")).toHaveTextContent("test-guardrail-1");
     });
 
-    it("should drop the detail tab together with ?guardrail= when the info view is closed", async () => {
+    it("should clear ?guardrail= and ?detail_tab= by replacing history when the info view is closed", async () => {
       const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
       renderWithProviders(<GuardrailsPanel {...defaultProps} />, {
         searchParams: "?tab=guardrails&guardrail=test-guardrail-1&detail_tab=settings",
@@ -218,21 +218,6 @@ describe("GuardrailsPanel", () => {
       expect(lastUpdate.searchParams.has("guardrail")).toBe(false);
       expect(lastUpdate.searchParams.has("detail_tab")).toBe(false);
       expect(lastUpdate.searchParams.get("tab")).toBe("guardrails");
-      expect(lastUpdate.options.history).toBe("replace");
-    });
-
-    it("should clear ?guardrail= by replacing history when the info view is closed", async () => {
-      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
-      renderWithProviders(<GuardrailsPanel {...defaultProps} />, {
-        searchParams: "?guardrail=test-guardrail-1",
-        onUrlUpdate,
-      });
-
-      fireEvent.click(await screen.findByRole("button", { name: "Close Guardrail Info" }));
-
-      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
-      const lastUpdate = onUrlUpdate.mock.calls.at(-1)![0];
-      expect(lastUpdate.searchParams.has("guardrail")).toBe(false);
       expect(lastUpdate.options.history).toBe("replace");
       expect(await screen.findByText("Mock Guardrail Table")).toBeInTheDocument();
     });

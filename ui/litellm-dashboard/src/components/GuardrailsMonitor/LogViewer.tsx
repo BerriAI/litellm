@@ -1,7 +1,7 @@
 import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
-import React from "react";
+import React, { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
@@ -115,6 +115,10 @@ export function LogViewer({
   const selectedLog: ViewLogsLogEntry | null =
     fullLogResponse?.data?.find((log) => log.request_id === selectedRequestId) ?? fullLogResponse?.data?.[0] ?? null;
 
+  useEffect(() => {
+    if (fullLogResponse && !selectedLog) setSelectedRequestId(null);
+  }, [fullLogResponse, selectedLog, setSelectedRequestId]);
+
   return (
     <div className="bg-card border border-border rounded-lg">
       <div className="p-4 border-b border-border">
@@ -139,6 +143,7 @@ export function LogViewer({
                     key={f}
                     variant={activeFilter === f ? "default" : "outline"}
                     size="sm"
+                    aria-pressed={activeFilter === f}
                     onClick={() => setActiveFilter(f)}
                   >
                     {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -153,6 +158,7 @@ export function LogViewer({
                     key={size}
                     variant={sampleSize === size ? "default" : "outline"}
                     size="sm"
+                    aria-pressed={sampleSize === size}
                     onClick={() => setSampleSize(size)}
                   >
                     {size}

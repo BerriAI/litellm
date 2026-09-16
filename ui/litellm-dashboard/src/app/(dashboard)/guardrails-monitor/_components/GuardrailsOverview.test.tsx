@@ -313,6 +313,15 @@ describe("GuardrailsOverview", () => {
       expect(rowOrder()).toEqual(["Free Bedrock Guardrail", "High Failure Guardrail", "Low Failure Guardrail"]);
     });
 
+    it.each(["?sort_by=avgLatency&sort_order=asc", "?sort_by=avgLatency"])(
+      "keeps guardrails with no recorded latency last for %s",
+      (searchParams) => {
+        renderOverview(vi.fn(), { searchParams });
+
+        expect(rowOrder()[0]).toBe("Low Failure Guardrail");
+      },
+    );
+
     it("falls back to the highest fail rate first for a column that cannot be sorted", () => {
       renderOverview(vi.fn(), { searchParams: "?sort_by=name" });
 
