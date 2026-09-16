@@ -85,7 +85,7 @@ const renderPanel = (key: string) => {
 
 export default function ModelsAndEndpointsPage() {
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
-  const { data: teams } = useTeams();
+  const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const { data: uiSettings } = useUISettings();
   const queryClient = useQueryClient();
   const { modelId, teamId, close } = useModelDetailRouting();
@@ -126,9 +126,10 @@ export default function ModelsAndEndpointsPage() {
     [canCreate, canViewAutoRouters, isAdmin, isViewOnly],
   );
   const visibleTabKeys = useMemo<ModelTabKey[]>(() => visibleSlugs.map((slug) => slug || BASE_TAB_KEY), [visibleSlugs]);
+  const holdTeamScopedTabs = isLoadingTeams && !isViewOnly;
   const allowedTabKeys = useMemo<ModelTabKey[]>(
-    () => (teams === undefined ? Array.from(new Set([...visibleTabKeys, ...TEAM_SCOPED_TAB_KEYS])) : visibleTabKeys),
-    [teams, visibleTabKeys],
+    () => (holdTeamScopedTabs ? Array.from(new Set([...visibleTabKeys, ...TEAM_SCOPED_TAB_KEYS])) : visibleTabKeys),
+    [holdTeamScopedTabs, visibleTabKeys],
   );
   const [activeKey, setActiveKey] = useUrlTab(allowedTabKeys, BASE_TAB_KEY);
 

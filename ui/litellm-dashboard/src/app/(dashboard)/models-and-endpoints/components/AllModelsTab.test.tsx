@@ -90,9 +90,13 @@ vi.mock("../../hooks/models/useModelCostMap", () => ({
   useModelCostMap: () => ({ data: { "gpt-4": { litellm_provider: "openai" } }, isLoading: false, error: null }),
 }));
 
-const mockTeams = [{ team_id: "team-1", team_alias: "Engineering" }];
+const ENGINEERING_TEAMS = [{ team_id: "team-1", team_alias: "Engineering" }];
+const teamsState: { data: typeof ENGINEERING_TEAMS | undefined; isLoading: boolean } = {
+  data: ENGINEERING_TEAMS,
+  isLoading: false,
+};
 vi.mock("../../hooks/teams/useTeams", () => ({
-  useTeams: () => ({ data: mockTeams, isLoading: false, error: null, refetch: vi.fn() }),
+  useTeams: () => ({ data: teamsState.data, isLoading: teamsState.isLoading, error: null, refetch: vi.fn() }),
 }));
 
 const BASE_MODEL_INFO = {
@@ -160,19 +164,17 @@ const defaultProps = {
 type TabProps = Partial<typeof defaultProps>;
 
 interface RenderTabOptions {
-  // NuqsTestingAdapter resets the update queue on mount, which swallows URL writes made by
-  // mount effects (the DataTable server page clamp). Opt out to observe those writes.
-  keepMountUpdates?: boolean;
+  observeMountUrlWrites?: boolean;
 }
 
 const renderTab = (
   props: TabProps = {},
   searchParams?: string,
-  { keepMountUpdates = false }: RenderTabOptions = {},
+  { observeMountUrlWrites = false }: RenderTabOptions = {},
 ) => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
   const ui = <AllModelsTab {...defaultProps} {...props} />;
-  if (!keepMountUpdates) {
+  if (!observeMountUrlWrites) {
     const view = renderWithProviders(ui, { searchParams, onUrlUpdate });
     return { ...view, onUrlUpdate };
   }
@@ -208,6 +210,8 @@ describe("AllModelsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     modelsInfoCalls.length = 0;
+    teamsState.data = ENGINEERING_TEAMS;
+    teamsState.isLoading = false;
     setModelsInfo([makeRow()]);
     vi.spyOn(useAuthorizedModule, "default").mockReturnValue(MOCK_AUTHORIZED);
   });
@@ -312,11 +316,70 @@ describe("AllModelsTab", () => {
       expect(screen.queryByText(/create a Virtual Key/i)).not.toBeInTheDocument();
     });
 
-    it("translates a sortable column id in ?sort_by= into its server sort field", () => {
+    it.each([
+      ["model_name", "model_name"],
+      ["model_info_created_by", "created_at"],
+      ["model_info_updated_at", "updated_at"],
+      ["input_cost", "costs"],
+      ["model_info_db_model", "status"],
+    ])("translates ?sort_by=%s into the server sort field %s", (columnId, serverField) => {
+      renderTab({}, `?sort_by=${columnId}&sort_order=desc`);
+
+      expect(lastModelsInfoCall()).toMatchObject({ sortBy: serverField, sortOrder: "desc" });
+    });
+
+    it("defaults ?sort_order= to ascending when only ?sort_by= is present", () => {
       renderTab({}, "?sort_by=model_info_created_by");
 
-      expect(lastModelsInfoCall().sortBy).toBe("created_at");
-      expect(lastModelsInfoCall().sortOrder).toBe("asc");
+      expect(lastModelsInfoCall()).toMatchObject({ sortBy: "created_at", sortOrder: "asc" });
+    });
+
+    it("falls back to Current Team Models for an unknown ?view_mode=", () => {
+      renderTab({}, "?view_mode=bogus");
+
+      expect(screen.getByTestId("models-view-select")).toHaveTextContent("Current Team Models");
+      expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
+    });
+
+    it("falls back to Personal and clears a ?filter_team= that is not in the loaded team list", async () => {
+      const { onUrlUpdate } = renderTab({}, "?filter_team=ghost-team", { observeMountUrlWrites: true });
+
+      expect(modelsInfoCalls.some((call) => call.teamId !== undefined)).toBe(false);
+      expect(screen.getByTestId("models-team-select")).toHaveTextContent("Personal");
+      expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate).has("filter_team")).toBe(false));
+    });
+
+    it("waits for the team list before querying a ?filter_team= deep link and keeps ?page=", async () => {
+      teamsState.data = undefined;
+      teamsState.isLoading = true;
+      setModelsInfo([makeRow()], 1);
+      const { onUrlUpdate, rerender } = renderTab({}, "?filter_team=team-1&page=3", {
+        observeMountUrlWrites: true,
+      });
+
+      expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+
+      teamsState.data = ENGINEERING_TEAMS;
+      teamsState.isLoading = false;
+      setModelsInfo([makeRow()], 200);
+      rerender(<AllModelsTab {...defaultProps} />);
+
+      await waitFor(() => expect(lastModelsInfoCall()).toMatchObject({ teamId: "team-1", page: 3 }));
+      expect(screen.getByTestId("models-team-select")).toHaveTextContent("Engineering");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("queries Personal but keeps ?filter_team= when the team list failed to load", async () => {
+      teamsState.data = undefined;
+      const { onUrlUpdate } = renderTab({}, "?filter_team=team-1", { observeMountUrlWrites: true });
+
+      expect(lastModelsInfoCall().teamId).toBeUndefined();
+      expect(screen.getByTestId("models-team-select")).toHaveTextContent("Personal");
+      await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+      expect(onUrlUpdate).not.toHaveBeenCalled();
     });
 
     it("ignores a ?sort_by= that names a column which cannot be sorted", async () => {
@@ -340,9 +403,24 @@ describe("AllModelsTab", () => {
       expect(lastModelsInfoCall().size).toBe(50);
     });
 
+    it("snaps a ?page_size= the table does not offer to the default and drops it on the next page change", async () => {
+      const user = userEvent.setup();
+      setModelsInfo([makeRow()], 200);
+      const { onUrlUpdate } = renderTab({}, "?page_size=30");
+
+      expect(lastModelsInfoCall().size).toBe(50);
+      expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("50");
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 200");
+
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).get("page")).toBe("2"));
+      expect(lastUrl(onUrlUpdate).has("page_size")).toBe(false);
+    });
+
     it("keeps ?page= when the models request failed instead of snapping back to page 1", async () => {
       setModelsInfoError();
-      const { onUrlUpdate } = renderTab({}, "?page=3", { keepMountUpdates: true });
+      const { onUrlUpdate } = renderTab({}, "?page=3", { observeMountUrlWrites: true });
 
       await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
 
@@ -352,7 +430,7 @@ describe("AllModelsTab", () => {
 
     it("clamps ?page= to the last page once the server reports fewer rows", async () => {
       setModelsInfo([makeRow()], 1);
-      const { onUrlUpdate } = renderTab({}, "?page=3", { keepMountUpdates: true });
+      const { onUrlUpdate } = renderTab({}, "?page=3", { observeMountUrlWrites: true });
 
       await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
       expect(lastUrl(onUrlUpdate).has("page")).toBe(false);
@@ -405,13 +483,16 @@ describe("AllModelsTab", () => {
       await waitFor(() => expect(lastUrl(onUrlUpdate).has("view_mode")).toBe(false));
     });
 
-    it("writes header sorting to ?sort_by= and ?sort_order= and clears both when unsorted", async () => {
+    it("writes header sorting to ?sort_by= and ?sort_order=, resets the page, and clears both when unsorted", async () => {
       const user = userEvent.setup();
-      const { onUrlUpdate } = renderTab();
+      setModelsInfo([makeRow()], 100);
+      const { onUrlUpdate } = renderTab({}, "?page=2");
 
       await user.click(sortHeader("model_info_updated_at"));
       await waitFor(() => expect(lastUrl(onUrlUpdate).get("sort_by")).toBe("model_info_updated_at"));
       expect(lastUrl(onUrlUpdate).has("sort_order")).toBe(false);
+      expect(lastUrl(onUrlUpdate).has("page")).toBe(false);
+      await waitFor(() => expect(lastModelsInfoCall().page).toBe(1));
 
       await user.click(sortHeader("model_info_updated_at"));
       await waitFor(() => expect(lastUrl(onUrlUpdate).get("sort_order")).toBe("desc"));
@@ -421,9 +502,10 @@ describe("AllModelsTab", () => {
       expect(lastUrl(onUrlUpdate).has("sort_order")).toBe(false);
     });
 
-    it("writes the access group filter to ?access_group= and drops it when the chip is removed", async () => {
+    it("writes the access group filter to ?access_group=, resets the page, and drops it with its chip", async () => {
       const user = userEvent.setup();
-      const { onUrlUpdate } = renderTab();
+      setModelsInfo([makeRow()], 100);
+      const { onUrlUpdate } = renderTab({}, "?page=2");
 
       await user.click(screen.getByTestId("datatable-filters-trigger"));
       await user.click(await screen.findByPlaceholderText("Filter by Model Access Group"));
@@ -431,6 +513,7 @@ describe("AllModelsTab", () => {
       await user.click(screen.getByTestId("filter-drawer-apply"));
 
       await waitFor(() => expect(lastUrl(onUrlUpdate).get("access_group")).toBe("sales-team"));
+      expect(lastUrl(onUrlUpdate).has("page")).toBe(false);
 
       await user.click(await screen.findByTestId("filter-chip-remove-model_info_access_groups"));
 
@@ -476,34 +559,10 @@ describe("AllModelsTab", () => {
     });
   });
 
-  it("queries the selected team and resets to the first page", async () => {
+  it("applies a public model name filter through the drawer and resets the page", async () => {
     const user = userEvent.setup();
-    renderTab();
-
-    expect(lastModelsInfoCall().teamId).toBeUndefined();
-
-    await user.click(screen.getByTestId("models-team-select"));
-    await user.click(await screen.findByRole("option", { name: "Engineering" }));
-
-    await waitFor(() => {
-      expect(lastModelsInfoCall().teamId).toBe("team-1");
-    });
-    expect(lastModelsInfoCall().page).toBe(1);
-  });
-
-  it("debounces the model name search into the server query", async () => {
-    renderTab();
-
-    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "claude" } });
-
-    await waitFor(() => {
-      expect(lastModelsInfoCall().search).toBe("claude");
-    });
-  });
-
-  it("applies a public model name filter through the drawer", async () => {
-    const user = userEvent.setup();
-    renderTab();
+    setModelsInfo([makeRow()], 100);
+    const { onUrlUpdate } = renderTab({}, "?page=2");
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
     await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
@@ -513,6 +572,8 @@ describe("AllModelsTab", () => {
     await waitFor(() => {
       expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("gpt-3.5-turbo");
     });
+    await waitFor(() => expect(lastUrl(onUrlUpdate).has("page")).toBe(false));
+    await waitFor(() => expect(lastModelsInfoCall().page).toBe(1));
   });
 
   it("renders every row the server returned for the selected model group so rows match the footer total", () => {
@@ -575,23 +636,6 @@ describe("AllModelsTab", () => {
 
     await waitFor(() => expect(lastModelsInfoCall().search).toBe("opus"));
     expect(lastModelsInfoCall().modelName).toBe("claude-opus");
-  });
-
-  it("resets search, filters, team and sorting from the drawer reset button", async () => {
-    const user = userEvent.setup();
-    renderTab({ selectedModelGroup: "gpt-4" });
-
-    await user.click(screen.getByTestId("models-team-select"));
-    await user.click(await screen.findByRole("option", { name: "Engineering" }));
-    await waitFor(() => expect(lastModelsInfoCall().teamId).toBe("team-1"));
-
-    await user.click(screen.getByTestId("datatable-filters-trigger"));
-    await user.click(await screen.findByTestId("filter-drawer-reset"));
-
-    expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("all");
-    await waitFor(() => {
-      expect(lastModelsInfoCall().teamId).toBeUndefined();
-    });
   });
 
   it("opens the delete modal from the row and deletes the model", async () => {

@@ -95,6 +95,14 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("DB Model")).toBeInTheDocument();
   });
 
+  it("restores column choices saved under the all-models storage key", () => {
+    localStorage.setItem("litellm_table_columns_all-models", JSON.stringify({ model_info_db_model: true }));
+
+    render(<AllModelsTable {...baseProps} />);
+
+    expect(screen.getByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
+  });
+
   it("renders the nine design columns and hides Source behind the Columns menu", async () => {
     const user = userEvent.setup();
     render(<AllModelsTable {...baseProps} />);

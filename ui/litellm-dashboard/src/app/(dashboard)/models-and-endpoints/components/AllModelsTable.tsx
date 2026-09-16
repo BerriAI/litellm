@@ -31,6 +31,7 @@ export type ModelViewMode = (typeof MODEL_VIEW_MODES)[number];
 export const PERSONAL_TEAM_VALUE = "personal";
 export const ALL_MODEL_GROUPS_VALUE = "all";
 export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
+export const PAGE_SIZE_OPTIONS: readonly number[] = [10, 25, 50];
 
 const MODEL_TABLE_BODY_HEIGHT = 600;
 const COLUMN_VISIBILITY_TABLE_ID = "all-models";
@@ -195,7 +196,7 @@ export function AllModelsTable({
       pagination={pagination}
       onPaginationChange={onPaginationChange}
       rowCount={rowCount}
-      pageSizeOptions={[10, 25, 50]}
+      pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
       filterMode="server"
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}

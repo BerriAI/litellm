@@ -38,8 +38,10 @@ vi.mock("@/components/team/TeamInfo", () => ({
 
 const mockUseAuthorized = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => mockUseAuthorized() }));
-const teamsState: { data: Team[] | undefined } = { data: [] };
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: teamsState.data }) }));
+const teamsState: { data: Team[] | undefined; isLoading: boolean } = { data: [], isLoading: false };
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({ data: teamsState.data, isLoading: teamsState.isLoading }),
+}));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => ({ data: { values: {} } }),
 }));
@@ -66,14 +68,12 @@ const TEAM_ADMINED_BY_U1 = {
 } as unknown as Team;
 
 interface RenderPageOptions {
-  // NuqsTestingAdapter resets the update queue on mount, which swallows URL writes made by
-  // mount effects (the useUrlTab fallback clear). Opt out to observe those writes.
-  keepMountUpdates?: boolean;
+  observeMountUrlWrites?: boolean;
 }
 
-const renderPage = (searchParams?: string, { keepMountUpdates = false }: RenderPageOptions = {}) => {
+const renderPage = (searchParams?: string, { observeMountUrlWrites = false }: RenderPageOptions = {}) => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-  if (!keepMountUpdates) {
+  if (!observeMountUrlWrites) {
     const view = renderWithProviders(<ModelsAndEndpointsPage />, { searchParams, onUrlUpdate });
     return { ...view, onUrlUpdate };
   }
@@ -104,6 +104,7 @@ describe("ModelsAndEndpointsPage", () => {
     detailState.modelId = null;
     detailState.teamId = null;
     teamsState.data = [];
+    teamsState.isLoading = false;
     mockUseAuthorized.mockReturnValue(ADMIN);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).ResizeObserver = class {
@@ -139,7 +140,7 @@ describe("ModelsAndEndpointsPage", () => {
     });
 
     it("leaves a URL that names a visible tab untouched", async () => {
-      const { onUrlUpdate } = renderPage("?tab=llm-credentials", { keepMountUpdates: true });
+      const { onUrlUpdate } = renderPage("?tab=llm-credentials", { observeMountUrlWrites: true });
 
       await new Promise((resolve) => setTimeout(resolve, URL_SETTLE_MS));
 
@@ -161,7 +162,7 @@ describe("ModelsAndEndpointsPage", () => {
 
     it("falls back to All Models and clears ?tab= for a tab the role cannot see", async () => {
       mockUseAuthorized.mockReturnValue(NON_ADMIN);
-      const { onUrlUpdate } = renderPage("?tab=health&model_search=gpt", { keepMountUpdates: true });
+      const { onUrlUpdate } = renderPage("?tab=health&model_search=gpt", { observeMountUrlWrites: true });
 
       expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
       expect(screen.queryByTestId("panel-health")).not.toBeInTheDocument();
@@ -171,7 +172,7 @@ describe("ModelsAndEndpointsPage", () => {
     });
 
     it("falls back to All Models and clears an unknown ?tab=", async () => {
-      const { onUrlUpdate } = renderPage("?tab=settings", { keepMountUpdates: true });
+      const { onUrlUpdate } = renderPage("?tab=settings", { observeMountUrlWrites: true });
 
       expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
       await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
@@ -180,7 +181,7 @@ describe("ModelsAndEndpointsPage", () => {
 
     it("hides the write-only tabs from a view-only admin deep link", async () => {
       mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
-      const { onUrlUpdate } = renderPage("?tab=llm-credentials", { keepMountUpdates: true });
+      const { onUrlUpdate } = renderPage("?tab=llm-credentials", { observeMountUrlWrites: true });
 
       expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
       await waitFor(() => expect(lastUrl(onUrlUpdate).has("tab")).toBe(false));
@@ -189,13 +190,15 @@ describe("ModelsAndEndpointsPage", () => {
     it("holds a team-scoped ?tab= while teams load, then opens it once the user is a team admin", async () => {
       mockUseAuthorized.mockReturnValue(NON_ADMIN);
       teamsState.data = undefined;
-      const { onUrlUpdate, rerender } = renderPage("?tab=add", { keepMountUpdates: true });
+      teamsState.isLoading = true;
+      const { onUrlUpdate, rerender } = renderPage("?tab=add", { observeMountUrlWrites: true });
 
       await new Promise((resolve) => setTimeout(resolve, URL_SETTLE_MS));
       expect(onUrlUpdate).not.toHaveBeenCalled();
       expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
 
       teamsState.data = [TEAM_ADMINED_BY_U1];
+      teamsState.isLoading = false;
       rerender(<ModelsAndEndpointsPage />);
 
       expect(await screen.findByTestId("panel-add")).toBeInTheDocument();
@@ -206,14 +209,41 @@ describe("ModelsAndEndpointsPage", () => {
     it("clears a team-scoped ?tab= once teams load and the user cannot create models", async () => {
       mockUseAuthorized.mockReturnValue(NON_ADMIN);
       teamsState.data = undefined;
+      teamsState.isLoading = true;
       const { onUrlUpdate, rerender } = renderPage("?tab=add");
 
       teamsState.data = [];
+      teamsState.isLoading = false;
       rerender(<ModelsAndEndpointsPage />);
 
       expect(await screen.findByTestId("panel-all-models")).toBeInTheDocument();
       await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
       expect(lastUrl(onUrlUpdate).has("tab")).toBe(false);
+    });
+
+    it.each(["add", "auto-routers"])(
+      "falls back to Your Models and clears ?tab=%s when the teams request failed",
+      async (tab) => {
+        mockUseAuthorized.mockReturnValue(NON_ADMIN);
+        teamsState.data = undefined;
+        teamsState.isLoading = false;
+        const { onUrlUpdate } = renderPage(`?tab=${tab}`, { observeMountUrlWrites: true });
+
+        expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
+        expect(screen.getByRole("tab", { name: "Your Models" })).toHaveAttribute("aria-selected", "true");
+        await waitFor(() => expect(lastUrl(onUrlUpdate).has("tab")).toBe(false));
+      },
+    );
+
+    it("does not hold ?tab=add for a view-only admin while teams load", async () => {
+      mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+      teamsState.data = undefined;
+      teamsState.isLoading = true;
+      const { onUrlUpdate } = renderPage("?tab=add", { observeMountUrlWrites: true });
+
+      expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "All Models" })).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(lastUrl(onUrlUpdate).has("tab")).toBe(false));
     });
   });
 
