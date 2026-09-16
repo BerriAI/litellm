@@ -6,6 +6,8 @@ import PromptTable from "./PromptTable";
 import PromptInfoView from "./prompt_info";
 import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
+import type { PromptEditorViewProps } from "./prompt_editor_view/types";
+import { toPromptEnvFilter, usePromptEnvFilter, usePromptsPanelUrlState } from "./usePromptsUrlState";
 import { toast } from "@/lib/toast";
 import { isProxyAdminRole } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
@@ -36,20 +38,28 @@ interface PromptsProps {
   userRole?: string;
 }
 
+interface EditSession {
+  promptId: string;
+  data: PromptEditorViewProps["initialPromptData"];
+}
+
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
-  const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
-  const [selectedPromptEnvironment, setSelectedPromptEnvironment] = useState<string | undefined>(undefined);
+  const [envFilter, setEnvFilter] = usePromptEnvFilter();
+  const panel = usePromptsPanelUrlState();
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
-  const [showEditorView, setShowEditorView] = useState(false);
-  const [editPromptData, setEditPromptData] = useState<any>(null);
+  const [editSession, setEditSession] = useState<EditSession | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string; environment: string } | null>(null);
 
   // Admin Viewer follows the read-parity rule: see prompts, no writes.
   const canModify = userRole ? isProxyAdminRole(userRole) : false;
+  const selectedEnvironment = envFilter === "all" ? undefined : envFilter;
+  const selectedPromptId = panel.promptId;
+  const editPromptData = editSession?.promptId === selectedPromptId ? editSession.data : null;
+  const canOpenEditor = selectedPromptId === null ? canModify : editPromptData !== null;
+  const showEditorView = panel.isEditorRequested && canOpenEditor;
 
   const fetchPrompts = async () => {
     if (!accessToken) {
@@ -73,27 +83,22 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   }, [accessToken, selectedEnvironment]);
 
   const handlePromptClick = (promptId: string, environment: string) => {
-    setSelectedPromptId(promptId);
-    setSelectedPromptEnvironment(environment);
+    setEditSession(null);
+    panel.openPrompt(promptId, environment);
   };
 
   const handleAddPrompt = () => {
-    if (selectedPromptId) {
-      setSelectedPromptId(null);
-    }
-    setEditPromptData(null);
-    setShowEditorView(true);
+    setEditSession(null);
+    panel.openNewPromptEditor();
   };
 
-  const handleEditPrompt = (promptData: any) => {
-    setEditPromptData(promptData);
-    setShowEditorView(true);
+  const handleEditPrompt = (promptData: EditSession["data"]) => {
+    if (selectedPromptId === null) return;
+    setEditSession({ promptId: selectedPromptId, data: promptData });
+    panel.openEditor();
   };
 
   const handleAddPromptFromFile = () => {
-    if (selectedPromptId) {
-      setSelectedPromptId(null);
-    }
     setIsAddModalVisible(true);
   };
 
@@ -102,15 +107,14 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   };
 
   const handleCloseEditor = () => {
-    setShowEditorView(false);
-    setEditPromptData(null);
+    setEditSession(null);
+    panel.closeEditor();
   };
 
   const handleSuccess = () => {
     fetchPrompts();
-    setShowEditorView(false);
-    setEditPromptData(null);
-    setSelectedPromptId(null);
+    setEditSession(null);
+    if (selectedPromptId !== null || panel.isEditorRequested) panel.closePrompt();
   };
 
   const handleDeleteClick = (promptId: string, promptName: string, environment: string) => {
@@ -150,8 +154,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       ) : selectedPromptId ? (
         <PromptInfoView
           promptId={selectedPromptId}
-          initialEnvironment={selectedPromptEnvironment}
-          onClose={() => setSelectedPromptId(null)}
+          initialEnvironment={panel.promptEnvironment ?? undefined}
+          onClose={panel.closePrompt}
           accessToken={accessToken}
           isAdmin={canModify}
           onDelete={fetchPrompts}
@@ -177,7 +181,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
             <Select
               items={ENVIRONMENT_ITEMS}
               value={selectedEnvironment ?? null}
-              onValueChange={(value) => setSelectedEnvironment((value as string | null) ?? undefined)}
+              onValueChange={(value) => setEnvFilter(toPromptEnvFilter(value))}
             >
               <SelectTrigger className="w-[180px]">
                 <SelectValue placeholder={ALL_ENVIRONMENTS_LABEL} />
