@@ -37,6 +37,9 @@ test.describe("Proxy Admin - Key budget window", () => {
 
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
+    // The initial, unfiltered list must already contain this newly created key.
+    // useKeys keeps that list visible while the filtered search is pending.
+    await expect(page.getByRole("row").filter({ hasText: alias })).toBeVisible({ timeout: 15_000 });
     // Deliver the real search result after editing starts: replacing the list's
     // key object must not reset the open form and erase its unsaved budget.
     const searchReceived = Promise.withResolvers<void>();

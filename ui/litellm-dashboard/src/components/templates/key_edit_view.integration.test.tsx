@@ -998,13 +998,31 @@ describe("KeyEditView", () => {
     fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
       target: { value: "12.5" },
     });
-    view.rerender(<KeyEditView {...props} keyData={{ ...MOCK_KEY_DATA, max_budget: 99 }} />);
+    view.rerender(
+      <KeyEditView
+        {...props}
+        keyData={{
+          ...MOCK_KEY_DATA,
+          max_budget: 99,
+          rpm_limit: 75,
+          models: ["gpt-4"],
+          metadata: { note: "new" },
+          object_permission: { ...MOCK_KEY_DATA.object_permission, vector_stores: ["store-new"] },
+        }}
+      />,
+    );
     await chooseSelectOption(userEvent, screen.getByLabelText("Reset Budget"), "monthly");
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
-    await waitFor(() =>
-      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: "12.5", budget_duration: "30d" })),
-    );
+    const expected = {
+      max_budget: "12.5",
+      budget_duration: "30d",
+      rpm_limit: 75,
+      models: ["gpt-4"],
+      metadata: JSON.stringify({ note: "new" }, null, 2),
+      vector_stores: ["store-new"],
+    };
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expected)));
   });
 
   it("should start a fresh budget draft when switching to another key", async () => {
@@ -1604,6 +1622,8 @@ describe("KeyEditView", () => {
       view.rerender(<></>);
       view.rerender(renderEditor({ ...key }));
       await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
+      view.rerender(renderEditor({ ...key, spend: 1 }));
+      expect(screen.getByRole("button", { name: "Keep project" })).toBeVisible();
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
       await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach)));
