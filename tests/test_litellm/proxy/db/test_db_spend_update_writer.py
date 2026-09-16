@@ -2492,7 +2492,18 @@ async def test_daily_transaction_carries_compression_saved_tokens():
 
 
 @pytest.mark.asyncio
-async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
+@pytest.mark.parametrize("estimate, recorded_savings, expected", [
+    pytest.param(None, None, -0.005, id="plain-classifier-cost"),
+    pytest.param({"version": 1, "status": "unknown"}, None, 0.0, id="unknown"),
+    pytest.param({"version": 2, "status": "unknown"}, None, 0.0, id="unknown-v2"),
+    pytest.param({"version": 1, "status": "unknown"}, -0.003, 0.0, id="unknown-stale-value"),
+    pytest.param({"version": 0, "status": "estimated"}, -0.003, 0.0, id="unsupported-version"),
+    pytest.param({"version": 1, "status": "estimated"}, -0.003, -0.003, id="estimated"),
+    pytest.param(None, -0.003, -0.003, id="legacy"),
+])
+async def test_daily_transaction_compression_saved_tokens_zero_when_absent(
+    estimate: dict[str, object] | None, recorded_savings: float | None, expected: float,
+) -> None:
     """Requests without any compression metadata produce a zero count."""
     writer = DBSpendUpdateWriter()
     mock_prisma = MagicMock()
@@ -2510,7 +2521,12 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
         "prompt_tokens": 100,
         "completion_tokens": 10,
         "spend": 0.01,
-        "metadata": json.dumps({"usage_object": {}}),
+        "metadata": json.dumps({
+            "usage_object": {"prompt_tokens": 100, "completion_tokens": 10},
+            "routing_decision": {"savings_baseline_model": "anthropic/claude-sonnet-5", "classifier_cost": 0.005},
+            "autorouter_savings": recorded_savings,
+            "autorouter_savings_estimate": estimate,
+        }),
     }
 
     transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
@@ -2523,6 +2539,8 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+    assert transaction["spend"] == 0.01
+    assert transaction["autorouter_savings_spend"] == expected
 
 
 # ---------------------------------------------------------------------------

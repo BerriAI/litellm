@@ -1037,6 +1037,13 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
 
 @dataclass(frozen=True, slots=True)
+class BaselineRouteStamp:
+    router_name: str
+    baseline_model: str
+    baseline_deployment_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConsumedRequestTagsStamp:
     """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
 

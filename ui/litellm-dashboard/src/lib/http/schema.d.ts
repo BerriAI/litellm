@@ -23556,9 +23556,9 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost for covered turns only
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
              * Classifier Cost
@@ -23577,16 +23577,29 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description saved_spend over baseline_spend, as a percentage
+             * @description Covered savings over covered baseline spend, as a percentage
              */
-            saved_pct: number;
-            /** Saved Per Session */
-            saved_per_session: number;
+            saved_pct: number | null;
+            /**
+             * Saved Per Session
+             * @description Average session savings; unavailable unless every turn is covered
+             */
+            saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             * @description Signed savings for covered turns only; null when traffic has no current estimates
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Sessions */
             sessions: number;
             /**
@@ -23617,9 +23630,9 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost for covered turns only
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
              * Classifier Cost
@@ -23628,16 +23641,29 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description saved_spend over baseline_spend, as a percentage
+             * @description Covered savings over covered baseline spend, as a percentage
              */
-            saved_pct: number;
-            /** Saved Per Session */
-            saved_per_session: number;
+            saved_pct: number | null;
+            /**
+             * Saved Per Session
+             * @description Average session savings; unavailable unless every turn is covered
+             */
+            saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             * @description Signed savings for covered turns only; null when traffic has no current estimates
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Sessions */
             sessions: number;
             /**
@@ -23907,21 +23933,21 @@ export interface components {
         AutoRouterSessionResponse: {
             /**
              * Baseline Model
-             * @description The savings baseline most of this session's turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             * @description The savings baseline most covered turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
              */
             baseline_model: string | null;
             /**
              * Baseline Models
-             * @description Turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             * @description Covered turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
              */
             baseline_models: {
                 [key: string]: number;
             };
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost; unavailable unless every turn is covered
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             /**
              * Last Model
              * @description The deployment model the most recent turn was routed to
@@ -23939,9 +23965,24 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Estimated savings against the baseline, net of classifier cost
+             * @description Estimated savings for covered turns only, net of classifier cost
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Baseline Spend
+             * @description Estimated single-model cost for covered turns only
+             */
+            savings_estimated_baseline_spend: number | null;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Session Id */
             session_id: string;
             /**

@@ -549,6 +549,17 @@ class SpendLogCleanup:
         Prune auto-router session rollup rows, which carry their own retention horizon.
         """
         session_cutoff: Final = datetime.now(timezone.utc) - timedelta(seconds=float(retention_seconds))
+        from litellm.proxy.db.baseline_accounting import BaselineAccountingStore
+
+        if remaining_ms := self._remaining_timeout_ms(deadline)():
+            try:
+                await BaselineAccountingStore.for_client(prisma_client).retire_before(
+                    session_cutoff,
+                    self.batch_size,
+                    remaining_ms,
+                )
+            except Exception:  # noqa: BLE001  # retained observations are retried by the next cleanup job
+                verbose_proxy_logger.warning("Auto-router baseline retention remains pending")
         sessions_result: Final = await self._delete_old_autorouter_session_rows(prisma_client, session_cutoff, deadline)
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
         return (sessions_result,)

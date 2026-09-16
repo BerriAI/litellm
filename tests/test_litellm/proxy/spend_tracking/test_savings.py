@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 
@@ -23,13 +23,13 @@ pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 def test_baseline_preserves_anthropic_pricing_fields(modifier: dict[str, str], continuing: bool) -> None:
     usage: Final = _usage(1000, 0, 1000, 100).model_copy(update=modifier)
     expected: Final = (_usage(1000, 1000, 0, 100) if continuing else usage).model_copy(update=modifier)
-    normalized: Final = _baseline_usage(usage, continuing)
+    normalized: Final = _baseline_usage(expected)
     cache_fields: Final = {"prompt_tokens_details", "cache_read_input_tokens", "cache_creation_input_tokens"}
     assert normalized.model_dump(exclude=cache_fields) == usage.model_dump(exclude=cache_fields)
     assert usage.prompt_tokens_details.cached_tokens == 0
     selected_cost: Final = 0.013
     assert compute_autorouter_savings(
-        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, conversation_continuing=continuing,
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, baseline_usage=expected,
         cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
     ) == pytest.approx(sum(anthropic_cost_per_token("claude-opus-5", expected)) - selected_cost)
 
@@ -41,7 +41,7 @@ def test_anthropic_baseline_keeps_negotiated_prices_with_provider_multiplier() -
     }
     usage: Final = _usage(1000, 1000, 0, 100).model_copy(update={"speed": "fast"})
     assert compute_autorouter_savings(
-        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, baseline_info=info,
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, baseline_info=info, baseline_usage=usage,
         cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
     ) == pytest.approx(0.0015 * 2 - 0.013)
 
@@ -428,146 +428,109 @@ def test_negative_token_counts_clamp_to_zero():
     assert result.prompt_caching == 0.0
 
 
-def _usage(fresh: int, cached: int, written: int, out: int) -> Usage:
+def _usage(fresh: int, cached: int, written: int, out: int, *, hour: bool = False, image: int = 0) -> Usage:
     """Usage as the spend log records it; `prompt_tokens` is the inclusive total."""
     return Usage(
         prompt_tokens=fresh + cached + written,
         completion_tokens=out,
         total_tokens=fresh + cached + written + out,
-        prompt_tokens_details={"cached_tokens": cached, "cache_creation_tokens": written, "text_tokens": fresh},
+        prompt_tokens_details={
+            "cached_tokens": cached, "cache_creation_tokens": written, "text_tokens": fresh - image, "image_tokens": image,
+            "cache_creation_token_details": {"ephemeral_1h_input_tokens": written} if hour else None,
+        },
         cache_read_input_tokens=cached,
         cache_creation_input_tokens=written,
     )
 
 
-def _savings(baseline: str, selected: str, usage: Usage, continuing: bool = True) -> float:
-    """Savings for a request, defaulting to a conversation already underway.
-
-    `continuing=True` is the mid-conversation case, where the baseline had the prompt
-    cached and this request's write is what the switch cost. `continuing=False` is a
-    conversation's first turn, where nothing was cached for any model.
-    """
+def _savings(baseline: str, selected: str, usage: Usage, baseline_usage: Usage | None = None) -> float | None:
     return compute_autorouter_savings(
         baseline_model=baseline,
         selected_model=selected,
         selected_provider="anthropic",
         usage=usage,
-        conversation_continuing=continuing,
+        baseline_usage=baseline_usage,
     )
 
 
-def test_switching_models_mid_conversation_charges_the_cold_cache_write():
-    """Staying on one model writes the cache once and reads it thereafter. Switching
-    leaves the new model cold, so it pays to write the whole prompt again; when that
-    charge outweighs the cheaper rates the route lost money and must report a loss.
-
-    Pricing the baseline as if it too re-wrote the cache credits a charge it never
-    paid, which is how a losing switch used to read as the largest saving on the page.
-    """
-    usage = _usage(fresh=3, cached=500, written=12304, out=500)
-    result = _savings("claude-sonnet-5", "claude-haiku-4-5", usage)
-
-    sonnet = litellm.get_model_info("claude-sonnet-5", "anthropic")
-    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    warm_baseline = (
-        3 * sonnet["input_cost_per_token"]
-        + 12804 * sonnet["cache_read_input_token_cost"]
-        + 500 * sonnet["output_cost_per_token"]
+@pytest.mark.parametrize("baseline, selected, actual, modeled, loses_money", [
+    pytest.param("claude-sonnet-5", "claude-haiku-4-5", _usage(3, 500, 12304, 500),
+                 _usage(3, 12804, 0, 500), True, id="warm-baseline-cold-route"),
+    pytest.param("claude-opus-5", "claude-opus-5", _usage(0, 0, 20000, 1000),
+                 _usage(0, 20000, 0, 1000), True, id="same-model-cold-route"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(0, 19000, 1000, 1000),
+                 _usage(0, 19500, 500, 1000), False, id="partly-cached-growth"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(0, 0, 100000, 1000, hour=True),
+                 _usage(0, 0, 100000, 1000, hour=True), False, id="expired-one-hour"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(0, 0, 100000, 1000, hour=True),
+                 _usage(0, 100000, 0, 1000), True, id="invented-one-hour-hit"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(4000, 0, 16000, 1000, hour=True, image=4000),
+                 _usage(4000, 0, 16000, 1000, hour=True, image=4000), False, id="image-and-one-hour-write"),
+])
+def test_supplied_baseline_usage_is_priced_independently(
+    baseline: str, selected: str, actual: Usage, modeled: Usage, loses_money: bool,
+) -> None:
+    result: Final = _savings(baseline, selected, actual, modeled)
+    expected: Final = sum(generic_cost_per_token(model=baseline, usage=modeled, custom_llm_provider="anthropic")) - sum(
+        generic_cost_per_token(model=selected, usage=actual, custom_llm_provider="anthropic")
     )
-    actually_paid = (
-        3 * haiku["input_cost_per_token"]
-        + 500 * haiku["cache_read_input_token_cost"]
-        + 12304 * haiku["cache_creation_input_token_cost"]
-        + 500 * haiku["output_cost_per_token"]
-    )
-    assert result == pytest.approx(warm_baseline - actually_paid)
-    assert result < 0, "a cache-thrashing switch must report a loss, not a saving"
-
-    phantom = 12304 * sonnet["cache_creation_input_token_cost"]
-    assert result != pytest.approx(warm_baseline + phantom - actually_paid)
+    assert result == pytest.approx(expected)
+    assert result is not None and (result < 0) is loses_money
+    assert _baseline_usage(modeled).prompt_tokens_details == modeled.prompt_tokens_details
 
 
-def test_a_cold_switch_never_beats_turning_caching_off():
-    """Switching to a cold model makes it write the whole prompt again. That write is a
-    real cost of switching, so the same traffic must look worse than if caching were off
-    entirely.
-
-    The baseline is priced as a warm cache even though this request read nothing: a
-    switch reads nothing precisely because the new model's cache is empty, and staying
-    on one model would have had the prompt cached already. Gating the warm baseline on
-    a read charged the baseline a write it would never repeat, which made a cold switch
-    report a larger saving than no caching at all.
-    """
-    cold_switch = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 0, 20_000, 1_000))
-    caching_off = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(20_000, 0, 0, 1_000))
-
-    assert cold_switch < caching_off
-
-    opus = litellm.get_model_info("claude-opus-5", "anthropic")
-    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    warm_baseline = 20_000 * opus["cache_read_input_token_cost"] + 1_000 * opus["output_cost_per_token"]
-    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
-    assert cold_switch == pytest.approx(warm_baseline - actually_paid)
-
-
-def test_moving_one_token_between_cache_buckets_does_not_move_the_answer():
-    """A continuing conversation writes a few new tokens and reads the rest. Treating the
-    presence of a write as the signal for a switch made that ordinary increment flip the
-    result, so a request reading 19,999 and writing 1 landed somewhere entirely different
-    from one reading 20,000 and writing none.
-    """
-    reads_nothing = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 0, 20_000, 1_000))
-    reads_one = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", _usage(0, 1, 19_999, 1_000))
-    assert reads_one == pytest.approx(reads_nothing, abs=1e-4)
+@pytest.mark.parametrize("modifier, multiplier", [({}, 1.0), ({"inference_geo": "us"}, 1.1), ({"speed": "fast"}, 2.0)])
+@pytest.mark.parametrize("negotiated", [False, True])
+@pytest.mark.parametrize("provenance", [None, "modeled", "observed_initial"])
+def test_observed_initial_uses_provider_billing_and_effective_rates(
+    modifier: dict[str, str], multiplier: float, negotiated: bool,
+    provenance: Literal["modeled", "observed_initial"] | None,
+) -> None:
+    usage: Final = _usage(1000, 2000, 3000, 100).model_copy(update=modifier)
+    info: Final = litellm.get_model_info("claude-opus-5", "anthropic").copy()
+    if negotiated:
+        info["input_cost_per_token"] = 1e-6
+        info["output_cost_per_token"] = 2e-6
+        info["cache_read_input_token_cost"] = 3e-7
+        info["cache_creation_input_token_cost"] = 4e-6
+    billed: Final = anthropic_cost_per_token("claude-opus-5", usage, model_info=info)
+    if negotiated:
+        assert sum(billed) == pytest.approx(0.0138 * multiplier)
+    assert compute_autorouter_savings(
+        "anthropic/claude-opus-5", "claude-opus-5", "anthropic", usage,
+        selected_info=info, baseline_info=info, baseline_usage=usage,
+        baseline_deployment_id="same", selected_deployment_id="same",
+        cost_breakdown={"input_cost": billed[0], "output_cost": billed[1]},
+        baseline_provenance=provenance,
+    ) == 0.0
 
 
-def test_multimodal_prompts_are_priced_on_the_baseline_too():
-    """The baseline is this same request met by a warm cache, so every field it was
-    priced on has to survive. Rebuilding the details from the cache buckets alone
-    dropped the image and audio counts, which priced the baseline as a text-only
-    request that never ran and shrank the reported saving on multimodal traffic.
-    """
-    details = {"cached_tokens": 0, "cache_creation_tokens": 16_000, "text_tokens": 0, "image_tokens": 4_000}
-    with_images = Usage(
-        prompt_tokens=20_000,
-        completion_tokens=1_000,
-        total_tokens=21_000,
-        prompt_tokens_details=details,
-    )
-    baseline = _baseline_usage(with_images, conversation_continuing=True)
-
-    assert baseline.prompt_tokens_details.image_tokens == 4_000, "image tokens must survive into the baseline"
-
-    opus = litellm.get_model_info("claude-opus-5", "anthropic")
-    priced, _ = generic_cost_per_token(model="claude-opus-5", usage=baseline, custom_llm_provider="anthropic")
-    text_only = 20_000 * opus["cache_read_input_token_cost"]
-    assert priced > text_only, "dropping the image tokens undercharges the baseline and hides the saving"
-
-
-def test_the_baseline_is_never_charged_a_cache_write():
-    """Carrying the details through must not carry the 5m/1h creation breakdown with
-    them. `generic_cost_per_token` charges a creation cost whenever that breakdown is
-    present, even against a zeroed creation count, which would put the phantom write
-    back on the baseline for every long-cache request.
-    """
-    long_cache = Usage(
-        prompt_tokens=20_000,
-        completion_tokens=1_000,
-        total_tokens=21_000,
-        prompt_tokens_details={
-            "cached_tokens": 0,
-            "cache_creation_tokens": 20_000,
-            "text_tokens": 0,
-            "cache_creation_token_details": {"ephemeral_1h_input_tokens": 20_000},
-        },
-    )
-    baseline = _baseline_usage(long_cache, conversation_continuing=True)
-
-    opus = litellm.get_model_info("claude-opus-5", "anthropic")
-    priced, _ = generic_cost_per_token(model="claude-opus-5", usage=baseline, custom_llm_provider="anthropic")
-    assert priced == pytest.approx(20_000 * opus["cache_read_input_token_cost"]), (
-        "the baseline reads a warm cache; it never pays to create one"
-    )
+@pytest.mark.parametrize("model, deployment, known, delta", [
+    ("claude-sonnet-5", "same", "observed", 0.0),
+    ("claude-opus-5", "other", "observed", 0.0),
+    ("claude-opus-5", "", "observed", 0.0),
+    ("claude-opus-5", "same", "missing", 0.0),
+    ("claude-opus-5", "same", "different", 0.0),
+    ("claude-opus-5", "same", "observed", 0.01),
+    ("claude-opus-5", "same", "prices", 0.0),
+    ("claude-opus-5", "same", "unbilled", 0.0),
+])
+def test_initial_provenance_cannot_override_mismatched_evidence(
+    model: str, deployment: str, known: Literal["observed", "missing", "different", "prices", "unbilled"], delta: float,
+) -> None:
+    usage: Final = _usage(1000, 0, 1000, 100)
+    billed: Final = anthropic_cost_per_token("claude-opus-5", usage)
+    info: Final = litellm.get_model_info(model, "anthropic").copy()
+    if known == "prices":
+        info["cache_read_input_token_cost"] = 0.001  # No reads here: equal charge alone cannot establish equal rates.
+    assert compute_autorouter_savings(
+        "claude-opus-5", model, "anthropic", usage,
+        baseline_usage=(None if known == "missing" else _usage(1000, 1000, 0, 100) if known == "different" else usage),
+        selected_info=info,
+        baseline_provenance="observed_initial",
+        baseline_deployment_id="same", selected_deployment_id=deployment,
+        cost_breakdown=None if known == "unbilled" else {"input_cost": billed[0] + delta, "output_cost": billed[1]},
+    ) is None
 
 
 def test_uncached_request_is_the_plain_rate_difference():
@@ -588,11 +551,12 @@ def test_escalation_reports_its_real_cost():
 
 
 def test_autorouter_savings_zero_when_model_unchanged():
-    assert _savings("claude-opus-5", "claude-opus-5", _usage(3, 500, 12304, 500)) == 0.0
+    usage: Final = _usage(3, 500, 12304, 500)
+    assert _savings("claude-opus-5", "claude-opus-5", usage, usage) == 0.0
 
 
-def test_autorouter_savings_unknown_baseline_fails_open_to_zero():
-    assert _savings("totally-made-up-model-xyz", "claude-haiku-4-5", _usage(3, 500, 12304, 500)) == 0.0
+def test_autorouter_savings_unknown_baseline_remains_unknown():
+    assert _savings("totally-made-up-model-xyz", "claude-haiku-4-5", _usage(3, 500, 12304, 500)) is None
 
 
 def test_autorouter_savings_zero_without_baseline():
@@ -607,9 +571,7 @@ def test_autorouter_savings_zero_without_baseline():
     assert result.autorouter == 0.0
 
 
-def test_compute_savings_spend_carries_a_losing_switch_through():
-    """The signed value must survive into SavingsSpend; clamping it here would put the
-    dashboard back to only ever showing gains."""
+def test_compute_savings_spend_carries_a_recorded_losing_switch_through():
     result = compute_savings_spend(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
@@ -617,6 +579,7 @@ def test_compute_savings_spend_carries_a_losing_switch_through():
         gateway_injected_cache=True,
         routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-sonnet-5"},
         usage_object=_cached_usage_object(),
+        recorded_autorouter_savings=-0.01,
     )
     assert result.autorouter < 0
 
@@ -651,18 +614,10 @@ def test_malformed_usage_object_does_not_fail_the_spend_write():
     assert result.compression > 0
 
 
-def test_the_same_deployment_spelled_two_ways_is_not_a_switch():
-    """The spend log records a normalized model name while the baseline arrives as the
-    operator wrote it in config. Comparing the raw strings makes a request that never
-    changed model look like a switch, and prices one deployment against itself."""
-    # Must be a cached request: the baseline arm is priced against a warm cache and the
-    # selected arm against what was actually paid, so treating one deployment as two
-    # charges it a cold-cache write it never took, inventing a loss on a request that
-    # never changed model. An uncached request prices identically either way and would
-    # make this assertion vacuous.
-    usage = _usage(fresh=3, cached=500, written=12304, out=500)
-    assert _savings("anthropic/claude-opus-5", "claude-opus-5", usage) == 0.0
-    assert _savings("claude-opus-5", "anthropic/claude-opus-5", usage) == 0.0
+def test_equal_modeled_usage_is_zero_under_equivalent_model_names() -> None:
+    usage: Final = _usage(3, 500, 12304, 500)
+    assert _savings("anthropic/claude-opus-5", "claude-opus-5", usage, usage) == 0.0
+    assert _savings("claude-opus-5", "anthropic/claude-opus-5", usage, usage) == 0.0
 
 
 def test_baseline_is_priced_under_its_own_provider():
@@ -686,99 +641,9 @@ def test_baseline_is_priced_under_its_own_provider():
     assert azure > 0 > deepseek
 
 
-def test_unresolvable_baseline_fails_open_to_zero():
+def test_unresolvable_baseline_remains_unknown():
     usage = _usage(fresh=2000, cached=0, written=0, out=500)
-    assert _savings("no-such-provider-xyz/no-such-model", "claude-haiku-4-5", usage) == 0.0
-
-
-def test_a_first_turn_is_the_rate_difference_not_a_switch_penalty():
-    """Nothing was cached anywhere on a conversation's first turn, so the baseline would
-    have paid the same cache write. Charging it to the selected arm alone reported a
-    fraction of the real saving; on this shape roughly 4% of it.
-    """
-    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
-    first_turn = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, continuing=False)
-
-    opus = litellm.get_model_info("claude-opus-5", "anthropic")
-    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    both_write = (20_000 * opus["cache_creation_input_token_cost"] + 1_000 * opus["output_cost_per_token"]) - (
-        20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
-    )
-    assert first_turn == pytest.approx(both_write)
-
-    mid_conversation = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage)
-    assert first_turn > mid_conversation * 10, "a first turn must not be priced as a switch"
-
-
-def test_a_first_turn_that_saves_money_never_reports_a_loss():
-    """The write premium is fixed by prompt size while the saving grows with completion
-    length, so charging the write to a first turn made short answers over a large cached
-    prompt read as losses on requests that genuinely saved. That is the shape most likely
-    to be on the dashboard, and the sign has to be right.
-    """
-    short_answer = _usage(fresh=0, cached=0, written=20_000, out=200)
-    assert _savings("anthropic/claude-opus-5", "claude-haiku-4-5", short_answer, continuing=False) > 0
-    assert _savings("anthropic/claude-opus-5", "claude-haiku-4-5", short_answer) < 0
-
-
-def test_an_undetermined_conversation_shape_stays_conservative():
-    """The default must charge the write. A caller that cannot be read, or a surface the
-    router never classified, has said nothing about whether the baseline was warm, and a
-    savings figure must not inflate on a guess.
-    """
-    usage = _usage(fresh=0, cached=0, written=20_000, out=1_000)
-    defaulted = compute_autorouter_savings(
-        baseline_model="anthropic/claude-opus-5",
-        selected_model="claude-haiku-4-5",
-        selected_provider="anthropic",
-        usage=usage,
-    )
-    assert defaulted == pytest.approx(_savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage))
-    assert defaulted < _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage, continuing=False)
-
-
-def test_a_continuing_turn_on_the_same_model_writes_its_growth_on_both_arms():
-    """A conversation that grew by a few tokens writes those on whatever model serves
-    it, and they are new to every model, so the baseline would have written them too.
-    Moving them into the baseline's read bucket forgives it a write it really owes and
-    shrinks the reported saving on ordinary steady-state traffic.
-    """
-    usage = _usage(fresh=0, cached=19_900, written=100, out=1_000)
-    opus = litellm.get_model_info("claude-opus-5", "anthropic")
-    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-
-    def cost(info: dict) -> float:
-        return (
-            19_900 * info["cache_read_input_token_cost"]
-            + 100 * info["cache_creation_input_token_cost"]
-            + 1_000 * info["output_cost_per_token"]
-        )
-
-    both_write_the_growth = cost(opus) - cost(haiku)
-    assert _savings("anthropic/claude-opus-5", "claude-haiku-4-5", usage) == pytest.approx(both_write_the_growth)
-
-
-def test_a_switch_onto_a_partly_cached_model_still_pays_for_the_write():
-    """A model holding a small prefix of this prompt still has to write the rest, and
-    that write is the switch's cost. Keying the same-model case off reading *anything*
-    rather than reading *most of it* would hand this request the full rate gap and
-    inflate the saving by an order of magnitude.
-    """
-    mostly_written = _usage(fresh=0, cached=500, written=19_500, out=1_000)
-    reported = _savings("anthropic/claude-opus-5", "claude-haiku-4-5", mostly_written)
-
-    opus = litellm.get_model_info("claude-opus-5", "anthropic")
-    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    if_treated_as_same_model = (
-        500 * opus["cache_read_input_token_cost"]
-        + 19_500 * opus["cache_creation_input_token_cost"]
-        + 1_000 * opus["output_cost_per_token"]
-    ) - (
-        500 * haiku["cache_read_input_token_cost"]
-        + 19_500 * haiku["cache_creation_input_token_cost"]
-        + 1_000 * haiku["output_cost_per_token"]
-    )
-    assert reported < if_treated_as_same_model / 10, "a mostly-cold switch must not be priced as a continuation"
+    assert _savings("no-such-provider-xyz/no-such-model", "claude-haiku-4-5", usage) is None
 
 
 def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
@@ -794,7 +659,7 @@ def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=first_turn,
-        conversation_continuing=False,
+        baseline_usage=first_turn,
     )
 
     gpt5 = litellm.get_model_info("gpt-5", "openai")
@@ -830,7 +695,7 @@ def _priced_chat_model_without_cache_read_rate() -> tuple[str, str, str]:
             usage=_usage(fresh=1_000, cached=0, written=0, out=100),
             conversation_continuing=True,
         )
-        if priced == 0.0:
+        if priced is None or priced == 0.0:
             continue
         return key, key.removeprefix(f"{provider}/"), provider
     raise AssertionError("the bundled map has no per-token chat model without a cache-read rate")
@@ -848,7 +713,7 @@ def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=continuing,
-        conversation_continuing=True,
+        baseline_usage=_usage(0, 20000, 0, 1000),
     )
 
     baseline = litellm.get_model_info(baseline_name, baseline_provider)
@@ -989,7 +854,7 @@ def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
         compression_saved_tokens=0,
         gateway_injected_cache=True,
         routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-opus-5"},
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
     )
     assert result.autorouter != 0.0
 
@@ -1004,13 +869,13 @@ def test_a_leftover_configured_baseline_does_not_override_the_recorded_one(monke
         compression_saved_tokens=0,
         gateway_injected_cache=True,
         routing_decision={"conversation_continuing": True, "savings_baseline_model": "anthropic/claude-opus-5"},
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
     )
     against_opus = compute_autorouter_savings(
         baseline_model="anthropic/claude-opus-5",
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
-        usage=Usage(**_cached_usage_object()),
+        usage=_usage(12807, 0, 0, 500),
     )
     assert result.autorouter == against_opus
 
@@ -1077,12 +942,12 @@ def test_prompt_caching_prices_at_the_deployment_rate_not_the_public_one():
         ("baseline", "selected", 2.0, None, 0.0, -0.015),
         ("baseline", "selected", 1.0, None, 0.0, 0.0),
         ("baseline", "selected", 0.1, 0.004, 0.001, 0.01),
-        ("baseline", "baseline", 0.1, 0.004, 0.001, -0.001),
-        (None, "selected", 0.1, None, 0.0, 0.0),
-        ("baseline", None, 0.1, None, 0.0, 0.0),
+        ("baseline", "baseline", 0.1, 0.004, 0.001, 0.01),
+        (None, "selected", 0.1, None, 0.0, 0.006),
+        ("baseline", None, 0.1, None, 0.0, 0.0075),
         (None, None, 0.1, None, 0.0, 0.0),
-        ("", "selected", 0.1, None, 0.0, 0.0),
-        ("baseline", "", 0.1, None, 0.0, 0.0),
+        ("", "selected", 0.1, None, 0.0, 0.006),
+        ("baseline", "", 0.1, None, 0.0, 0.0075),
     ],
 )
 def test_autorouter_savings_distinguishes_priced_deployments(
@@ -1195,7 +1060,7 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         compression_saved_tokens=0,
         gateway_injected_cache=True,
         routing_decision=decision,
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
         llm_router=lambda: router,
     )
     at_public_rate = compute_savings_spend(
@@ -1204,7 +1069,7 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         compression_saved_tokens=0,
         gateway_injected_cache=True,
         routing_decision={k: v for k, v in decision.items() if k != "savings_baseline_deployment_id"},
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
         llm_router=lambda: router,
     )
     assert with_deployment_rate.autorouter > at_public_rate.autorouter
@@ -1257,9 +1122,8 @@ def test_a_boolean_is_not_a_recorded_savings_figure():
     assert result.autorouter == 0.0
 
 
-def test_rows_written_before_the_field_shipped_recompute():
-    """No recorded figure means the row predates the logging-path stamp; the writer
-    recomputes exactly what the one shared helper would have recorded."""
+@pytest.mark.parametrize("continuing", [False, True])
+def test_legacy_cache_rows_without_an_estimate_do_not_invent_a_new_figure(continuing: bool) -> None:
     from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
 
     recomputed = compute_savings_spend(
@@ -1267,17 +1131,17 @@ def test_rows_written_before_the_field_shipped_recompute():
         custom_llm_provider="anthropic",
         compression_saved_tokens=0,
         gateway_injected_cache=False,
-        routing_decision=_routed_decision(),
+        routing_decision={**_routed_decision(), "conversation_continuing": continuing},
         usage_object=_cached_usage_object(),
     )
     direct = autorouter_savings_for_request(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
-        routing_decision=_routed_decision(),
+        routing_decision={**_routed_decision(), "conversation_continuing": continuing},
         usage_object=_cached_usage_object(),
     )
-    assert direct is not None and direct != 0.0
-    assert recomputed.autorouter == direct
+    assert direct is None
+    assert recomputed.autorouter == 0.0
 
 
 def test_driver_off_is_none_not_zero_for_the_request_helper():
@@ -1317,7 +1181,7 @@ def test_logging_payload_never_stamps_internal_calls():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         model_id=None,
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
         cost_breakdown=None,
     )
     assert stamped is not None and stamped != 0.0
@@ -1327,7 +1191,7 @@ def test_logging_payload_never_stamps_internal_calls():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         model_id=None,
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
         cost_breakdown=None,
     )
     assert internal is None
@@ -1343,13 +1207,13 @@ def test_savings_are_net_of_a_priced_classifier():
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         routing_decision=_routed_decision(),
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
     )
     net = autorouter_savings_for_request(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         routing_decision={**_routed_decision(), "classifier_cost": 0.005},
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
     )
     assert gross is not None and net == pytest.approx(gross - 0.005)
 
@@ -1362,13 +1226,13 @@ def test_an_unpriced_classifier_deducts_nothing(classifier_cost: object):
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         routing_decision=_routed_decision(),
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
     )
     with_cost_field = autorouter_savings_for_request(
         model="claude-haiku-4-5",
         custom_llm_provider="anthropic",
         routing_decision={**_routed_decision(), "classifier_cost": classifier_cost},
-        usage_object=_cached_usage_object(),
+        usage_object=_usage(12807, 0, 0, 500).model_dump(),
     )
     assert with_cost_field == gross
 
@@ -1477,4 +1341,41 @@ def test_marks_gateway_injection_credits_only_the_deployment_that_was_injected()
     assert marks_gateway_injection({"litellm_gateway_injected_cache": ""}, "dep-a") is True
     assert marks_gateway_injection({"litellm_gateway_injected_cache": ""}, None) is True
     assert marks_gateway_injection({"litellm_call_id": "c1"}, "dep-a") is False
+
+
+@pytest.mark.parametrize("classifier", [0.0, 0.02])
+def test_observed_baseline_keeps_both_costs_and_classifier_overhead(classifier: float) -> None:
+    from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot, price_baseline_comparison
+
+    snapshot: Final = BaselineCostSnapshot(
+        model="baseline", provider="anthropic", prices=None,
+        actual_spend=0.17, classifier_cost=classifier,
+    )
+    restored: Final = BaselineCostSnapshot.model_validate_json(snapshot.model_dump_json())
+    result: Final = price_baseline_comparison(restored, Usage(prompt_tokens=100, completion_tokens=10), "observed_identical")
+    assert result is not None
+    assert result.baseline == snapshot.actual_spend
+    assert result.actual == snapshot.actual_spend + classifier
+    assert result.savings == pytest.approx(-classifier)
+    assert price_baseline_comparison(restored, None, None) is None
+
+
+def test_modeled_baseline_uses_recorded_prices_and_preserves_other_actual_charges() -> None:
+    from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot, price_baseline_comparison
+
+    snapshot: Final = BaselineCostSnapshot(
+        model="claude-opus-5", provider="anthropic",
+        prices={
+            **litellm.get_model_info("claude-opus-5", custom_llm_provider="anthropic"),
+            "input_cost_per_token": 0.001, "output_cost_per_token": 0.002,
+        },
+        actual_token_cost=0.2, actual_spend=0.23, classifier_cost=0.01,
+    )
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=10)
+    result: Final = price_baseline_comparison(snapshot, usage, "modeled")
+    assert result is not None
+    assert result.actual == pytest.approx(0.24)
+    assert result.baseline == pytest.approx(0.12 + 0.03)
+    assert result.savings == pytest.approx(-0.09)
+    assert price_baseline_comparison(snapshot.model_copy(update={"prices": None}), usage, "modeled") is None
     assert marks_gateway_injection({"litellm_gateway_injected_cache": True}, "dep-a") is False
