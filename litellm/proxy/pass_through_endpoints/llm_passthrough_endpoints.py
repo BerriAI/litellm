@@ -1200,7 +1200,7 @@ async def bedrock_proxy_route(
 COMPREHEND_MEDICAL_TARGET_PREFIX: Final = "ComprehendMedical_20181030"
 
 
-def _resolve_comprehend_medical_region() -> str | None:
+def _resolve_aws_passthrough_region() -> str | None:
     region_candidates: Final = (
         get_secret_str(secret_name="AWS_REGION_NAME"),
         get_secret_str(secret_name="AWS_REGION"),
@@ -1240,7 +1240,7 @@ async def comprehend_medical_proxy_route(
             ),
         )
 
-    aws_region_name: Final = _resolve_comprehend_medical_region()
+    aws_region_name: Final = _resolve_aws_passthrough_region()
     if aws_region_name is None:
         raise HTTPException(
             status_code=400,
@@ -1310,6 +1310,121 @@ async def comprehend_medical_sdk_proxy_route(
             detail=f"Expected an X-Amz-Target header of the form {COMPREHEND_MEDICAL_TARGET_PREFIX}.<Operation>",
         )
     return await comprehend_medical_proxy_route(
+        operation=operation,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+@router.post(
+    "/transcribe/{operation}",
+    tags=["Amazon Transcribe Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def transcribe_proxy_route(
+    operation: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
+
+    The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+    using the proxy's AWS credentials. Streaming transcription (`transcribestreaming`)
+    uses a separate HTTP/2 event-stream protocol and is not served by this route.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+    """
+    from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
+        TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+        TRANSCRIBE_TARGET_PREFIX,
+        transcribe_supported_operations,
+    )
+
+    if operation not in transcribe_supported_operations():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported Amazon Transcribe operation: {operation}. "
+                f"Supported operations: {', '.join(sorted(transcribe_supported_operations()))}"
+            ),
+        )
+
+    aws_region_name: Final = _resolve_aws_passthrough_region()
+    if aws_region_name is None:
+        raise HTTPException(
+            status_code=400,
+            detail="AWS region not found. Set AWS_REGION_NAME in the proxy environment.",
+        )
+
+    try:
+        data: Final = await _json_request_body(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Request body must be valid JSON: {e}")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    if "stream" in data:
+        raise HTTPException(status_code=400, detail="'stream' is not an Amazon Transcribe request member")
+
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
+
+    target_url: Final = f"https://transcribe.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
+    prepped: Final = await run_aws_signing(
+        sign_aws_json_post,
+        get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
+        service_name="transcribe",
+        aws_region_name=aws_region_name,
+        url=target_url,
+        body=json.dumps(data),
+        headers=MappingProxyType(
+            {
+                "Content-Type": "application/x-amz-json-1.1",
+                "X-Amz-Target": f"{TRANSCRIBE_TARGET_PREFIX}.{operation}",
+            }
+        ),
+    )
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=operation,
+        target=str(prepped.url),
+        custom_headers=prepped.headers,
+        custom_llm_provider=TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepped.body)
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.post(
+    "/transcribe",
+    tags=["Amazon Transcribe Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def transcribe_sdk_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`
+    at `/transcribe` and the operation is read from the `X-Amz-Target` header, per the
+    AWS JSON 1.1 protocol.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+    """
+    from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
+        TRANSCRIBE_TARGET_PREFIX,
+    )
+
+    target_header: Final = request.headers.get("x-amz-target", "")
+    target_prefix, _, operation = target_header.partition(".")
+    if target_prefix != TRANSCRIBE_TARGET_PREFIX or not operation:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected an X-Amz-Target header of the form {TRANSCRIBE_TARGET_PREFIX}.<Operation>",
+        )
+    return await transcribe_proxy_route(
         operation=operation,
         request=request,
         fastapi_response=fastapi_response,

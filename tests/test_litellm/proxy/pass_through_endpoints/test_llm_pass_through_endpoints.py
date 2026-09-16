@@ -5135,6 +5135,137 @@ class TestComprehendMedicalProxyRoute:
         assert exc_info.value.status_code == 400
 
 
+TRANSCRIBE_UPSTREAM = "https://transcribe.us-west-2.amazonaws.com/"
+
+
+@pytest.fixture
+def transcribe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+    yield TestClient(app)
+
+
+class TestTranscribeProxyRoute:
+    START_JOB_BODY: Final = MappingProxyType(
+        {
+            "TranscriptionJobName": "litellm-job-1",
+            "LanguageCode": "en-US",
+            "Media": {"MediaFileUri": "s3://bucket/audio.wav"},
+        }
+    )
+
+    def test_signs_and_forwards_start_transcription_job(self, transcribe_client: TestClient) -> None:
+        upstream_body = {"TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": "IN_PROGRESS"}}
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=upstream_body))
+            response = transcribe_client.post(
+                "/transcribe/StartTranscriptionJob",
+                json=dict(self.START_JOB_BODY),
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert (response.status_code, response.json()) == (200, upstream_body)
+        sent = route.calls.last.request
+        assert json.loads(sent.content) == dict(self.START_JOB_BODY)
+        assert sent.headers["x-amz-target"] == "Transcribe.StartTranscriptionJob"
+        assert sent.headers["content-type"] == "application/x-amz-json-1.1"
+        assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-access-key/")
+        assert "/us-west-2/transcribe/aws4_request" in sent.headers["authorization"]
+        assert "x-amz-date" in sent.headers
+
+    def test_sdk_route_reads_operation_from_x_amz_target_and_resigns(self, transcribe_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=httpx.Response(200, json={"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}})
+            )
+            response = transcribe_client.post(
+                "/transcribe",
+                json={"TranscriptionJobName": "litellm-job-1"},
+                headers={
+                    "Authorization": "AWS4-HMAC-SHA256 Credential=sk-virtual/20260101/us-west-2/transcribe/aws4_request",
+                    "X-Amz-Target": "Transcribe.GetTranscriptionJob",
+                    "Content-Type": "application/x-amz-json-1.1",
+                },
+            )
+
+        assert (response.status_code, response.json()) == (200, {"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}})
+        sent = route.calls.last.request
+        assert sent.headers["x-amz-target"] == "Transcribe.GetTranscriptionJob"
+        assert "Credential=test-access-key/" in sent.headers["authorization"]
+        assert "sk-virtual" not in sent.headers["authorization"]
+
+    def test_upstream_error_status_and_body_are_returned(self, transcribe_client: TestClient) -> None:
+        aws_error = {"__type": "BadRequestException", "Message": "The requested job couldn't be found."}
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(400, json=aws_error))
+            response = transcribe_client.post("/transcribe/GetTranscriptionJob", json={"TranscriptionJobName": "missing"})
+
+        assert (response.status_code, response.json()) == (400, aws_error)
+
+    @pytest.mark.parametrize(
+        "operation",
+        ["Start-Transcription-Job", "Transcribe.StartTranscriptionJob", "a" * 200, "starttranscriptionjob", "DetectEntitiesV2"],
+    )
+    def test_rejects_unsupported_operations_without_calling_aws(self, transcribe_client: TestClient, operation: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(f"/transcribe/{operation}", json={})
+
+        assert response.status_code == 400
+        assert "Unsupported Amazon Transcribe operation" in response.json()["detail"]
+        assert not route.called
+
+    @pytest.mark.parametrize(
+        "raw_body",
+        ['{"MaxResults": 5, "stream": true}', '{"MaxResults": 5, "stream": false}', '["x"]', "not json"],
+    )
+    def test_rejects_bad_bodies_without_calling_aws(self, transcribe_client: TestClient, raw_body: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(
+                "/transcribe/ListTranscriptionJobs", content=raw_body, headers={"Content-Type": "application/json"}
+            )
+
+        assert response.status_code == 400
+        assert not route.called
+
+    def test_missing_region_returns_400_without_calling_aws(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"):
+            monkeypatch.delenv(name, raising=False)
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe/ListTranscriptionJobs", json={})
+
+        assert response.status_code == 400
+        assert "AWS region" in response.json()["detail"]
+        assert not route.called
+
+    @pytest.mark.parametrize("target_header", ["", "Transcribe", "ComprehendMedical_20181030.DetectPHI", "Transcribe."])
+    def test_sdk_route_rejects_bad_x_amz_target(self, transcribe_client: TestClient, target_header: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe", json={}, headers={"X-Amz-Target": target_header})
+
+        assert response.status_code == 400
+        assert "X-Amz-Target" in response.json()["detail"]
+        assert not route.called
+
+    def test_transcribe_is_a_mapped_pass_through_route(self) -> None:
+        from litellm.proxy._types import LiteLLMRoutes
+
+        assert "/transcribe" in LiteLLMRoutes.mapped_pass_through_routes.value
+
+
 LIVE_RESOURCE_PATH = "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
 
 

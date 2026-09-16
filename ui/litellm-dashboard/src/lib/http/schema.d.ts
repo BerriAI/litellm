@@ -16437,6 +16437,56 @@ export interface paths {
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
         trace?: never;
     };
+    "/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`
+         *     at `/transcribe` and the operation is read from the `X-Amz-Target` header, per the
+         *     AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_sdk_proxy_route_transcribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transcribe/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Proxy Route
+         * @description Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
+         *
+         *     The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+         *     using the proxy's AWS credentials. Streaming transcription (`transcribestreaming`)
+         *     uses a separate HTTP/2 event-stream protocol and is not served by this route.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_proxy_route_transcribe__operation__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/update/default_team_settings": {
         parameters: {
             query?: never;
@@ -61416,6 +61466,57 @@ export interface operations {
             header?: never;
             path: {
                 toolset_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transcribe_sdk_proxy_route_transcribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    transcribe_proxy_route_transcribe__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
             };
             cookie?: never;
         };

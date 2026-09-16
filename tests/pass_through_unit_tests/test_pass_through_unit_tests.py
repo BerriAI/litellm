@@ -411,6 +411,8 @@ async def test_pass_through_request_logging_failure_with_stream(
 PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
     "/comprehendmedical": {"POST"},
     "/comprehendmedical/{operation}": {"POST"},
+    "/transcribe": {"POST"},
+    "/transcribe/{operation}": {"POST"},
 }
 
 
@@ -419,8 +421,8 @@ def test_pass_through_routes_support_all_methods():
     A pass-through route fronts a whole provider API, so narrowing its method
     set turns a request the upstream would have accepted into a 405. The
     exceptions are providers whose wire protocol admits only one method: Amazon
-    Comprehend Medical speaks AWS JSON 1.1, which is POST-only, so there is no
-    other method to forward.
+    Comprehend Medical and Amazon Transcribe speak AWS JSON 1.1, which is
+    POST-only, so there is no other method to forward.
     """
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,
