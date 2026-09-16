@@ -1,12 +1,13 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { renderWithProviders } from "../../../tests/test-utils";
-import { screen, waitFor } from "@testing-library/react";
+import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import KeyInfoView from "./key_info_view";
 
 const editViewMocks = vi.hoisted(() => ({
@@ -183,13 +184,19 @@ describe("KeyInfoView", () => {
     rotation_interval: undefined,
     last_rotation_at: undefined,
     key_rotation_at: undefined,
+    key_type: null,
+    last_active: null,
   };
 
   // Base mock for useAuthorized hook
-  const baseUseAuthorizedMock = {
+  const baseUseAuthorizedMock: ReturnType<typeof useAuthorized> = {
+    isLoading: false,
+    isAuthorized: true,
     accessToken: "test-token",
     userId: "test-user",
     userRole: "admin",
+    userRoleLabel: "admin",
+    isViewOnly: false,
     premiumUser: true,
     token: "test-token",
     userEmail: null,
@@ -231,6 +238,88 @@ describe("KeyInfoView", () => {
     renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
 
     expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
+  });
+
+  describe("detail tab in the URL", () => {
+    const keyInfoView = (onClose: () => void = () => {}) => (
+      <KeyInfoView keyData={MOCK_KEY_DATA} onClose={onClose} keyId="test-key-id" teams={[]} />
+    );
+    const lastParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+    it("opens on the tab named by ?key_tab=", () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+
+      renderWithProviders(keyInfoView(), { searchParams: "?key=test-key-id&key_tab=settings" });
+
+      expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("Key Settings")).toBeVisible();
+    });
+
+    it("opens an admin straight on the auto-router usage tab", () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+
+      renderWithProviders(keyInfoView(), { searchParams: "?key_tab=auto-router-usage" });
+
+      expect(screen.getByRole("tab", { name: "Auto-router usage" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("key-auto-router-usage")).toHaveTextContent("test-token-123");
+    });
+
+    it("writes the chosen tab to the URL and drops it again for the overview default", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(keyInfoView(), { searchParams: "?key=test-key-id", onUrlUpdate });
+
+      await userEvent.click(screen.getByRole("tab", { name: "Savings" }));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.get("key_tab")).toBe("savings"));
+      expect(lastParams(onUrlUpdate)?.get("key")).toBe("test-key-id");
+
+      await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("key_tab")).toBe(false));
+      expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("lands a non-admin on the overview when the URL names the admin-only tab, and clears it", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Internal User" });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(
+        <NuqsTestingAdapter
+          searchParams="?key=test-key-id&key_tab=auto-router-usage"
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <QueryClientProvider client={testQueryClient}>{keyInfoView()}</QueryClientProvider>
+        </NuqsTestingAdapter>,
+      );
+
+      expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.queryByTestId("key-auto-router-usage")).not.toBeInTheDocument();
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastParams(onUrlUpdate)?.has("key_tab")).toBe(false);
+      expect(lastParams(onUrlUpdate)?.get("key")).toBe("test-key-id");
+    });
+
+    it("clears the detail tab and savings view from the URL when the key is closed", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+      const onClose = vi.fn();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(keyInfoView(onClose), {
+        searchParams: "?key=test-key-id&key_tab=savings&key_savings_view=per-interval&filter_team=t-1",
+        onUrlUpdate,
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /back to keys/i }));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      const params = lastParams(onUrlUpdate);
+      expect(params?.has("key_tab")).toBe(false);
+      expect(params?.has("key_savings_view")).toBe(false);
+      expect(params?.get("filter_team")).toBe("t-1");
+    });
   });
 
   describe("last updated", () => {

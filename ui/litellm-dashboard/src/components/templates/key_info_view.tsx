@@ -17,6 +17,7 @@ import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
 import KeyAutoRouterUsageTab from "./KeyAutoRouterUsageTab";
+import { useKeyDetailUrlState } from "./useKeyDetailUrlState";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { useEffect, useState } from "react";
 import {
@@ -89,6 +90,8 @@ export default function KeyInfoView({
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const activityDateRange = useActivityDateRange();
+  const showAutoRouterUsage = hasProxyWideSpendView(userRole);
+  const { tab, setTab, clearKeyDetailUrlState } = useKeyDetailUrlState(showAutoRouterUsage);
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
@@ -167,11 +170,16 @@ export default function KeyInfoView({
     }
   }, [isRecentlyRegenerated]);
 
+  const handleClose = () => {
+    clearKeyDetailUrlState();
+    onClose();
+  };
+
   // Use currentKeyData instead of keyData throughout the component
   if (!currentKeyData) {
     return (
       <div className="p-4">
-        <Button variant="ghost" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={handleClose} className="mb-4">
           <ArrowLeft className="size-4" />
           {backButtonText}
         </Button>
@@ -379,7 +387,7 @@ export default function KeyInfoView({
       if (onDelete) {
         onDelete();
       }
-      onClose();
+      handleClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
       toast.fromError(error);
@@ -533,7 +541,7 @@ export default function KeyInfoView({
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
           expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
-        onBack={onClose}
+        onBack={handleClose}
         onRegenerate={() => setIsRegenerateModalOpen(true)}
         onDelete={() => setIsDeleteModalOpen(true)}
         onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
@@ -644,7 +652,7 @@ export default function KeyInfoView({
         </DialogContent>
       </Dialog>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
@@ -652,7 +660,7 @@ export default function KeyInfoView({
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             Savings
           </TabsTrigger>
-          {hasProxyWideSpendView(userRole) && (
+          {showAutoRouterUsage && (
             <TabsTrigger value="auto-router-usage" className="flex-none rounded-none px-4 py-2">
               Auto-router usage
             </TabsTrigger>
@@ -808,7 +816,7 @@ export default function KeyInfoView({
             />
           </TabsContent>
 
-          {hasProxyWideSpendView(userRole) && (
+          {showAutoRouterUsage && (
             <TabsContent value="auto-router-usage">
               <KeyAutoRouterUsageTab
                 accessToken={accessToken}
