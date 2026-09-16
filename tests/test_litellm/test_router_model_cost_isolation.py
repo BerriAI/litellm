@@ -11,14 +11,16 @@ import copy
 import logging
 import os
 import re
-from unittest.mock import patch
+from typing import Final
+from unittest.mock import Mock, patch
 
+import httpx
 import pytest
-
 
 import litellm
 from litellm import Router
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -57,6 +59,118 @@ def _restore_model_cost_entries(original_entries):
             litellm.model_cost.pop(key, None)
         else:
             litellm.model_cost[key] = value
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize("provider", ("hosted_vllm", "openai", "openai_like", "text-completion-openai"))
+async def test_discovered_limits_are_isolated_overridable_and_refreshable(
+    provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    upstream_limit: Final = iter((8192, 4096, 16384, 2048))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        assert request.headers["authorization"] == "Bearer local-key"
+        return httpx.Response(200, json={"data": [{"id": "org/local-model", "max_model_len": next(upstream_limit)}]})
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": f"{provider}/org/local-model",
+                    "api_base": f"https://{host}.test/v1",
+                    "api_key": "local-key",
+                },
+                "model_info": {"id": host, **overrides},
+            }
+            for host, overrides in (("one", {}), ("two", {"max_output_tokens": 512}))
+        ],
+        enable_pre_call_checks=True,
+    )
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+        first: Final = router.get_router_model_info(id="one", deployment=None, received_model_name="local")
+        second: Final = router.get_router_model_info(id="two", deployment=None, received_model_name="local")
+        assert (first["max_input_tokens"], first["max_output_tokens"]) == (8192, 8192)
+        assert (second["max_input_tokens"], second["max_output_tokens"]) == (4096, 512)
+        group: Final = router.get_model_group_info("local")
+        assert group is not None
+        assert group.max_input_tokens == 8192
+        listing: Final = router.get_model_listing_info("local")
+        assert listing is not None
+        assert listing.max_input_tokens == 8192
+        assert router.get_configured_token_limits("local") == (8192, 8192)
+        assert router._deployment_max_input_tokens("local", router.model_list[1]) == 4096
+        allowed: Final = router._pre_call_checks(
+            model="local", healthy_deployments=router.model_list, input="prompt", input_token_count=5000
+        )
+        assert [deployment["model_info"]["id"] for deployment in allowed] == ["one"]
+        assert router.model_list[0]["model_info"].get("max_input_tokens") is None
+        assert litellm.model_cost[f"{provider}/org/local-model"].get("max_input_tokens") is None
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
+        refreshed: Final = router.get_model_group_info("local")
+        assert refreshed is not None
+        assert refreshed.max_input_tokens == 16384
+        assert (
+            router.get_router_model_info(id="two", deployment=None, received_model_name="local")["max_output_tokens"]
+            == 512
+        )
+    _invalidate_model_cost_lowercase_map()
+
+
+async def test_discovery_preserves_input_overrides_and_survives_outages(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    responses: Final = iter((
+        httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
+        httpx.Response(503),
+    ))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "backend.test"
+        assert request.headers["authorization"] == "Bearer local-key"
+        assert request.headers["x-tenant"] == "tenant"
+        return next(responses)
+
+    router: Final = Router(model_list=[
+        {
+            "model_name": "configured",
+            "litellm_params": {
+                "model": "hosted_vllm/local-model",
+                "api_base": "https://backend.test/v1",
+                "api_key": "unused-key",
+                "extra_headers": {"authorization": "Bearer local-key", "X-Tenant": "tenant"},
+            },
+            "model_info": {"id": "configured", "max_input_tokens": 1024},
+        },
+        {
+            "model_name": "byok",
+            "litellm_params": {
+                "model": "openai/local-model",
+                "api_base": "https://caller.test/v1",
+                "use_clientside_credentials": True,
+            },
+        },
+        {"model_name": "default-openai", "litellm_params": {"model": "openai/local-model", "api_key": "unused"}},
+    ])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    responder: Final = Mock(side_effect=respond)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+        assert router.get_configured_token_limits("configured") == (1024, 4096)
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
+        assert router.get_configured_token_limits("configured") == (1024, 4096)
+        assert router.get_configured_token_limits("byok") == (None, None)
+        assert next(responses, None) is None
+        assert responder.call_count == 2
     _invalidate_model_cost_lowercase_map()
 
 
