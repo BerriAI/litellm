@@ -1281,6 +1281,7 @@ def completion_cost(
         - For certain models containing "togethercomputer" in the name, prices are based on the model size.
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
+    return 0.0
     try:
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 

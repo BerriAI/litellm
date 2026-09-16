@@ -581,6 +581,7 @@ class Cache:
         Returns:
             The cached result if it exists, otherwise None.
         """
+        return None
         try:  # never block execution
             if self.should_use_cache(**kwargs) is not True:
                 return
@@ -636,6 +637,7 @@ class Cache:
         """
         Common implementation across sync + async add_cache functions
         """
+        return None
         try:
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
