@@ -516,6 +516,45 @@ def test_counters_attribute_every_outcome_to_its_mount(
     assert counts["mount:anthropic:rejected"] == 1 and "mount:openai:rejected" not in counts
 
 
+def test_a_rejection_says_whether_the_body_was_cut_short_or_simply_unfinished(
+    store: RedisResponseStore, provider: Provider,
+) -> None:
+    """One `rejected` count cannot tell a connection that dropped from a body the
+    provider finished sending and the rules turned down, and those have opposite
+    fixes: the first is the client going away mid-capture, the second is a grammar
+    the cache does not accept. A mount whose rejections are mostly one or the other
+    is a different problem, so the report has to be able to say which."""
+    upstream: Final = f"http://127.0.0.1:{provider.server_port}"
+    cut_short: Final = cache_edge(store)
+    provider.stream = True
+    provider.truncated = True
+    provider.response = b'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    running: Final = start_provider_edge(cut_short, mounts={"openai": upstream})
+    try:
+        forward("POST", running.edge.api_base("openai") + "/v1/chat/completions",
+                headers=HEADERS, body=MARKED, timeout=5)
+    finally:
+        running.shutdown()
+
+    unfinished: Final = cache_edge(store)
+    provider.stream = False
+    provider.truncated = False
+    provider.response = b'{"choices":[{"index":0,"message":{"content":"hi"}}]}'
+    second: Final = start_provider_edge(unfinished, mounts={"openai": upstream})
+    try:
+        call(second.edge.api_base("openai") + "/v1/chat/completions", MARKED)
+    finally:
+        second.shutdown()
+
+    cut: Final = dict(cut_short.counters.counts)
+    turned_down: Final = dict(unfinished.counters.counts)
+    assert cut["mount:openai:rejected"] == 1 and turned_down["mount:openai:rejected"] == 1
+    assert cut["mount:openai:rejected_cut_short"] == 1
+    assert "mount:openai:rejected_incomplete" not in cut
+    assert turned_down["mount:openai:rejected_incomplete"] == 1
+    assert "mount:openai:rejected_cut_short" not in turned_down
+
+
 EMBEDDING_SUCCESS: Final = (
     b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],'
     b'"model":"text-embedding-3-small","usage":{"prompt_tokens":2,"total_tokens":2}}'
