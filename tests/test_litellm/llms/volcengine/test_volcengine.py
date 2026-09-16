@@ -42,6 +42,34 @@ class TestVolcEngineConfig:
             "type": "enabled",
         }
 
+    def test_response_format_supported(self):
+        """response_format must be a supported param so JSON mode is not rejected.
+
+        Regression for UnsupportedParamsError on volcengine/doubao when passing
+        response_format: the field was declared on the config but missing from
+        get_supported_openai_params, so litellm rejected it before dispatch.
+        """
+        config = VolcEngineConfig()
+        model = "doubao-seed-2-0-pro-260215"
+
+        assert "response_format" in config.get_supported_openai_params(model=model)
+
+        mapped = config.map_openai_params(
+            non_default_params={"response_format": {"type": "json_object"}},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert mapped["response_format"] == {"type": "json_object"}
+
+        e2e = get_optional_params(
+            model=model,
+            custom_llm_provider="volcengine",
+            response_format={"type": "json_object"},
+            drop_params=False,
+        )
+        assert e2e["response_format"] == {"type": "json_object"}
+
     def test_thinking_parameter_handling(self):
         """Test comprehensive thinking parameter handling scenarios"""
         config = VolcEngineConfig()
