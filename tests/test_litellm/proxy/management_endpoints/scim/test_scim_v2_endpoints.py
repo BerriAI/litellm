@@ -611,23 +611,45 @@ def _scim_test_client(monkeypatch: pytest.MonkeyPatch, mock_prisma_client: Magic
 
 
 @pytest.mark.parametrize(
-    ("path", "table"),
-    [("/scim/v2/Users", "litellm_usertable"), ("/scim/v2/Groups", "litellm_teamtable")],
+    ("path", "table", "rows"),
+    [
+        (
+            "/scim/v2/Users",
+            "litellm_usertable",
+            tuple(LiteLLM_UserTable(user_id=f"user-{i}", teams=[]) for i in range(SCIM_MAX_PAGE_SIZE)),
+        ),
+        (
+            "/scim/v2/Groups",
+            "litellm_teamtable",
+            tuple(LiteLLM_TeamTable(team_id=f"team-{i}", team_alias=f"Team {i}") for i in range(SCIM_MAX_PAGE_SIZE)),
+        ),
+    ],
 )
-def test_list_endpoints_clamp_count_above_max_page_size(monkeypatch: pytest.MonkeyPatch, path: str, table: str):
+def test_list_endpoints_clamp_count_above_max_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    table: str,
+    rows: tuple[LiteLLM_UserTable, ...] | tuple[LiteLLM_TeamTable, ...],
+):
     """
     Okta's SCIM connector paginates with count=200. RFC 7644 section 3.4.2.4 says a
     server caps oversized pages to its own maximum, so the request must succeed with
-    a page of at most SCIM_MAX_PAGE_SIZE instead of failing query validation.
+    a page of exactly SCIM_MAX_PAGE_SIZE instead of failing query validation.
     """
-    mock_table: Final = MagicMock(find_many=AsyncMock(return_value=[]), count=AsyncMock(return_value=0))
+    mock_table: Final = MagicMock(
+        find_many=AsyncMock(return_value=list(rows)),
+        count=AsyncMock(return_value=SCIM_MAX_PAGE_SIZE * 2),
+    )
     mock_prisma_client: Final = MagicMock(**{f"db.{table}": mock_table})
     client: Final = _scim_test_client(monkeypatch, mock_prisma_client)
 
     response: Final = client.get(path, params={"startIndex": 1, "count": SCIM_MAX_PAGE_SIZE * 2})
 
     assert response.status_code == 200
-    assert response.json()["itemsPerPage"] <= SCIM_MAX_PAGE_SIZE
+    body: Final = response.json()
+    assert body["itemsPerPage"] == SCIM_MAX_PAGE_SIZE
+    assert body["totalResults"] == SCIM_MAX_PAGE_SIZE * 2
+    assert len(body["Resources"]) == SCIM_MAX_PAGE_SIZE
     assert mock_table.find_many.await_args.kwargs["take"] == SCIM_MAX_PAGE_SIZE
 
 
