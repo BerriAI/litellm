@@ -2139,7 +2139,7 @@ async def test_model_info_alias_without_prisma(hidden):
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
 
-    models = resp["data"]
+    models = json.loads(resp.body)["data"]
 
     alias_found = any(
         m["model_name"] == model_alias
@@ -2203,7 +2203,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):  # noqa: F
     resp = await model_info_v1(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
-    models = resp["data"]
+    models = json.loads(resp.body)["data"]
     is_model_alias_in_list = False
     for item in models:
         if model_alias == item["model_name"]:
@@ -2280,7 +2280,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
     resp = await model_info_v1(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
-    models = resp["data"]
+    models = json.loads(resp.body)["data"]
     assert models[0]["model_info"]["mode"] == "rerank"
     resp = await model_group_info(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
@@ -2920,7 +2920,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
         assert result["status"] == "success"
         assert "callbacks" in result
 
-        callbacks = result["callbacks"]
+        callbacks = [cb for cb in result["callbacks"] if not cb.get("read_only", False)]
 
         # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
         assert len(callbacks) == 5
