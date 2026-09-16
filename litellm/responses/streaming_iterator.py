@@ -32,6 +32,9 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
@@ -257,6 +260,7 @@ class BaseResponsesAPIStreamingIterator:
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
         self._generated_content = ""
+        self._generated_tool_arguments = ""
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: bool | None = None
@@ -352,6 +356,10 @@ class BaseResponsesAPIStreamingIterator:
                     _delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_delta, str):
                         self._generated_content += _delta
+                elif _event_type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA:
+                    _args_delta: Final = getattr(openai_responses_api_chunk, "delta", None)
+                    if isinstance(_args_delta, str):
+                        self._generated_tool_arguments += _args_delta
                 _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -432,8 +440,11 @@ class BaseResponsesAPIStreamingIterator:
                         and _response_obj is not None
                         and _response_obj.usage is None
                     ):
-                        _response_obj.usage = ResponseAPILoggingUtils.estimate_usage_from_text(
-                            self.model or "", self.request_data.get("input"), self._generated_content
+                        _response_obj.usage = _estimate_usage_from_text(
+                            self.model or "",
+                            self.request_data.get("input"),
+                            self.request_data,
+                            self._generated_content + self._generated_tool_arguments,
                         )
                     _stamp_responses_usage_cost(getattr(openai_responses_api_chunk, "response", None), self.logging_obj)
 
@@ -1345,6 +1356,29 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return ResponseAPIUsage.model_validate(usage)
     except ValidationError:
         return None
+
+
+def _estimate_usage_from_text(
+    model: str,
+    request_input: object,
+    responses_api_request: Mapping[str, object],
+    generated_text: str,
+) -> ResponseAPIUsage:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
+        input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
+        responses_api_request=dict(responses_api_request),
+    )
+    input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
+        model=model, messages=messages
+    )
+    output_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
+        model=model, text=generated_text, count_response_tokens=True
+    )
+    return ResponseAPIUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
 
 
 def _stamp_responses_usage_cost(
