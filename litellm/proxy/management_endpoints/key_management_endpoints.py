@@ -1519,11 +1519,13 @@ def _update_request_with_retained_team_limits(
     rpm/tpm/concurrency/budget must still be compared against the effective
     team caps so reassignment cannot silently keep an over-cap value.
     """
-    retained: dict[str, object] = {}
-    for field_name in _KEY_TEAM_LIMIT_WARNING_FIELDS:
-        if field_name in data.model_fields_set:
-            continue
-        retained[field_name] = getattr(existing_key_row, field_name, None)
+    retained: Final = MappingProxyType(
+        {
+            field_name: getattr(existing_key_row, field_name, None)
+            for field_name in _KEY_TEAM_LIMIT_WARNING_FIELDS
+            if field_name not in data.model_fields_set
+        }
+    )
     if not retained:
         return data
     return data.model_copy(update=retained)
@@ -1567,7 +1569,7 @@ def _maybe_add_key_team_limit_warnings(
     warnings = _collect_key_team_limit_warnings(data=data, team_table=team_table)
     if not warnings:
         return payload
-    return {**payload, "warnings": list(warnings)}
+    return MappingProxyType({**payload, "warnings": warnings})
 
 
 async def _check_team_key_limits(
@@ -2003,7 +2005,7 @@ async def generate_key_fn(
             team_table=team_table,
         )
         if team_limit_warnings:
-            response.warnings = list(team_limit_warnings)
+            response.warnings = team_limit_warnings
         return response
 
     except Exception as e:
@@ -2175,7 +2177,7 @@ async def generate_service_account_key_fn(
         team_table=team_table,
     )
     if team_limit_warnings:
-        response.warnings = list(team_limit_warnings)
+        response.warnings = team_limit_warnings
     return response
 
 
@@ -3270,9 +3272,9 @@ async def update_key_fn(
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        updated_key_info: Final[Mapping[str, object]] = {"key": key, **response["data"]}
+        updated_key_info: Final[Mapping[str, object]] = MappingProxyType({"key": key, **response["data"]})
         if team_limit_warnings:
-            return {**updated_key_info, "warnings": list(team_limit_warnings)}
+            return MappingProxyType({**updated_key_info, "warnings": team_limit_warnings})
         return updated_key_info
         # update based on remaining passed in values
     except Exception as e:
