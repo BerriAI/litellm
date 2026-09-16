@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast
+from typing import Any, Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -5838,7 +5838,7 @@ def test_supported_reasoning_efforts_still_map(model):
         assert "thinkingConfig" in result
 
 
-def _transform_gemini_response(candidates: list) -> ModelResponse:
+def _transform_gemini_response(candidates: list[dict[str, Any]]) -> ModelResponse:
     """Run the non-streaming transformation over a raw Gemini body."""
     raw_response = MagicMock()
     raw_response.headers = {}
