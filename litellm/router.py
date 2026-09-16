@@ -240,6 +240,7 @@ from litellm.types.router import (
     DeploymentModelListingInfo,
     DeploymentTypedDict,
     FallbackAccessCheck,
+    FallbackBudgetCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -755,6 +756,7 @@ class Router:
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
+        fallback_budget_check: FallbackBudgetCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     ) -> None:
         """
@@ -793,6 +795,7 @@ class Router:
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
             fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
+            fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -834,6 +837,7 @@ class Router:
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.auto_router_capability_limit = auto_router_capability_limit
         self.fallback_access_check: Final = fallback_access_check
+        self.fallback_budget_check: Final = fallback_budget_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
