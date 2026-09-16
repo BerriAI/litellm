@@ -2250,10 +2250,15 @@ def _build_guardrail_request_data(data: dict, request: ApplyGuardrailRequest) ->
     metadata layered on top."""
     metadata_key: Final = get_metadata_variable_name_from_kwargs(data)
     proxy_metadata: Final = data.get(metadata_key)
+    has_metadata: Final = isinstance(proxy_metadata, dict) or request.metadata is not None
     return {
         **data,
         **({"messages": request.messages} if request.messages is not None else {}),
-        metadata_key: {**(proxy_metadata if isinstance(proxy_metadata, dict) else {}), **(request.metadata or {})},
+        **(
+            {metadata_key: {**(proxy_metadata if isinstance(proxy_metadata, dict) else {}), **(request.metadata or {})}}
+            if has_metadata
+            else {}
+        ),
     }
 
 
