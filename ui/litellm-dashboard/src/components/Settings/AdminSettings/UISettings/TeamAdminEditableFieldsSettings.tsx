@@ -1,65 +1,136 @@
 "use client";
 
+import { Controller } from "react-hook-form";
+import { z } from "zod/v4";
+
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import {
+  parseSupportedTeamAdminEditableFields,
+  parseTeamAdminEditableFields,
+  teamAdminFieldLabel,
+} from "@/components/team/teamAdminEditAccess";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { teamAdminFieldLabel } from "@/components/team/teamAdminEditAccess";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toast } from "@/lib/toast";
 
-interface TeamAdminEditableFieldsSettingsProps {
-  editableFields: readonly string[];
-  supportedFields: readonly string[];
-  description?: string;
-  isUpdating: boolean;
-  onUpdate: (settings: { team_admin_editable_team_fields: string[] }) => void;
-}
+const editableFieldsSchema = z.object({ team_admin_editable_team_fields: z.array(z.string()) });
 
-export default function TeamAdminEditableFieldsSettings({
-  editableFields,
-  supportedFields,
-  description,
-  isUpdating,
-  onUpdate,
-}: TeamAdminEditableFieldsSettingsProps) {
-  const toggleField = (field: string, checked: boolean) => {
-    const next = checked ? [...editableFields, field] : editableFields.filter((item) => item !== field);
-    onUpdate({ team_admin_editable_team_fields: next });
-  };
+type SaveEditableFields = ReturnType<typeof useUpdateUISettings>["mutate"];
+
+export default function TeamAdminEditableFieldsSettings() {
+  const { accessToken } = useAuthorized();
+  const { data, isLoading } = useUISettings();
+  const { mutate: saveSettings, isPending } = useUpdateUISettings(accessToken);
+  const supportedFields = parseSupportedTeamAdminEditableFields(data?.field_schema);
+  const savedFields = parseTeamAdminEditableFields(data?.values);
+  const enabledFields = supportedFields.filter((field) => savedFields.includes(field));
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-1">
+    <Card>
+      <CardHeader>
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-foreground">Team admin editable fields</p>
-          <Badge variant={editableFields.length > 0 ? "secondary" : "outline"}>
-            {editableFields.length > 0
-              ? `${editableFields.length} field${editableFields.length !== 1 ? "s" : ""} enabled`
+          <CardTitle>Team admin editable fields</CardTitle>
+          <Badge variant={enabledFields.length > 0 ? "secondary" : "outline"}>
+            {enabledFields.length > 0
+              ? `${enabledFields.length} field${enabledFields.length !== 1 ? "s" : ""} enabled`
               : "Team admins cannot edit team settings"}
           </Badge>
         </div>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
-      </div>
+        <CardDescription>
+          {data?.field_schema?.properties?.team_admin_editable_team_fields?.description ??
+            "Team settings fields a team admin may change on the teams they administer."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : (
+          <TeamAdminEditableFieldsForm
+            key={enabledFields.join(",")}
+            enabledFields={enabledFields}
+            supportedFields={supportedFields}
+            isPending={isPending}
+            saveSettings={saveSettings}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
-      {supportedFields.length === 0 ? (
-        <p className="text-xs italic text-muted-foreground">
-          This proxy version does not support enabling any team settings fields for team admins yet.
-        </p>
-      ) : (
-        <div className="ml-4 space-y-2">
-          {supportedFields.map((field) => {
-            const checkboxId = `team-admin-editable-${field}`;
-            return (
-              <label key={field} htmlFor={checkboxId} className="flex cursor-pointer items-center gap-2">
-                <Checkbox
-                  id={checkboxId}
-                  checked={editableFields.includes(field)}
-                  disabled={isUpdating}
-                  onCheckedChange={(checked) => toggleField(field, checked === true)}
-                />
-                <span className="text-sm text-foreground">{teamAdminFieldLabel(field)}</span>
-              </label>
-            );
-          })}
-        </div>
-      )}
-    </div>
+interface TeamAdminEditableFieldsFormProps {
+  enabledFields: readonly string[];
+  supportedFields: readonly string[];
+  isPending: boolean;
+  saveSettings: SaveEditableFields;
+}
+
+function TeamAdminEditableFieldsForm({
+  enabledFields,
+  supportedFields,
+  isPending,
+  saveSettings,
+}: TeamAdminEditableFieldsFormProps) {
+  const form = useZodForm(editableFieldsSchema, {
+    defaultValues: { team_admin_editable_team_fields: [...enabledFields] },
+  });
+  const submit = form.handleSubmit((values) =>
+    saveSettings(values, {
+      onSuccess: () => {
+        form.reset(values);
+        toast.success("Team admin editable fields updated successfully");
+      },
+      onError: (error) => {
+        toast.fromError(error);
+      },
+    }),
+  );
+
+  if (supportedFields.length === 0) {
+    return (
+      <p className="text-sm italic text-muted-foreground">
+        This proxy version does not support enabling any team settings fields for team admins yet.
+      </p>
+    );
+  }
+
+  return (
+    <form onSubmit={(event) => void submit(event)} className="space-y-4">
+      <Controller
+        control={form.control}
+        name="team_admin_editable_team_fields"
+        render={({ field }) => (
+          <div className="space-y-2">
+            {supportedFields.map((name) => {
+              const checkboxId = `team-admin-editable-${name}`;
+              return (
+                <label key={name} htmlFor={checkboxId} className="flex cursor-pointer items-center gap-2">
+                  <Checkbox
+                    id={checkboxId}
+                    checked={field.value.includes(name)}
+                    disabled={isPending}
+                    onCheckedChange={(checked) =>
+                      field.onChange(
+                        supportedFields.filter((item) => (item === name ? checked : field.value.includes(item))),
+                      )
+                    }
+                  />
+                  <span className="text-sm text-foreground">{teamAdminFieldLabel(name)}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      />
+      <Button type="submit" disabled={isPending || !form.formState.isDirty}>
+        {isPending ? "Saving..." : "Save"}
+      </Button>
+    </form>
   );
 }
