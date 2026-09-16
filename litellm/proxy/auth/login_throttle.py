@@ -23,10 +23,11 @@ from typing import Final, Literal, NamedTuple, NoReturn
 
 from fastapi import Request, status
 from pydantic import TypeAdapter, ValidationError
+from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.network import TrustedProxyConfig, normalize_cidr_ranges, resolve_client_ip
 from litellm.secret_managers.main import get_secret_bool
@@ -53,6 +54,7 @@ _MAX_TRACKED_COUNTERS: Final = 20_000
 _MAX_TRACKED_BLOCKS: Final = 10_000
 _NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
 _NOT_BLOCKED: Final = (0, 0)
+_REDIS_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, asyncio.TimeoutError)
 _LOCAL_BLOCK_EXPIRY: Final = TypeAdapter[float | None](float | None)
 _SOURCE_LIMIT_OVERRIDES: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
 
@@ -304,7 +306,7 @@ class LoginThrottle:
             return _LUA_BLOCK_TTLS.validate_python(
                 await self.redis_cache.async_register_script(_BLOCK_TTLS_LUA)(list(keys), [])
             )
-        except Exception as err:
+        except _REDIS_FAILURES as err:
             self._warn_redis(err)
             return _NOT_BLOCKED
 
@@ -327,7 +329,7 @@ class LoginThrottle:
                         list(keys), [self.user_limit, source_limit, self.window_seconds, self.block_seconds]
                     )
                 )
-            except Exception as err:
+            except _REDIS_FAILURES as err:
                 self._warn_redis(err)
         user_block: Final = self._local_bump(keys.pair_counter, keys.pair_block, self.user_limit)
         if source_limit == 0 or user_block > 0:
@@ -349,7 +351,7 @@ class LoginThrottle:
         if self.redis_cache is not None:
             try:
                 await self.redis_cache.async_delete_cache(pair_counter)
-            except Exception as err:
+            except _REDIS_FAILURES as err:
                 self._warn_redis(err)
         self.counters.delete_cache(pair_counter)
 
