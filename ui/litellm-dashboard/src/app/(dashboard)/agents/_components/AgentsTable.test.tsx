@@ -202,7 +202,7 @@ describe("AgentsTable", () => {
 
     expect(screen.getByText("Health Check")).toBeInTheDocument();
     await user.click(screen.getByRole("switch"));
-    expect(onHealthCheckToggle).toHaveBeenCalledWith(true, expect.anything());
+    expect(onHealthCheckToggle).toHaveBeenCalledWith(true);
   });
 
   describe("URL table state", () => {
@@ -255,6 +255,48 @@ describe("AgentsTable", () => {
         searchParams: "?sort_by=agent_name&sort_order=desc",
       });
       expect(rowNames()).toEqual(["Beta Agent", "Alpha Agent"]);
+    });
+
+    it.each(["agent_name", "agent_id", "spend"])(
+      "honors sort_by=%s from the URL instead of falling back to created_at",
+      (sortBy) => {
+        const olderZulu: Agent = {
+          ...makeAgent(),
+          agent_id: "z-id",
+          agent_name: "Zulu Agent",
+          spend: 5,
+          created_at: "2021-01-01T00:00:00Z",
+        };
+        const newerAlpha: Agent = {
+          ...makeAgent(),
+          agent_id: "a-id",
+          agent_name: "Alpha Agent",
+          spend: 1,
+          created_at: "2023-01-01T00:00:00Z",
+        };
+        renderWithProviders(<AgentsTable agents={[olderZulu, newerAlpha]} {...baseProps} />, {
+          searchParams: `?sort_by=${sortBy}&sort_order=asc`,
+        });
+        expect(rowNames()).toEqual(["Alpha Agent", "Zulu Agent"]);
+      },
+    );
+
+    it("goes back to the first page when the health check is toggled", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const onHealthCheckToggle = vi.fn();
+      renderWithProviders(
+        <AgentsTable agents={manyAgents} {...baseProps} onHealthCheckToggle={onHealthCheckToggle} />,
+        { searchParams: "?page=2&page_size=10", onUrlUpdate },
+      );
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 3");
+
+      await user.click(screen.getByRole("switch"));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("page")).toBe(false));
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page_size")).toBe("10");
+      expect(onHealthCheckToggle).toHaveBeenCalledWith(true);
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 3");
     });
 
     it("writes the sort to the URL when a header is clicked", async () => {

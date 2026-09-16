@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import type { ReactNode } from "react";
@@ -147,21 +147,18 @@ describe("VectorStoreInfoView", () => {
 
     it("falls back to Details for an unknown detail_tab and clears it from the URL", async () => {
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      renderWithProviders(
-        <VectorStoreInfoView vectorStoreId="vs-1" onClose={vi.fn()} accessToken="sk-test" is_admin={true} />,
-        {
-          wrapper: ({ children }: { children: ReactNode }) => (
-            <NuqsTestingAdapter
-              searchParams="?vector_store=vs-1&detail_tab=bogus"
-              onUrlUpdate={onUrlUpdate}
-              hasMemory
-              resetUrlUpdateQueueOnMount={false}
-            >
-              {children}
-            </NuqsTestingAdapter>
-          ),
-        },
-      );
+      render(<VectorStoreInfoView vectorStoreId="vs-1" onClose={vi.fn()} accessToken="sk-test" is_admin={true} />, {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <NuqsTestingAdapter
+            searchParams="?vector_store=vs-1&detail_tab=bogus"
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            {children}
+          </NuqsTestingAdapter>
+        ),
+      });
       await screen.findByText("Vector Store ID: vs-1");
       expect(screen.getByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true");
       await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("detail_tab")).toBe(false));
@@ -188,11 +185,16 @@ describe("VectorStoreInfoView", () => {
       expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
     });
 
-    it("ignores edit=true for a non-admin", async () => {
+    it("opens the edit form from edit=true for a non-admin, as the table's Edit action does", async () => {
       renderView("?vector_store=vs-1&edit=true", undefined, false);
+      expect(await screen.findByRole("button", { name: "Save Changes" })).toBeInTheDocument();
+    });
+
+    it("hides the Edit Vector Store button from a non-admin", async () => {
+      renderView("?vector_store=vs-1", undefined, false);
       await screen.findByText("Vector Store ID: vs-1");
-      expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Edit Vector Store" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
     });
   });
 });

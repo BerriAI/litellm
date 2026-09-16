@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { parseAsString, useQueryState } from "nuqs";
+import { parseAsString, useQueryStates } from "nuqs";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +18,11 @@ import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
 import { toast } from "@/lib/toast";
 import { Plugin, ListPluginsResponse } from "@/components/claude_code_plugins/types";
+
+const SKILL_DETAIL_PARSERS = {
+  skill: parseAsString.withOptions({ history: "push" }),
+  skill_tab: parseAsString,
+};
 
 interface ClaudeCodePluginsPanelProps {
   accessToken: string | null;
@@ -61,7 +66,9 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
     name: string;
     displayName: string;
   } | null>(null);
-  const [selectedSkillId, setSelectedSkillId] = useQueryState("skill", parseAsString.withOptions({ history: "push" }));
+  const [{ skill: selectedSkillId }, setSkillDetailUrl] = useQueryStates(SKILL_DETAIL_PARSERS);
+  const openSkill = (skillId: string) => void setSkillDetailUrl({ skill: skillId, skill_tab: null });
+  const closeSkill = () => void setSkillDetailUrl(null);
   const selectedSkill = pluginsList.find((plugin) => plugin.id === selectedSkillId);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
@@ -114,7 +121,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
         <SelectedSkill
           skill={selectedSkill}
           isLoading={isLoading}
-          onBack={() => void setSelectedSkillId(null)}
+          onBack={closeSkill}
           isAdmin={isAdmin}
           accessToken={accessToken}
           onPublishClick={fetchPlugins}
@@ -139,7 +146,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
             isLoading={isLoading}
             onDeleteClick={handleDeleteClick}
             isAdmin={isAdmin}
-            onPluginClick={(id) => void setSelectedSkillId(id)}
+            onPluginClick={openSkill}
           />
         </>
       )}

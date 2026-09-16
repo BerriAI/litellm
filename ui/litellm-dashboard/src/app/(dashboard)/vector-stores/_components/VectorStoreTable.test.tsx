@@ -149,6 +149,26 @@ describe("VectorStoreTable", () => {
       expect(rowIds()).toEqual(["vs-a", "vs-b"]);
     });
 
+    it.each(["vector_store_id", "vector_store_name", "updated_at"])(
+      "honors sort_by=%s from the URL instead of falling back to created_at",
+      (sortBy) => {
+        const olderZulu: VectorStore = {
+          ...makeStore("vs-z", "2024-01-01T00:00:00Z"),
+          vector_store_name: "zulu",
+          updated_at: "2024-06-01T00:00:00Z",
+        };
+        const newerAlpha: VectorStore = {
+          ...makeStore("vs-a", "2024-03-01T00:00:00Z"),
+          vector_store_name: "alpha",
+          updated_at: "2024-04-01T00:00:00Z",
+        };
+        renderWithProviders(<VectorStoreTable {...defaultProps} data={[olderZulu, newerAlpha]} />, {
+          searchParams: `?sort_by=${sortBy}&sort_order=asc`,
+        });
+        expect(rowIds()).toEqual(["vs-a", "vs-z"]);
+      },
+    );
+
     it("writes the sort to the URL when a header is clicked", async () => {
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();

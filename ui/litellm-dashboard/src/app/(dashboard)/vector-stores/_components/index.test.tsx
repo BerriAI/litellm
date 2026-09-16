@@ -1,6 +1,7 @@
-import { screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { useQueryState } from "nuqs";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,8 +19,24 @@ vi.mock("@/components/networking", () => ({
 
 vi.mock("./VectorStoreTable", () => ({
   __esModule: true,
-  default: ({ isLoading }: { isLoading?: boolean }) => (
-    <div data-testid="vector-store-table">{isLoading ? "table-loading" : "table-loaded"}</div>
+  default: ({
+    isLoading,
+    onView,
+    onEdit,
+  }: {
+    isLoading?: boolean;
+    onView: (vectorStoreId: string) => void;
+    onEdit: (vectorStoreId: string) => void;
+  }) => (
+    <div data-testid="vector-store-table">
+      {isLoading ? "table-loading" : "table-loaded"}
+      <button type="button" onClick={() => onView("vs-1")}>
+        View vs-1
+      </button>
+      <button type="button" onClick={() => onEdit("vs-1")}>
+        Edit vs-1
+      </button>
+    </div>
   ),
 }));
 
@@ -259,7 +276,7 @@ describe("VectorStoreManagement URL state", () => {
     "falls back to Manage and clears tab=$tab for a $userRole who cannot see it",
     async ({ tab, userRole, isViewOnly }) => {
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      renderWithProviders(
+      render(
         <VectorStoreManagement accessToken="sk-test" userID="user-1" userRole={userRole} isViewOnly={isViewOnly} />,
         {
           wrapper: ({ children }: { children: ReactNode }) => (
@@ -342,5 +359,75 @@ describe("VectorStoreManagement URL state", () => {
     expect(params?.has("detail_tab")).toBe(false);
     expect(params?.get("tab")).toBe("manage");
     expect(await screen.findByRole("tab", { name: "Manage Vector Stores" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledTimes(1));
+  });
+
+  it("reloads the vector store list when the detail closes through the URL alone, as browser Back does", async () => {
+    const user = userEvent.setup();
+    const ClearVectorStoreParam = () => {
+      const [, setVectorStore] = useQueryState("vector_store");
+      return (
+        <button type="button" onClick={() => void setVectorStore(null)}>
+          Browser back
+        </button>
+      );
+    };
+    renderWithProviders(
+      <>
+        <VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />
+        <ClearVectorStoreParam />
+      </>,
+      { searchParams: "?tab=manage&vector_store=vs-1" },
+    );
+    expect(screen.getByTestId("vector-store-info-view")).toHaveTextContent("vs-1");
+    expect(mockVectorStoreListCall).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Browser back" }));
+
+    await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledTimes(1));
+    expect(mockCredentialListCall).toHaveBeenCalledWith("sk-test");
+    expect(await screen.findByTestId("vector-store-table")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "View vs-1" }));
+    expect(await screen.findByTestId("vector-store-info-view")).toHaveTextContent("vs-1");
+    await user.click(screen.getByRole("button", { name: "Browser back" }));
+
+    await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledTimes(2));
+  });
+
+  it("pushes vector_store with edit=true from the table's Edit action and drops a stale detail_tab", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(
+      <VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />,
+      { searchParams: "?tab=manage&detail_tab=test", onUrlUpdate },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Edit vs-1" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("vector_store")).toBe("vs-1"));
+    const update = lastUrlUpdate(onUrlUpdate);
+    expect(update?.searchParams.get("edit")).toBe("true");
+    expect(update?.searchParams.has("detail_tab")).toBe(false);
+    expect(update?.searchParams.get("tab")).toBe("manage");
+    expect(update?.options.history).toBe("push");
+    expect(screen.getByTestId("vector-store-info-view")).toHaveTextContent("vs-1");
+  });
+
+  it("pushes vector_store without edit from the table's View action even when edit=true is left over", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(
+      <VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" isViewOnly={false} />,
+      { searchParams: "?tab=manage&edit=true&detail_tab=test", onUrlUpdate },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "View vs-1" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("vector_store")).toBe("vs-1"));
+    const update = lastUrlUpdate(onUrlUpdate);
+    expect(update?.searchParams.has("edit")).toBe(false);
+    expect(update?.searchParams.has("detail_tab")).toBe(false);
+    expect(update?.options.history).toBe("push");
   });
 });

@@ -131,6 +131,29 @@ describe("IndexesTable", () => {
       expect(rowNames()).toEqual(["older-index", "newer-index"]);
     });
 
+    it.each(["index_name", "vector_store_name"])(
+      "honors idx_sort_by=%s from the URL instead of falling back to created_at",
+      (sortBy) => {
+        const olderZulu: VectorStoreIndex = {
+          ...olderIndex,
+          id: "idx-zulu",
+          index_name: "zulu-index",
+          litellm_params: { vector_store_index: "provider-zulu", vector_store_name: "zulu-store" },
+        };
+        const newerAlpha: VectorStoreIndex = {
+          ...newerIndex,
+          id: "idx-alpha",
+          index_name: "alpha-index",
+          litellm_params: { vector_store_index: "provider-alpha", vector_store_name: "alpha-store" },
+        };
+        renderWithProviders(
+          <IndexesTable data={[olderZulu, newerAlpha]} resolveVectorStoreId={noResolve} onViewVectorStore={vi.fn()} />,
+          { searchParams: `?idx_sort_by=${sortBy}&idx_sort_order=asc` },
+        );
+        expect(rowNames()).toEqual(["alpha-index", "zulu-index"]);
+      },
+    );
+
     it("writes the sort under idx_ keys when a header is clicked", async () => {
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();

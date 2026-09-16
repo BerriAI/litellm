@@ -13,7 +13,11 @@ vi.mock("@/components/networking", () => ({
 }));
 
 vi.mock("./add_agent_form", () => ({
-  default: () => <div data-testid="add-agent-form" />,
+  default: ({ onSuccess }: { onSuccess: () => void }) => (
+    <button data-testid="add-agent-form" onClick={onSuccess}>
+      Finish add
+    </button>
+  ),
 }));
 
 vi.mock("./agent_info", () => ({
@@ -156,8 +160,60 @@ describe("AgentsPanel", () => {
     });
     // one initial load + one post-delete refetch
     await waitFor(() => {
-      expect(vi.mocked(networking.getAgentsList).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(networking.getAgentsList).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("keeps the delete dialog open until the refreshed list without the deleted agent has loaded", async () => {
+    const user = userEvent.setup();
+    const doomedAgent = {
+      agent_id: "agent-9",
+      agent_name: "Doomed Agent",
+      litellm_params: { model: "gpt-4" },
+      spend: 0,
+      keys: [],
+    };
+    let resolveReload: (value: { agents: never[] }) => void = () => {};
+    vi.mocked(networking.getAgentsList)
+      .mockResolvedValueOnce({ agents: [doomedAgent] })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveReload = resolve;
+          }),
+      );
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
+      searchParams: "?health_check=true",
+    });
+
+    await user.click(await screen.findByTestId("agent-actions-agent-9"));
+    await user.click(await screen.findByTestId("agent-action-delete"));
+    const confirmDialog = await screen.findByRole("alertdialog");
+    await user.click(within(confirmDialog).getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => expect(networking.getAgentsList).toHaveBeenCalledTimes(2));
+    expect(networking.getAgentsList).toHaveBeenLastCalledWith("test-token", true);
+    expect(screen.getByText(/are you sure you want to delete agent: Doomed Agent\?/i)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveReload({ agents: [] });
+    });
+
+    await waitFor(() => expect(screen.queryByText(/are you sure you want to delete agent/i)).not.toBeInTheDocument());
+    expect(screen.queryByText("Doomed Agent")).not.toBeInTheDocument();
+  });
+
+  it("reloads the list with the URL's health_check after an agent is added", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
+      searchParams: "?health_check=true",
+    });
+    await waitFor(() => expect(networking.getAgentsList).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole("button", { name: "Finish add" }));
+
+    await waitFor(() => expect(networking.getAgentsList).toHaveBeenCalledTimes(2));
+    expect(networking.getAgentsList).toHaveBeenLastCalledWith("test-token", true);
   });
 
   it("should show a loading skeleton on initial load and clear it once agents arrive", async () => {
@@ -346,12 +402,12 @@ describe("AgentsPanel", () => {
       expect(screen.queryByRole("table")).not.toBeInTheDocument();
     });
 
-    it("pushes agent when an agent is opened from the table", async () => {
+    it("pushes agent when an agent is opened from the table and drops leftover tab and key", async () => {
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
       vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [listedAgent] });
       renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
-        searchParams: "?agent_search=listed",
+        searchParams: "?agent_search=listed&tab=settings&key=stale",
         onUrlUpdate,
       });
 
@@ -360,6 +416,8 @@ describe("AgentsPanel", () => {
       await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("agent")).toBe("agent-1"));
       expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("push");
       expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("agent_search")).toBe("listed");
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("key")).toBe(false);
       expect(screen.getByTestId("agent-info")).toHaveTextContent("agent-1");
     });
 

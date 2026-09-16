@@ -168,11 +168,11 @@ describe("ClaudeCodePluginsPanel selected skill URL state", () => {
     expect(screen.queryByText("Loading skill…")).not.toBeInTheDocument();
   });
 
-  it("shows a not-found state for an unknown skill and clears skill on back", async () => {
+  it("shows a not-found state for an unknown skill and clears skill and skill_tab on back", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     renderWithProviders(<ClaudeCodePluginsPanel accessToken="sk-test" userRole="Admin" />, {
-      searchParams: "?skill=plugin-gone",
+      searchParams: "?skill=plugin-gone&skill_tab=usage",
       onUrlUpdate,
     });
 
@@ -180,18 +180,23 @@ describe("ClaudeCodePluginsPanel selected skill URL state", () => {
     await user.click(screen.getByRole("button", { name: "Back to Skills" }));
 
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("skill")).toBe(false));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("skill_tab")).toBe(false);
     expect(await screen.findByTestId("plugin-table")).toBeInTheDocument();
   });
 
-  it("pushes skill when a row is opened and clears it when the detail closes", async () => {
+  it("pushes skill when a row is opened, drops a leftover skill_tab, and clears skill when the detail closes", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-    renderWithProviders(<ClaudeCodePluginsPanel accessToken="sk-test" userRole="Admin" />, { onUrlUpdate });
+    renderWithProviders(<ClaudeCodePluginsPanel accessToken="sk-test" userRole="Admin" />, {
+      searchParams: "?skill_tab=usage",
+      onUrlUpdate,
+    });
 
     await user.click(await screen.findByRole("button", { name: "open my-skill" }));
 
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("skill")).toBe("plugin-1"));
     expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("push");
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("skill_tab")).toBe(false);
     expect(screen.getByTestId("skill-detail")).toHaveTextContent("my-skill");
 
     await user.click(screen.getByRole("button", { name: "Back from detail" }));

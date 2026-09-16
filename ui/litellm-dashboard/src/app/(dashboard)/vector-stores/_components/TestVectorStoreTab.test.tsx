@@ -126,5 +126,24 @@ describe("TestVectorStoreTab", () => {
 
       expect(screen.getByTestId("tester-vector-store-id")).toHaveTextContent("vs_456");
     });
+
+    it("tests the first loaded vector store when the list arrives after the first render with no URL store", () => {
+      const { rerender } = renderWithProviders(<TestVectorStoreTab accessToken="test-token" vectorStores={[]} />);
+
+      rerender(<TestVectorStoreTab accessToken="test-token" vectorStores={mockVectorStores} />);
+
+      expect(screen.getByTestId("tester-vector-store-id")).toHaveTextContent("vs_123");
+    });
+
+    it("moves off a vector store that disappears from the list when the URL names none", () => {
+      const { rerender } = renderWithProviders(
+        <TestVectorStoreTab accessToken="test-token" vectorStores={mockVectorStores} />,
+      );
+      expect(screen.getByTestId("tester-vector-store-id")).toHaveTextContent("vs_123");
+
+      rerender(<TestVectorStoreTab accessToken="test-token" vectorStores={[mockVectorStores[1]]} />);
+
+      expect(screen.getByTestId("tester-vector-store-id")).toHaveTextContent("vs_456");
+    });
   });
 });

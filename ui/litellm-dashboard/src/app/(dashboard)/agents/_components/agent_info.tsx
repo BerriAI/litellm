@@ -86,9 +86,17 @@ interface AgentKeyDetailProps {
   keysLoading: boolean;
   onClose: () => void;
   onDelete: () => void;
+  onKeyDataUpdate: (updated: Partial<KeyResponse>) => void;
 }
 
-const AgentKeyDetail: React.FC<AgentKeyDetailProps> = ({ keyToken, agentKeys, keysLoading, onClose, onDelete }) => {
+const AgentKeyDetail: React.FC<AgentKeyDetailProps> = ({
+  keyToken,
+  agentKeys,
+  keysLoading,
+  onClose,
+  onDelete,
+  onKeyDataUpdate,
+}) => {
   if (keysLoading) {
     return <LoadingState />;
   }
@@ -98,6 +106,7 @@ const AgentKeyDetail: React.FC<AgentKeyDetailProps> = ({ keyToken, agentKeys, ke
       keyData={agentKeys.find((key) => key.token === keyToken)}
       onClose={onClose}
       onDelete={onDelete}
+      onKeyDataUpdate={onKeyDataUpdate}
       teams={null}
       backButtonText="Back to Agent"
     />
@@ -303,6 +312,13 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     </AgentFormField>
   );
 
+  const handleSelectedKeyDataUpdate = (updated: Partial<KeyResponse>) => {
+    const rotatedToken = updated.token ?? updated.token_id;
+    if (!rotatedToken || rotatedToken === selectedKeyToken) return;
+    void setSelectedKeyToken(rotatedToken, { history: "replace" });
+    refetchAgentKeys();
+  };
+
   if (selectedKeyToken) {
     return (
       <AgentKeyDetail
@@ -314,6 +330,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
           void setSelectedKeyToken(null);
           refetchAgentKeys();
         }}
+        onKeyDataUpdate={handleSelectedKeyDataUpdate}
       />
     );
   }

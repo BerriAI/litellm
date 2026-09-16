@@ -35,17 +35,26 @@ vi.mock("@/components/templates/key_info_view", () => ({
     keyData,
     onClose,
     onDelete,
+    onKeyDataUpdate,
     backButtonText,
   }: {
     keyData: KeyResponse | undefined;
     onClose: () => void;
     onDelete: () => void;
+    onKeyDataUpdate?: (updated: Partial<KeyResponse>) => void;
     backButtonText: string;
   }) => (
     <div>
       <p data-testid="key-info-view">{keyData ? keyData.key_alias : "Key not found"}</p>
       <button onClick={onClose}>{backButtonText}</button>
       <button onClick={onDelete}>Delete key</button>
+      <button onClick={() => onKeyDataUpdate?.({ token: "hash-rotated", key_alias: "agent-primary-key" })}>
+        Regenerate key
+      </button>
+      <button onClick={() => onKeyDataUpdate?.({ blocked: true })}>Block key</button>
+      <button onClick={() => onKeyDataUpdate?.({ token: "hash-abcdef123456789", key_alias: "renamed" })}>
+        Rename key
+      </button>
     </div>
   ),
 }));
@@ -232,6 +241,32 @@ describe("AgentInfoView URL state", () => {
     expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("agent")).toBe("agent-1");
     expect(await screen.findByRole("tab", { name: "Overview" })).toBeInTheDocument();
   });
+
+  it("swaps key to the regenerated token in place and refetches the agent's keys", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderAgent(true, `?agent=agent-1&key=${agentKey.token}`, onUrlUpdate);
+
+    await user.click(await screen.findByRole("button", { name: "Regenerate key" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("key")).toBe("hash-rotated"));
+    expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("replace");
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("agent")).toBe("agent-1");
+    expect(agentKeysState.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["Block key", "Rename key"])(
+    "keeps key and skips the refetch when %s leaves the token unchanged",
+    async (buttonName) => {
+      const user = userEvent.setup();
+      renderAgent(true, `?agent=agent-1&key=${agentKey.token}`);
+
+      await user.click(await screen.findByRole("button", { name: buttonName }));
+
+      expect(agentKeysState.refetch).not.toHaveBeenCalled();
+      expect(screen.getByTestId("key-info-view")).toHaveTextContent("agent-primary-key");
+    },
+  );
 
   it("clears key and refetches the agent's keys after the key is deleted", async () => {
     const user = userEvent.setup();

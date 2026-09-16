@@ -116,7 +116,9 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
       toast.success(`Agent "${agentToDelete.name}" deleted successfully`);
-      reloadAgents();
+      const request = { accessToken, healthCheck: healthCheckEnabled };
+      const agents = await fetchAgents(accessToken, healthCheckEnabled);
+      setAgentsLoad((previous) => settleAgentsLoad(previous, request, agents));
     } catch (error) {
       console.error("Error deleting agent:", error);
       toast.fromError("Failed to delete agent");

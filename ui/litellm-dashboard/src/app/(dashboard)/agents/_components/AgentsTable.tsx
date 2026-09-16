@@ -126,7 +126,10 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
                     <Switch
                       size="sm"
                       checked={healthCheckEnabled}
-                      onCheckedChange={onHealthCheckToggle}
+                      onCheckedChange={(checked) => {
+                        onPaginationChange((previous) => ({ ...previous, pageIndex: 0 }));
+                        onHealthCheckToggle(checked);
+                      }}
                       disabled={isHealthCheckLoading}
                     />
                   </div>

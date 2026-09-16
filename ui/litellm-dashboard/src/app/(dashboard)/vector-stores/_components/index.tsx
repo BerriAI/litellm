@@ -116,7 +116,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
 
   const handleCloseInfo = () => {
     void setVectorStoreDetailUrl(null);
-    fetchVectorStores();
   };
 
   const confirmDelete = async () => {
@@ -147,9 +146,10 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   };
 
   useEffect(() => {
+    if (selectedVectorStoreId) return;
     fetchVectorStores();
     fetchCredentials();
-  }, [accessToken]);
+  }, [accessToken, selectedVectorStoreId]);
 
   return selectedVectorStoreId ? (
     <div className="w-full h-full">

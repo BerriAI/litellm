@@ -85,8 +85,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({ vectorStoreId
   const form = useZodForm(vectorStoreEditSchema, { defaultValues: EMPTY_VALUES });
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStore | null>(null);
   const [loadFailed, setLoadFailed] = useState<boolean>(false);
-  const [{ edit }, setDetailUrl] = useVectorStoreDetailUrlState();
-  const isEditing = is_admin && edit;
+  const [{ edit: isEditing }, setDetailUrl] = useVectorStoreDetailUrlState();
   const setIsEditing = (editing: boolean) => void setDetailUrl({ edit: editing });
   const [detailTab, setDetailTab] = useVectorStoreDetailTab();
   const [metadataString, setMetadataString] = useState<string>("{}");
