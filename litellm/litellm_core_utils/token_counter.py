@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
+    ChatCompletionReasoningItem,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
@@ -849,6 +850,10 @@ def _count_anthropic_content(
     return tokens
 
 
+def _count_nonempty_text_tokens(text: str, count_function: TokenCounterFunction) -> int:
+    return count_function(text) if text else 0
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -857,6 +862,7 @@ def _count_content_list(
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
+        | ChatCompletionReasoningItem
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
@@ -901,9 +907,12 @@ def _count_content_list(
             elif c["type"] == "thinking":
                 # Claude extended thinking content block
                 # Count the thinking text and skip signature (opaque signature blob)
-                thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
+                num_tokens += _count_nonempty_text_tokens(str(c.get("thinking", "")), count_function)
+            elif c["type"] == "reasoning":
+                num_tokens += sum(
+                    _count_nonempty_text_tokens(summary.get("text", ""), count_function)
+                    for summary in c.get("summary", ())
+                )
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
@@ -920,7 +929,7 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, reasoning, tool_reference)."
                 )
         return num_tokens
     except Exception as e:

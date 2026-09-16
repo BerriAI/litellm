@@ -7,6 +7,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import Future, wait
+from copy import deepcopy
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -31,6 +32,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from litellm.types.llms.openai import ChatCompletionReasoningItem, ChatCompletionThinkingBlock
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -1248,6 +1250,122 @@ def test_token_counter_with_thinking_content():
     assert (
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+
+
+@pytest.mark.parametrize("model", ["gemini/gemini-3.8-flash", "gpt-6-astra"])
+@pytest.mark.parametrize(
+    ("reasoning", "summary_texts"),
+    [
+        ({"type": "reasoning"}, ()),
+        ({"type": "reasoning", "summary": []}, ()),
+        ({"type": "reasoning", "encrypted_content": "opaque " * 1000}, ()),
+        (
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "A short synthetic summary."}]},
+            ("A short synthetic summary.",),
+        ),
+        (
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "First thought."},
+                    {"type": "summary_text", "text": ""},
+                    {"type": "summary_text", "text": "Second thought."},
+                ],
+                "id": "rs_opaque_identifier",
+                "encrypted_content": "opaque " * 1000,
+            },
+            ("First thought.", "", "Second thought."),
+        ),
+    ],
+    ids=["missing-summary", "empty-summary", "encrypted-only", "summary", "multiple-summaries-with-metadata"],
+)
+def test_token_counter_with_reasoning_content(
+    model: str, reasoning: ChatCompletionReasoningItem, summary_texts: tuple[str, ...]
+) -> None:
+    original: Final = deepcopy(reasoning)
+    messages: Final = [
+        {"role": "user", "content": "Context marker."},
+        {"role": "assistant", "content": [reasoning, {"type": "text", "text": "Ready."}]},
+    ]
+    equivalent_messages: Final = [
+        {"role": "user", "content": "Context marker."},
+        {
+            "role": "assistant",
+            "content": [
+                *({"type": "text", "text": value} for value in summary_texts),
+                {"type": "text", "text": "Ready."},
+            ],
+        },
+    ]
+
+    assert token_counter(model=model, messages=messages) == token_counter(model=model, messages=equivalent_messages)
+    assert reasoning == original
+
+
+@pytest.mark.parametrize(
+    ("block", "texts"),
+    [
+        ({"type": "thinking"}, ()),
+        ({"type": "thinking", "thinking": ""}, ()),
+        ({"type": "reasoning", "summary": []}, ()),
+        ({"type": "reasoning", "summary": [{"type": "summary_text"}]}, ()),
+        ({"type": "reasoning", "summary": [{"type": "summary_text", "text": ""}]}, ()),
+        (
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": ""},
+                    {"type": "summary_text", "text": "Thought"},
+                ],
+            },
+            ("Thought",),
+        ),
+    ],
+    ids=["missing-thinking", "empty-thinking", "empty-summary", "missing-text", "empty-text", "mixed-texts"],
+)
+def test_empty_reasoning_text_does_not_count_tokenizer_special_tokens(
+    block: ChatCompletionThinkingBlock | ChatCompletionReasoningItem, texts: tuple[str, ...]
+) -> None:
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.processors import TemplateProcessing
+
+    tokenizer: Final = Tokenizer(WordLevel({"[UNK]": 0, "[BOS]": 1, "[EOS]": 2, "Ready": 3, "Thought": 4}, unk_token="[UNK]"))
+    tokenizer.post_processor = TemplateProcessing(single="[BOS] $A [EOS]", special_tokens=[("[BOS]", 1), ("[EOS]", 2)])
+    custom_tokenizer: Final = {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    messages: Final = [{"role": "assistant", "content": [block, {"type": "text", "text": "Ready"}]}]
+    equivalent_messages: Final = [
+        {
+            "role": "assistant",
+            "content": [*({"type": "text", "text": value} for value in texts), {"type": "text", "text": "Ready"}],
+        }
+    ]
+
+    assert tokenizer.encode("").ids == [1, 2]
+    assert token_counter(custom_tokenizer=custom_tokenizer, messages=messages) == token_counter(
+        custom_tokenizer=custom_tokenizer, messages=equivalent_messages
+    )
+
+
+def test_reasoning_content_preserves_prompt_cache_eligibility() -> None:
+    model: Final = "gemini/gemini-3.8-flash"
+    messages: Final = [
+        {"role": "user", "content": "Context marker. " * 1800},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "A short synthetic summary."}]},
+                {"type": "text", "text": "Ready."},
+            ],
+        },
+        {"role": "user", "content": "Reply with exactly OK."},
+    ]
+    count: Final = token_counter(model=model, messages=messages)
+
+    assert count >= litellm.utils.get_prompt_cache_min_tokens(model)
+    assert litellm.utils.is_prompt_caching_valid_prompt(model=model, messages=messages)
+    assert litellm.utils.is_prompt_caching_valid_prompt(model=model, messages=messages, min_token_count=count)
+    assert not litellm.utils.is_prompt_caching_valid_prompt(model=model, messages=messages, min_token_count=count + 1)
 
 
 def test_token_counter_with_tool_reference_block():
