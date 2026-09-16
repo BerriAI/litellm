@@ -264,6 +264,8 @@ scim_router: Final = APIRouter(
     dependencies=[Depends(_premium_user_check)],
 )
 
+SCIM_MAX_PAGE_SIZE: Final = 100
+
 
 # Helper functions for common operations
 async def _get_prisma_client_or_raise_exception():
@@ -1572,12 +1574,13 @@ def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
 )
 async def get_users(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=0),
     filter: str | None = Query(None),
 ):
     """
     Get a list of users according to SCIM v2 protocol
     """
+    page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET USERS request: startIndex=%s count=%s filter=%s",
         startIndex,
@@ -1607,7 +1610,7 @@ async def get_users(
         users: Final[Sequence[LiteLLM_UserTable]] = await _table(UserRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -1623,7 +1626,7 @@ async def get_users(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_users)),
+            itemsPerPage=len(scim_users),
             Resources=scim_users,
         )
 
@@ -2399,12 +2402,13 @@ class _TeamWhereConditions(TypedDict, total=False):
 )
 async def get_groups(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=0),
     filter: str | None = Query(None),
 ):
     """
     Get a list of groups according to SCIM v2 protocol
     """
+    page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET GROUPS request: startIndex=%s count=%s filter=%s",
         startIndex,
@@ -2425,7 +2429,7 @@ async def get_groups(
         teams: Final = await _table(TeamRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -2462,7 +2466,7 @@ async def get_groups(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_groups)),
+            itemsPerPage=len(scim_groups),
             Resources=scim_groups,
         )
 
