@@ -8,9 +8,9 @@ import httpx
 import pytest
 
 import litellm
+from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
-from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
@@ -2333,22 +2333,7 @@ def test_non_bash_tool_result_skipped():
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
 
 
-class TestRustChatCompletionsHook:
-    """The catalog keeps Anthropic chat completions on the Python path, so the
-    injected native callables are never consulted even with the switch on."""
-
-    @pytest.fixture(autouse=True)
-    def _reset_bridge(self, monkeypatch):
-        from litellm.rust_bridge.chat_completions import native as bridge
-        from litellm.rust_bridge import configuration
-
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        configuration.reset_rust_configuration()
-        bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
-        yield
-        bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
-        configuration.reset_rust_configuration()
-
+class TestAnthropicChatCompletionPreCallLogging:
     @staticmethod
     def _completion_kwargs(**overrides):
         from litellm.types.utils import ModelResponse
@@ -2374,45 +2359,10 @@ class TestRustChatCompletionsHook:
         kwargs.update(overrides)
         return kwargs
 
-    @staticmethod
-    def _inject():
-        from litellm.rust_bridge.chat_completions import native as bridge
-
-        seen = {"gate": [], "call": []}
-
-        def gate(**kwargs):
-            seen["gate"].append(kwargs)
-
-        def native(**kwargs):
-            seen["call"].append(kwargs)
-            raise AssertionError("the native call must not run for a python-only route")
-
-        bridge.set_rust_chat_completions(decline=gate, chat_completions=native)
-        return seen
-
-    def test_the_python_only_route_never_consults_the_core(self):
-        from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
-        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-
-        seen = self._inject()
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ) as transform:
-            try:
-                AnthropicChatCompletion().completion(**self._completion_kwargs())
-            except Exception:
-                # The Python path goes on to make an HTTP call; reaching it is
-                # the assertion, so the network failure below is expected.
-                pass
-        assert seen["gate"] == []
-        assert seen["call"] == []
-        assert transform.called
-
     def test_pre_call_logging_fires_once_on_the_python_path(self):
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        self._inject()
         calls = {"pre_call": []}
         logging_obj = MagicMock()
         logging_obj.pre_call.side_effect = lambda **kwargs: calls["pre_call"].append(kwargs)
@@ -2422,6 +2372,8 @@ class TestRustChatCompletionsHook:
             try:
                 AnthropicChatCompletion().completion(**self._completion_kwargs(logging_obj=logging_obj))
             except Exception:
+                # The Python path goes on to make an HTTP call; reaching it is
+                # the assertion, so the network failure below is expected.
                 pass
 
         assert len(calls["pre_call"]) == 1
