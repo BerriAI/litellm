@@ -53,7 +53,9 @@ def _single_process_collection(monkeypatch):
 
 
 def _logger_with_mock_team_gauges() -> PrometheusLogger:
-    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
+    with patch(  # test-quality-ok: PrometheusLogger has no registry-injection seam; every test in this directory skips its metric construction the same way
+        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
+    ):
         logger = PrometheusLogger()
     for metric_name in TEAM_RATE_LIMIT_METRICS:
         setattr(logger, metric_name, MagicMock())
@@ -446,7 +448,9 @@ def test_excluded_labels_never_reach_team_gauge_labelnames():
     `exclude_labels`, so these gauges are always real prometheus_client
     Gauges and always expose `collect` for alias cleanup.
     """
-    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
+    with patch(  # test-quality-ok: PrometheusLogger has no registry-injection seam; every test in this directory skips its metric construction the same way
+        "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
+    ):
         logger = PrometheusLogger()
     logger.exclude_labels = frozenset({"model", "team_alias"})
     logger.label_filters = {}
