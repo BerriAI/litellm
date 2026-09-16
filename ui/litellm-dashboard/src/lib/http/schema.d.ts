@@ -24505,10 +24505,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_token_endpoint_token_post */
         Body_token_endpoint_token_post: {
@@ -24526,10 +24532,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {

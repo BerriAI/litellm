@@ -525,6 +525,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/call",
         "/v1/mcp/tools",
         "/introspect",
+        "/token",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
