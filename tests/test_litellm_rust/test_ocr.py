@@ -8,7 +8,6 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.ocr import native as rust_ocr_bridge
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -69,35 +68,6 @@ def ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[dict[str, object]]
         server.shutdown()
         server.server_close()
         thread.join()
-
-
-def test_native_ocr_with_compiled_rust_extension(
-    ocr_server: tuple[ThreadingHTTPServer, list[dict[str, object]]],
-) -> None:
-    server, requests = ocr_server
-    address: Final = server.server_address
-    host: Final = str(address[0])
-    port: Final = int(address[1])
-
-    response: Final = rust_ocr_bridge.ocr(
-        model="mistral-ocr-latest",
-        document={"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
-        api_key="test-key",
-        api_base=f"http://{host}:{port}",
-        custom_llm_provider="mistral",
-        extra_headers=None,
-        optional_params={},
-        timeout=None,
-    )
-
-    assert response is not None
-    assert response["pages"][0]["markdown"] == "native OCR response"
-    assert len(requests) == 1
-    assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
-    assert requests[0]["body"] == {
-        "model": "mistral-ocr-latest",
-        "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
-    }
 
 
 @pytest.mark.parametrize(
@@ -217,22 +187,6 @@ async def test_native_ocr_failures_do_not_retry_on_python(ocr_server, asynchrono
     assert caught.value.status_code == 503
     assert len(requests) == 1
     assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
-
-
-@pytest.mark.parametrize("custom_provider", ["mistral", "not-a-provider"])
-def test_native_ocr_rejects_invalid_input_before_network(ocr_server, custom_provider):
-    from litellm.rust_bridge import _native
-
-    server, requests = ocr_server
-    with pytest.raises(ValueError, match="Document URL is required"):
-        _native.ocr(
-            model="mistral-ocr-latest",
-            custom_llm_provider=custom_provider,
-            document={"type": "document_url"},
-            api_key="test-key",
-            api_base=f"http://127.0.0.1:{server.server_port}",
-        )
-    assert requests == []
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

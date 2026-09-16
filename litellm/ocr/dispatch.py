@@ -7,8 +7,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import main
 from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
 from litellm.rust_bridge.catalog import Context, Route
-from litellm.rust_bridge.ocr.lifecycle import NATIVE_OCR_LIFECYCLE, NativeOcrLifecycle
-from litellm.rust_bridge.ocr.native import LiteLLMOcrRequest
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest, NativeAocr
 from litellm.rust_bridge.runtime import arun, run
 
 __all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
@@ -48,18 +47,16 @@ def ocr(
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
     request: Final = _public_request("ocr", args, kwargs)
-    fallback: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
+    python_ocr: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
         Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], main.ocr
     )
-    if request.kwargs.get("aocr"):
-        return fallback(*args, **kwargs)
+    if request.kwargs.get("aocr") is True:
+        return python_ocr(*args, **kwargs)
     return run(
         _context(request),
-        binding=NATIVE_OCR_LIFECYCLE,
-        native=lambda hook: cast(  # cast-ok: False selects the synchronous result
-            OCRResponse, hook(request, args, kwargs, False)
-        ),
-        python=lambda: fallback(*args, **kwargs),
+        binding=NATIVE_OCR,
+        native=lambda hook: hook(request, args, kwargs),
+        python=lambda: python_ocr(*args, **kwargs),
     )
 
 
@@ -69,14 +66,10 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
         Callable[..., Awaitable[OCRResponse]], main.aocr
     )
 
-    async def native(hook: NativeOcrLifecycle) -> OCRResponse:
-        return await cast(  # cast-ok: True selects the asynchronous result
-            Awaitable[OCRResponse], hook(request, args, kwargs, True)
-        )
+    async def native(hook: NativeAocr) -> OCRResponse:
+        return await hook(request, args, kwargs)
 
-    return await arun(
-        _context(request), binding=NATIVE_OCR_LIFECYCLE, native=native, python=lambda: fallback(*args, **kwargs)
-    )
+    return await arun(_context(request), binding=NATIVE_AOCR, native=native, python=lambda: fallback(*args, **kwargs))
 
 
 def _context(request: LiteLLMOcrRequest) -> Context:
