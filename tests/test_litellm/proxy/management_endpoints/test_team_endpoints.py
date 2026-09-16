@@ -10838,6 +10838,41 @@ async def test_team_member_me_returns_caller_membership(mock_db_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spend", "total_spend", "expected_total_spend"),
+    [(150.0, 40.0, 150.0), (10.0, 40.0, 40.0)],
+)
+async def test_team_member_info_floors_total_spend_at_current_cycle_spend(
+    mock_db_client, spend, total_spend, expected_total_spend
+):
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_me
+
+    team_id = "team-me-floor"
+    caller_id = "alice@example.com"
+    caller_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller_id)
+    team = _build_team_for_me(team_id, [{"user_id": caller_id, "user_email": None, "role": "user"}])
+    membership = _build_membership_for_me(caller_id, team_id, spend=spend).model_copy(
+        update={"total_spend": total_spend}
+    )
+    user = LiteLLM_UserTable(user_id=caller_id, user_email=caller_id, max_budget=None)
+
+    p_team, p_membership, p_user = _patch_member_me_helpers(
+        team=team, membership=membership, user=user
+    )
+    with p_team, p_membership, p_user:
+        response = await team_member_me(
+            http_request=MagicMock(spec=Request),
+            team_id=team_id,
+            user_api_key_dict=caller_auth,
+        )
+
+    assert response.total_spend == expected_total_spend
+    assert response.spend == spend
+
+
+@pytest.mark.asyncio
 async def test_team_member_me_matches_email_only_member(mock_db_client):
     """
     Members onboarded by email may have user_id=None on the stored entry —
@@ -12586,6 +12621,36 @@ async def test_get_all_team_memberships_validates_rows():
     assert result[0].spend == 2.5
     find_many_kwargs = mock_prisma_client.db.litellm_teammembership.find_many.call_args.kwargs
     assert find_many_kwargs["where"] == {"team_id": {"in": ["team-1"]}, "user_id": {"in": ["member-1"]}}
+
+
+@pytest.mark.asyncio
+async def test_get_all_team_memberships_floors_total_spend_at_current_cycle_spend():
+    from litellm.proxy.management_endpoints.team_endpoints import get_all_team_memberships
+
+    membership_rows = tuple(
+        MagicMock(
+            model_dump=lambda user_id=user_id, spend=spend, total_spend=total_spend: {
+                "user_id": user_id,
+                "team_id": "team-1",
+                "spend": spend,
+                "total_spend": total_spend,
+            }
+        )
+        for user_id, spend, total_spend in [
+            ("member-1", 150.0, 40.0),
+            ("member-2", 10.0, 40.0),
+        ]
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=membership_rows)
+
+    result = await get_all_team_memberships(mock_prisma_client, ["team-1"])
+
+    assert [(membership.total_spend, membership.spend) for membership in result] == [
+        (150.0, 150.0),
+        (40.0, 10.0),
+    ]
 
 
 @pytest.mark.asyncio
