@@ -15,6 +15,7 @@ never promoted whole.
 
 import json
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.otel.model.metadata import RequestIdentity
@@ -85,11 +86,24 @@ def promoted_baggage(
             value = extract(identity, request_model, team_metadata_keys)
             if value:
                 out[key] = value
-    for meta_key in metadata_keys:
-        value = identity.metadata.get(meta_key)
-        if value:
-            out[f"{LiteLLM.METADATA_PREFIX}{meta_key}"] = value
+    out.update(promoted_metadata(identity.metadata, metadata_keys))
     return out
+
+
+def promoted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
+    """Allowlisted entries of a flattened metadata mapping under ``litellm.metadata.*``.
+
+    A dotted key such as ``requester_metadata.trace_id`` reads the nested value and
+    is promoted under its last segment (``litellm.metadata.trace_id``), so the
+    caller-facing attribute name is independent of where the proxy stored it.
+    """
+    return MappingProxyType(
+        {
+            f"{LiteLLM.METADATA_PREFIX}{meta_key.rsplit('.', 1)[-1]}": value
+            for meta_key in metadata_keys
+            if (value := metadata.get(meta_key))
+        }
+    )
 
 
 def _filtered_team_metadata_json(

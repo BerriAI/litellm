@@ -78,7 +78,7 @@ class RequestIdentity:
         model, not just the user-facing one.
         """
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
-        metadata = {key: str(value) for key, value in raw_meta.items() if isinstance(value, (str, bool, int, float))}
+        metadata: Final = MappingProxyType(dict(flatten_metadata(raw_meta)))
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
             # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
@@ -95,7 +95,9 @@ class RequestIdentity:
         )
 
     @classmethod
-    def from_user_api_key_auth(cls, auth: object) -> RequestIdentity:
+    def from_user_api_key_auth(
+        cls, auth: object, request_metadata: Mapping[str, object] | None = None
+    ) -> RequestIdentity:
         """Identity from a ``UserAPIKeyAuth`` (duck-typed to keep this module
         free of a proxy import).
 
@@ -103,11 +105,12 @@ class RequestIdentity:
         guardrail, or service span is created — so the whole request's spans
         inherit identity, not just the LLM-call span. Metadata sub-keys use the
         ``user_api_key_*`` names that ``baggage.DEFAULT_BAGGAGE_METADATA_KEYS``
-        promotes.
+        promotes; ``request_metadata`` (the proxy's per-request metadata dict) is
+        flattened to dotted keys so ``requester_metadata.<key>`` resolves too.
         """
         get: Final = lambda name: getattr(auth, name, None)  # noqa: E731
-        metadata: Final = {
-            meta_key: str(value)
+        auth_meta: Final = tuple(
+            (meta_key, str(value))
             for meta_key, attr in (
                 ("user_api_key_user_id", "user_id"),
                 ("user_api_key_org_id", "org_id"),
@@ -115,7 +118,9 @@ class RequestIdentity:
                 ("user_api_key_end_user_id", "end_user_id"),
             )
             if (value := get(attr))
-        }
+        )
+        request_meta: Final = flatten_metadata(request_metadata) if request_metadata is not None else ()
+        metadata: Final = MappingProxyType(dict((*request_meta, *auth_meta)))
         return cls(
             team_id=as_str(get("team_id")),
             team_alias=as_str(get("team_alias")),
@@ -349,6 +354,33 @@ def model_from_request_data(data: object) -> str | None:
     if isinstance(data, Mapping):
         return as_str(data.get("model"))
     return None
+
+
+def metadata_from_request_data(data: object) -> Mapping[str, object] | None:
+    """The proxy's per-request metadata dict from a pre-call ``data`` dict.
+
+    The proxy writes it under ``metadata`` or ``litellm_metadata`` depending on
+    the route; the one carrying the ``requester_metadata`` snapshot wins.
+    """
+    top: Final = _as_str_mapping(data)
+    if top is None:
+        return None
+    candidates: Final = tuple(
+        nested for name in ("metadata", "litellm_metadata") if (nested := _as_str_mapping(top.get(name))) is not None
+    )
+    return next(
+        (c for c in candidates if isinstance(c.get("requester_metadata"), Mapping)),
+        candidates[0] if candidates else None,
+    )
+
+
+def flatten_metadata(raw: Mapping[str, object], prefix: str = "") -> Iterator[tuple[str, str]]:
+    """Scalar leaves of a nested metadata mapping, keyed by their dotted path."""
+    for key, value in raw.items():
+        if (nested := _as_str_mapping(value)) is not None:
+            yield from flatten_metadata(nested, f"{prefix}{key}.")
+        elif isinstance(value, (str, bool, int, float)):
+            yield f"{prefix}{key}", str(value)
 
 
 def resolve_provider_model(payload: StandardLoggingPayload) -> str | None:
