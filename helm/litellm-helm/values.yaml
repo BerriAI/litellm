@@ -117,6 +117,12 @@ startupProbe:
 ingress:
   enabled: false
   className: "nginx"
+  # Load balancer idle timeout in seconds. ALB renders
+  # alb.ingress.kubernetes.io/load-balancer-attributes:
+  # idle_timeout.timeout_seconds=N. Nginx renders
+  # nginx.ingress.kubernetes.io/proxy-read-timeout and proxy-send-timeout.
+  # User-supplied annotations win, and 0 disables generated annotations.
+  idleTimeoutSeconds: 600
   labels: {}
   annotations:
     {}
@@ -585,6 +591,10 @@ migrationJob:
 # Setting LITELLM_LOG inside `envVars:` below also wins: the template skips
 # this injection entirely when envVars already defines LITELLM_LOG.
 logLevel: INFO
+
+# Uvicorn keep-alive timeout in seconds (KEEPALIVE_TIMEOUT). Must exceed the
+# load balancer idle timeout in front of the gateway.
+keepaliveTimeoutSeconds: 630
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {}

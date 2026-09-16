@@ -61,6 +61,10 @@ spec:
             - name: NUM_WORKERS
               value: {{ .Values.gateway.numWorkers | quote }}
             {{- end }}
+            {{- if .Values.gateway.keepaliveTimeoutSeconds }}
+            - name: KEEPALIVE_TIMEOUT
+              value: {{ .Values.gateway.keepaliveTimeoutSeconds | quote }}
+            {{- end }}
             {{- if .Values.database.connectionPool.enabled }}
             {{- include "litellm.connectionPoolEnv" $ | nindent 12 }}
             {{- end }}

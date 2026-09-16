@@ -64,6 +64,7 @@ resource "google_compute_backend_service" "gateway" {
   name                  = "${local.name}-gateway-bs"
   protocol              = "HTTP"
   load_balancing_scheme = "EXTERNAL_MANAGED"
+  timeout_sec           = var.lb_timeout_seconds
 
   backend {
     group = google_compute_region_network_endpoint_group.gateway[0].id

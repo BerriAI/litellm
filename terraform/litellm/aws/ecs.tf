@@ -176,6 +176,9 @@ locals {
   backend_extra_env_list = [
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
+  gateway_timeout_env = contains(keys(var.gateway_extra_env), "KEEPALIVE_TIMEOUT") ? [] : [
+    { name = "KEEPALIVE_TIMEOUT", value = tostring(var.alb_idle_timeout_seconds + 30) },
+  ]
 
   # Storing models in the DB needs a DB. Without one the backend reads its
   # model list from proxy_config only.
@@ -292,6 +295,7 @@ locals {
     local.shared_env,
     local.gateway_otel_env,
     local.billing_metrics_env,
+    local.gateway_timeout_env,
     local.gateway_extra_env_list,
     local.proxy_config_env,
     local.metrics_env,
