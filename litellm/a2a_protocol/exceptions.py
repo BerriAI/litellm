@@ -4,6 +4,8 @@ A2A Protocol Exceptions.
 Custom exception types for A2A protocol operations, following LiteLLM's exception pattern.
 """
 
+from typing import Final
+
 import httpx
 
 
@@ -110,6 +112,15 @@ class A2AAgentCardError(A2AError):
             response=response,
             litellm_debug_info=litellm_debug_info,
         )
+
+
+class A2AAgentCardDiscoveryError(A2AAgentCardError):
+    """Raised when no known agent card path answered; names every path probed and why each failed."""
+
+    def __init__(self, base_url: str, failures: tuple[tuple[str, Exception], ...]) -> None:
+        self.failures = failures
+        attempts: Final = ", ".join(f"{path} ({error})" for path, error in failures)
+        super().__init__(message=f"Failed to fetch agent card from {base_url}. Tried {attempts}", url=base_url)
 
 
 class A2ALocalhostURLError(A2AConnectionError):
