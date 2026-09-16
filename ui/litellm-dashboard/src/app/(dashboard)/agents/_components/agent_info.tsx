@@ -43,6 +43,7 @@ import AgentCostView from "./agent_cost_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
 import { buildDiscoveryRequest, overlayDiscoveredCardParams } from "./agent_discovery_utils";
+import { useAgentTab, useSelectedAgentKey } from "./useAgentUrlState";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -71,14 +72,46 @@ const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }
   </>
 );
 
+const LoadingState: React.FC = () => (
+  <div className="p-4">
+    <div className="flex justify-center items-center h-64">
+      <UiLoadingSpinner className="size-8 text-primary" />
+    </div>
+  </div>
+);
+
+interface AgentKeyDetailProps {
+  keyToken: string;
+  agentKeys: KeyResponse[];
+  keysLoading: boolean;
+  onClose: () => void;
+  onDelete: () => void;
+}
+
+const AgentKeyDetail: React.FC<AgentKeyDetailProps> = ({ keyToken, agentKeys, keysLoading, onClose, onDelete }) => {
+  if (keysLoading) {
+    return <LoadingState />;
+  }
+  return (
+    <KeyInfoView
+      keyId={keyToken}
+      keyData={agentKeys.find((key) => key.token === keyToken)}
+      onClose={onClose}
+      onDelete={onDelete}
+      teams={null}
+      backButtonText="Back to Agent"
+    />
+  );
+};
+
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const [agent, setAgent] = useState<Agent | null>(null);
-  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const [selectedKeyToken, setSelectedKeyToken] = useSelectedAgentKey();
   const { data: keysData, isLoading: keysLoading, refetch: refetchAgentKeys } = useKeys(1, 100, { agentID: agentId });
   const agentKeys = keysData?.keys ?? [];
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useAgentTab(isAdmin);
   const [isSaving, setIsSaving] = useState(false);
   const form = useForm<AgentFormValues>({ defaultValues: {} });
   const panels = useCollapsiblePanels([AGENT_FORM_CONFIG.basic.key]);
@@ -234,13 +267,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   };
 
   if (isLoading) {
-    return (
-      <div className="p-4">
-        <div className="flex justify-center items-center h-64">
-          <UiLoadingSpinner className="size-8 text-primary" />
-        </div>
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (!agent) {
@@ -276,18 +303,17 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     </AgentFormField>
   );
 
-  if (selectedKey) {
+  if (selectedKeyToken) {
     return (
-      <KeyInfoView
-        keyId={selectedKey.token}
-        keyData={selectedKey}
-        onClose={() => setSelectedKey(null)}
+      <AgentKeyDetail
+        keyToken={selectedKeyToken}
+        agentKeys={agentKeys}
+        keysLoading={keysLoading}
+        onClose={() => void setSelectedKeyToken(null)}
         onDelete={() => {
-          setSelectedKey(null);
+          void setSelectedKeyToken(null);
           refetchAgentKeys();
         }}
-        teams={null}
-        backButtonText="Back to Agent"
       />
     );
   }
@@ -354,7 +380,11 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
               <DetailItem label="Updated At">{formatDate(agent.updated_at)}</DetailItem>
             </DetailList>
 
-            <AgentVirtualKeys keys={agentKeys} isLoading={keysLoading} onKeyClick={setSelectedKey} />
+            <AgentVirtualKeys
+              keys={agentKeys}
+              isLoading={keysLoading}
+              onKeyClick={(key) => void setSelectedKeyToken(key.token)}
+            />
 
             {agent.object_permission &&
               (agent.object_permission.mcp_servers?.length ||

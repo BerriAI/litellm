@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 
 import type { VectorStoreIndex } from "./IndexesTab";
 import { getIndexesTableColumns } from "./IndexesTableColumns";
@@ -16,7 +15,13 @@ interface IndexesTableProps {
   isLoading?: boolean;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["index_name", "vector_store_name", "created_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+  keyPrefix: "idx_",
+};
 
 function EmptyState() {
   return (
@@ -36,7 +41,7 @@ const IndexesTable: React.FC<IndexesTableProps> = ({
   onViewVectorStore,
   isLoading = false,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(
     () => getIndexesTableColumns({ resolveVectorStoreId, onViewVectorStore }),
@@ -47,11 +52,13 @@ const IndexesTable: React.FC<IndexesTableProps> = ({
     <DataTable
       data={data}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(row, index) => row.id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading indexes…"
       noDataMessage={<EmptyState />}

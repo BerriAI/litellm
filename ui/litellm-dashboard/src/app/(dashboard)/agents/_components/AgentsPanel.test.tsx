@@ -1,9 +1,11 @@
 import React from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentsPanel from "./AgentsPanel";
 import * as networking from "@/components/networking";
+import { renderWithProviders } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
@@ -15,7 +17,12 @@ vi.mock("./add_agent_form", () => ({
 }));
 
 vi.mock("./agent_info", () => ({
-  default: () => <div data-testid="agent-info" />,
+  default: ({ agentId, onClose }: { agentId: string; onClose: () => void }) => (
+    <div>
+      <p data-testid="agent-info">{agentId}</p>
+      <button onClick={onClose}>Close agent</button>
+    </div>
+  ),
 }));
 
 describe("AgentsPanel", () => {
@@ -26,37 +33,37 @@ describe("AgentsPanel", () => {
   });
 
   it("should render the Agents panel title", () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     expect(screen.getByText("Agents")).toBeInTheDocument();
   });
 
   it("should show Add New Agent button for admin users", () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     expect(screen.getByText("Add New Agent")).toBeInTheDocument();
   });
 
   it("should show Add New Agent button for proxy_admin users", () => {
-    render(<AgentsPanel accessToken="test-token" userRole="proxy_admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="proxy_admin" />);
     expect(screen.getByText("Add New Agent")).toBeInTheDocument();
   });
 
   it("should not show Add New Agent button for internal_user role", () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
     expect(screen.queryByText("Add New Agent")).not.toBeInTheDocument();
   });
 
   it("should not show Add New Agent button for internal_user_viewer role", () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Internal Viewer" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Internal Viewer" />);
     expect(screen.queryByText("Add New Agent")).not.toBeInTheDocument();
   });
 
   it("should show the Actions column for admin role", async () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     expect(await screen.findByRole("columnheader", { name: /actions/i })).toBeInTheDocument();
   });
 
   it("should not show the Actions column for internal user role", async () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
     await waitFor(() => {
       expect(screen.queryByRole("columnheader", { name: /actions/i })).not.toBeInTheDocument();
       expect(screen.getByRole("table")).toBeInTheDocument();
@@ -64,16 +71,16 @@ describe("AgentsPanel", () => {
   });
 
   it("should render the Health Check toggle for admins and non-admins", () => {
-    const { unmount } = render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    const { unmount } = renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     expect(screen.getByText("Health Check")).toBeInTheDocument();
     unmount();
 
-    render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
     expect(screen.getByText("Health Check")).toBeInTheDocument();
   });
 
   it("should call getAgentsList with health_check=false on initial load", async () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     await waitFor(() => {
       expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
     });
@@ -99,7 +106,7 @@ describe("AgentsPanel", () => {
       ],
     });
 
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
 
     const keyedRow = (await screen.findByText("Keyed Agent")).closest("tr")!;
     const keylessRow = screen.getByText("Keyless Agent").closest("tr")!;
@@ -109,7 +116,7 @@ describe("AgentsPanel", () => {
 
   it("should refetch with health_check=true when the toggle is enabled", async () => {
     const user = userEvent.setup();
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     await waitFor(() => {
       expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
     });
@@ -135,7 +142,7 @@ describe("AgentsPanel", () => {
       ],
     });
 
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
 
     await user.click(await screen.findByTestId("agent-actions-agent-9"));
     await user.click(await screen.findByTestId("agent-action-delete"));
@@ -154,7 +161,7 @@ describe("AgentsPanel", () => {
   });
 
   it("should show a loading skeleton on initial load and clear it once agents arrive", async () => {
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
@@ -162,7 +169,7 @@ describe("AgentsPanel", () => {
   });
 
   it("should clear the loading state when there is no access token rather than skeleton forever", async () => {
-    render(<AgentsPanel accessToken={null} userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken={null} userRole="Admin" />);
     await waitFor(() => {
       expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
     });
@@ -188,7 +195,7 @@ describe("AgentsPanel", () => {
           }),
       );
 
-    const { rerender } = render(<AgentsPanel accessToken="token-a" userRole="Admin" />);
+    const { rerender } = renderWithProviders(<AgentsPanel accessToken="token-a" userRole="Admin" />);
     expect(await screen.findByText("first-token-agent")).toBeInTheDocument();
 
     rerender(<AgentsPanel accessToken="token-b" userRole="Admin" />);
@@ -212,7 +219,7 @@ describe("AgentsPanel", () => {
       })
       .mockRejectedValueOnce(new Error("unauthorized"));
 
-    const { rerender } = render(<AgentsPanel accessToken="token-a" userRole="Admin" />);
+    const { rerender } = renderWithProviders(<AgentsPanel accessToken="token-a" userRole="Admin" />);
     expect(await screen.findByText("Stale Agent")).toBeInTheDocument();
 
     rerender(<AgentsPanel accessToken="token-b" userRole="Admin" />);
@@ -240,7 +247,7 @@ describe("AgentsPanel", () => {
         ],
       });
 
-    const { rerender } = render(<AgentsPanel accessToken="token-a" userRole="Admin" />);
+    const { rerender } = renderWithProviders(<AgentsPanel accessToken="token-a" userRole="Admin" />);
     rerender(<AgentsPanel accessToken="token-b" userRole="Admin" />);
 
     expect(await screen.findByText("Current Agent")).toBeInTheDocument();
@@ -279,7 +286,7 @@ describe("AgentsPanel", () => {
           }),
       );
 
-    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     expect(await screen.findByText("Stable Agent")).toBeInTheDocument();
 
     await user.click(screen.getByRole("switch"));
@@ -289,6 +296,105 @@ describe("AgentsPanel", () => {
 
     await act(async () => {
       resolveRefetch({ agents });
+    });
+  });
+
+  describe("URL state", () => {
+    const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0];
+    const listedAgent = {
+      agent_id: "agent-1",
+      agent_name: "Listed Agent",
+      litellm_params: { model: "gpt-4" },
+      spend: 0,
+      keys: [],
+    };
+
+    it("loads with health_check on when the URL asks for it", async () => {
+      renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
+        searchParams: "?health_check=true",
+      });
+
+      await waitFor(() => expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", true));
+      expect(networking.getAgentsList).not.toHaveBeenCalledWith("test-token", false);
+      expect(screen.getByRole("switch")).toBeChecked();
+    });
+
+    it("writes health_check when the toggle flips and drops it when turned off", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, { onUrlUpdate });
+      await waitFor(() => expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false));
+
+      await user.click(screen.getByRole("switch"));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("health_check")).toBe("true"));
+      await waitFor(() => expect(screen.getByRole("switch")).toBeEnabled());
+      expect(screen.getByRole("switch")).toBeChecked();
+
+      await user.click(screen.getByRole("switch"));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("health_check")).toBe(false));
+      await waitFor(() => expect(vi.mocked(networking.getAgentsList).mock.calls).toHaveLength(3));
+      expect(vi.mocked(networking.getAgentsList).mock.calls.at(-1)).toEqual(["test-token", false]);
+    });
+
+    it("renders the detail view for the agent in the URL", () => {
+      renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
+        searchParams: "?agent=agent-42",
+      });
+
+      expect(screen.getByTestId("agent-info")).toHaveTextContent("agent-42");
+      expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    it("pushes agent when an agent is opened from the table", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [listedAgent] });
+      renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
+        searchParams: "?agent_search=listed",
+        onUrlUpdate,
+      });
+
+      await user.click(await screen.findByText("agent-1"));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("agent")).toBe("agent-1"));
+      expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("push");
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("agent_search")).toBe("listed");
+      expect(screen.getByTestId("agent-info")).toHaveTextContent("agent-1");
+    });
+
+    it("clears agent and its nested detail keys when the detail closes", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
+        searchParams: "?agent=agent-1&tab=settings&key=hash-1&health_check=true",
+        onUrlUpdate,
+      });
+
+      await user.click(screen.getByRole("button", { name: "Close agent" }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("agent")).toBe(false));
+      const update = lastUrlUpdate(onUrlUpdate);
+      expect(update?.searchParams.has("tab")).toBe(false);
+      expect(update?.searchParams.has("key")).toBe(false);
+      expect(update?.searchParams.get("health_check")).toBe("true");
+      expect(update?.options.history).toBe("push");
+      expect(await screen.findByRole("table")).toBeInTheDocument();
+    });
+
+    it("closes an open detail when Add New Agent is clicked", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AgentsPanel accessToken="test-token" userRole="Admin" />, {
+        searchParams: "?agent=agent-1&tab=settings",
+        onUrlUpdate,
+      });
+
+      await user.click(screen.getByRole("button", { name: /Add New Agent/ }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("agent")).toBe(false));
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+      expect(screen.queryByTestId("agent-info")).not.toBeInTheDocument();
     });
   });
 });

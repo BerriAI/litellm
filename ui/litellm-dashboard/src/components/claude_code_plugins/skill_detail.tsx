@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ArrowLeft, Check, Copy, Link2 } from "lucide-react";
 import { cn } from "@/lib/cva.config";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { buildMarketplaceSettingsSnippet, formatInstallCommand, getSourceDisplayText, getSourceLink } from "./helpers";
 import { Plugin, PluginSource } from "./types";
 
@@ -42,8 +43,16 @@ interface SkillDetailProps {
   onPublishClick?: () => void;
 }
 
+const SKILL_TABS = ["overview", "usage", "setup"] as const;
+type SkillTab = (typeof SKILL_TABS)[number];
+
+const TAB_BAR: readonly { key: SkillTab; label: string }[] = [
+  { key: "overview", label: "Overview" },
+  { key: "usage", label: "How to Use" },
+];
+
 const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useUrlTab(SKILL_TABS, "overview", "skill_tab");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, key: string) => {
@@ -67,16 +76,16 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
     ...(skill.created_at ? [{ property: "Added", value: new Date(skill.created_at).toLocaleDateString() }] : []),
   ];
 
-  const tabs = [
-    { key: "overview", label: "Overview" },
-    { key: "usage", label: "How to Use" },
-  ];
+  const handleBack = () => {
+    setActiveTab("overview");
+    onBack();
+  };
 
   return (
     <div className="py-6 pl-0 pr-8">
       {/* Back link */}
       <div
-        onClick={onBack}
+        onClick={handleBack}
         className="mb-6 inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground"
       >
         <ArrowLeft className="size-3" />
@@ -94,7 +103,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
       {/* Tab bar */}
       <div className="mb-7 mt-6 border-b border-border">
         <div className="flex">
-          {tabs.map((tab) => (
+          {TAB_BAR.map((tab) => (
             <div
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}

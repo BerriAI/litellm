@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   vectorStoreListCall,
@@ -19,6 +19,22 @@ import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
+import { useUrlTab } from "@/hooks/useUrlTab";
+import { useVectorStoreDetailUrlState } from "./useVectorStoreUrlState";
+
+const VECTOR_STORE_TABS = ["create", "manage", "test", "indexes"] as const;
+type VectorStoreTab = (typeof VECTOR_STORE_TABS)[number];
+
+interface TabAccess {
+  canCreateVectorStores: boolean;
+  canViewIndexes: boolean;
+}
+
+const isTabVisible = (tab: VectorStoreTab, access: TabAccess): boolean => {
+  if (tab === "create") return access.canCreateVectorStores;
+  if (tab === "indexes") return access.canViewIndexes;
+  return true;
+};
 
 interface VectorStoreProps {
   accessToken: string | null;
@@ -35,12 +51,21 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [vectorStoreToDelete, setVectorStoreToDelete] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
-  const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
-  const [editVectorStore, setEditVectorStore] = useState(false);
+  const [{ vector_store: selectedVectorStoreId }, setVectorStoreDetailUrl] = useVectorStoreDetailUrlState();
   const [isDeleting, setIsDeleting] = useState(false);
-  const canCreateVectorStores = isProxyAdminRole(userRole || "") && !isViewOnly;
-  const defaultTab = canCreateVectorStores ? "create" : "manage";
-  const { onTabChange, hasVisited } = useVisitedTabs(defaultTab);
+  const canViewIndexes = isProxyAdminRole(userRole || "");
+  const canCreateVectorStores = canViewIndexes && !isViewOnly;
+  const visibleTabs = useMemo(
+    () => VECTOR_STORE_TABS.filter((tab) => isTabVisible(tab, { canCreateVectorStores, canViewIndexes })),
+    [canCreateVectorStores, canViewIndexes],
+  );
+  const [activeTab, setActiveTab] = useUrlTab(visibleTabs, canCreateVectorStores ? "create" : "manage");
+  const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
+
+  const handleTabChange = (tab: VectorStoreTab) => {
+    onTabChange(tab);
+    setActiveTab(tab);
+  };
 
   const fetchVectorStores = async () => {
     if (!accessToken) {
@@ -82,18 +107,15 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   };
 
   const handleView = (vectorStoreId: string) => {
-    setSelectedVectorStoreId(vectorStoreId);
-    setEditVectorStore(false);
+    void setVectorStoreDetailUrl({ vector_store: vectorStoreId, edit: null, detail_tab: null });
   };
 
   const handleEdit = (vectorStoreId: string) => {
-    setSelectedVectorStoreId(vectorStoreId);
-    setEditVectorStore(true);
+    void setVectorStoreDetailUrl({ vector_store: vectorStoreId, edit: true, detail_tab: null });
   };
 
   const handleCloseInfo = () => {
-    setSelectedVectorStoreId(null);
-    setEditVectorStore(false);
+    void setVectorStoreDetailUrl(null);
     fetchVectorStores();
   };
 
@@ -136,7 +158,6 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         onClose={handleCloseInfo}
         accessToken={accessToken}
         is_admin={isAdminRole(userRole || "")}
-        editVectorStore={editVectorStore}
       />
     </div>
   ) : (
@@ -156,7 +177,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           You can use vector stores to store and retrieve LLM embeddings.
         </p>
 
-        <Tabs defaultValue={defaultTab} onValueChange={onTabChange}>
+        <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
             {canCreateVectorStores && (
               <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
@@ -169,7 +190,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
             <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
               Test Vector Store
             </TabsTrigger>
-            {isProxyAdminRole(userRole || "") && (
+            {canViewIndexes && (
               <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
                 Indexes
               </TabsTrigger>
@@ -204,7 +225,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
             <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
           </TabsContent>
 
-          {isProxyAdminRole(userRole || "") && (
+          {canViewIndexes && (
             <TabsContent keepMounted={hasVisited("indexes")} value="indexes">
               <IndexesTab accessToken={accessToken} vectorStores={vectorStores} onViewVectorStore={handleView} />
             </TabsContent>

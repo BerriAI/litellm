@@ -32,13 +32,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { useVectorStoreDetailTab, useVectorStoreDetailUrlState } from "./useVectorStoreUrlState";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
   onClose: () => void;
   accessToken: string | null;
   is_admin: boolean;
-  editVectorStore: boolean;
 }
 
 const vectorStoreEditShape = {
@@ -81,17 +81,14 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
   </>
 );
 
-const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
-  vectorStoreId,
-  onClose,
-  accessToken,
-  is_admin,
-  editVectorStore,
-}) => {
+const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({ vectorStoreId, onClose, accessToken, is_admin }) => {
   const form = useZodForm(vectorStoreEditSchema, { defaultValues: EMPTY_VALUES });
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStore | null>(null);
   const [loadFailed, setLoadFailed] = useState<boolean>(false);
-  const [isEditing, setIsEditing] = useState<boolean>(editVectorStore);
+  const [{ edit }, setDetailUrl] = useVectorStoreDetailUrlState();
+  const isEditing = is_admin && edit;
+  const setIsEditing = (editing: boolean) => void setDetailUrl({ edit: editing });
+  const [detailTab, setDetailTab] = useVectorStoreDetailTab();
   const [metadataString, setMetadataString] = useState<string>("{}");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
 
@@ -216,7 +213,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         {is_admin && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
       </div>
 
-      <Tabs defaultValue="details">
+      <Tabs value={detailTab} onValueChange={setDetailTab}>
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
           <TabsTrigger value="details" className="flex-none rounded-none px-4 py-2">
             Details

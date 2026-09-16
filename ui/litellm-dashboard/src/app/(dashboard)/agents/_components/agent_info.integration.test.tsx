@@ -2,6 +2,7 @@ import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentInfoView from "./agent_info";
 import * as networking from "@/components/networking";
@@ -121,9 +122,11 @@ const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLeve
 const renderView = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="tok" isAdmin={true} />
-    </QueryClientProvider>,
+    <NuqsTestingAdapter hasMemory>
+      <QueryClientProvider client={queryClient}>
+        <AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="tok" isAdmin={true} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
   );
 };
 

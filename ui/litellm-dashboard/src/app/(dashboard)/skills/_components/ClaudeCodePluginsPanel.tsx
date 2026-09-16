@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { parseAsString, useQueryState } from "nuqs";
+import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -22,6 +24,34 @@ interface ClaudeCodePluginsPanelProps {
   userRole?: string;
 }
 
+interface SelectedSkillProps {
+  skill: Plugin | undefined;
+  isLoading: boolean;
+  onBack: () => void;
+  isAdmin: boolean;
+  accessToken: string | null;
+  onPublishClick: () => void;
+}
+
+const SelectedSkill: React.FC<SelectedSkillProps> = ({ skill, isLoading, onBack, ...detailProps }) => {
+  if (skill) {
+    return <SkillDetail skill={skill} onBack={onBack} {...detailProps} />;
+  }
+  if (isLoading) {
+    return <p className="text-sm text-muted-foreground">Loading skill…</p>;
+  }
+  return (
+    <div>
+      <Button variant="ghost" className="mb-4" onClick={onBack}>
+        <ArrowLeft />
+        Back to Skills
+      </Button>
+      <h1 className="text-xl font-semibold">Skill not found</h1>
+      <p className="text-sm text-muted-foreground">It may have been deleted.</p>
+    </div>
+  );
+};
+
 const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessToken, userRole }) => {
   const [pluginsList, setPluginsList] = useState<Plugin[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -31,7 +61,8 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
     name: string;
     displayName: string;
   } | null>(null);
-  const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
+  const [selectedSkillId, setSelectedSkillId] = useQueryState("skill", parseAsString.withOptions({ history: "push" }));
+  const selectedSkill = pluginsList.find((plugin) => plugin.id === selectedSkillId);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -79,10 +110,11 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      {selectedSkill ? (
-        <SkillDetail
+      {selectedSkillId ? (
+        <SelectedSkill
           skill={selectedSkill}
-          onBack={() => setSelectedSkill(null)}
+          isLoading={isLoading}
+          onBack={() => void setSelectedSkillId(null)}
           isAdmin={isAdmin}
           accessToken={accessToken}
           onPublishClick={fetchPlugins}
@@ -107,10 +139,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
             isLoading={isLoading}
             onDeleteClick={handleDeleteClick}
             isAdmin={isAdmin}
-            onPluginClick={(id) => {
-              const skill = pluginsList.find((p) => p.id === id);
-              if (skill) setSelectedSkill(skill);
-            }}
+            onPluginClick={(id) => void setSelectedSkillId(id)}
           />
         </>
       )}

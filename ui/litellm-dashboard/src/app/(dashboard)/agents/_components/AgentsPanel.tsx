@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useReducer, useState } from "react";
 import { Info, Plus } from "lucide-react";
 import { getAgentsList, deleteAgentCall } from "@/components/networking";
 import AddAgentForm from "./add_agent_form";
@@ -19,6 +19,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { useAgentDetailUrlState, useAgentHealthCheck } from "./useAgentUrlState";
 
 interface AgentsPanelProps {
   accessToken: string | null;
@@ -30,74 +31,68 @@ interface AgentsResponse {
   agents: Agent[];
 }
 
+interface AgentsLoad {
+  accessToken: string;
+  healthCheck: boolean;
+  agents: Agent[];
+}
+
+const NO_AGENTS: Agent[] = [];
+
+const fetchAgents = async (accessToken: string, healthCheck: boolean): Promise<Agent[] | null> => {
+  try {
+    const response: AgentsResponse = await getAgentsList(accessToken, healthCheck);
+    return response.agents || [];
+  } catch (error) {
+    console.error("Error fetching agents:", error);
+    return null;
+  }
+};
+
+const settleAgentsLoad = (
+  previous: AgentsLoad | null,
+  request: Omit<AgentsLoad, "agents">,
+  agents: Agent[] | null,
+): AgentsLoad => ({
+  ...request,
+  agents: agents ?? (previous?.accessToken === request.accessToken ? previous.agents : NO_AGENTS),
+});
+
 const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
-  const [agentsList, setAgentsList] = useState<Agent[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState(false);
   const [agentToDelete, setAgentToDelete] = useState<{ id: string; name: string } | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [healthCheckEnabled, setHealthCheckEnabled] = useState(false);
+  const { selectedAgentId, openAgent, closeAgent } = useAgentDetailUrlState();
+  const [healthCheckEnabled, setHealthCheckEnabled] = useAgentHealthCheck();
+  const [agentsLoad, setAgentsLoad] = useState<AgentsLoad | null>(null);
+  const [reloadCount, reloadAgents] = useReducer((count: number) => count + 1, 0);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   useEffect(() => {
+    if (!accessToken) return;
     let cancelled = false;
-    const loadForToken = async () => {
-      if (!accessToken) {
-        setAgentsList([]);
-        setIsLoading(false);
-        return;
-      }
-      setIsLoading(true);
-      try {
-        const response: AgentsResponse = await getAgentsList(accessToken, false);
-        if (!cancelled) {
-          setAgentsList(response.agents || []);
-        }
-      } catch (error) {
-        console.error("Error fetching agents:", error);
-        if (!cancelled) {
-          setAgentsList([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    };
-    loadForToken();
+    const request = { accessToken, healthCheck: healthCheckEnabled };
+    void fetchAgents(accessToken, healthCheckEnabled).then((agents) => {
+      if (!cancelled) setAgentsLoad((previous) => settleAgentsLoad(previous, request, agents));
+    });
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, healthCheckEnabled, reloadCount]);
 
-  const refetchAgents = async (healthCheck: boolean) => {
-    if (!accessToken) {
-      return;
-    }
-    try {
-      const response: AgentsResponse = await getAgentsList(accessToken, healthCheck);
-      setAgentsList(response.agents || []);
-    } catch (error) {
-      console.error("Error fetching agents:", error);
-    }
-  };
+  const currentLoad = accessToken && agentsLoad?.accessToken === accessToken ? agentsLoad : null;
+  const agentsList = currentLoad?.agents ?? NO_AGENTS;
+  const isLoading = Boolean(accessToken) && currentLoad === null;
+  const isHealthCheckLoading = currentLoad !== null && currentLoad.healthCheck !== healthCheckEnabled;
 
-  const handleHealthCheckToggle = async (checked: boolean) => {
-    setHealthCheckEnabled(checked);
-    setIsHealthCheckLoading(true);
-    try {
-      await refetchAgents(checked);
-    } finally {
-      setIsHealthCheckLoading(false);
-    }
+  const handleHealthCheckToggle = (checked: boolean) => {
+    void setHealthCheckEnabled(checked);
   };
 
   const handleAddAgent = () => {
     if (selectedAgentId) {
-      setSelectedAgentId(null);
+      closeAgent();
     }
     setIsAddModalVisible(true);
   };
@@ -107,7 +102,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   };
 
   const handleSuccess = () => {
-    refetchAgents(healthCheckEnabled);
+    reloadAgents();
   };
 
   const handleDeleteClick = (agentId: string, agentName: string) => {
@@ -121,7 +116,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
       toast.success(`Agent "${agentToDelete.name}" deleted successfully`);
-      await refetchAgents(healthCheckEnabled);
+      reloadAgents();
     } catch (error) {
       console.error("Error deleting agent:", error);
       toast.fromError("Failed to delete agent");
@@ -162,12 +157,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
       </div>
 
       {selectedAgentId ? (
-        <AgentInfoView
-          agentId={selectedAgentId}
-          onClose={() => setSelectedAgentId(null)}
-          accessToken={accessToken}
-          isAdmin={isAdmin}
-        />
+        <AgentInfoView agentId={selectedAgentId} onClose={closeAgent} accessToken={accessToken} isAdmin={isAdmin} />
       ) : (
         <AgentsTable
           agents={agentsList}
@@ -176,7 +166,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
           healthCheckEnabled={healthCheckEnabled}
           isHealthCheckLoading={isHealthCheckLoading}
           onHealthCheckToggle={handleHealthCheckToggle}
-          onAgentClick={(id) => setSelectedAgentId(id)}
+          onAgentClick={openAgent}
           onDeleteClick={handleDeleteClick}
         />
       )}

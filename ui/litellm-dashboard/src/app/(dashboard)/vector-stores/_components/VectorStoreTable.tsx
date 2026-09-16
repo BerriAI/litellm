@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { VectorStore } from "@/components/vector_store_management/types";
 
 import { getVectorStoreTableColumns } from "./VectorStoreTableColumns";
@@ -17,7 +16,12 @@ interface VectorStoreTableProps {
   isLoading?: boolean;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["vector_store_id", "vector_store_name", "created_at", "updated_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 function EmptyState() {
   return (
@@ -34,7 +38,7 @@ function EmptyState() {
 }
 
 const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdit, onDelete, isLoading = false }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(() => getVectorStoreTableColumns({ onView, onEdit, onDelete }), [onView, onEdit, onDelete]);
 
@@ -42,11 +46,13 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
     <DataTable
       data={data}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(vectorStore, index) => vectorStore.vector_store_id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading vector stores…"
       noDataMessage={<EmptyState />}

@@ -1,11 +1,10 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Bot, CircleCheck, Search as SearchIcon, X } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
 import { Agent } from "@/components/agents/types";
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -24,7 +23,13 @@ interface AgentsTableProps {
   onDeleteClick: (agentId: string, agentName: string) => void;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["agent_name", "agent_id", "spend", "created_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+  urlKeys: { search: "agent_search" },
+};
 
 function EmptyState({ isFiltered }: { isFiltered: boolean }) {
   return (
@@ -52,8 +57,14 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
   onAgentClick,
   onDeleteClick,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
-  const [searchTerm, setSearchTerm] = useState("");
+  const {
+    search: searchTerm,
+    setSearch: setSearchTerm,
+    sorting,
+    onSortingChange,
+    pagination,
+    onPaginationChange,
+  } = useUrlTableState(TABLE_STATE_OPTIONS);
   const filteredAgents = useMemo(
     () =>
       filterBySearchTerm(agents, searchTerm, (agent) => [
@@ -73,11 +84,13 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
     <DataTable
       data={filteredAgents}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(agent, index) => agent.agent_id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading agents…"
       noDataMessage={<EmptyState isFiltered={agents.length > 0} />}

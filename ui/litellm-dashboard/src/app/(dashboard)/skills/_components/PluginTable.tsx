@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { Plugin } from "@/components/claude_code_plugins/types";
 
 import { getPluginTableColumns } from "./PluginTableColumns";
@@ -17,7 +16,12 @@ interface PluginTableProps {
   onPluginClick: (pluginId: string) => void;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["name", "created_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 function EmptyState() {
   return (
@@ -32,7 +36,7 @@ function EmptyState() {
 }
 
 const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDeleteClick, isAdmin, onPluginClick }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(
     () => getPluginTableColumns({ isAdmin, onPluginClick, onDeleteClick }),
@@ -43,11 +47,13 @@ const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDel
     <DataTable
       data={pluginsList}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(plugin, index) => plugin.id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading skills…"
       noDataMessage={<EmptyState />}
