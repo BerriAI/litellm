@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
@@ -65,24 +65,24 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
   ),
 }));
 
-vi.mock("./TopModelView", () => ({
-  default: ({
-    topModels,
-    topModelsLimit,
-    setTopModelsLimit,
-  }: {
-    topModels: { key: string; spend: number }[];
-    topModelsLimit: number;
-    setTopModelsLimit: (limit: number) => void;
-  }) => (
-    <div>
-      <span>Top Models</span>
-      <span>{`top-models:${topModels.map((row) => `${row.key}=${row.spend}`).join("|")}`}</span>
-      <span>{`top-models-limit:${topModelsLimit}`}</span>
-      <button onClick={() => setTopModelsLimit(50)}>set-top-models-limit</button>
-    </div>
-  ),
-}));
+const topModelViewMock = vi.hoisted(() => ({ renderReal: false }));
+
+vi.mock("./TopModelView", async (importOriginal) => {
+  const { default: RealTopModelView } = await importOriginal<typeof import("./TopModelView")>();
+  return {
+    default: (props: ComponentProps<typeof RealTopModelView>) =>
+      topModelViewMock.renderReal ? (
+        <RealTopModelView {...props} />
+      ) : (
+        <div>
+          <span>Top Models</span>
+          <span>{`top-models:${props.topModels.map((row) => `${row.key}=${row.spend}`).join("|")}`}</span>
+          <span>{`top-models-limit:${props.topModelsLimit}`}</span>
+          <button onClick={() => props.setTopModelsLimit(50)}>set-top-models-limit</button>
+        </div>
+      ),
+  };
+});
 
 vi.mock("./TeamUserSpendCard", () => ({
   default: ({ teamIds }: { teamIds: string[] }) => <div>{`team-user-spend:${teamIds.join("|")}`}</div>,
@@ -439,6 +439,7 @@ describe("EntityUsage", () => {
   };
 
   beforeEach(() => {
+    topModelViewMock.renderReal = false;
     mockTagDailyActivityCall.mockClear();
     mockTeamDailyActivityCall.mockClear();
     mockTeamDailyActivityAggregatedCall.mockClear();
@@ -1494,6 +1495,31 @@ describe("EntityUsage", () => {
         expect(lastUrl(onUrlUpdate).get("top_agents")).toBe("50");
       });
       expect(topModelCardLimits()).toEqual(["top-models-limit:50", "top-models-limit:50"]);
+    });
+
+    it("keeps the Top Agents view toggle on its own key so it does not follow ?top_models_view=", async () => {
+      topModelViewMock.renderReal = true;
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<EntityUsage {...defaultProps} entityType="team" />, {
+        searchParams: "?top_models_view=chart",
+        onUrlUpdate,
+      });
+
+      await screen.findByText("Top Agents Driving Spend");
+      const viewModeTabs = (card: "models" | "agents", name: "Table View" | "Chart View") => {
+        const [modelsToggle, agentsToggle] = screen.getAllByRole("tablist", { name: "Top model view mode" });
+        return within(card === "models" ? modelsToggle : agentsToggle).getByRole("tab", { name });
+      };
+      expect(viewModeTabs("models", "Chart View")).toHaveAttribute("aria-selected", "true");
+      expect(viewModeTabs("agents", "Table View")).toHaveAttribute("aria-selected", "true");
+
+      await user.click(viewModeTabs("agents", "Chart View"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).get("top_agents_view")).toBe("chart"));
+      expect(lastUrl(onUrlUpdate).get("top_models_view")).toBe("chart");
+      expect(viewModeTabs("agents", "Chart View")).toHaveAttribute("aria-selected", "true");
+      expect(viewModeTabs("models", "Chart View")).toHaveAttribute("aria-selected", "true");
     });
   });
 });

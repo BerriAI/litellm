@@ -1,3 +1,4 @@
+import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
@@ -6,14 +7,17 @@ import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import React, { useState } from "react";
+import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
+import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
-import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
-import { keyInfoV1Call } from "../../../networking";
+import type { KeyResponse } from "../../../key_team_helpers/key_list";
 import KeyInfoView from "../../../templates/key_info_view";
 import { TagUsage } from "../../types";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
+const VIEW_MODES = ["table", "chart"] as const;
+const viewModeParser = parseAsStringLiteral(VIEW_MODES).withDefault("table");
+const selectedKeyParser = parseAsString.withOptions({ history: "push" });
 
 interface TopKeyViewProps {
   topKeys: any[];
@@ -25,11 +29,10 @@ interface TopKeyViewProps {
 
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
   const { accessToken } = useAuthorized();
-  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [keyData, setKeyData] = useState<any | undefined>(undefined);
-  const [viewMode, setViewMode] = useState<"chart" | "table">("table");
+  const [selectedKeyId, setSelectedKeyId] = useQueryState("key", selectedKeyParser);
+  const [viewMode, setViewMode] = useQueryState("top_keys_view", viewModeParser);
   const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
+  const { data: selectedKey, isLoading: isSelectedKeyLoading } = useKeyInfo(selectedKeyId);
 
   const toggleTagsExpansion = (apiKey: string) => {
     setExpandedTags((prev) => {
@@ -43,25 +46,17 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     });
   };
 
-  const handleKeyClick = async (item: any) => {
+  const handleKeyClick = (apiKey: string) => {
     if (!accessToken) return;
-
-    try {
-      const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
-      const transformedKeyData = transformKeyInfo(keyInfo);
-
-      setKeyData(transformedKeyData);
-      setSelectedKey(item.api_key);
-      setIsModalOpen(true); // Open modal when key is clicked
-    } catch (error) {
-      console.error("Error fetching key info:", error);
-    }
+    void setSelectedKeyId(apiKey);
   };
 
-  const handleClose = () => {
-    setIsModalOpen(false);
-    setSelectedKey(null);
-    setKeyData(undefined);
+  const handleClose = () => void setSelectedKeyId(null);
+
+  const handleSelectedKeyDataUpdate = (updated: Partial<KeyResponse>) => {
+    const rotatedToken = updated.token ?? updated.token_id;
+    if (!rotatedToken || rotatedToken === selectedKeyId) return;
+    void setSelectedKeyId(rotatedToken, { history: "replace" });
   };
 
   // Handle clicking outside the modal
@@ -71,24 +66,21 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     }
   };
 
-  // Handle escape key
-  React.useEffect(() => {
+  useEffect(() => {
+    if (!selectedKeyId) return;
     const handleEscapeKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isModalOpen) {
-        handleClose();
-      }
+      if (e.key === "Escape") void setSelectedKeyId(null);
     };
-
     document.addEventListener("keydown", handleEscapeKey);
     return () => document.removeEventListener("keydown", handleEscapeKey);
-  }, [isModalOpen]);
+  }, [selectedKeyId, setSelectedKeyId]);
 
   // Define columns for the table view
   const baseColumns = [
     {
       header: "Key ID",
       accessorKey: "api_key",
-      cell: (info: any) => <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />,
+      cell: (info: any) => <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original.api_key)} />,
     },
     {
       header: "Key Alias",
@@ -188,13 +180,13 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         </RadioGroup>
         <div className="flex space-x-2">
           <button
-            onClick={() => setViewMode("table")}
+            onClick={() => void setViewMode("table")}
             className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             Table View
           </button>
           <button
-            onClick={() => setViewMode("chart")}
+            onClick={() => void setViewMode("chart")}
             className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             Chart View
@@ -216,7 +208,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             layout="vertical"
             showLegend={false}
             valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-            onValueChange={(item) => handleKeyClick(item)}
+            onValueChange={(item) => handleKeyClick(item.api_key)}
             showTooltip={true}
             customTooltip={(props) => {
               const item = props.payload?.[0]?.payload;
@@ -245,7 +237,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <DataTable columns={columns} data={topKeys} isLoading={false} maxBodyHeight={600} size="compact" />
       )}
 
-      {isModalOpen && selectedKey && keyData && (
+      {selectedKeyId && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-overlay"
           onClick={handleOutsideClick}
@@ -264,7 +256,17 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
             {/* Content */}
             <div className="p-6 h-full">
-              <KeyInfoView keyId={selectedKey} onClose={handleClose} keyData={keyData} teams={teams} />
+              {isSelectedKeyLoading ? (
+                <p className="text-sm text-muted-foreground">Loading key...</p>
+              ) : (
+                <KeyInfoView
+                  keyId={selectedKeyId}
+                  onClose={handleClose}
+                  keyData={selectedKey}
+                  teams={teams}
+                  onKeyDataUpdate={handleSelectedKeyDataUpdate}
+                />
+              )}
             </div>
           </div>
         </div>

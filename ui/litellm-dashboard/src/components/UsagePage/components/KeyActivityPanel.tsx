@@ -1,5 +1,6 @@
 import { Search, X } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import { parseAsString, throttle, useQueryState } from "nuqs";
+import React, { useMemo } from "react";
 
 import { ActivityMetrics } from "@/components/activity_metrics";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -7,13 +8,15 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { filterKeyActivity } from "../keyActivityFilter";
 import type { ModelActivityData } from "../types";
 
+const keySearchParser = parseAsString.withDefault("").withOptions({ limitUrlUpdates: throttle(300) });
+
 interface KeyActivityPanelProps {
   keyMetrics: Record<string, ModelActivityData>;
   hidePromptCachingMetrics?: boolean;
 }
 
 const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePromptCachingMetrics = false }) => {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useQueryState("key_search", keySearchParser);
   const filtered = useMemo(() => filterKeyActivity(keyMetrics, query), [keyMetrics, query]);
   const totalKeys = Object.keys(keyMetrics).length;
   const shownKeys = Object.keys(filtered).length;
@@ -30,11 +33,11 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePro
             aria-label="Search keys"
             placeholder="Search by key alias, key hash, user ID, or email"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => void setQuery(e.target.value)}
           />
           {isFiltering && (
             <InputGroupAddon align="inline-end">
-              <InputGroupButton size="icon-xs" aria-label="Clear key search" onClick={() => setQuery("")}>
+              <InputGroupButton size="icon-xs" aria-label="Clear key search" onClick={() => void setQuery(null)}>
                 <X />
               </InputGroupButton>
             </InputGroupAddon>

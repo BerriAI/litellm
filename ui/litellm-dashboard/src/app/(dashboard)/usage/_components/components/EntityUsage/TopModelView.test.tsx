@@ -1,7 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { renderWithProviders } from "@/../tests/test-utils";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import TopModelView from "./TopModelView";
+
+const lastSearchParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
 
 describe("TopModelView", () => {
   const mockSetTopModelsLimit = vi.fn();
@@ -19,22 +24,22 @@ describe("TopModelView", () => {
   const showsChart = (container: HTMLElement) => container.querySelector(".recharts-wrapper") !== null;
 
   it("should render", () => {
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
     expect(screen.getByText("Table View")).toBeInTheDocument();
   });
 
   it("should display table view button", () => {
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
     expect(screen.getByText("Table View")).toBeInTheDocument();
   });
 
   it("should display chart view button", () => {
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
     expect(screen.getByText("Chart View")).toBeInTheDocument();
   });
 
   it("should display all table column headers", () => {
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
     expect(screen.getByText("Model")).toBeInTheDocument();
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
     expect(screen.getByText("Successful")).toBeInTheDocument();
@@ -43,7 +48,7 @@ describe("TopModelView", () => {
   });
 
   it("should display model data in table view", () => {
-    render(
+    renderWithProviders(
       <TopModelView
         topModels={[
           {
@@ -72,7 +77,7 @@ describe("TopModelView", () => {
 
   it("should switch to chart view when chart view button is clicked", async () => {
     const user = userEvent.setup();
-    const { container } = render(
+    const { container } = renderWithProviders(
       <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
     );
 
@@ -85,7 +90,7 @@ describe("TopModelView", () => {
 
   it("should switch to table view when table view button is clicked", async () => {
     const user = userEvent.setup();
-    const { container } = render(
+    const { container } = renderWithProviders(
       <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
     );
 
@@ -96,9 +101,68 @@ describe("TopModelView", () => {
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
   });
 
+  it("shows the chart when ?top_models_view=chart", () => {
+    const { container } = renderWithProviders(
+      <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
+      { searchParams: "?top_models_view=chart" },
+    );
+
+    expect(showsChart(container)).toBe(true);
+    expect(screen.queryByText("Spend (USD)")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the table when ?top_models_view= is unknown", () => {
+    const { container } = renderWithProviders(
+      <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
+      { searchParams: "?top_models_view=pie" },
+    );
+
+    expect(showsChart(container)).toBe(false);
+    expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Table View" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Chart View" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("writes ?top_models_view=chart and drops it again for the default table", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(
+      <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
+      { onUrlUpdate },
+    );
+
+    await clickControl(user, "Chart View");
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("top_models_view")).toBe("chart"));
+
+    await clickControl(user, "Table View");
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("top_models_view")).toBe(false));
+  });
+
+  it("keeps a panel with its own viewModeUrlKey independent of top_models_view", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { container } = renderWithProviders(
+      <TopModelView
+        topModels={oneModel}
+        topModelsLimit={5}
+        setTopModelsLimit={mockSetTopModelsLimit}
+        viewModeUrlKey="top_agents_view"
+      />,
+      { searchParams: "?top_models_view=chart", onUrlUpdate },
+    );
+
+    expect(showsChart(container)).toBe(false);
+
+    await clickControl(user, "Chart View");
+
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("top_agents_view")).toBe("chart"));
+    expect(lastSearchParams(onUrlUpdate)?.get("top_models_view")).toBe("chart");
+    expect(showsChart(container)).toBe(true);
+  });
+
   it("renders one cyan bar per model with model names on the axis in chart view", async () => {
     const user = userEvent.setup();
-    const { container } = render(
+    const { container } = renderWithProviders(
       <TopModelView
         topModels={[
           {
@@ -133,7 +197,7 @@ describe("TopModelView", () => {
 
   it("should call setTopModelsLimit when the limit control is changed", async () => {
     const user = userEvent.setup();
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
 
     await clickControl(user, "10");
 
@@ -149,7 +213,9 @@ describe("TopModelView", () => {
       tokens: 10000 + i * 1000,
     }));
 
-    render(<TopModelView topModels={manyModels} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(
+      <TopModelView topModels={manyModels} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
+    );
 
     expect(screen.getByText("model-1")).toBeInTheDocument();
     expect(screen.getByText("model-5")).toBeInTheDocument();
@@ -174,14 +240,16 @@ describe("TopModelView", () => {
       },
     ];
 
-    render(<TopModelView topModels={models} topModelsLimit={10} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(
+      <TopModelView topModels={models} topModelsLimit={10} setTopModelsLimit={mockSetTopModelsLimit} />,
+    );
 
     expect(screen.getByText("model-1")).toBeInTheDocument();
     expect(screen.getByText("model-2")).toBeInTheDocument();
   });
 
   it("should format spend values with two decimal places", () => {
-    render(
+    renderWithProviders(
       <TopModelView
         topModels={[
           {
@@ -200,7 +268,7 @@ describe("TopModelView", () => {
   });
 
   it("should display zero values correctly", () => {
-    render(
+    renderWithProviders(
       <TopModelView
         topModels={[
           {
@@ -220,7 +288,7 @@ describe("TopModelView", () => {
   });
 
   it("should display successful requests with green styling", () => {
-    render(
+    renderWithProviders(
       <TopModelView
         topModels={[
           {
@@ -242,7 +310,7 @@ describe("TopModelView", () => {
   });
 
   it("should display failed requests with red styling", () => {
-    render(
+    renderWithProviders(
       <TopModelView
         topModels={[
           {
@@ -264,7 +332,7 @@ describe("TopModelView", () => {
   });
 
   it("should format large token numbers with commas", () => {
-    render(
+    renderWithProviders(
       <TopModelView
         topModels={[
           {
@@ -283,13 +351,13 @@ describe("TopModelView", () => {
   });
 
   it("should handle empty model list", () => {
-    render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
+    renderWithProviders(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
     expect(screen.getByText("Model")).toBeInTheDocument();
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
   });
 
   it("should display dash for missing model key", () => {
-    render(
+    renderWithProviders(
       <TopModelView
         topModels={[
           {

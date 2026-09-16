@@ -16,10 +16,16 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BarChart } from "@/components/shared/charts";
+import { useUrlTab } from "@/hooks/useUrlTab";
+import { parseAsArrayOf, parseAsString, useQueryState } from "nuqs";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { ChartLoader } from "./shared/chart_loader";
+
+const AGENTS_PARSER = parseAsArrayOf(parseAsString).withDefault([]);
+const UA_TABS = ["active-users", "per-user"] as const;
+const UA_PERIODS = ["dau", "wau", "mau"] as const;
 
 // New interfaces for the updated API response
 interface TagActiveUsersResponse {
@@ -74,7 +80,9 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
 
   // Tag filtering state
   const [availableTags, setAvailableTags] = useState<string[]>([]);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useQueryState("agents", AGENTS_PARSER);
+  const [activeTab, setActiveTab] = useUrlTab(UA_TABS, "active-users", "ua_tab");
+  const [activePeriod, setActivePeriod] = useUrlTab(UA_PERIODS, "dau", "ua_period");
   const [tagsLoading, setTagsLoading] = useState(false);
 
   // Separate loading states for each endpoint
@@ -385,7 +393,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                 multiple
                 items={availableTags}
                 value={selectedTags}
-                onValueChange={(next: string[]) => setSelectedTags(next)}
+                onValueChange={(next: string[]) => void setSelectedTags(next)}
               >
                 <ComboboxChips render={<div ref={anchor} />} className="w-full" aria-busy={tagsLoading}>
                   <ComboboxValue>
@@ -484,7 +492,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
       {/* Main tabs for DAU/WAU/MAU vs Per User Usage */}
       <Card>
         <CardContent>
-          <Tabs defaultValue="active-users">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
               <TabsTrigger value="active-users" className="flex-none rounded-none px-4 py-2">
                 DAU/WAU/MAU
@@ -501,7 +509,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                 <p className="text-sm text-muted-foreground">Active users across different time periods</p>
               </div>
 
-              <Tabs defaultValue="dau">
+              <Tabs value={activePeriod} onValueChange={setActivePeriod}>
                 <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
                   <TabsTrigger value="dau" className="flex-none rounded-none px-4 py-2">
                     DAU
