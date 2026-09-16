@@ -2059,7 +2059,6 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
 def _caller_headers_without_litellm_secrets(
     request: Request, user_api_key_dict: UserAPIKeyAuth, never_forwarded: frozenset[str]
 ) -> Mapping[str, str]:
-    """Incoming headers minus the ones only LiteLLM consumes and minus whatever value authenticated the caller."""
     incoming: Final = _safe_get_request_headers(request)
     dropped_by_name: Final = never_forwarded.union(
         (_MAPPED_ROUTE_CALLER_KEY_HEADER, *_operator_configured_caller_key_header_names())
@@ -2088,7 +2087,6 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(
 def _upstream_headers_for_anthropic_route(
     request: Request, user_api_key_dict: UserAPIKeyAuth, proxy_auth_header: Mapping[str, str] | None
 ) -> Mapping[str, str]:
-    """Caller headers minus LiteLLM secrets, with the proxy's own Anthropic credential layered on top."""
     caller_headers: Final = _caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
