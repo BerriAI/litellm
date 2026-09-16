@@ -626,7 +626,7 @@ class MCPClient:
         1. Check ssl_verify parameter (can be SSLContext, bool, or path to CA bundle)
         2. Check SSL_VERIFY environment variable
         3. Check SSL_CERT_FILE environment variable
-        4. Fall back to certifi CA bundle
+        4. Fall back to the OS trust store with certifi layered on top
         """
 
         def factory(
