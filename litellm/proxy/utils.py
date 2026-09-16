@@ -936,6 +936,26 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
 
+def _mcp_guardrail_gate_data(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    """``request_data`` reshaped so guardrail gating can read the request's metadata.
+
+    Every MCP call site hands ``post_mcp_call_hook`` the request's
+    ``Logging.model_call_details``, which nests the request metadata under
+    ``litellm_params``. ``CustomGuardrail.should_run_guardrail`` only reads the
+    top level, so without this lift the guardrail list a key, team or policy
+    resolved onto the request is invisible and only ``default_on`` guardrails
+    ever run, and ``opted_out_global_guardrails`` never takes one off.
+    """
+    params: Final = request_data.get("litellm_params")
+    if not isinstance(params, Mapping):
+        return request_data
+    nested: Final = cast("Mapping[str, object]", params)  # cast-ok: litellm_params is always a str-keyed dict
+    lifted: Final = MappingProxyType({key: nested[key] for key in ("metadata", "litellm_metadata") if key in nested})
+    if not lifted:
+        return request_data
+    return MappingProxyType({**request_data, **lifted})
+
+
 @dataclass(frozen=True)
 class _CallbackCapabilities:
     """Cached per-hook capability flags derived from ``litellm.callbacks``.
@@ -3350,15 +3370,13 @@ class ProxyLogging:
             verbose_proxy_logger.debug("MCP guardrail translation handler unavailable; skipping post_mcp_call hook")
             return response
 
+        gate_data: Final = _mcp_guardrail_gate_data(request_data)
         for callback in caps.resolved_callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
             if "apply_guardrail" not in type(callback).__dict__ or callback.use_native_lifecycle_hooks:
                 continue
-            if (
-                callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
-                is not True
-            ):
+            if callback.should_run_guardrail(data=gate_data, event_type=GuardrailEventHooks.post_mcp_call) is not True:
                 continue
             response = await self._run_guardrail_with_metrics(
                 callback,
