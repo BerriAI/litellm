@@ -45,7 +45,11 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import (
+    get_or_create_metadata_bucket,
+    independent_snapshot,
+    is_expected_client_error,
+)
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -2089,6 +2093,13 @@ class ProxyBaseLLMRequestProcessing:
     ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
+        configured_fallbacks: Final = (
+            self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+            if llm_router is not None and not self.data.get("disable_fallbacks")
+            else None
+        )
+        pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
+
         try:
             return await self.common_processing_pre_call_logic(
                 request=request,
@@ -2107,14 +2118,19 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
         except ProxyRateLimitError as original_exc:
-            original_model: Final = self.data.get("model")
-            if not original_model or not llm_router or self.data.get("disable_fallbacks"):
+            rate_limited_data: Final = self.data
+            original_model: Final = rate_limited_data.get("model")
+            if (
+                pristine is None
+                or not configured_fallbacks
+                or rate_limited_data.get("disable_fallbacks")
+                or not isinstance(original_model, str)
+            ):
                 raise
 
             fallback_models: Final = self._resolve_fallback_models(
                 model=original_model,
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
+                fallbacks=configured_fallbacks,
             )
             if not fallback_models:
                 raise
@@ -2129,6 +2145,7 @@ class ProxyBaseLLMRequestProcessing:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
                         continue
+                    self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
                     try:
                         return await self.common_processing_pre_call_logic(
@@ -2150,39 +2167,30 @@ class ProxyBaseLLMRequestProcessing:
                     except ProxyRateLimitError:
                         continue
             except BaseException:
-                self.data["model"] = original_model
+                self.data = rate_limited_data
                 raise
 
-            self.data["model"] = original_model
+            self.data = rate_limited_data
             raise original_exc
 
-    def _resolve_fallback_models(
-        self,
-        model: str,
-        llm_router: Router,
-        user_api_key_dict: UserAPIKeyAuth,
-    ) -> list | None:
-        from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
-
-        fallbacks = None
-
+    @staticmethod
+    def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
         key_router_settings: Final = user_api_key_dict.router_settings
-        if isinstance(key_router_settings, dict) and "fallbacks" in key_router_settings:
-            fallbacks = key_router_settings["fallbacks"]
+        key_fallbacks: Final = key_router_settings.get("fallbacks") if isinstance(key_router_settings, dict) else None
+        fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.fallbacks
+        return fallbacks if isinstance(fallbacks, list) and fallbacks else None
 
-        if fallbacks is None:
-            fallbacks = llm_router.fallbacks
-
-        if not fallbacks:
-            return None
+    @staticmethod
+    def _resolve_fallback_models(model: str, fallbacks: list) -> list | None:
+        from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
         fallback_model_group, generic_fallback_idx = get_fallback_model_group(
             fallbacks=fallbacks,
             model_group=model,
         )
-        if fallback_model_group is None and generic_fallback_idx is not None:
-            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
-        return fallback_model_group
+        if fallback_model_group is not None:
+            return fallback_model_group
+        return fallbacks[generic_fallback_idx]["*"] if generic_fallback_idx is not None else None
 
     @staticmethod
     def _get_model_id_from_response(hidden_params: Mapping[str, object], data: Mapping[str, object]) -> str:
