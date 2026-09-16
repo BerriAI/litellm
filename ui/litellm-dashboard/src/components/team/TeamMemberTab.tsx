@@ -3,12 +3,13 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import MemberTable from "@/components/common_components/MemberTable";
 import { Member } from "@/components/networking";
-import { DateCell, MoneyCell } from "@/components/shared/table_cells";
+import { DateCell, formatCellDate, MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
 import type { ComponentProps } from "react";
 import { TeamData } from "./TeamInfo";
+import { describeCycleWindow } from "./cycleWindow";
 
 interface TeamMemberTabProps {
   teamData: TeamData;
@@ -91,10 +92,13 @@ export default function TeamMemberTab({
     return models && models.length > 0 ? models : null;
   };
 
+  const getUserBudgetTable = (userId: string | null) => {
+    if (!userId) return undefined;
+    return teamData.team_memberships.find((tm) => tm.user_id === userId)?.litellm_budget_table;
+  };
+
   const getUserBudgetReset = (userId: string | null): string | null => {
-    if (!userId) return null;
-    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.litellm_budget_table?.budget_reset_at ?? null;
+    return getUserBudgetTable(userId)?.budget_reset_at ?? null;
   };
 
   const extraColumns: NonNullable<ComponentProps<typeof MemberTable>["extraColumns"]> = [
@@ -135,14 +139,21 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Current Cycle Spend (USD)
-          <SimpleTooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
+          <SimpleTooltip content="Spend since this member's budget window last started. It resets to $0 on the date shown under the amount and is the value checked against the member's budget. Members with no reset window keep accruing, so for them this equals Total Spend.">
             <CircleHelp className="size-4" aria-label="Current cycle spend information" />
           </SimpleTooltip>
         </span>
       ),
       key: "spend",
       sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
-      render: (record: Member) => <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />,
+      render: (record: Member) => (
+        <div>
+          <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
+          <div className="text-xs text-muted-foreground">
+            {describeCycleWindow(getUserBudgetTable(record.user_id), (iso) => formatCellDate(new Date(iso), "date"))}
+          </div>
+        </div>
+      ),
     },
     {
       title: (

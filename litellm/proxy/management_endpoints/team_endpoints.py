@@ -783,11 +783,11 @@ async def get_all_team_memberships(
         include={"litellm_budget_table": True},
     )
 
-    returned_tm: Final[list[LiteLLM_TeamMembership]] = []
-    for tm in team_memberships:
-        returned_tm.append(LiteLLM_TeamMembership.model_validate(tm.model_dump()))
+    return [_with_total_spend_floor(LiteLLM_TeamMembership.model_validate(tm.model_dump())) for tm in team_memberships]
 
-    return returned_tm
+
+def _with_total_spend_floor(tm: LiteLLM_TeamMembership) -> LiteLLM_TeamMembership:
+    return tm.model_copy(update={"total_spend": max(tm.total_spend or 0.0, tm.spend or 0.0)})
 
 
 def _check_team_model_specific_limits(
@@ -4715,7 +4715,7 @@ async def team_member_me(
         role=member_role,
         user_email=user_email,
         spend=membership.spend,
-        total_spend=membership.total_spend,
+        total_spend=max(membership.total_spend or 0.0, membership.spend or 0.0),
         budget_id=membership.budget_id,
         litellm_budget_table=membership.litellm_budget_table,
     )

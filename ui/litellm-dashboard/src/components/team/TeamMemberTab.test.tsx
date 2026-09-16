@@ -80,7 +80,7 @@ const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
         tpm_limit: 10000,
         rpm_limit: 100,
         model_max_budget: null,
-        budget_duration: null,
+        budget_duration: "30d",
         budget_reset_at: budgetResetIso,
       },
     },
@@ -272,6 +272,10 @@ describe("TeamMembersComponent", () => {
     expect(screen.getByText("$1,538.26")).toBeInTheDocument();
     expect(screen.getByText(/100 RPM/)).toBeInTheDocument();
     expect(screen.getByText(/10000 TPM/)).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("row", { name: /user1@test\.com/ })).getByText(/Resets.*\(every 30d\)/),
+    ).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /user2@test\.com/ })).getByText("Never resets")).toBeInTheDocument();
   });
 
   it("should display the budget reset date for member with a budget reset", () => {
