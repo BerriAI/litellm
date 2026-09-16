@@ -1,4 +1,5 @@
-use crate::Error;
+mod error;
+pub use error::Error;
 mod client;
 mod handler;
 mod prepare;
