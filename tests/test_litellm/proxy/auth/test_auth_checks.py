@@ -7161,9 +7161,6 @@ def _project_with_budget(spend: float, max_budget: float):
     ],
 )
 async def test_project_max_budget_check_reads_live_spend_counter(counter_spend, db_spend, blocks):
-    """LIT-3269: project budget enforcement must read the cross-pod
-    ``spend:project:{id}`` counter first and only fall back to the cached row's
-    spend, matching key/team/org checks. The boundary is inclusive (>=)."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.auth_checks import _project_max_budget_check
 

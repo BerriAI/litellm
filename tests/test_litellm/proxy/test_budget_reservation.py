@@ -672,10 +672,6 @@ async def _seed_project_scoped_budgets(
 
 @pytest.mark.asyncio
 async def test_should_reserve_project_and_team_member_counters_for_project_scoped_key(spend_counter_state):
-    """LIT-3269: a key carrying user_id, team_id and project_id reserves against
-    both the team member counter and the project counter; neither replaces the
-    other. After the call the project counter reflects the real cost once, not
-    the reservation plus the post-call increment."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     await _seed_project_scoped_budgets(
@@ -724,8 +720,6 @@ async def test_should_reserve_project_and_team_member_counters_for_project_scope
 
 @pytest.mark.asyncio
 async def test_exhausted_team_member_budget_still_blocks_project_scoped_key(spend_counter_state):
-    """LIT-3269: the project budget is additive. A project with plenty of
-    headroom must not let a key through once its team member budget is spent."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     await _seed_project_scoped_budgets(
@@ -755,7 +749,6 @@ async def test_exhausted_team_member_budget_still_blocks_project_scoped_key(spen
 
 @pytest.mark.asyncio
 async def test_exhausted_project_budget_blocks_project_scoped_key(spend_counter_state):
-    """LIT-3269: with team member headroom left, the project budget alone blocks the key."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     await _seed_project_scoped_budgets(
