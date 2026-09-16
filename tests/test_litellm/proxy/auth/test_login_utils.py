@@ -725,11 +725,15 @@ async def _db_login(throttle, username: str, password: str, *, correct: bool):
     from litellm.proxy.auth.login_utils import authenticate_user
 
     with (
-        patch("litellm.proxy.auth.login_utils.UserRepository", _known_user(username)),
+        patch(  # test-quality-ok: the user lookup is the database boundary; faked so no DB is needed
+            "litellm.proxy.auth.login_utils.UserRepository", _known_user(username)
+        ),
         patch(  # test-quality-ok: reaches the known-DB-user branch without a database
             "litellm.proxy.auth.login_utils.verify_password", return_value=correct
         ),
-        patch("litellm.proxy.auth.login_utils._rehash_password_if_needed", new=AsyncMock()),
+        patch(  # test-quality-ok: the rehash writes to the database; faked so no DB is needed
+            "litellm.proxy.auth.login_utils._rehash_password_if_needed", new=AsyncMock()
+        ),
         patch(  # test-quality-ok: success mints a UI key; faked so no DB is needed
             "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
         ),
@@ -1062,7 +1066,9 @@ async def test_the_configured_admin_credentials_bypass_the_throttle(monkeypatch)
     assert [await _fail(throttle) for _ in range(3)] == ["401", "401", "429"]
 
     with (
-        patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()),
+        patch(  # test-quality-ok: the admin sign-in upserts the admin row; faked so no DB is needed
+            "litellm.proxy.auth.login_utils.user_update", new=AsyncMock()
+        ),
         patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
             "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
         ),
@@ -1135,9 +1141,9 @@ async def test_a_user_with_no_password_set_does_not_consume_the_budget(monkeypat
     repo = MagicMock()
     repo.return_value.table.find_first = AsyncMock(return_value=passwordless)
 
-    with patch(
+    with patch(  # test-quality-ok: reaches the passwordless-DB-user branch without a database
         "litellm.proxy.auth.login_utils.UserRepository", repo
-    ):  # test-quality-ok: reaches the passwordless-DB-user branch without a database
+    ):
         for _ in range(5):
             with pytest.raises(ProxyException) as exc:
                 await authenticate_user(
