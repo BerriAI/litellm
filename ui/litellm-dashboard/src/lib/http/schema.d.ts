@@ -7859,7 +7859,10 @@ export interface paths {
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in
-         *     - info: dict - The key's row, minus the hashed token
+         *     - info: dict - The key's row, minus the hashed token. Deleted keys are served from the
+         *       LiteLLM_DeletedVerificationToken archive and carry deleted_at / deleted_by
+         *         - status: "active" | "expired" | "revoked" | "deleted" - Derived from blocked, expires and
+         *           whether the row came from the archive
          *         - key_alias: str | None - User-friendly key alias
          *         - spend: float - Amount spent by the key. When budget_duration is set this covers only the
          *           current budget window, not the key's lifetime
@@ -7917,7 +7920,9 @@ export interface paths {
          *
          *     Parameters:
          *         expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
-         *         status: Optional[str] - Filter by status. Currently supports "deleted" to query deleted keys.
+         *         status: Optional[str] - Filter by status: "active", "expired", "revoked" (blocked) or "deleted".
+         *         "deleted" reads the LiteLLM_DeletedVerificationToken archive; the other values partition the
+         *         live key table, so every live key matches exactly one of them.
          *
          *     Returns:
          *         {
@@ -9674,6 +9679,62 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/nvidia_nim/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        get: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__get"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        put: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__put"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        post: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__post"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        delete: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        patch: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__patch"];
         trace?: never;
     };
     "/ocr": {
@@ -15626,6 +15687,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
          *     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
+         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
@@ -15852,6 +15914,7 @@ export interface paths {
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
+         *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
@@ -24134,7 +24197,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
              * @default fail_closed
              * @enum {string}
              */
@@ -27535,6 +27598,11 @@ export interface components {
              */
             total_prompt_tokens: number;
             /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
+            /**
              * Total Spend
              * @default 0
              */
@@ -27544,6 +27612,11 @@ export interface components {
              * @default 0
              */
             total_successful_requests: number;
+            /**
+             * Total Timed Requests
+             * @default 0
+             */
+            total_timed_requests: number;
             /**
              * Total Tokens
              * @default 0
@@ -29609,6 +29682,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Org Id */
             org_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /**
              * Permissions
              * @default {}
@@ -29647,6 +29722,11 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -31220,6 +31300,11 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -31252,6 +31337,11 @@ export interface components {
              * @description Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.
              */
             advisory_system_message?: string | null;
+            /**
+             * Agent Id
+             * @description Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.
+             */
+            agent_id?: string | null;
             /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
@@ -31453,6 +31543,16 @@ export interface components {
              * @default 25000
              */
             chunk_budget_chars: number;
+            /**
+             * Client Id
+             * @description Client id of the gateway's Entra app registration (a confidential client). Falls back to the AGENT365_CLIENT_ID environment variable.
+             */
+            client_id?: string | null;
+            /**
+             * Client Secret
+             * @description Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.
+             */
+            client_secret?: string | null;
             /**
              * Confidence Threshold
              * @description Only block or mask when detection confidence >= this value; below threshold, allow or log_only.
@@ -31893,6 +31993,11 @@ export interface components {
              */
             realtime_violation_message?: string | null;
             /**
+             * Resource App Id
+             * @description Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.
+             */
+            resource_app_id?: string | null;
+            /**
              * Rules
              * @description Ordered allow/deny rules. Patterns use regex for tool names/types and optional regex constraints on tool arguments.
              */
@@ -31993,6 +32098,11 @@ export interface components {
              * @description The ID of your Model Armor template
              */
             template_id?: string | null;
+            /**
+             * Tenant Id
+             * @description Entra tenant id used for the On-Behalf-Of token exchange. Falls back to the AGENT365_TENANT_ID environment variable.
+             */
+            tenant_id?: string | null;
             /**
              * Timeout
              * @description Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.
@@ -33355,6 +33465,13 @@ export interface components {
             model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Model Max Budget
+             * @description Max budget per model for every key on the team, overridable per key (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -34112,6 +34229,13 @@ export interface components {
             /** Model Aliases */
             model_aliases?: {
                 [key: string]: unknown;
+            } | null;
+            /**
+             * Model Max Budget
+             * @description Max budget per model for every key on the team, overridable per key (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
@@ -37139,6 +37263,16 @@ export interface components {
              */
             successful_requests: number;
             /**
+             * Timed Requests
+             * @default 0
+             */
+            timed_requests: number;
+            /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
+            /**
              * Total Tokens
              * @default 0
              */
@@ -39252,6 +39386,13 @@ export interface components {
             model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Model Max Budget
+             * @description Max budget per model for every key on the team, overridable per key (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -39963,6 +40104,10 @@ export interface components {
             team_model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /** Team Model Max Budget */
+            team_model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Team Models
              * @default []
@@ -39983,6 +40128,11 @@ export interface components {
             team_tpm_limit?: number | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -51292,7 +51442,7 @@ export interface operations {
                 sort_order?: string;
                 /** @description Expand related objects (e.g. 'user') */
                 expand?: string[] | null;
-                /** @description Filter by status (e.g. 'deleted') */
+                /** @description Filter by status: 'active' (not blocked, not expired), 'expired' (not blocked, past expiry), 'revoked' (blocked) or 'deleted' (archived keys). Omit to return live keys regardless of status. */
                 status?: string | null;
                 /** @description Filter keys by project ID */
                 project_id?: string | null;
@@ -53508,6 +53658,161 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

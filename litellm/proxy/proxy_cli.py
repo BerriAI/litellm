@@ -261,7 +261,7 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         import litellm
-        from litellm._logging import _get_uvicorn_json_log_config
+        from litellm._logging import _get_uvicorn_json_log_config, resolve_log_level
 
         uvicorn_args: Final = {
             "app": "litellm.proxy.proxy_server:app",
@@ -275,6 +275,8 @@ class ProxyInitializationHelpers:
         elif litellm.json_logs:
             # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
+        elif litellm_log := os.environ.get("LITELLM_LOG"):
+            uvicorn_args["log_level"] = resolve_log_level(litellm_log)
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         if timeout_worker_healthcheck is not None:

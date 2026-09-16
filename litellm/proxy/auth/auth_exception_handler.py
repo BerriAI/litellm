@@ -15,6 +15,7 @@ from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -25,6 +26,7 @@ from litellm.proxy.auth.auth_utils import (
     mark_invalid_virtual_key_error,
     normalize_request_route,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -50,6 +52,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+        )
+    if isinstance(e, ModelAccessDeniedHTTPException):
+        return ModelAccessDeniedProxyException(
+            message=str(e.detail),
+            internal_message=e.internal_message,
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=e.status_code,
         )
     if isinstance(e, HTTPException):
         return ProxyException(

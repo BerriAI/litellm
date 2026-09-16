@@ -246,6 +246,7 @@ class Litellm_EntityType(enum.Enum):
     TEAM = "team"
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"
+    ORGANIZATION_MEMBER = "organization_member"
     PROJECT = "project"
     TAG = "tag"
     AGENT = "agent"
@@ -485,6 +486,7 @@ class LiteLLMRoutes(enum.Enum):
         "/milvus",
         "/gigachat",
         "/watsonx",
+        "/nvidia_nim",
     ]
 
     #########################################################
@@ -2002,6 +2004,13 @@ RouterSettingsDict = Annotated[
 class NewTeamRequest(TeamBase):
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description=(
+            "Max budget per model for every key on the team, overridable per key "
+            "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
+        ),
+    )
     tags: list | None = None
     guardrails: list[str] | None = None
     policies: list[str] | None = None
@@ -2103,6 +2112,13 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description=(
+            "Max budget per model for every key on the team, overridable per key "
+            "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
+        ),
+    )
 
 
 class PatchTeamRequest(UpdateTeamRequest):
@@ -3054,6 +3070,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpd_limit: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
+    team_model_max_budget: dict[str, object] | None = None
     team_models: list = []
     team_blocked: bool = False
     soft_budget: float | None = None
@@ -3732,6 +3749,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
+            "S3_LOG_PROMPTS_ONLY",
         ],
     )
 
@@ -4052,6 +4070,22 @@ class ProxyException(Exception):
         if self.provider_specific_fields:
             error_dict["provider_specific_fields"] = self.provider_specific_fields
         return error_dict
+
+
+class ModelAccessDeniedProxyException(ProxyException):
+    def __init__(
+        self,
+        message: str,
+        internal_message: str,
+        type: str,
+        param: str | None,
+        code: int | str | None,
+    ) -> None:
+        super().__init__(message=message, type=type, param=param, code=code)
+        self.internal_message: Final = internal_message
+
+    def sanitized_internal_message(self) -> str:
+        return self.internal_message.replace("\r", "").replace("\n", "")
 
 
 class CommonProxyErrors(str, enum.Enum):
@@ -4468,6 +4502,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
+    model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -5242,6 +5277,8 @@ class BaseDailySpendTransaction(TypedDict):
     api_requests: int
     successful_requests: int
     failed_requests: int
+    total_response_time_ms: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
+    timed_requests: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):
@@ -5280,6 +5317,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: dict[str, float] | None
     team_member_list_transactions: dict[str, float] | None
     org_list_transactions: dict[str, float] | None
+    org_member_list_transactions: ReadOnly[dict[str, float] | None]
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
     model_access_group_list_transactions: ReadOnly[dict[str, float] | None]

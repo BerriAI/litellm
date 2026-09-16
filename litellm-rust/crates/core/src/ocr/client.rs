@@ -4,14 +4,13 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use serde::de::DeserializeOwned;
 
-use super::error::{OcrError, OcrResponseError};
+use super::error::{Error, OcrError, OcrResponseError};
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use super::wire::{DecodedOcrResponse, decode_response};
-use crate::Error;
-use crate::auth::vertex::VertexAuth;
 use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
-use crate::error::TransportError;
 use crate::media::MediaFetcher;
+use crate::transport::Error as TransportError;
+use litellm_auth_gcp::VertexAuth;
 
 #[derive(Clone)]
 pub struct OcrClient {
@@ -36,12 +35,6 @@ impl OcrClient {
         shared_client()
     }
 
-    #[tracing::instrument(
-        name = "ocr",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
     pub async fn perform(&self, request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
         use super::{
             NativeOutcome, OcrAdmission, OcrCall, OcrCallStep, OcrHookHost, OcrHost,
@@ -61,9 +54,16 @@ impl OcrClient {
             match call.resume(result.take()).await? {
                 OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
                     result = Some(OcrHostResult::Request(Ok((
-                        Box::new(request.take().ok_or_else(|| {
-                            Error::InvalidRequest("OCR request was already projected".into())
-                        })?),
+                        Box::new(
+                            request
+                                .take()
+                                .ok_or_else(|| {
+                                    Error::InvalidRequest(
+                                        "OCR request was already projected".into(),
+                                    )
+                                })?
+                                .into(),
+                        ),
                         false,
                     ))))
                 }
@@ -164,7 +164,7 @@ pub(crate) async fn read_response_bytes(
         }
     }
     if !status.is_success() {
-        return Err(crate::error::TransportError::Http {
+        return Err(crate::transport::Error::Http {
             status: status.as_u16(),
             body: crate::http_utils::truncate_error_body(&String::from_utf8_lossy(&bytes)),
         }
@@ -180,7 +180,7 @@ pub(crate) fn transport_error(error: reqwest::Error) -> Error {
             body: "OCR request timed out".into(),
         };
     }
-    crate::error::TransportError::from(error).into()
+    crate::transport::Error::from(error).into()
 }
 
 #[cfg(test)]
