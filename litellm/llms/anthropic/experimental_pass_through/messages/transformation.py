@@ -27,6 +27,7 @@ from ...common_utils import (
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
+from ..utils import normalize_reasoning_effort_value
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
@@ -377,8 +378,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         optional_params.setdefault("thinking", fitted_thinking)
         if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
-            mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
-            if mapped_effort is None:
+            requested_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
+            if requested_effort is None:
                 raise AnthropicError(
                     message=(
                         f"Invalid reasoning_effort: {reasoning_effort!r}. "
@@ -387,14 +388,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            gate_error: Final = AnthropicConfig._validate_effort_for_model(model, mapped_effort, custom_llm_provider)
-            if gate_error is not None:
+            existing_output_config: Final = optional_params.get("output_config")
+            existing_mapping: Final = existing_output_config if isinstance(existing_output_config, dict) else {}
+            raw_explicit_effort: Final = existing_mapping.get("effort")
+            explicit_effort: Final = raw_explicit_effort if isinstance(raw_explicit_effort, str) else None
+            candidate_effort: Final = explicit_effort if explicit_effort is not None else requested_effort
+            gate_error: Final = AnthropicConfig._validate_effort_for_model(model, candidate_effort, custom_llm_provider)
+            resolved_effort: Final = (
+                candidate_effort
+                if gate_error is None
+                else normalize_reasoning_effort_value(candidate_effort, model, custom_llm_provider)
+            )
+            if gate_error is not None and resolved_effort == candidate_effort:
                 raise AnthropicError(message=gate_error, status_code=400)
-            existing_output_config = optional_params.get("output_config")
-            if not isinstance(existing_output_config, dict):
-                existing_output_config = {}
-            existing_output_config.setdefault("effort", mapped_effort)
-            optional_params["output_config"] = existing_output_config
+            optional_params["output_config"] = {**existing_mapping, "effort": resolved_effort}
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
