@@ -48,6 +48,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
 import { z } from "zod/v4";
 import GuardrailsSelect from "./GuardrailsSelect";
+import {
+  type CallerEditAccess,
+  parseTeamEditAccess,
+  TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION,
+  TEAM_ADMIN_EDITING_DISABLED_TITLE,
+} from "./teamAdminEditAccess";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
@@ -288,6 +294,7 @@ export interface TeamData {
     guardrails?: string[];
     policies?: string[];
     object_permission?: ObjectPermission | null;
+    caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string | null;
@@ -306,7 +313,6 @@ export interface TeamInfoProps {
   accessToken: string | null;
   is_team_admin: boolean;
   is_proxy_admin: boolean;
-  is_org_admin?: boolean;
   userModels: string[];
   editTeam: boolean;
   premiumUser?: boolean;
@@ -522,7 +528,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   accessToken,
   is_team_admin,
   is_proxy_admin,
-  is_org_admin = false,
   userModels,
   editTeam,
   premiumUser = false,
@@ -565,7 +570,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole, userId } = useAuthorized();
+  const { userRole } = useAuthorized();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
@@ -574,14 +579,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { data: userOrganizations = [] } = useOrganizations();
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
-
-  // Check if user is org admin for this team's organization
-  const isOrgAdminForTeam = useMemo(() => {
-    const teamOrgId = teamData?.team_info?.organization_id;
-    if (!teamOrgId || !userId) return false;
-    const org = userOrganizations.find((o) => o.organization_id === teamOrgId);
-    return org?.members?.some((m: any) => m.user_id === userId && m.user_role === "org_admin") ?? false;
-  }, [teamData, userOrganizations, userId]);
 
   // Models currently selected in the team edit form, used to scope the per-model
   // rate limit dropdown to models this team actually has access to.
@@ -606,15 +603,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return unfurlWildcardModelsInList(selected, userModels);
   }, [watchedModels, teamData, userModels]);
 
-  const isTeamAdminFromTeamData = useMemo(
-    () =>
-      teamData?.team_info?.members_with_roles?.some(
-        (member) => member.user_id != null && member.user_id === userId && member.role === "admin",
-      ) ?? false,
-    [teamData, userId],
-  );
-
-  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
+  const teamEditAccess = useMemo(() => parseTeamEditAccess(teamData?.team_info?.caller_edit_access), [teamData]);
+  const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
@@ -631,6 +621,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
+  };
+
+  const openSettingsEditor = (modelAliases: Record<string, string>) => {
+    if (teamEditAccess.kind === "team_admin_disabled") {
+      toast.error(TEAM_ADMIN_EDITING_DISABLED_TITLE, { description: TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION });
+      return;
+    }
+    setTeamModelAliases(modelAliases);
+    startEditing();
   };
 
   const applyKillSwitchToGuardrails = (checked: boolean) => {
@@ -1324,10 +1323,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             {canEditTeam && !isEditing && (
               <Button
                 variant="outline"
-                onClick={() => {
-                  setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
-                  startEditing();
-                }}
+                onClick={() => openSettingsEditor(info.litellm_model_table?.model_aliases ?? {})}
               >
                 <Pencil />
                 Edit Settings
