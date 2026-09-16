@@ -3606,11 +3606,12 @@ async def test_add_litellm_data_to_request_otel_span_does_not_override_caller_tr
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("parent_otel_span", [None, "invalid_span"])
+@pytest.mark.parametrize("parent_otel_span", [None, "invalid_span", "not_a_span"])
 async def test_add_litellm_data_to_request_no_trace_id_without_valid_otel_span(parent_otel_span):
-    """No OTel span (OTel off) or a span with an invalid context must leave
-    litellm_trace_id unset so downstream keeps generating its own id."""
-    span = INVALID_SPAN if parent_otel_span == "invalid_span" else None
+    """No OTel span (OTel off), a span with an invalid context, or an object
+    that only quacks like a span (auth is typed loosely and often stubbed) must
+    leave litellm_trace_id unset so downstream keeps generating its own id."""
+    span = {"invalid_span": INVALID_SPAN, "not_a_span": MagicMock()}.get(parent_otel_span)
     data = await add_litellm_data_to_request(
         data={"model": "gpt-5.6"},
         request=_request_mock_without_trace_headers(),
