@@ -12,7 +12,10 @@ from pydantic import TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import model_access_group_spend_counter_key
+from litellm.proxy.common_utils.user_api_key_cache import (
+    model_access_group_spend_counter_key,
+    project_spend_counter_key,
+)
 
 _CounterValues: Final = TypeAdapter(dict[str, float | None])
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
@@ -154,6 +157,8 @@ def _iter_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None)
         yield f"spend:end_user:{end_user_id}"
     if token.org_id is not None:
         yield f"spend:org:{token.org_id}"
+    if token.project_id is not None:
+        yield project_spend_counter_key(token.project_id)
 
 
 def admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> frozenset[str]:
@@ -168,10 +173,12 @@ def post_call_counter_keys(
     end_user_id: str | None,
     tags: Sequence[object] | None,
     model_access_groups: Sequence[object] | None,
+    project_id: str | None = None,
 ) -> frozenset[str]:
     """Every counter ``increment_spend_counters`` warm-checks, except budget windows which bind on read."""
     entity_keys: Final = admission_counter_keys(
-        UserAPIKeyAuth(token=token, team_id=team_id, user_id=user_id, org_id=org_id), end_user_id
+        UserAPIKeyAuth(token=token, team_id=team_id, user_id=user_id, org_id=org_id, project_id=project_id),
+        end_user_id,
     )
     tag_keys: Final = frozenset(f"spend:tag:{tag}" for tag in tags or () if tag and isinstance(tag, str))
     group_keys: Final = frozenset(

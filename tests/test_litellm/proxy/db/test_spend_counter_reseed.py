@@ -67,12 +67,14 @@ class _FakePrismaClient:
         error: Exception | None = None,
         end_user_row: SimpleNamespace | None = None,
         end_user_error: Exception | None = None,
+        project_row: SimpleNamespace | None = None,
     ) -> None:
         self.db = SimpleNamespace(
             litellm_budgetwindowspend=_FakeFindUniqueTable(row=row, error=error),
             litellm_spendlogs=_FakeSpendLogsTable(total=spend_logs_total),
             litellm_endusertable=_FakeFindUniqueTable(row=end_user_row, error=end_user_error),
             litellm_verificationtoken=_InFlightCountingTable(),
+            litellm_projecttable=_FakeFindUniqueTable(row=project_row),
         )
 
 
@@ -426,6 +428,23 @@ async def test_from_db_bounds_in_flight_prisma_requests_across_counter_keys():
 
     assert results == [1.0] * burst
     assert prisma.db.litellm_verificationtoken.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
+
+
+@pytest.mark.asyncio
+async def test_from_db_reseeds_project_counter_from_the_project_row():
+    """LIT-3269: a cold ``spend:project:{id}`` counter seeds from LiteLLM_ProjectTable.spend,
+    so a fresh pod enforces the project budget against persisted spend rather than 0."""
+    prisma: Final = _FakePrismaClient(project_row=SimpleNamespace(project_id="proj-1", spend=7.25))
+
+    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:project:proj-1") == 7.25
+    assert prisma.db.litellm_projecttable.where_clauses == [{"project_id": "proj-1"}]
+
+
+@pytest.mark.asyncio
+async def test_from_db_returns_none_for_a_missing_project_row():
+    prisma: Final = _FakePrismaClient(project_row=None)
+
+    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:project:proj-1") is None
 
 
 @pytest.mark.asyncio

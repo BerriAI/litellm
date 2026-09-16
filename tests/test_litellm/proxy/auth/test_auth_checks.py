@@ -7138,6 +7138,67 @@ async def test_project_allowlist_enforced_when_key_models_empty():
     assert exc_info.value.code == "403"
 
 
+def _project_with_budget(spend: float, max_budget: float):
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_ProjectTableCachedObj
+
+    return LiteLLM_ProjectTableCachedObj(
+        project_id="p-budget",
+        team_id="t-1",
+        budget_id="b-1",
+        spend=spend,
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="b-1", max_budget=max_budget),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "counter_spend, db_spend, blocks",
+    [
+        pytest.param(5.0, 0.0, True, id="counter-at-budget-blocks-despite-stale-db-row"),
+        pytest.param(4.99, 0.0, False, id="counter-under-budget-admits"),
+        pytest.param(None, 5.0, True, id="no-counter-falls-back-to-persisted-spend"),
+        pytest.param(None, 0.0, False, id="no-counter-and-no-persisted-spend-admits"),
+    ],
+)
+async def test_project_max_budget_check_reads_live_spend_counter(counter_spend, db_spend, blocks):
+    """LIT-3269: project budget enforcement must read the cross-pod
+    ``spend:project:{id}`` counter first and only fall back to the cached row's
+    spend, matching key/team/org checks. The boundary is inclusive (>=)."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.auth_checks import _project_max_budget_check
+
+    real_spend_counter_cache = DualCache()
+    if counter_spend is not None:
+        real_spend_counter_cache.in_memory_cache.set_cache(key="spend:project:p-budget", value=counter_spend)
+    valid_token = UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget", team_id="t-1", user_id="u-1")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        if not blocks:
+            await _project_max_budget_check(
+                project_object=_project_with_budget(spend=db_spend, max_budget=5.0),
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            return
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _project_max_budget_check(
+                project_object=_project_with_budget(spend=db_spend, max_budget=5.0),
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        await asyncio.sleep(0)
+
+    assert exc_info.value.entity_type == Litellm_EntityType.PROJECT.value
+    assert exc_info.value.entity_id == "p-budget"
+    assert exc_info.value.current_cost == 5.0
+    proxy_logging_obj.budget_alerts.assert_awaited_once()
+    assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "project_budget"
+
+
 def test_is_user_proxy_admin_rejects_view_only_admin():
     """This predicate skips `non_proxy_admin_allowed_routes_check` entirely, so an
     Admin Viewer answering True here would gain every write route. Read parity for
