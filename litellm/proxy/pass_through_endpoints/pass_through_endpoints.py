@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequenc
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
@@ -1188,7 +1189,7 @@ async def pass_through_request(
                 query=urlencode(
                     HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
-                        request_query_params=requested_query_params or {},
+                        request_query_params=requested_query_params or MappingProxyType({}),
                         default_query_params=default_query_params,
                     )
                 ).encode("ascii")
