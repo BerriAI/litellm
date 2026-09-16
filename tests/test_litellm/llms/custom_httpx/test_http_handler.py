@@ -6,11 +6,13 @@ import pathlib
 import ssl
 import threading
 import weakref
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import certifi
 import httpx
 import pytest
+import respx
 from aiohttp import ClientSession, TCPConnector
 
 import litellm
@@ -1550,7 +1552,8 @@ def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
 
 
 @pytest.mark.asyncio
-async def test_put_can_refuse_to_follow_a_redirect():
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_non_get_methods_can_refuse_to_follow_a_redirect(method: str) -> None:
     """The client follows redirects by default; a caller uploading to a URL it did not choose must be able to opt out."""
     hops: list[str] = []  # mutable-ok: the fake transport records the paths it was asked for
 
@@ -1564,15 +1567,45 @@ async def test_put_can_refuse_to_follow_a_redirect():
     await handler.client.aclose()
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler), follow_redirects=True)
     try:
-        followed = await handler.put("https://uploads.example/first", data=b"x")
+        followed = await getattr(handler, method)("https://uploads.example/first", data=b"x")
         assert followed.status_code == 200
         assert hops == ["/first", "/second"]
 
         hops.clear()
         with pytest.raises(MaskedHTTPStatusError) as refused:
-            await handler.put("https://uploads.example/first", data=b"x", follow_redirects=False)
+            await getattr(handler, method)("https://uploads.example/first", data=b"x", follow_redirects=False)
         assert refused.value.status_code == 302
         assert hops == ["/first"]
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.RemoteProtocolError])
+@pytest.mark.parametrize("follow_redirects", [None, False])
+async def test_post_retry_preserves_redirect_preference(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[httpx.ConnectError] | type[httpx.RemoteProtocolError],
+    follow_redirects: bool | None,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    first: Final = respx_mock.post("https://moderation.example/check").mock(
+        side_effect=[error_type("connection reset"), httpx.Response(302, headers={"Location": "/landing"})]
+    )
+    landing: Final = respx_mock.get("https://moderation.example/landing").respond(200)
+    handler: Final = AsyncHTTPHandler()
+    try:
+        if follow_redirects is False:
+            with pytest.raises(httpx.HTTPStatusError, match="302"):
+                await handler.post("https://moderation.example/check", json={"text": "hi"}, follow_redirects=False)
+            assert landing.call_count == 0
+        else:
+            response: Final = await handler.post("https://moderation.example/check", json={"text": "hi"})
+            assert response.status_code == 200
+            assert landing.call_count == 1
+        assert first.call_count == 2
+        assert first.calls[0].request.content == first.calls[1].request.content == b'{"text":"hi"}'
     finally:
         await handler.close()
 

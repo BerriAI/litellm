@@ -1,7 +1,18 @@
+import asyncio
+import socket
+import threading
+from collections.abc import AsyncIterator
+from typing import Final
+
+import httpx
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 
+import litellm
 from litellm.exceptions import ModifyResponseException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.guardrails.guardrail_hooks.custom_code import primitives
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeCompilationError,
     CustomCodeGuardrail,
@@ -77,18 +88,14 @@ def test_nfkc_homoglyph_rejected_at_compile():
     [
         # Literal dunder attribute access.
         "def apply_guardrail(i, r, t):\n    return str.__class__\n",
-        "def apply_guardrail(i, r, t):\n"
-        "    return ().__class__.__bases__[0].__subclasses__()\n",
+        "def apply_guardrail(i, r, t):\n    return ().__class__.__bases__[0].__subclasses__()\n",
         # gi_code — on the transformer's restricted-names list.
-        "def apply_guardrail(i, r, t):\n"
-        "    def g():\n        yield 1\n"
-        "    return g().gi_code\n",
+        "def apply_guardrail(i, r, t):\n    def g():\n        yield 1\n    return g().gi_code\n",
         # Import forms.
         "import os\ndef apply_guardrail(i, r, t):\n    return allow()\n",
-        "from subprocess import call\n"
-        "def apply_guardrail(i, r, t):\n    return allow()\n",
+        "from subprocess import call\ndef apply_guardrail(i, r, t):\n    return allow()\n",
         # __import__ is rejected as an underscore-prefixed name.
-        "def apply_guardrail(i, r, t):\n" '    return __import__("os")\n',
+        'def apply_guardrail(i, r, t):\n    return __import__("os")\n',
     ],
 )
 def test_compile_time_rejections(snippet: str):
@@ -100,8 +107,7 @@ def test_compile_time_rejections(snippet: str):
     "snippet",
     [
         # getattr is not in the sandbox builtins — NameError at call time.
-        "def apply_guardrail(i, r, t):\n"
-        '    return getattr(str, "_"+"_class_"+"_")\n',
+        'def apply_guardrail(i, r, t):\n    return getattr(str, "_"+"_class_"+"_")\n',
         # setattr is guarded_setattr + full_write_guard — setting any attribute
         # on a user-defined object raises TypeError, whether the name is a
         # dunder or not.
@@ -139,10 +145,7 @@ def test_documented_ssn_example_compiles_and_runs():
 
 @pytest.mark.asyncio
 async def test_async_guardrail_compiles_and_runs():
-    code = (
-        "async def apply_guardrail(inputs, request_data, input_type):\n"
-        "    return allow()\n"
-    )
+    code = "async def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
     guardrail = _compile(code)
     from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -156,10 +159,7 @@ async def test_async_guardrail_compiles_and_runs():
 
 @pytest.mark.asyncio
 async def test_custom_code_pre_call_block_uses_passthrough():
-    code = (
-        "def apply_guardrail(inputs, request_data, input_type):\n"
-        '    return block("blocked by test")\n'
-    )
+    code = 'def apply_guardrail(inputs, request_data, input_type):\n    return block("blocked by test")\n'
     guardrail = _compile(code)
 
     with pytest.raises(ModifyResponseException) as exc_info:
@@ -176,10 +176,7 @@ async def test_custom_code_pre_call_block_uses_passthrough():
 
 @pytest.mark.asyncio
 async def test_custom_code_post_call_block_raises_http_400():
-    code = (
-        "def apply_guardrail(inputs, request_data, input_type):\n"
-        '    return block("blocked by test")\n'
-    )
+    code = 'def apply_guardrail(inputs, request_data, input_type):\n    return block("blocked by test")\n'
     guardrail = _compile(code)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -263,10 +260,7 @@ async def test_custom_code_allow_still_records_success_not_flagged():
 
 
 def test_typical_sync_guardrail_still_works():
-    code = (
-        "def apply_guardrail(inputs, request_data, input_type):\n"
-        "    return allow()\n"
-    )
+    code = "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
     guardrail = _compile(code)
     assert guardrail._compiled_function is not None
 
@@ -293,3 +287,178 @@ def test_augmented_assignment_works():
 def test_missing_apply_guardrail_raises():
     with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
         _compile("x = 1\n")
+
+
+@pytest_asyncio.fixture
+async def _http_requests(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[list[httpx.Request]]:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/redirect":
+            return httpx.Response(302, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+        return httpx.Response(200, json={"allowed": True})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond), follow_redirects=True) as client:
+        handler.client = client
+        monkeypatch.setattr(primitives, "get_async_httpx_client", lambda **kwargs: handler)
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+        yield requests
+
+
+def _resolve_to(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
+    def getaddrinfo(host: str, port: int, *, proto: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET6 if ":" in address else socket.AF_INET, socket.SOCK_STREAM, proto, "", (address, port))]
+
+    monkeypatch.setattr("litellm.litellm_core_utils.url_utils.socket.getaddrinfo", getaddrinfo)
+
+
+@pytest.mark.asyncio
+async def test_slow_dns_does_not_block_other_guardrail_requests(
+    monkeypatch: pytest.MonkeyPatch, _http_requests: list[httpx.Request]
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    dns_started: Final = asyncio.Event()
+    release_dns: Final = threading.Event()
+
+    def getaddrinfo(host: str, port: int, *, proto: int) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+        if host == "slow.example.com":
+            loop.call_soon_threadsafe(dns_started.set)
+            release_dns.wait(timeout=5)
+        return [(socket.AF_INET, socket.SOCK_STREAM, proto, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr("litellm.litellm_core_utils.url_utils.socket.getaddrinfo", getaddrinfo)
+    slow_request: Final = asyncio.create_task(primitives.http_get("http://slow.example.com/check"))
+    try:
+        await asyncio.wait_for(dns_started.wait(), timeout=5)
+        assert not slow_request.done()
+        fast_result: Final = await asyncio.wait_for(primitives.http_get("http://fast.example.com/check"), timeout=5)
+        assert fast_result["success"] is True
+        assert not slow_request.done()
+        assert len(_http_requests) == 1
+        assert _http_requests[0].headers["Host"] == "fast.example.com"
+    finally:
+        release_dns.set()
+        slow_result: Final = await asyncio.wait_for(slow_request, timeout=5)
+
+    assert slow_result["success"] is True
+    assert len(_http_requests) == 2
+    assert _http_requests[1].headers["Host"] == "slow.example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "DELETE", "PATCH"])
+@pytest.mark.parametrize(
+    ("url", "resolved_ip"),
+    [
+        ("http://127.0.0.1:8971/", "127.0.0.1"),
+        ("http://localhost/admin", "127.0.0.1"),
+        ("http://10.1.2.3/", "10.1.2.3"),
+        ("http://192.168.1.1/", "192.168.1.1"),
+        ("http://169.254.169.254/latest/meta-data/iam/security-credentials/", "169.254.169.254"),
+        ("http://[::1]/", "::1"),
+        ("http://example.com:99999/", "93.184.216.34"),
+        ("http://example.com:notaport/", "93.184.216.34"),
+    ],
+)
+async def test_http_primitives_block_internal_targets(
+    url: str,
+    resolved_ip: str,
+    method: str,
+    monkeypatch: pytest.MonkeyPatch,
+    _http_requests: list[httpx.Request],
+) -> None:
+    _resolve_to(monkeypatch, resolved_ip)
+
+    result: Final = await primitives.http_request(url, method=method)
+
+    assert result["success"] is False
+    assert result["status_code"] == 0
+    assert result["error"] is not None and "Blocked" in result["error"]
+    assert _http_requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def test_http_primitives_allow_public_url(
+    method: str, monkeypatch: pytest.MonkeyPatch, _http_requests: list[httpx.Request]
+) -> None:
+    _resolve_to(monkeypatch, "93.184.216.34")
+    headers: Final = {"Authorization": "Bearer t"}
+
+    result: Final = await primitives.http_request(
+        "http://moderation.example.com:8080/v1/check", method=method, headers=headers, body={"text": "hi"}
+    )
+
+    assert result["success"] is True
+    assert result["body"] == {"allowed": True}
+    assert len(_http_requests) == 1
+    request: Final = _http_requests[0]
+    assert str(request.url) == "http://93.184.216.34:8080/v1/check"
+    assert request.method == method
+    assert request.headers["Host"] == "moderation.example.com:8080"
+    assert request.headers["Authorization"] == "Bearer t"
+    assert headers == {"Authorization": "Bearer t"}
+    if method != "GET":
+        assert request.content == b'{"text":"hi"}'
+
+
+@pytest.mark.asyncio
+async def test_http_primitives_honor_allowlisted_internal_host(
+    monkeypatch: pytest.MonkeyPatch, _http_requests: list[httpx.Request]
+) -> None:
+    _resolve_to(monkeypatch, "10.1.2.3")
+    blocked: Final = await primitives.http_get("http://internal-moderation.corp/check")
+    assert blocked["success"] is False
+    assert _http_requests == []
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal-moderation.corp"])
+    result: Final = await primitives.http_get("http://internal-moderation.corp/check")
+
+    assert result["success"] is True
+    assert len(_http_requests) == 1
+    assert str(_http_requests[0].url) == "http://10.1.2.3/check"
+    assert _http_requests[0].headers["Host"] == "internal-moderation.corp"
+
+
+@pytest.mark.asyncio
+async def test_http_primitives_validation_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch, _http_requests: list[httpx.Request]
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+
+    def unexpected_resolution(host: str, port: int, *, proto: int) -> None:
+        pytest.fail("Disabled validation must not resolve DNS")
+
+    monkeypatch.setattr("litellm.litellm_core_utils.url_utils.socket.getaddrinfo", unexpected_resolution)
+    result: Final = await primitives.http_get("http://10.1.2.3/internal")
+
+    assert result["success"] is True
+    assert len(_http_requests) == 1
+    assert str(_http_requests[0].url) == "http://10.1.2.3/internal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "DELETE", "PATCH"])
+@pytest.mark.parametrize("validation_enabled", [True, False])
+async def test_http_primitives_do_not_follow_redirects(
+    method: str,
+    validation_enabled: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    _http_requests: list[httpx.Request],
+) -> None:
+    _resolve_to(monkeypatch, "93.184.216.34")
+    monkeypatch.setattr(litellm, "user_url_validation", validation_enabled)
+
+    result: Final = await primitives.http_request(
+        "http://moderation.example.com/redirect", method=method, body={"text": "hi"}
+    )
+
+    assert len(_http_requests) == 1
+    assert _http_requests[0].url.path == "/redirect"
+    assert _http_requests[0].method == method
+    assert result["status_code"] == 302
+    assert result["success"] is False
