@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 import litellm
@@ -145,3 +148,21 @@ def test_advertised_reasoning_efforts_match_the_gateway(model: str) -> None:
     key = f"clf_ai_gateway/{model}"
     entry = {**litellm.model_cost[key], "key": key}
     assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == GATEWAY_REASONING_EFFORTS[model]
+
+
+def test_selectable_in_the_proxy_add_model_form() -> None:
+    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    provider_fields = json.loads(fields_path.read_text(encoding="utf-8"))
+    entries = [entry for entry in provider_fields if entry["litellm_provider"] == "clf_ai_gateway"]
+    assert len(entries) == 1
+
+    entry = entries[0]
+    assert entry["provider"] == "CLF_AI_GATEWAY"
+    assert entry["provider_display_name"] == "CLF AI Gateway"
+    assert entry["default_model_placeholder"] in litellm.model_cost
+
+    fields = {field["key"]: field for field in entry["credential_fields"]}
+    assert fields["api_key"]["required"] is True
+    assert fields["api_key"]["field_type"] == "password"
+    assert fields["api_base"]["required"] is False
+    assert fields["api_base"]["placeholder"] == "https://api.clfaigateway.dev/v1"
