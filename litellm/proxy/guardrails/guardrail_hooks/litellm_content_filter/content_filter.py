@@ -2001,8 +2001,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         tail_lower: Final = tail.lower()
         if any(phrase in buffered_lower and phrase not in tail_lower for phrase in plan.exception_phrases):
             return True
-        open_sentence: Final = SENTENCE_TERMINATORS.split(head.lower())[-1]
-        return any(word in open_sentence for word in plan.conditional_words)
+        cut_sentence: Final = (
+            SENTENCE_TERMINATORS.split(head.lower())[-1] + SENTENCE_TERMINATORS.split(tail_lower, maxsplit=1)[0]
+        )
+        return any(word in cut_sentence for word in plan.conditional_words)
 
     def _trim_streamed_choice_buffer(
         self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
