@@ -12,7 +12,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
-    ChatCompletionToolCallChunk,
+    ChatCompletionAssistantToolCall,
 )
 from litellm.types.utils import ModelResponse, Usage
 
@@ -174,10 +174,25 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """
-        Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
-        """
         data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        messages_to_send: Final = data.get("messages")
+        if messages_to_send is not None:
+            litellm.remove_index_from_tool_calls(messages=messages_to_send)
+
+        return data
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        data: Final = await super().async_transform_request(model, messages, optional_params, litellm_params, headers)
+        messages_to_send: Final = data.get("messages")
+        if messages_to_send is not None:
+            litellm.remove_index_from_tool_calls(messages=messages_to_send)
 
         return data
 
@@ -225,11 +240,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         cohere_tools_response: Final = cohere_v2_chat_response["message"].get("tool_calls", [])
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
-            tool_calls: Final[list[ChatCompletionToolCallChunk]] = []
-            for index, tool in enumerate(cohere_tools_response):
-                tool_call: ChatCompletionToolCallChunk = {
+            tool_calls: Final[list[ChatCompletionAssistantToolCall]] = []
+            for tool in cohere_tools_response:
+                tool_call: ChatCompletionAssistantToolCall = {
                     **tool,
-                    "index": index,
                 }
                 tool_calls.append(tool_call)
             _message: Final = litellm.Message(
