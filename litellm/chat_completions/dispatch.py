@@ -70,17 +70,26 @@ def _public_request(
     )
 
 
+def _context(request: LiteLLMChatCompletionsRequest) -> Context:
+    return Context(
+        Route.CHAT_COMPLETIONS,
+        provider=request.custom_llm_provider,
+        model=request.model,
+        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
+    )
+
+
 _DISPATCH: Final = PublicDispatch(
     route=Route.CHAT_COMPLETIONS,
     request=lambda args, kwargs: _public_request(_COMPLETION, args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
     bypass=lambda request: request.kwargs.get("acompletion") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.CHAT_COMPLETIONS,
     request=lambda args, kwargs: _public_request(_ACOMPLETION, args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
 )
 
 
@@ -106,15 +115,6 @@ async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-
         python=python,
         binding=NATIVE_ACOMPLETION,
         native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
-    )
-
-
-def _context(request: LiteLLMChatCompletionsRequest) -> Context:
-    return Context(
-        Route.CHAT_COMPLETIONS,
-        provider=request.custom_llm_provider,
-        model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
     )
 
 

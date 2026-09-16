@@ -49,17 +49,22 @@ _PYTHON_AOCR: Final = cast(  # cast-ok: forward the original call shape through 
     Callable[..., Awaitable[OCRResponse]], main.aocr
 )
 
+
+def _context(request: LiteLLMOcrRequest) -> Context:
+    return Context(Route.OCR, provider=request.custom_llm_provider, model=request.model)
+
+
 _DISPATCH: Final = PublicDispatch(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("ocr", args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
     bypass=lambda request: request.kwargs.get("aocr") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("aocr", args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
 )
 
 
@@ -84,7 +89,3 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
         binding=NATIVE_AOCR,
         native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
-
-
-def _context(request: LiteLLMOcrRequest) -> Context:
-    return Context(Route.OCR, provider=request.custom_llm_provider, model=request.model)
