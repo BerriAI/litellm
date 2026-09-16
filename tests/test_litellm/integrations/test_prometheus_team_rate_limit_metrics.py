@@ -21,6 +21,9 @@ import pytest
 from prometheus_client import CollectorRegistry, Gauge
 
 from litellm.integrations.prometheus import PrometheusLogger, _ExcludedLabelMetric
+from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
+    BoundedPrometheusSeriesTracker,
+)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
 )
@@ -61,6 +64,8 @@ def _logger_with_mock_team_gauges() -> PrometheusLogger:
         setattr(logger, metric_name, MagicMock())
     logger.get_labels_for_metric = MagicMock(side_effect=PrometheusMetricLabels.get_labels)
     logger._team_series_label_values = {}
+    # the real tracker, not a double: it owns the removal these tests assert on
+    logger._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
     return logger
 
 

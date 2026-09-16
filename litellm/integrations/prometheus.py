@@ -177,7 +177,16 @@ def _get_budget_metrics_per_request_timeout() -> float:
 
 
 class _LabeledGauge(Protocol):
-    """Structural type shared by ``prometheus_client.Gauge`` and the no-op / label-excluding wrappers above."""
+    """
+    Structural type shared by ``prometheus_client.Gauge`` and the no-op /
+    label-excluding wrappers above.
+
+    ``remove`` is declared even though retirement is performed by
+    ``BoundedPrometheusSeriesTracker``: the tracker takes an untyped metric and
+    reports an ``AttributeError`` as "not removed" rather than raising, so a
+    wrapper that stopped exposing ``remove`` would silently retire nothing.
+    Requiring it here is what keeps that a type error instead.
+    """
 
     def labels(self, *labelvalues: str) -> _LabeledGauge: ...
 
@@ -2370,6 +2379,10 @@ class PrometheusLogger(CustomLogger):
         Superseded aliases are swept on both paths, because a team can be
         renamed and then have its limit removed before it sends another
         limited request, which would otherwise strand the pre-rename series.
+
+        Both drops go through ``BoundedPrometheusSeriesTracker.remove_series``,
+        the same call the key/team rate limit gauges use, rather than a second
+        removal path of this file's own.
         """
         labelnames: Final = self.get_labels_for_metric(metric_name)
         if UserAPIKeyLabelNames.TEAM.value not in labelnames:
@@ -2398,12 +2411,11 @@ class PrometheusLogger(CustomLogger):
             return
 
         self._forget_team_series(metric_name=metric_name, labels=labels)
-        try:
-            gauge.remove(*label_values)
-        except KeyError:
-            # No child series for this labelset, which is the common case:
-            # the team never had a limit for this model.
-            pass
+        # Removal goes through the shared tracker so this file has one path
+        # that drops a child series. A labelset with no child is the common
+        # case here -- the team never had a limit for this model -- and the
+        # tracker already treats that as removed rather than an error.
+        self._bounded_prometheus_series_tracker.remove_series(gauge, label_values)
 
     def _drop_superseded_team_series(
         self,
@@ -2431,10 +2443,7 @@ class PrometheusLogger(CustomLogger):
         )
         previous: Final = self._team_series_label_values.get(identity)
         if previous is not None and previous != label_values:
-            try:
-                gauge.remove(*previous)
-            except KeyError:
-                pass
+            self._bounded_prometheus_series_tracker.remove_series(gauge, previous)
         self._team_series_label_values[identity] = label_values
 
     def _forget_team_series(
