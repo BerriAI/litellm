@@ -15,10 +15,11 @@ from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
+from opentelemetry.sdk._logs import LogData
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -6029,6 +6030,101 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
             response_obj,
         )
         self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
+
+
+class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
+    """Regression for the OTLP exporter rejecting gen_ai.system=None on every export cycle."""
+
+    HERE = os.path.dirname(__file__)
+    POLL_INTERVAL = 0.05
+    POLL_TIMEOUT = 2.0
+
+    def _providerless_kwargs(self) -> tuple[dict[str, object], dict[str, object]]:
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
+            kwargs = json.load(f)
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
+            response_obj = json.load(f)
+        kwargs["litellm_params"]["custom_llm_provider"] = None
+        return kwargs, response_obj
+
+    def _recorded_metrics(self) -> MetricsData | None:
+        metric_reader = InMemoryMetricReader()
+        meter_provider = MeterProvider(metric_readers=[metric_reader])
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+        )
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs, response_obj = self._providerless_kwargs()
+        start = datetime.utcnow()
+        otel._handle_success(kwargs, response_obj, start, start + timedelta(seconds=1))
+
+        deadline = time.time() + self.POLL_TIMEOUT
+        while time.time() < deadline:
+            data = metric_reader.get_metrics_data()
+            if data and getattr(data, "resource_metrics", None):
+                return data
+            time.sleep(self.POLL_INTERVAL)
+        return None
+
+    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[LogData, ...]:
+        log_exporter = InMemoryLogExporter()
+        logger_provider = OTLoggerProvider()
+        logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
+        with patch.dict(os.environ, {"OTEL_SEMCONV_STABILITY_OPT_IN": semconv_opt_in}):
+            handler = OpenTelemetry(
+                config=OpenTelemetryConfig(exporter="console", enable_events=True),
+                logger_provider=logger_provider,
+            )
+        handler.message_logging = True
+
+        kwargs, response_obj = self._providerless_kwargs()
+        span = handler.tracer.start_span("test")
+        with self.assertNoLogs("opentelemetry.attributes", level="WARNING"):
+            handler._emit_semantic_logs(kwargs, response_obj, span)
+        span.end()
+        handler._logger_provider.force_flush(2000)
+        return log_exporter.get_finished_logs()
+
+    def _assert_every_attribute_encodes(self, attrs: dict[str, object]) -> None:
+        from opentelemetry.exporter.otlp.proto.common._internal import _encode_attributes
+
+        self.assertEqual(len(_encode_attributes(attrs) or []), len(attrs))
+
+    def test_metrics_are_encodable_and_carry_no_provider_label(self):
+        data = self._recorded_metrics()
+        self.assertIsNotNone(data, "no metrics were recorded")
+        data_points = [
+            dp
+            for rm in data.resource_metrics
+            for sm in rm.scope_metrics
+            for m in sm.metrics
+            for dp in m.data.data_points
+        ]
+        self.assertTrue(data_points, "no metric data points were recorded")
+        for dp in data_points:
+            self.assertNotIn("gen_ai.system", dp.attributes)
+            self._assert_every_attribute_encodes(dict(dp.attributes))
+
+    def test_legacy_content_events_are_encodable_and_carry_no_provider_label(self):
+        logs = self._emitted_log_records("")
+        self.assertTrue(logs, "no content events were emitted")
+        for log in logs:
+            attrs = dict(log.log_record.attributes or {})
+            self.assertNotIn("gen_ai.system", attrs)
+            self._assert_every_attribute_encodes(attrs)
+
+    def test_inference_details_event_is_encodable_and_carries_no_provider_label(self):
+        logs = self._emitted_log_records("gen_ai_latest_experimental")
+        self.assertEqual(len(logs), 1)
+        attrs = dict(logs[0].log_record.attributes or {})
+        self.assertEqual(attrs["event_name"], "gen_ai.client.inference.operation.details")
+        self.assertNotIn("gen_ai.provider.name", attrs)
+        self._assert_every_attribute_encodes(attrs)
 
 
 class TestDynamicTracerProviderCache(unittest.TestCase):
