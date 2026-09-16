@@ -80,8 +80,8 @@ client = TestClient(app)
 def _team_admin_may_edit(*fields: str):
     """Let team admins change ``fields`` on /team/update for the duration of the block.
 
-    The registry ships empty (LIT-5722 adds fields one PR at a time), so tests that exercise the
-    gates layered underneath the allow-list widen it here instead of asserting the early 403."""
+    The registry only lists the fields shipped so far (LIT-5722 adds them one PR at a time), so tests that
+    exercise the gates layered underneath the allow-list widen it here instead of asserting the early 403."""
     with (
         patch(  # test-quality-ok: the registry is a module constant update_team reads directly; no seam to inject
             "litellm.proxy.management_endpoints.team_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
@@ -15046,6 +15046,36 @@ async def test_update_team_team_admin_echoing_unpermitted_fields_unchanged_is_al
 
     assert result["data"].team_id == "test_team_id"
     assert prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_changes_tpm_limit_once_a_proxy_admin_enables_it(
+    disable_audit_logging_for_mocked_team,
+):
+    """tpm_limit is the first field a proxy admin can open to team admins; every other field stays admin-only."""
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {})
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": ["tpm_limit"]})  # test-quality-ok: update_team reads general_settings as a proxy_server module global
+        )
+        await update_team(
+            data=UpdateTeamRequest(team_id="test_team_id", tpm_limit=5000),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+        with pytest.raises(ProxyException) as refused:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", tpm_limit=6000, rpm_limit=10),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+
+    assert prisma.db.litellm_teamtable.update.await_count == 1
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["tpm_limit"] == 5000
+    assert str(refused.value.code) == "403"
+    assert "'rpm_limit'" in str(refused.value.message)
 
 
 @pytest.mark.asyncio

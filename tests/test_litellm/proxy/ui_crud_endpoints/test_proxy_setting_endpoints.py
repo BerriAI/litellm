@@ -3321,11 +3321,7 @@ class TestTeamAdminEditableTeamFieldsSetting:
 
     def test_patch_persists_and_syncs_the_list_to_general_settings(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
-        monkeypatch.setattr(
-            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS",
-            frozenset({"tpm_limit", "rpm_limit"}),
-        )
-        general_settings: dict = {"team_admin_editable_team_fields": ["rpm_limit"]}
+        general_settings: dict = {"team_admin_editable_team_fields": []}
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
         try:
@@ -3373,7 +3369,7 @@ class TestTeamAdminEditableTeamFieldsSetting:
         field_schema = data["field_schema"]["properties"]["team_admin_editable_team_fields"]
         assert field_schema["type"] == "array"
         assert field_schema["items"]["type"] == "string"
-        assert isinstance(field_schema["items"]["enum"], list)
+        assert "tpm_limit" in field_schema["items"]["enum"]
 
 
 class TestSyncUiSettingsToGeneralSettings:

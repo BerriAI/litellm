@@ -1889,18 +1889,32 @@ describe("TeamInfoView", () => {
       expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    it("opens the form for a team admin once the proxy reports an enabled field", async () => {
+    it("gives a team admin only the fields the proxy enabled and sends only those on save", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
-        createMockTeamData({ caller_edit_access: { kind: "team_admin", editable_fields: ["tpm_limit"] } }),
+        createMockTeamData({
+          tpm_limit: 1000,
+          caller_edit_access: { kind: "team_admin", editable_fields: ["tpm_limit"] },
+        }),
       );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
       renderWithProviders(<TeamInfoView {...teamAdminProps} />);
 
       await user.click(await screen.findByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+      const tpmInput = await screen.findByLabelText("Tokens per minute Limit (TPM)");
+      expect(tpmInput).toHaveValue(1000);
+      expect(screen.queryByLabelText("Team Name")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Requests per minute Limit (RPM)")).not.toBeInTheDocument();
+
+      fireEvent.change(tpmInput, { target: { value: "5000" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toStrictEqual({ team_id: "123", tpm_limit: 5000 });
+      expect(toast.success).toHaveBeenCalledWith("Team settings updated successfully");
       expect(toast.error).not.toHaveBeenCalled();
     });
 

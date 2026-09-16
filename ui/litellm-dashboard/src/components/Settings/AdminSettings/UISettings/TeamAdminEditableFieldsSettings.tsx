@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { teamAdminFieldLabel } from "@/components/team/teamAdminEditAccess";
 
 interface TeamAdminEditableFieldsSettingsProps {
   editableFields: readonly string[];
@@ -53,7 +54,7 @@ export default function TeamAdminEditableFieldsSettings({
                   disabled={isUpdating}
                   onCheckedChange={(checked) => toggleField(field, checked === true)}
                 />
-                <span className="text-sm text-foreground">{field}</span>
+                <span className="text-sm text-foreground">{teamAdminFieldLabel(field)}</span>
               </label>
             );
           })}

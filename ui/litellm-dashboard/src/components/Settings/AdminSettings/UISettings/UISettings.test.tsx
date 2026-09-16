@@ -187,7 +187,7 @@ describe("UISettings", () => {
     expect(screen.getByText("Team settings fields a team admin may change")).toBeInTheDocument();
 
     act(() => {
-      fireEvent.click(screen.getByRole("checkbox", { name: "tpm_limit" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Tokens per minute Limit (TPM)" }));
     });
 
     expect(mutateMock).toHaveBeenCalledWith(

@@ -4,7 +4,39 @@ import {
   parseSupportedTeamAdminEditableFields,
   parseTeamAdminEditableFields,
   parseTeamEditAccess,
+  teamAdminFieldLabel,
+  teamAdminSettingsChanges,
 } from "./teamAdminEditAccess";
+
+describe("teamAdminFieldLabel", () => {
+  it("names tpm_limit the way the team settings form does", () => {
+    expect(teamAdminFieldLabel("tpm_limit")).toBe("Tokens per minute Limit (TPM)");
+  });
+
+  it("falls back to the raw field name for a field the dashboard has no label for", () => {
+    expect(teamAdminFieldLabel("max_budget")).toBe("max_budget");
+  });
+});
+
+describe("teamAdminSettingsChanges", () => {
+  const tpmEnabled = new Set(["tpm_limit"]);
+
+  it.each([
+    ["a typed number string", "5000", 5000],
+    ["a stored number", 1200, 1200],
+    ["zero", "0", 0],
+    ["an emptied input", "", null],
+    ["whitespace", "  ", null],
+    ["no stored limit", null, null],
+    ["an unset value", undefined, null],
+  ])("sends tpm_limit for %s", (_label, tpm_limit, expected) => {
+    expect(teamAdminSettingsChanges({ tpm_limit }, tpmEnabled)).toStrictEqual({ tpm_limit: expected });
+  });
+
+  it("leaves tpm_limit out when the proxy did not enable it for team admins", () => {
+    expect(teamAdminSettingsChanges({ tpm_limit: "5000" }, new Set(["max_budget"]))).toStrictEqual({});
+  });
+});
 
 describe("parseTeamAdminEditableFields", () => {
   it("returns the configured list", () => {
