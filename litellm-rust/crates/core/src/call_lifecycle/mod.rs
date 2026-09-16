@@ -2,9 +2,6 @@ use std::future::Future;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub mod host;
-#[cfg(test)]
-#[path = "../../tests/host_lifecycle.rs"]
-mod host_tests;
 pub mod types;
 
 pub use types::{

@@ -157,8 +157,10 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, crate::
     )?;
     let connection = OcrConnection {
         api_key: nonblank(wire.api_key),
+        dynamic_api_key: None,
         api_key_source,
         api_base: nonblank(wire.api_base),
+        dynamic_api_base: None,
         api_base_source,
         extra_headers: headers,
         extra_headers_source,

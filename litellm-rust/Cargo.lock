@@ -2027,6 +2027,7 @@ dependencies = [
  "serde_path_to_error",
  "serde_with",
  "sha2 0.10.9",
+ "strum",
  "subtle",
  "thiserror 2.0.19",
  "tokio",

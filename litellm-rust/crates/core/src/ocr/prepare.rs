@@ -43,7 +43,7 @@ where
             .hooks
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
-                custom_llm_provider: request.config.provider().as_str().into(),
+                custom_llm_provider: request.provider_name().into(),
                 url: url.into(),
                 headers: headers.to_vec(),
                 body,
@@ -93,7 +93,7 @@ pub(crate) async fn guardrail_document(
         .hooks
         .during_call(OcrDuringCallRequest {
             model: request.model.clone(),
-            custom_llm_provider: request.config.provider().as_str().into(),
+            custom_llm_provider: request.provider_name().into(),
             url: url.into(),
             headers: headers.to_vec(),
             body: serde_json::to_value(&request.document).map_err(|_| {
@@ -125,4 +125,51 @@ pub(crate) fn body_document(body: &Value) -> Result<OcrDocument, super::Error> {
 
 pub(crate) fn credential_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
+}
+
+pub(crate) fn resolve_connection_params(request: LiteLLMOcrRequest) -> LiteLLMOcrRequest {
+    use litellm_auth::{InputSource, Sourced};
+
+    let connection = request.connection;
+    let api_base_env = match request.config.provider() {
+        super::provider_config::OcrProvider::Mistral => Some("MISTRAL_API_BASE"),
+        super::provider_config::OcrProvider::AzureAi => Some("AZURE_AI_API_BASE"),
+        super::provider_config::OcrProvider::Cohere
+        | super::provider_config::OcrProvider::Reducto
+        | super::provider_config::OcrProvider::VertexAi => None,
+    };
+    let dynamic_api_key = connection.dynamic_api_key.or_else(|| {
+        connection
+            .api_key
+            .clone()
+            .map(|value| Sourced::new(value, connection.api_key_source))
+            .or_else(|| {
+                request
+                    .config
+                    .get_api_key_env_var()
+                    .and_then(credential_env)
+                    .map(|value| Sourced::new(value, InputSource::Environment))
+            })
+    });
+    let dynamic_api_base = connection.dynamic_api_base.or_else(|| {
+        connection
+            .api_base
+            .clone()
+            .map(|value| Sourced::new(value, connection.api_base_source))
+            .or_else(|| {
+                api_base_env
+                    .and_then(credential_env)
+                    .map(|value| Sourced::new(value, InputSource::Environment))
+            })
+    });
+    LiteLLMOcrRequest {
+        connection: request
+            .config
+            .resolve_connection_params(super::OcrConnection {
+                dynamic_api_key,
+                dynamic_api_base,
+                ..connection
+            }),
+        ..request
+    }
 }

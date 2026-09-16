@@ -1,3 +1,3 @@
 pub(crate) mod transformation;
 
-pub(crate) use transformation::{CohereOptions, CohereResponse, validate_document};
+pub(crate) use transformation::{CohereOptions, validate_document};

@@ -23,7 +23,7 @@ pub(crate) async fn perform_ocr_request(
     let context = CallLifecycleContext::new(
         "ocr",
         request.model.clone(),
-        request.config.provider().as_str(),
+        request.provider_name(),
         request
             .litellm_call_id
             .clone()
@@ -54,6 +54,7 @@ impl PreparedOcrCall {
         client: OcrClient,
         request: LiteLLMOcrRequest,
     ) -> Result<Self, super::Error> {
+        let request = super::prepare::resolve_connection_params(request);
         let http = match request.config {
             OcrConfigKind::Cohere => CohereParseConfig.prepare_request(&request, &client).await?,
             OcrConfigKind::Mistral => MistralOCRConfig.prepare_request(&request, &client).await?,
@@ -99,6 +100,30 @@ impl PreparedOcrCall {
             crate::http_utils::execute_http_request(self.client.provider_http(), self.http)
                 .await
                 .map_err(super::client::transport_error)?;
+        if !response.status().is_success() {
+            let headers = response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .to_str()
+                        .ok()
+                        .map(|value| (name.to_string(), value.to_string()))
+                })
+                .collect();
+            return match super::client::read_response_bytes(
+                response,
+                self.request.connection.max_response_bytes,
+            )
+            .await
+            {
+                Err(super::Error::Transport(crate::transport::Error::Http { status, body })) => {
+                    Err(self.request.config.get_error_class(body, status, headers))
+                }
+                Err(error) => Err(error),
+                Ok(_) => unreachable!("non-success response produces an HTTP error"),
+            };
+        }
         let model = &self.request.model;
         let context = OcrResponseContext {
             client: &self.client,

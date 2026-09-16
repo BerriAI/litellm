@@ -100,7 +100,38 @@ pub(crate) struct VertexAIDeepSeekOCRConfig;
 impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
     type OcrParams = DeepSeekOcrParams;
     type ProviderRequest = DeepSeekOcrRequest;
-    type ProviderResponse = DeepSeekOcrResponse;
+    type Environment = vertex::VertexEnvironment;
+
+    fn get_api_key_env_var(&self) -> Option<&'static str> {
+        VertexAIOCRConfig.get_api_key_env_var()
+    }
+
+    async fn validate_environment(
+        &self,
+        request: &LiteLLMOcrRequest,
+        client: &OcrClient,
+    ) -> Result<Self::Environment, crate::ocr::Error> {
+        BaseOcrConfig::validate_environment(&VertexAIOCRConfig, request, client).await
+    }
+
+    fn get_complete_url(
+        &self,
+        request: &LiteLLMOcrRequest,
+        _params: &Self::OcrParams,
+        environment: &Self::Environment,
+    ) -> Result<String, crate::ocr::Error> {
+        let config = VertexConfig::from_sourced_optional_params(
+            &request.optional_params,
+            &request.input_sources,
+        )?;
+        let location = vertex::get_vertex_ai_location(&config, &credential_env)
+            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        self.get_complete_url(
+            request.connection.api_base.as_deref(),
+            &environment.project_id,
+            &location,
+        )
+    }
 
     async fn async_transform_ocr_request(
         &self,
@@ -113,17 +144,21 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         self.transform_ocr_request(model, document, optional_params, headers)
     }
 
-    fn normalize_response(
+    fn transform_ocr_response(
         &self,
         model: &str,
-        response: DeepSeekOcrResponse,
+        raw_response: &[u8],
+        request_format: crate::ocr::types::OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        normalize_response(model, response)
+        crate::llms::base_llm::ocr::transformation::decode_and_normalize_response(
+            model,
+            raw_response,
+            request_format,
+            normalize_response,
+        )
     }
-}
 
-impl VertexAIDeepSeekOCRConfig {
-    pub(crate) fn transform_ocr_request(
+    fn transform_ocr_request(
         &self,
         model: &str,
         document: OcrDocument,
@@ -148,28 +183,18 @@ impl VertexAIDeepSeekOCRConfig {
                 .collect(),
         })
     }
+}
 
+impl VertexAIDeepSeekOCRConfig {
     pub(crate) async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )
-        .map_err(crate::ocr::Error::from)?;
-        let authentication = VertexAIOCRConfig
-            .validate_environment(&request.connection, &config, client)
-            .await?;
-        let location = vertex::get_vertex_ai_location(&config, &credential_env)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
-        let url = self.get_complete_url(
-            request.connection.api_base.as_deref(),
-            &authentication.project_id,
-            &location,
-        )?;
+        let authentication = self.validate_environment(request, client).await?;
+        let url = BaseOcrConfig::get_complete_url(self, request, &params, &authentication)?;
+
         let body = self
             .async_transform_ocr_request(
                 &request.model,
@@ -393,7 +418,11 @@ impl VertexAIDeepSeekOCRConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{VertexAIDeepSeekOCRConfig, provider_model};
+    use super::{
+        DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig, normalize_response,
+        provider_model,
+    };
+    use serde_json::{Value, json};
 
     #[test]
     fn unconsumed_options_remain_available_for_body_composition() {
@@ -435,6 +464,249 @@ mod tests {
                 .get_complete_url(None, "proj-1", "europe-west4")
                 .unwrap(),
             "https://aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/endpoints/openapi/chat/completions"
+        );
+    }
+
+    use rstest::rstest;
+
+    use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+    use crate::ocr::types::OcrDocument;
+
+    fn document() -> OcrDocument {
+        serde_json::from_value(json!({"type":"image_url","image_url":"gs://bucket/a.png"})).unwrap()
+    }
+
+    #[rstest]
+    #[case("stream", json!(true))]
+    #[case("temperature", json!(0.1))]
+    #[case("max_tokens", json!(1024))]
+    #[case("top_p", json!(0.9))]
+    #[case("n", json!(2))]
+    #[case("stop", json!("done"))]
+    #[case("stop", json!(["done", "stop"]))]
+    #[case("temperature", json!(null))]
+    fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
+        let params: DeepSeekOcrParams =
+            serde_json::from_value(json!({name: value.clone(), "ignored": true})).unwrap();
+        let result = serde_json::to_value(
+            VertexAIDeepSeekOCRConfig
+                .transform_ocr_request("deepseek-ai/deepseek-ocr-maas", document(), &params, &[])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["model"], "deepseek-ai/deepseek-ocr-maas");
+        assert_eq!(
+            result["messages"][0]["content"][0],
+            json!({"type":"image_url","image_url":"gs://bucket/a.png"})
+        );
+        assert_eq!(result[name], value);
+        assert!(result.get("ignored").is_none());
+    }
+
+    #[rstest]
+    #[case(json!({"type":"image_url","image_url":"data:image/png;base64,AA=="}))]
+    #[case(json!({"type":"document_url","document_url":"data:application/pdf;base64,AA=="}))]
+    fn request_maps_both_document_types_to_image_content(#[case] document: Value) {
+        let source = document
+            .get("image_url")
+            .or_else(|| document.get("document_url"))
+            .unwrap()
+            .clone();
+        let request = VertexAIDeepSeekOCRConfig
+            .transform_ocr_request(
+                "deepseek-ai/deepseek-ocr-maas",
+                serde_json::from_value(document).unwrap(),
+                &DeepSeekOcrParams::default(),
+                &[],
+            )
+            .unwrap();
+        let result = serde_json::to_value(request).unwrap();
+        assert_eq!(
+            result["messages"][0]["content"][0],
+            json!({"type":"image_url","image_url":source})
+        );
+    }
+
+    #[rstest]
+    #[case(json!("# hello"), "# hello")]
+    #[case(json!("{broken"), "{broken")]
+    #[case(json!(" {\"pages\":[]} "), " {\"pages\":[]} ")]
+    #[case(json!({"pages":[]}), "")]
+    #[case(json!("[]"), "[]")]
+    #[case(json!("{\"pages\":[{\"markdown\":\"json text\"}]}"), "json text")]
+    #[case(json!({"pages":[{"markdown":"object"}]}), "object")]
+    fn response_transform_handles_text_json_and_objects(
+        #[case] content: Value,
+        #[case] expected: &str,
+    ) {
+        let has_pages = content
+            .as_object()
+            .is_some_and(|data| data.contains_key("pages"))
+            || content
+                .as_str()
+                .is_some_and(|text| text.contains("\"pages\""));
+        let response: DeepSeekOcrResponse = serde_json::from_value(
+            json!({"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":1}}),
+        )
+        .unwrap();
+        let result = normalize_response("model", response).unwrap().into_json();
+        assert_eq!(result["pages"][0]["markdown"], expected);
+        assert_eq!(result["pages"][0]["index"], 0);
+        if has_pages {
+            assert!(result["usage_info"].is_null());
+        } else {
+            assert_eq!(result["usage_info"]["prompt_tokens"], 1);
+        }
+    }
+
+    #[test]
+    fn structured_result_maps_pages_usage_model_and_annotation() {
+        let response: DeepSeekOcrResponse = serde_json::from_value(json!({
+            "choices":[{"message":{"content":{
+                "pages":[{"index":2,"markdown":"page","images":[{"id":"one"}],"dimensions":{"width":10}}],
+                "model":"provider-model",
+                "usage_info":{"pages_processed":1},
+                "document_annotation":{"language":"en"},
+                "future":"kept"
+            }}}]
+        }))
+        .unwrap();
+        let result = normalize_response("requested", response)
+            .unwrap()
+            .into_json();
+        assert_eq!(result["pages"][0]["index"], 2);
+        assert_eq!(result["pages"][0]["images"][0]["id"], "one");
+        assert_eq!(result["model"], "provider-model");
+        assert_eq!(result["usage_info"]["pages_processed"], 1);
+        assert_eq!(result["document_annotation"]["language"], "en");
+        assert!(result.get("future").is_none());
+    }
+
+    #[test]
+    fn response_transform_rejects_missing_empty_and_malformed_content() {
+        for value in [
+            json!({"choices":[]}),
+            json!({"choices":[{"message":{"content":{}}}]}),
+            json!({"choices":[{"message":{"content":""}}]}),
+            json!({"choices":[{"message":{"content":"{\"pages\":[{\"markdown\":42}]}"}}]}),
+            json!({"choices":[{"message":{"content":{"pages":[{"markdown":42}]}}}]}),
+        ] {
+            let result = serde_json::from_value::<DeepSeekOcrResponse>(value)
+                .map_err(|_| ())
+                .and_then(|response| normalize_response("model", response).map_err(|_| ()));
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn structured_content_preserves_usage_presence_and_shared_page_defaults() {
+        for (usage, expected) in [(json!(null), None), (json!({"pages_processed":2}), Some(2))] {
+            let response = serde_json::from_value(json!({
+                "choices":[{"message":{"content":{
+                    "pages":[42, {"index":"2", "images":[{"id":"kept"}], "ignored":true}],
+                    "usage_info":usage
+                }}}],
+                "usage":{"pages_processed":99}
+            }))
+            .unwrap();
+            let normalized = normalize_response("model", response).unwrap();
+            assert_eq!(normalized.pages.len(), 1);
+            assert_eq!(normalized.pages[0].index, 2);
+            assert_eq!(normalized.pages[0].markdown, "");
+            assert!(normalized.pages[0].extra_fields.is_empty());
+            assert_eq!(
+                normalized
+                    .usage_info
+                    .and_then(|usage| usage.pages_processed),
+                expected
+            );
+        }
+    }
+
+    use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+    use litellm_auth::InputSource;
+
+    fn request_body(request: &str) -> Value {
+        serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
+    }
+
+    #[tokio::test]
+    async fn facade_executes_vertex_deepseek_at_the_openai_endpoint() {
+        let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+            "choices":[{"message":{"content":"recognized"}}],
+            "usage":{"prompt_tokens":1}
+        }))])
+        .await;
+        let mut request = wire_request(
+            "vertex_ai/deepseek-ocr-maas",
+            &base,
+            json!({
+                "vertex_project":"project-1",
+                "vertex_location":"europe-west4",
+                "temperature":0.1,
+                "future_ocr_option":true,
+                "extra_body":{"provider_option":"value"}
+            }),
+        );
+        request.document = request
+            .document
+            .with_source("gs://bucket/document.pdf".into());
+
+        let response = perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(response.pages[0].markdown, "recognized");
+        assert_eq!(
+            response.usage_info.unwrap().extra_fields["prompt_tokens"],
+            1
+        );
+        let requests = seen.lock().unwrap();
+        assert!(requests[0].starts_with(
+            "POST /v1/projects/project-1/locations/europe-west4/endpoints/openapi/chat/completions "
+        ));
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-key")
+        );
+        let body = request_body(&requests[0]);
+        assert_eq!(body["model"], "deepseek-ai/deepseek-ocr-maas");
+        assert_eq!(body["temperature"], 0.1);
+        assert_eq!(body["future_ocr_option"], true);
+        assert_eq!(body["provider_option"], "value");
+        assert!(body.get("vertex_project").is_none());
+        assert!(body.get("extra_body").is_none());
+        assert_eq!(
+            body["messages"][0]["content"][0],
+            json!({"type":"image_url","image_url":"gs://bucket/document.pdf"})
+        );
+    }
+
+    #[test]
+    fn host_registration_selects_deepseek_without_affecting_mistral() {
+        assert!(crate::ocr::wire::is_supported_request(
+            "deepseek-ocr-maas",
+            Some("vertex_ai")
+        ));
+        assert!(crate::ocr::wire::is_supported_request(
+            "mistral-ocr-maas",
+            Some("vertex_ai")
+        ));
+    }
+
+    #[tokio::test]
+    async fn request_controlled_api_base_is_rejected_before_vertex_auth() {
+        let mut request = wire_request(
+            "vertex_ai/deepseek-ocr-maas",
+            "https://caller.example",
+            json!({"vertex_project":"project-1"}),
+        );
+        request.connection.api_base_source = InputSource::Request;
+
+        let error = perform_ocr(request).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("request-controlled Vertex AI endpoint")
         );
     }
 }

@@ -1,5 +1,11 @@
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    #[error("upstream OCR error ({status}): {body}")]
+    Provider {
+        status: u16,
+        body: String,
+        headers: Vec<(String, String)>,
+    },
     #[error("File is empty or could not be read")]
     EmptyFile,
     #[error("Invalid MIME type: {0}")]

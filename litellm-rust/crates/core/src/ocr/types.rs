@@ -2,16 +2,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::serde_compat::{FiniteF64, LaxI64};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
+
+use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
 use crate::call_arguments::CallArguments;
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
-use litellm_auth::{InputSource, TokenProviderHandle};
+use crate::serde_compat::{FiniteF64, LaxI64};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -63,8 +64,10 @@ pub enum OcrResponseFormat {
 #[derive(Clone)]
 pub struct OcrConnection {
     pub api_key: Option<String>,
+    pub dynamic_api_key: Option<Sourced<String>>,
     pub api_key_source: InputSource,
     pub api_base: Option<String>,
+    pub dynamic_api_base: Option<Sourced<String>>,
     pub api_base_source: InputSource,
     pub extra_headers: Vec<(String, String)>,
     pub extra_headers_source: InputSource,
@@ -78,8 +81,10 @@ impl Default for OcrConnection {
     fn default() -> Self {
         Self {
             api_key: None,
+            dynamic_api_key: None,
             api_key_source: InputSource::Deployment,
             api_base: None,
+            dynamic_api_base: None,
             api_base_source: InputSource::Deployment,
             extra_headers: Vec::new(),
             extra_headers_source: InputSource::Deployment,
@@ -137,7 +142,7 @@ impl LiteLLMOcrRequest {
     }
 
     pub fn provider_name(&self) -> &'static str {
-        self.config.provider().as_str()
+        self.config.provider().into()
     }
 
     pub fn with_host_hooks(

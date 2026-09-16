@@ -1,8 +1,8 @@
-use crate::serde_compat::LaxI64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
+use crate::serde_compat::LaxI64;
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
@@ -13,6 +13,8 @@ use crate::ocr::types::{
     OcrUsageInfo,
 };
 use crate::url_utils::ApiUrl;
+
+const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -80,8 +82,46 @@ struct CohereBilledUnits {
 #[derive(Default)]
 pub(crate) struct CohereParseConfig;
 
-impl CohereParseConfig {
-    pub(crate) fn transform_ocr_request(
+impl BaseOcrConfig for CohereParseConfig {
+    type OcrParams = CohereOptions;
+    type ProviderRequest = CohereRequest;
+    type Environment = Vec<(String, String)>;
+
+    fn get_api_key_env_var(&self) -> Option<&'static str> {
+        Some(COHERE_API_KEY_ENV)
+    }
+
+    fn get_health_check_document(&self) -> OcrDocument {
+        OcrDocument::ImageUrl {
+            image_url: COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI.into(),
+            extra_fields: Default::default(),
+        }
+    }
+
+    async fn validate_environment(
+        &self,
+        request: &LiteLLMOcrRequest,
+        _client: &OcrClient,
+    ) -> Result<Self::Environment, crate::ocr::Error> {
+        self.validate_environment(&request.connection, &credential_env)
+    }
+
+    fn get_complete_url(
+        &self,
+        request: &LiteLLMOcrRequest,
+        _params: &Self::OcrParams,
+        _environment: &Self::Environment,
+    ) -> Result<String, crate::ocr::Error> {
+        self.get_complete_url(
+            request
+                .connection
+                .api_base
+                .as_deref()
+                .unwrap_or(COHERE_PARSE_API_BASE),
+        )
+    }
+
+    fn transform_ocr_request(
         &self,
         model: &str,
         document: OcrDocument,
@@ -91,12 +131,6 @@ impl CohereParseConfig {
         let image_url = image_url(document)?;
         Ok(build_request(model, image_url, optional_params))
     }
-}
-
-impl BaseOcrConfig for CohereParseConfig {
-    type OcrParams = CohereOptions;
-    type ProviderRequest = CohereRequest;
-    type ProviderResponse = CohereResponse;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["output_format", "req_format"]
@@ -113,12 +147,18 @@ impl BaseOcrConfig for CohereParseConfig {
         self.transform_ocr_request(model, document, optional_params, headers)
     }
 
-    fn normalize_response(
+    fn transform_ocr_response(
         &self,
         model: &str,
-        response: CohereResponse,
+        raw_response: &[u8],
+        request_format: crate::ocr::types::OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        normalize_response(model, response)
+        crate::llms::base_llm::ocr::transformation::decode_and_normalize_response(
+            model,
+            raw_response,
+            request_format,
+            normalize_response,
+        )
     }
 }
 
@@ -129,14 +169,8 @@ impl CohereParseConfig {
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let headers = self.validate_environment(&request.connection, &credential_env)?;
-        let url = self.get_complete_url(
-            request
-                .connection
-                .api_base
-                .as_deref()
-                .unwrap_or(COHERE_PARSE_API_BASE),
-        )?;
+        let headers = BaseOcrConfig::validate_environment(self, request, client).await?;
+        let url = BaseOcrConfig::get_complete_url(self, request, &params, &headers)?;
         let body = self
             .async_transform_ocr_request(
                 &request.model,
@@ -299,7 +333,11 @@ impl CohereParseConfig {
             .map(str::trim)
             .filter(|key| !key.is_empty())
             .map(str::to_string)
-            .or_else(|| env_lookup(COHERE_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
+            .or_else(|| {
+                self.get_api_key_env_var()
+                    .and_then(env_lookup)
+                    .filter(|key| !key.trim().is_empty())
+            })
             .ok_or_else(|| {
                 crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication(
                     "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
