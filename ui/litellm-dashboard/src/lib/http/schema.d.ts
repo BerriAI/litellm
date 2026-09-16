@@ -1843,6 +1843,7 @@ export interface paths {
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+         *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
@@ -1899,6 +1900,7 @@ export interface paths {
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+         *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
@@ -3980,6 +3982,7 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
@@ -4514,6 +4517,7 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
@@ -7736,6 +7740,7 @@ export interface paths {
          *     - blocked: Optional[bool] - Whether the key is blocked.
          *     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -8049,6 +8054,7 @@ export interface paths {
          *     - blocked: Optional[bool] - Whether the key is blocked.
          *     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+         *     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
@@ -8175,6 +8181,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
          *     - tpm_limit: Optional[int] - Tokens per minute limit
          *     - rpm_limit: Optional[int] - Requests per minute limit
+         *     - tpd_limit: Optional[int] - Tokens per day limit, charged by batch submissions instead of tpm_limit/rpm_limit
          *     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
          *     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
@@ -8424,7 +8431,7 @@ export interface paths {
          *     way to page, sort or filter it.
          *
          *     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
-         *     `rpm_limit` or `created_at`, each optionally prefixed with `-` for descending,
+         *     `rpm_limit`, `tpd_limit` or `created_at`, each optionally prefixed with `-` for descending,
          *     and defaults to `-created_at`. `budget_id` is appended to every sort as the
          *     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
          *     `page_size` defaults to 50 and is capped at 100. Filters are
@@ -9669,6 +9676,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nvidia_nim/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        get: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__get"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        put: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__put"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        post: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__post"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        delete: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        patch: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__patch"];
+        trace?: never;
+    };
     "/ocr": {
         parameters: {
             query?: never;
@@ -10619,6 +10682,7 @@ export interface paths {
          *     - max_budget: *Optional[float]* - Max budget for org
          *     - tpm_limit: *Optional[int]* - Max tpm limit for org
          *     - rpm_limit: *Optional[int]* - Max rpm limit for org
+         *     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
          *     - model_rpm_limit: *Optional[Dict[str, int]]* - The RPM (Requests Per Minute) limit per model for this organization.
          *     - model_tpm_limit: *Optional[Dict[str, int]]* - The TPM (Tokens Per Minute) limit per model for this organization.
          *     - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org
@@ -15605,6 +15669,7 @@ export interface paths {
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
+         *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
          *     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
@@ -15833,6 +15898,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
+         *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -24124,7 +24190,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
              * @default fail_closed
              * @enum {string}
              */
@@ -24582,6 +24648,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /**
@@ -24634,6 +24702,11 @@ export interface components {
              * @description Requests will NOT fail if this is exceeded. Will fire alerting though.
              */
             soft_budget?: number | null;
+            /**
+             * Tpd Limit
+             * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
+             */
+            tpd_limit?: number | null;
             /**
              * Tpm Limit
              * @description Max tokens per minute, allowed for this budget id.
@@ -27280,6 +27353,8 @@ export interface components {
             jwt_claim_name: string;
             /** Jwt Claim Value */
             jwt_claim_value: string;
+            /** Jwt Issuer */
+            jwt_issuer?: string | null;
             /** Key */
             key: string;
         };
@@ -27489,6 +27564,11 @@ export interface components {
              */
             total_prompt_tokens: number;
             /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
+            /**
              * Total Spend
              * @default 0
              */
@@ -27498,6 +27578,11 @@ export interface components {
              * @default 0
              */
             total_successful_requests: number;
+            /**
+             * Total Timed Requests
+             * @default 0
+             */
+            total_timed_requests: number;
             /**
              * Total Tokens
              * @default 0
@@ -28335,6 +28420,8 @@ export interface components {
             team_id?: string | null;
             /** Throttle On Budget Exceeded */
             throttle_on_budget_exceeded?: boolean | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -28495,6 +28582,8 @@ export interface components {
             token?: string | null;
             /** Token Id */
             token_id?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -28889,6 +28978,8 @@ export interface components {
             jwt_claim_name: string;
             /** Jwt Claim Value */
             jwt_claim_value: string;
+            /** Jwt Issuer */
+            jwt_issuer?: string | null;
             /**
              * Updated At
              * Format: date-time
@@ -29021,6 +29112,61 @@ export interface components {
              * @description Tier to route to when this rule matches: a built-in tier name, or with tier_definitions set, one of the defined tier names
              */
             tier: string;
+        };
+        /** LLMV2Calibration */
+        LLMV2Calibration: {
+            capable: components["schemas"]["LLMV2ProbabilityCalibration"];
+            efficient: components["schemas"]["LLMV2ProbabilityCalibration"];
+            /**
+             * Prompt Version
+             * @constant
+             */
+            prompt_version: "llm-v2-1";
+            /** Version */
+            version: string;
+        };
+        /** LLMV2Config */
+        LLMV2Config: {
+            calibration?: components["schemas"]["LLMV2Calibration"] | null;
+            /** Capable Profile */
+            capable_profile: string;
+            /**
+             * Capable Tier
+             * @default REASONING
+             */
+            capable_tier: string;
+            /** Efficient Profile */
+            efficient_profile: string;
+            /**
+             * Efficient Tier
+             * @default SIMPLE
+             */
+            efficient_tier: string;
+            /** Harness */
+            harness: string;
+            /**
+             * Max Output Tokens
+             * @default 1024
+             */
+            max_output_tokens: number;
+            /**
+             * Max Quality Gap
+             * @description Maximum estimated success loss allowed for efficient.
+             */
+            max_quality_gap: number;
+            /**
+             * Response Format
+             * @default json_schema
+             * @enum {string}
+             */
+            response_format: "json_schema" | "json_object";
+        };
+        /** LLMV2ProbabilityCalibration */
+        LLMV2ProbabilityCalibration: {
+            /** Intercept */
+            intercept: number;
+            /** Slope */
+            slope: number;
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -29226,6 +29372,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -29259,6 +29407,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -29367,6 +29517,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -29534,6 +29686,8 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -30727,6 +30881,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -31103,6 +31259,8 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -31133,6 +31291,11 @@ export interface components {
              * @description Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.
              */
             advisory_system_message?: string | null;
+            /**
+             * Agent Id
+             * @description Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.
+             */
+            agent_id?: string | null;
             /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
@@ -31334,6 +31497,16 @@ export interface components {
              * @default 25000
              */
             chunk_budget_chars: number;
+            /**
+             * Client Id
+             * @description Client id of the gateway's Entra app registration (a confidential client). Falls back to the AGENT365_CLIENT_ID environment variable.
+             */
+            client_id?: string | null;
+            /**
+             * Client Secret
+             * @description Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.
+             */
+            client_secret?: string | null;
             /**
              * Confidence Threshold
              * @description Only block or mask when detection confidence >= this value; below threshold, allow or log_only.
@@ -31774,6 +31947,11 @@ export interface components {
              */
             realtime_violation_message?: string | null;
             /**
+             * Resource App Id
+             * @description Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.
+             */
+            resource_app_id?: string | null;
+            /**
              * Rules
              * @description Ordered allow/deny rules. Patterns use regex for tool names/types and optional regex constraints on tool arguments.
              */
@@ -31874,6 +32052,11 @@ export interface components {
              * @description The ID of your Model Armor template
              */
             template_id?: string | null;
+            /**
+             * Tenant Id
+             * @description Entra tenant id used for the On-Behalf-Of token exchange. Falls back to the AGENT365_TENANT_ID environment variable.
+             */
+            tenant_id?: string | null;
             /**
              * Timeout
              * @description Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.
@@ -32617,6 +32800,11 @@ export interface components {
             /** Supported Reasoning Efforts */
             supported_reasoning_efforts?: string[] | null;
             /**
+             * Supports Fast Mode
+             * @default false
+             */
+            supports_fast_mode: boolean;
+            /**
              * Supports Function Calling
              * @default false
              */
@@ -32752,6 +32940,11 @@ export interface components {
             soft_budget?: number | null;
             /** Spend */
             spend?: number | null;
+            /**
+             * Tpd Limit
+             * @description Max tokens per day, charged by batch submissions, allowed for this budget id.
+             */
+            tpd_limit?: number | null;
             /**
              * Tpm Limit
              * @description Max tokens per minute, allowed for this budget id.
@@ -32967,6 +33160,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -33088,6 +33283,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id: string;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -33272,6 +33469,8 @@ export interface components {
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
             team_member_tpm_limit?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -33565,6 +33764,8 @@ export interface components {
             token?: string | null;
             /** Token Id */
             token_id?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -34019,6 +34220,8 @@ export interface components {
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
             team_member_tpm_limit?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -35428,6 +35631,8 @@ export interface components {
             team_id?: string | null;
             /** Throttle On Budget Exceeded */
             throttle_on_budget_exceeded?: boolean | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -35657,11 +35862,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "custom" | "heuristic_first" | "hybrid";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "llm_v2" | "custom" | "heuristic_first" | "hybrid";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -35755,6 +35960,8 @@ export interface components {
              * @description Rules that force a specific tier when their keywords match the prompt
              */
             keyword_tier_rules?: components["schemas"]["KeywordTierRule"][] | null;
+            /** @description Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2. */
+            llm_v2_config?: components["schemas"]["LLMV2Config"] | null;
             /**
              * Match Threshold
              * @description Minimum cosine similarity for a semantic keyword match
@@ -36996,6 +37203,16 @@ export interface components {
              */
             successful_requests: number;
             /**
+             * Timed Requests
+             * @default 0
+             */
+            timed_requests: number;
+            /**
+             * Total Response Time Ms
+             * @default 0
+             */
+            total_response_time_ms: number;
+            /**
              * Total Tokens
              * @default 0
              */
@@ -37010,23 +37227,35 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            /** Classifier Calibrated Capable P Solve */
+            classifier_calibrated_capable_p_solve?: number;
+            /** Classifier Calibrated Efficient P Solve */
+            classifier_calibrated_efficient_p_solve?: number;
             /** Classifier Calibrated P Solve */
             classifier_calibrated_p_solve?: number;
             /** Classifier Calibration Version */
             classifier_calibration_version?: string;
             /** Classifier Capability Boundary */
             classifier_capability_boundary?: string;
+            /** Classifier Capable P Solve */
+            classifier_capable_p_solve?: number;
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Crux */
             classifier_crux?: string;
+            /** Classifier Efficient P Solve */
+            classifier_efficient_p_solve?: number;
+            /** Classifier Max Quality Gap */
+            classifier_max_quality_gap?: number;
             /** Classifier Model */
             classifier_model?: string;
             /** Classifier P Solve */
             classifier_p_solve?: number;
             /** Classifier Primary Rule */
             classifier_primary_rule?: string;
+            /** Classifier Prompt Version */
+            classifier_prompt_version?: string;
             /** Classifier Threshold */
             classifier_threshold?: number;
             /** Context Escalated */
@@ -37421,6 +37650,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -37561,6 +37792,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Updated At */
@@ -38520,6 +38753,8 @@ export interface components {
             id: string;
             /** Is Active */
             is_active?: boolean | null;
+            /** Jwt Issuer */
+            jwt_issuer?: string | null;
             /** Key */
             key?: string | null;
         };
@@ -38667,6 +38902,8 @@ export interface components {
             temp_budget_increase?: number | null;
             /** Throttle On Budget Exceeded */
             throttle_on_budget_exceeded?: boolean | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Type */
@@ -38931,6 +39168,8 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -39130,6 +39369,8 @@ export interface components {
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
             team_member_tpm_limit?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -39640,6 +39881,8 @@ export interface components {
             end_user_object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** End User Rpm Limit */
             end_user_rpm_limit?: number | null;
+            /** End User Tpd Limit */
+            end_user_tpd_limit?: number | null;
             /** End User Tpm Limit */
             end_user_tpm_limit?: number | null;
             /** Expires */
@@ -39808,10 +40051,14 @@ export interface components {
             team_soft_budget?: number | null;
             /** Team Spend */
             team_spend?: number | null;
+            /** Team Tpd Limit */
+            team_tpd_limit?: number | null;
             /** Team Tpm Limit */
             team_tpm_limit?: number | null;
             /** Token */
             token?: string | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** Tpm Limit Per Model */
@@ -53335,6 +53582,161 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

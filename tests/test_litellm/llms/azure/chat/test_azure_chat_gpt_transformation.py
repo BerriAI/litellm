@@ -133,6 +133,32 @@ def test_transform_request_drops_tool_reference_parts():
 
 
 @pytest.mark.parametrize(
+    "enabled, expected", [(False, ("hi", "sys", "reply", "more")), (True, ("sys", "hi", "reply", "more"))]
+)
+def test_transform_request_system_messages_first_follows_global_flag(monkeypatch, enabled, expected):
+    """Azure OpenAI shares OpenAI's prefix-matched prompt cache, so the same flag moves
+    system messages ahead of the conversation on the Azure request body."""
+    monkeypatch.setattr(litellm, "openai_system_messages_first", enabled)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "more"},
+    ]
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure"},
+        headers={},
+    )
+
+    assert tuple(m["content"] for m in request["messages"]) == expected
+    assert [m["content"] for m in messages] == ["hi", "sys", "reply", "more"]
+
+
+@pytest.mark.parametrize(
     "model, emitted_key, absent_key",
     [
         ("gpt-5-chat", "max_completion_tokens", "max_tokens"),
