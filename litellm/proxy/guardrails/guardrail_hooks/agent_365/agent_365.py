@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -60,6 +60,7 @@ _GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
 _INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
 _AADSTS_CODES_ADAPTER: Final = TypeAdapter(tuple[int, ...])
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
+_TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
 _DEFAULT_TOKEN_TTL_SECONDS: Final = 3599.0
 _TOKEN_EXPIRY_SLACK_SECONDS: Final = 60.0
@@ -81,6 +82,13 @@ def _parse_aadsts_codes(raw: object) -> tuple[int, ...]:
         return ()
 
 
+def _parse_tool_input_schema(raw: object) -> Mapping[str, object] | None:
+    try:
+        return _TOOL_INPUT_SCHEMA_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+
+
 def entra_assertion(value: object) -> str | None:
     """``value`` when it is a compact JWS, the only bearer shape the OBO exchange accepts as its assertion.
     A LiteLLM virtual key, session bearer, or opaque upstream token in ``Authorization`` yields ``None``."""
@@ -97,6 +105,14 @@ class _EvaluateResponse(TypedDict, total=False):
     allowed: ReadOnly[bool]
     defender: ReadOnly[_DefenderResult]
     correlationId: ReadOnly[str]
+
+
+class _ToolReference(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str | None = None
+    input_schema: Mapping[str, object] | None = Field(default=None, serialization_alias="inputSchema")
 
 
 class _UnavailableDetail(TypedDict):
@@ -397,8 +413,14 @@ class Agent365Guardrail(CustomGuardrail):
         arguments: Final = data.get("mcp_arguments")
         server_name: Final = str(data.get("mcp_server_name") or "litellm")
         agent_id: Final = self.agent_id or user_api_key_dict.key_alias
+        description: Final = data.get("mcp_tool_description")
+        tool_reference: Final = _ToolReference(
+            name=tool_name,
+            description=description if isinstance(description, str) and description else None,
+            input_schema=_parse_tool_input_schema(data.get("mcp_tool_input_schema")),
+        )
         payload: Final[dict[str, object]] = {  # mutable-ok: JSON body with optional fields added below
-            "tool": {"name": tool_name},
+            "tool": tool_reference.model_dump(by_alias=True, exclude_none=True),
             "serverName": server_name,
             "conversationId": self._resolve_conversation_id(data),
         }
