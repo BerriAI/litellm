@@ -78,4 +78,15 @@ describe("UserBannerSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save banner" }));
     expect(mutate).toHaveBeenCalledWith({ enabled: false, message: "", severity: "info" }, expect.anything());
   });
+
+  it.each([
+    ["info", "Info"],
+    ["warning", "Warning"],
+    ["error", "Error"],
+  ])("shows the %s severity by its human label", (severity, label) => {
+    mockHooks({ ...publishedBanner, severity: severity as UserBanner["severity"] });
+    renderWithProviders(<UserBannerSettings />);
+
+    expect(screen.getByRole("combobox", { name: "Banner severity" })).toHaveTextContent(label);
+  });
 });

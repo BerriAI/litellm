@@ -1,14 +1,11 @@
 import json
-import os
 import stat
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 from litellm.proxy.client.cli import cli
@@ -18,7 +15,7 @@ from litellm.proxy.client.cli.commands.config import (
     load_config,
     save_config,
 )
-from litellm.proxy.client.cli.commands.private_json import write_private_json
+from litellm.litellm_core_utils.private_json import write_private_json
 from litellm.proxy.client.cli.interface import show_commands
 
 
@@ -355,7 +352,7 @@ class TestWritePrivateJson:
         def _interrupt(*args: object, **kwargs: object) -> None:
             raise KeyboardInterrupt()
 
-        monkeypatch.setattr("litellm.proxy.client.cli.commands.private_json.json.dump", _interrupt)
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.json.dump", _interrupt)
         target = tmp_path / "config.json"
 
         with pytest.raises(KeyboardInterrupt):

@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useState } from "react";
 
 import { getMajorAirlines } from "@/components/networking";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -187,13 +187,14 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
           <Field>
             <FieldLabel htmlFor={`${fieldId}-type`}>Type</FieldLabel>
             <Select
+              items={INTENT_TYPES}
               value={effectiveConfig.competitor_intent_type}
               onValueChange={(v: string | null) => v !== null && handleConfigChange("competitor_intent_type", v)}
             >
               <SelectTrigger id={`${fieldId}-type`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {INTENT_TYPES.map((type) => (
                   <SelectItem key={type.value} value={type.value} title={type.label}>
                     {type.label}
@@ -260,13 +261,14 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
           <Field>
             <FieldLabel htmlFor={`${fieldId}-competitor-comparison`}>Policy: Competitor comparison</FieldLabel>
             <Select
+              items={COMPETITOR_COMPARISON_POLICIES}
               value={effectiveConfig.policy?.competitor_comparison ?? "refuse"}
               onValueChange={(v: string | null) => v !== null && handlePolicyChange("competitor_comparison", v)}
             >
               <SelectTrigger id={`${fieldId}-competitor-comparison`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {COMPETITOR_COMPARISON_POLICIES.map((policy) => (
                   <SelectItem key={policy.value} value={policy.value} title={policy.label}>
                     {policy.label}
@@ -281,6 +283,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
               Policy: Possible competitor comparison
             </FieldLabel>
             <Select
+              items={POSSIBLE_COMPETITOR_COMPARISON_POLICIES}
               value={effectiveConfig.policy?.possible_competitor_comparison ?? "reframe"}
               onValueChange={(v: string | null) =>
                 v !== null && handlePolicyChange("possible_competitor_comparison", v)
@@ -289,7 +292,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
               <SelectTrigger id={`${fieldId}-possible-competitor-comparison`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {POSSIBLE_COMPETITOR_COMPARISON_POLICIES.map((policy) => (
                   <SelectItem key={policy.value} value={policy.value} title={policy.label}>
                     {policy.label}

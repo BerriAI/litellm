@@ -3,7 +3,6 @@ import copy
 import json
 import logging
 import os
-import sys
 import threading
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion

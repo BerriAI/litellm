@@ -165,7 +165,7 @@ describe("AdditionalModelSettings", () => {
 
     const temperatureField = screen.getByLabelText("Temperature value");
     await user.clear(temperatureField);
-    await user.type(temperatureField, "9");
+    fireEvent.change(temperatureField, { target: { value: "9" } });
     await user.tab();
 
     expect((temperatureField as HTMLInputElement).value).toBe("2");

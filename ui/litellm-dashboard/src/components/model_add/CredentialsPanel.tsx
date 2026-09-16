@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import { type ComponentProps, useState } from "react";
+import { useState } from "react";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -20,10 +20,6 @@ import { toast } from "@/lib/toast";
 import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
 
-interface CredentialsPanelProps {
-  uploadProps: ComponentProps<typeof CredentialModal>["uploadProps"];
-}
-
 const restrictedFields = ["credential_name", "custom_llm_provider"];
 
 const buildCredential = (values: Record<string, unknown>, credentialValues: Record<string, unknown>) => ({
@@ -37,7 +33,7 @@ const buildCredential = (values: Record<string, unknown>, credentialValues: Reco
 const withoutRestrictedFields = (values: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(values).filter(([key]) => !restrictedFields.includes(key)));
 
-export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps) {
+export default function CredentialsPanel() {
   const { accessToken, userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see credentials, do not modify.
   const canModifyCredentials = isProxyAdminRole(userRole ?? "");
@@ -142,7 +138,6 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
           onSubmit={handleAddCredential}
           open={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
-          uploadProps={uploadProps}
         />
       )}
       {isUpdateModalOpen && (
@@ -151,7 +146,6 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
           open={isUpdateModalOpen}
           existingCredential={selectedCredential}
           onSubmit={handleUpdateCredential}
-          uploadProps={uploadProps}
           onCancel={() => setIsUpdateModalOpen(false)}
         />
       )}

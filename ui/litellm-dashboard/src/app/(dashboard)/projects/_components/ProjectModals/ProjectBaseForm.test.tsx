@@ -101,4 +101,18 @@ describe("ProjectBaseForm", () => {
       expect(screen.getByText("Guardrails")).toBeInTheDocument();
     });
   });
+
+  it("should show combined, input, and output TPM limit inputs for a model row", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<FormWrapper />);
+    await user.click(screen.getByText("Advanced Settings"));
+    await user.click(screen.getByRole("button", { name: /add model limit/i }));
+
+    expect(screen.getByPlaceholderText("TPM Limit")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Input TPM Limit")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Output TPM Limit")).toBeInTheDocument();
+    expect(screen.getByLabelText("TPM Limit")).toBeInTheDocument();
+    expect(screen.getByLabelText("Input TPM Limit")).toBeInTheDocument();
+    expect(screen.getByLabelText("Output TPM Limit")).toBeInTheDocument();
+  });
 });

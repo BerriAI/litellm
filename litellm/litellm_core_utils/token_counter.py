@@ -3,10 +3,15 @@
 import base64
 import io
 import struct
-from collections.abc import Callable, Mapping
-from typing import Any, Final, Literal, cast
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from typing import Final, Literal, cast
 
+import anyio
+import anyio.lowlevel
+import httpx
 import tiktoken
+from tokenizers import Tokenizer
+from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
@@ -19,19 +24,30 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+    TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
+    AnthropicContentParamSource,
+    AnthropicContentParamSourceFileId,
+    AnthropicContentParamSourceUrl,
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesTextParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
-    OpenAIMessageContent,
+    OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
 
@@ -163,6 +179,17 @@ def calculate_tiles_needed(
     return total_tiles
 
 
+def high_detail_image_token_upper_bound(base_tokens: int = 85) -> int:
+    largest_tile_count: Final = calculate_tiles_needed(
+        MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES, MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
+    )
+    return base_tokens + (base_tokens * 2) * largest_tile_count
+
+
+def _unpack_ints(fmt: str, buffer: bytes) -> tuple[int, ...]:
+    return struct.unpack(fmt, buffer)
+
+
 def get_image_type(image_data: bytes) -> str | None:
     """take an image (really only the first ~100 bytes max are needed)
     and return 'png' 'gif' 'jpeg' 'webp' 'heic' or None. method added to
@@ -202,9 +229,9 @@ def get_image_dimensions(
     if data.startswith(("http://", "https://")):
         try:
             client: Final = _get_httpx_client()
-            response: Final = safe_get(client, data)
+            response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
-            content_length: Final = response.headers.get("Content-Length")
+            content_length: Final[str | None] = response.headers.get("Content-Length")
             if content_length is not None and int(content_length) > max_bytes:
                 pass  # skip download; img_data stays None
             else:
@@ -221,10 +248,10 @@ def get_image_dimensions(
     img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
-        w, h = struct.unpack(">LL", img_data[16:24])
+        w, h = _unpack_ints(">LL", img_data[16:24])
         return w, h
     elif img_type == "gif":
-        w, h = struct.unpack("<HH", img_data[6:10])
+        w, h = _unpack_ints("<HH", img_data[6:10])
         return w, h
     elif img_type == "jpeg":
         with io.BytesIO(img_data) as fhandle:
@@ -237,25 +264,25 @@ def get_image_dimensions(
                 while ord(byte) == 0xFF:
                     byte = fhandle.read(1)
                 ftype = ord(byte)
-                size = struct.unpack(">H", fhandle.read(2))[0] - 2
+                size = _unpack_ints(">H", fhandle.read(2))[0] - 2
             fhandle.seek(1, 1)
-            h, w = struct.unpack(">HH", fhandle.read(4))
+            h, w = _unpack_ints(">HH", fhandle.read(4))
         return w, h
     elif img_type == "webp":
         # For WebP, the dimensions are stored at different offsets depending on the format
         # Check for VP8X (extended format)
         if img_data[12:16] == b"VP8X":
-            w = struct.unpack("<I", img_data[24:27] + b"\x00")[0] + 1
-            h = struct.unpack("<I", img_data[27:30] + b"\x00")[0] + 1
+            w = _unpack_ints("<I", img_data[24:27] + b"\x00")[0] + 1
+            h = _unpack_ints("<I", img_data[27:30] + b"\x00")[0] + 1
             return w, h
         # Check for VP8 (lossy format)
         elif img_data[12:16] == b"VP8 ":
-            w = struct.unpack("<H", img_data[26:28])[0] & 0x3FFF
-            h = struct.unpack("<H", img_data[28:30])[0] & 0x3FFF
+            w = _unpack_ints("<H", img_data[26:28])[0] & 0x3FFF
+            h = _unpack_ints("<H", img_data[28:30])[0] & 0x3FFF
             return w, h
         # Check for VP8L (lossless format)
         elif img_data[12:16] == b"VP8L":
-            bits: Final = struct.unpack("<I", img_data[21:25])[0]
+            bits: Final = _unpack_ints("<I", img_data[21:25])[0]
             w = (bits & 0x3FFF) + 1
             h = ((bits >> 14) & 0x3FFF) + 1
             return w, h
@@ -304,6 +331,42 @@ TokenCounterFunction = Callable[[str], int]
 Type for a function that counts tokens in a string.
 """
 
+EXTRAPOLATION_SAMPLES: Final = 16
+T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_Retval = TypeVar("T_Retval")
+_COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
+
+
+def _count_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
+    existing: Final = _COUNT_OFFLOAD_LIMITER.get(None)
+    if existing is not None:
+        return existing
+    created: Final = anyio.CapacityLimiter(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    _COUNT_OFFLOAD_LIMITER.set(created)
+    return created
+
+
+def offload_token_count(
+    function: Callable[T_ParamSpec, T_Retval],
+) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
+    async def offloaded(
+        *args: T_ParamSpec.args,
+        **kwargs: T_ParamSpec.kwargs,  # kwargs-ok: ParamSpec keeps the wrapped function's own keyword contract
+    ) -> T_Retval:
+        return await asyncify(function, limiter=_count_offload_limiter_for_this_loop())(*args, **kwargs)
+
+    return offloaded
+
+
+def _get_tiktoken_count_function(
+    encode_length: Callable[[str], int],
+    chunk_size: int = TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        return sum(encode_length(text[start : start + chunk_size]) for start in range(0, len(text), chunk_size))
+
+    return count_tokens
+
 
 class _MessageCountParams:
     """
@@ -318,7 +381,7 @@ class _MessageCountParams:
         from litellm.utils import print_verbose
 
         actual_model: Final = _fix_model_name(model)
-        if actual_model == "gpt-3.5-turbo-0301":
+        if uses_legacy_message_accounting(model):
             self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
         elif actual_model in litellm.open_ai_chat_completion_models or actual_model in litellm.azure_llms:
@@ -335,7 +398,7 @@ def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: list[AllMessageValues | Message] | None = None,
+    messages: Sequence[AllMessageValues | Message] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -402,8 +465,8 @@ def token_counter(
 
 def _count_function_call_tokens(
     key: str,
-    value: Any,
-    message: Mapping[str, Any],
+    value: object,
+    message: Mapping[str, object],
     count_function: TokenCounterFunction,
 ) -> int:
     """
@@ -515,44 +578,88 @@ def _count_extra(
     return num_tokens
 
 
+def _get_extrapolating_count_function(
+    count_exactly: TokenCounterFunction,
+    max_exact_chars: int = TOKEN_COUNTER_MAX_EXACT_CHARS,
+) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        if len(text) <= max_exact_chars:
+            return count_exactly(text)
+        samples: Final = _evenly_spaced_samples(text, max_exact_chars)
+        sampled_chars: Final = sum(len(sample) for sample in samples)
+        return round(sum(count_exactly(sample) for sample in samples) * len(text) / sampled_chars)
+
+    return count_tokens
+
+
+def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
+    sample_count: Final = min(EXTRAPOLATION_SAMPLES, total_chars)
+    sample_chars: Final = total_chars // sample_count
+    last_start: Final = len(text) - sample_chars
+    return tuple(
+        text[start : start + sample_chars]
+        for start in (last_start * index // max(sample_count - 1, 1) for index in range(sample_count))
+    )
+
+
 def _get_count_function(
+    model: str | None,
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+) -> TokenCounterFunction:
+    return _get_extrapolating_count_function(_get_exact_count_function(model, custom_tokenizer))
+
+
+def _get_exact_count_function(
     model: str | None,
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer, print_verbose
+    from litellm.utils import _select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
         tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
+            tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                enc: Final = tokenizer_json["tokenizer"].encode(text)
-                return len(enc.ids)
+                return len(tokenizer.encode_batch_fast([text])[0])
 
+            return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
-            model_to_use: Final = _fix_model_name(model)
-            try:
-                if "gpt-4o" in model_to_use:
-                    encoding = tiktoken.get_encoding("o200k_base")
-                else:
-                    encoding = tiktoken.encoding_for_model(model_to_use)
-            except KeyError:
-                print_verbose("Warning: model not found. Using cl100k_base encoding.")
-                encoding = tiktoken.get_encoding("cl100k_base")
+            encoding: Final = openai_tokenizer_encoding(model)
 
-            def count_tokens(text: str) -> int:
+            def encode_length(text: str) -> int:
                 return len(encoding.encode(text, disallowed_special=()))
 
+            return _get_tiktoken_count_function(encode_length)
         else:
             raise ValueError("Unsupported tokenizer type")
     else:
 
-        def count_tokens(text: str) -> int:
+        def encode_length(text: str) -> int:
             return len(default_encoding.encode(text, disallowed_special=()))
 
-    return count_tokens
+        return _get_tiktoken_count_function(encode_length)
+
+
+def openai_tokenizer_encoding(model: str) -> tiktoken.Encoding:
+    """The tiktoken encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
+    from litellm.utils import print_verbose
+
+    model_to_use: Final = _fix_model_name(model)
+    if "gpt-4o" in model_to_use:
+        return tiktoken.get_encoding("o200k_base")
+    try:
+        return tiktoken.encoding_for_model(model_to_use)
+    except KeyError:
+        print_verbose("Warning: model not found. Using cl100k_base encoding.")
+        return tiktoken.get_encoding("cl100k_base")
+
+
+def uses_legacy_message_accounting(model: str) -> bool:
+    """Whether `token_counter` prices messages with the `gpt-3.5-turbo-0301` constants (4 per message, -1 per name)."""
+    return _fix_model_name(model) == "gpt-3.5-turbo-0301"
 
 
 def _fix_model_name(model: str) -> str:
@@ -567,7 +674,7 @@ def _fix_model_name(model: str) -> str:
 
 
 def _count_image_tokens(
-    image_url: Any,
+    image_url: object,
     use_default_image_token_count: bool,
 ) -> int:
     """
@@ -607,7 +714,7 @@ def _count_image_tokens(
         raise ValueError(f"Invalid image_url type: {type(image_url).__name__}. Expected str or dict with 'url' field.")
 
 
-def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
+def _validate_anthropic_content(content: Mapping[str, object]) -> type:
     """
     Validate and determine which Anthropic TypedDict applies.
 
@@ -622,7 +729,7 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
         "tool_result": AnthropicMessagesToolResultParam,
     }
 
-    expected_cls: Final = mapping.get(content_type)
+    expected_cls: Final = mapping.get(content_type) if isinstance(content_type, str) else None
     if expected_cls is None:
         raise ValueError(f"Unknown Anthropic content type: '{content_type}'")
 
@@ -633,8 +740,68 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     return expected_cls
 
 
+def _anthropic_image_source_data(
+    source: AnthropicContentParamSource | AnthropicContentParamSourceUrl | AnthropicContentParamSourceFileId,
+) -> str:
+    if source["type"] == "base64":
+        data: Final = source.get("data")
+        if not data:
+            return ""
+        media_type: Final = source.get("media_type") or "image/png"
+        return f"data:{media_type};base64,{data}"
+    if source["type"] == "url":
+        return source.get("url") or ""
+    return ""
+
+
+def _count_document_tokens(
+    document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+    default_token_count: int | None,
+) -> int:
+    source: Final = document["source"]
+    metadata_tokens: Final = sum(
+        count_function(text) for text in (document.get("title"), document.get("context")) if text
+    )
+    if source["type"] == "text":
+        return metadata_tokens + count_function(source["data"])
+    if source["type"] == "content":
+        content: Final = source["content"]
+        if isinstance(content, str):
+            return metadata_tokens + count_function(content)
+        return metadata_tokens + _count_content_list(
+            count_function, content, use_default_image_token_count, default_token_count
+        )
+    return metadata_tokens + calculate_img_tokens(
+        data=_anthropic_image_source_data(source),
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
+def _count_file_tokens(
+    file_value: object,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+) -> int:
+    """An OpenAI `file` block is the chat-completions spelling of a document, so it prices like one."""
+    if not isinstance(file_value, Mapping):
+        return 0
+    filename: Final = file_value.get("filename")
+    file_data: Final = file_value.get("file_data")
+    name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
+    if not isinstance(file_data, str) or not file_data:
+        return name_tokens
+    return name_tokens + calculate_img_tokens(
+        data=file_data,
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
 def _count_anthropic_content(
-    content: Mapping[str, Any],
+    content: Mapping[str, object],
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
     default_token_count: int | None,
@@ -649,7 +816,7 @@ def _count_anthropic_content(
     avoiding hardcoded field names.
     """
     typeddict_cls: Final = _validate_anthropic_content(content)
-    type_hints: Final = getattr(typeddict_cls, "__annotations__", {})
+    type_hints: Final[Mapping[str, object]] = getattr(typeddict_cls, "__annotations__", {})
     tokens = 0
 
     # Fields to skip (metadata/identifiers that don't contribute to prompt tokens)
@@ -684,13 +851,17 @@ def _count_anthropic_content(
 
 def _count_content_list(
     count_function: TokenCounterFunction,
-    content_list: OpenAIMessageContent,
+    content_list: str
+    | Iterable[
+        OpenAIMessageContentListBlock
+        | AnthropicMessagesTextParam
+        | AnthropicMessagesImageParam
+        | AnthropicMessagesDocumentParam
+    ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
 ) -> int:
-    """
-    Recursively count tokens from a list of content blocks.
-    """
+    """Recursively count tokens from a list of content blocks."""
     try:
         num_tokens = 0
         for c in content_list:
@@ -701,6 +872,25 @@ def _count_content_list(
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
+            elif c["type"] == "image":
+                num_tokens += calculate_img_tokens(
+                    data=_anthropic_image_source_data(c["source"]),
+                    mode="auto",
+                    use_default_image_token_count=use_default_image_token_count,
+                )
+            elif c["type"] == "document":
+                num_tokens += _count_document_tokens(
+                    c,
+                    count_function,
+                    use_default_image_token_count,
+                    default_token_count,
+                )
+            elif c["type"] == "file":
+                num_tokens += _count_file_tokens(
+                    c.get("file"),
+                    count_function,
+                    use_default_image_token_count,
+                )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -729,7 +919,8 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field "
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:

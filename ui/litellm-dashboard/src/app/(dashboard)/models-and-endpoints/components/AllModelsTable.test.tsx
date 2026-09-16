@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -59,6 +59,7 @@ const baseProps = {
   availableModelAccessGroups: ["sales-team"],
   userRole: "Admin",
   userID: "alice",
+  isViewOnly: false,
   onModelIdClick: vi.fn(),
   onTeamIdClick: vi.fn(),
   onDeleteClick: vi.fn(),
@@ -254,6 +255,17 @@ describe("AllModelsTable", () => {
       expect(onTogglePauseClick).not.toHaveBeenCalled();
     });
 
+    it("does not let a view-only admin toggle a model", async () => {
+      const user = userEvent.setup();
+      const onTogglePauseClick = vi.fn();
+      render(<AllModelsTable {...baseProps} isViewOnly onTogglePauseClick={onTogglePauseClick} />);
+
+      const toggle = screen.getByTestId("model-pause-toggle-model-1");
+      expect(toggle).toHaveAttribute("data-disabled");
+      await user.click(toggle);
+      expect(onTogglePauseClick).not.toHaveBeenCalled();
+    });
+
     it("does not let anyone toggle a config model", async () => {
       const user = userEvent.setup();
       const onTogglePauseClick = vi.fn();
@@ -309,6 +321,17 @@ describe("AllModelsTable", () => {
       expect(onDeleteClick).not.toHaveBeenCalled();
     });
 
+    it("blocks a view-only admin from deleting a DB model they created", async () => {
+      const user = userEvent.setup();
+      const onDeleteClick = vi.fn();
+      render(<AllModelsTable {...baseProps} isViewOnly onDeleteClick={onDeleteClick} />);
+
+      const deleteButton = screen.getByTestId("model-delete-model-1");
+      expect(deleteButton).toBeDisabled();
+      await user.click(deleteButton);
+      expect(onDeleteClick).not.toHaveBeenCalled();
+    });
+
     it("blocks deleting a config model", async () => {
       const user = userEvent.setup();
       const onDeleteClick = vi.fn();
@@ -342,7 +365,7 @@ describe("AllModelsTable", () => {
         />,
       );
 
-      await user.type(screen.getByTestId("datatable-search"), "gpt");
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "gpt" } });
       expect(onSearchChange).toHaveBeenCalled();
 
       await user.click(screen.getByTestId("datatable-refresh"));

@@ -116,9 +116,9 @@ export function GuardrailTestPanel({
                 {guardrailNames.map((name) => (
                   <div
                     key={name}
-                    className="inline-flex items-center space-x-1 rounded-md border border-blue-200 bg-blue-50 px-3 py-1"
+                    className="inline-flex items-center space-x-1 rounded-md border border-info/20 bg-info/10 px-3 py-1"
                   >
-                    <span className="font-mono text-sm font-medium text-blue-700">{name}</span>
+                    <span className="font-mono text-sm font-medium text-info">{name}</span>
                   </div>
                 ))}
               </div>

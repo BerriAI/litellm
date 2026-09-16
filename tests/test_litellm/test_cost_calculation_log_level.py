@@ -1,10 +1,7 @@
 """Test that cost calculation uses appropriate log levels"""
 
 import logging
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm import completion_cost

@@ -9,7 +9,9 @@ import {
   setLocalStorageItem,
 } from "@/utils/localStorageUtils";
 import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
-import { ChevronDown, ChevronsUpDown, Crown, LogOut, Mail, ShieldCheck, User } from "lucide-react";
+import { uiHref } from "@/utils/uiHref";
+import { ChevronDown, ChevronsUpDown, Crown, KeyRound, LogOut, Mail, ShieldCheck, User } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -63,7 +65,9 @@ interface UserDropdownProps {
 }
 
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar", collapsed = false }) => {
-  const { userId, userEmail, userRoleLabel: userRole, premiumUser } = useAuthorized();
+  const { userId, userEmail, userRoleLabel: userRole, premiumUser, loginMethod } = useAuthorized();
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -197,7 +201,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   const displayName = navAccountDisplayName(userEmail, userId);
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       {variant === "sidebar" ? (
         <PopoverTrigger
           render={
@@ -233,7 +237,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
           render={
             <button
               type="button"
-              className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-gray-100!"
+              className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-accent!"
               aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
               aria-haspopup="dialog"
             />
@@ -244,20 +248,33 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
               {initials}
             </AvatarFallback>
           </Avatar>
-          <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
+          <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-foreground md:inline">
             {displayName}
           </span>
-          <ChevronDown className="hidden size-2.5 shrink-0 text-gray-400 md:inline" aria-hidden />
+          <ChevronDown className="hidden size-2.5 shrink-0 text-muted-foreground md:inline" aria-hidden />
         </PopoverTrigger>
       )}
       <PopoverContent
         align={variant === "sidebar" ? "start" : "end"}
         side={variant === "sidebar" ? "top" : "bottom"}
-        className="w-auto gap-0 rounded-lg bg-white p-1 shadow-lg"
+        className="w-auto gap-0 rounded-lg bg-card p-1 shadow-lg"
         data-testid="user-dropdown-panel"
       >
         {renderUserInfoSection()}
         <Separator />
+        {loginMethod === "username_password" && (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              router.push(uiHref("change-password"));
+            }}
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+          >
+            <KeyRound className="size-4" />
+            Change Password
+          </button>
+        )}
         <button
           type="button"
           onClick={onLogout}

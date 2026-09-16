@@ -1,7 +1,8 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Modal, Space } from "antd";
-import { CircleHelp } from "lucide-react";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Check, CircleHelp, Copy, RefreshCw, TriangleAlert } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -9,7 +10,7 @@ import { z } from "zod/v4";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { toast } from "@/lib/toast";
 import { regenerateKeyCall } from "../networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -106,7 +107,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       // formatted preview, otherwise downstream expiry parsing breaks.
       const updatedKeyData: Partial<KeyResponse> = {
         ...response,
-        token: response.token || response.key_id || selectedToken.token,
+        token: response.token_id || response.token || selectedToken.token,
         key_name: response.key,
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,
@@ -147,133 +148,137 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   };
 
   return (
-    <Modal
-      title="Regenerate Virtual Key"
-      open={visible}
-      onCancel={handleClose}
-      width={520}
-      maskClosable={false}
-      footer={
-        regeneratedKey
-          ? [
-              <Space key="footer-actions">
-                <Button onClick={handleClose}>Close</Button>
-                <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
-                  <Button type="primary" icon={copied ? <CheckOutlined /> : <CopyOutlined />}>
-                    {copied ? "Copied" : "Copy Key"}
-                  </Button>
-                </CopyToClipboard>
-              </Space>,
-            ]
-          : [
-              <Space key="footer-actions">
-                <Button onClick={handleClose}>Cancel</Button>
-                <Button type="primary" icon={<SyncOutlined />} onClick={handleRegenerateKey} loading={isRegenerating}>
-                  Regenerate
-                </Button>
-              </Space>,
-            ]
-      }
-    >
-      {regeneratedKey ? (
-        <div className="flex flex-col gap-4">
-          <Alert type="warning" showIcon message="Save it now, you will not see it again" />
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>Regenerate Virtual Key</DialogTitle>
+        </DialogHeader>
+        {regeneratedKey ? (
+          <div className="flex flex-col gap-4">
+            <Alert variant="warning">
+              <TriangleAlert />
+              <AlertTitle>Save it now, you will not see it again</AlertTitle>
+            </Alert>
 
-          <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-muted-foreground">Key Alias</span>
-            <span className="text-sm text-foreground">{selectedToken?.key_alias || "No alias set"}</span>
-          </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs text-muted-foreground">Key Alias</span>
+              <span className="text-sm text-foreground">{selectedToken?.key_alias || "No alias set"}</span>
+            </div>
 
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs text-muted-foreground">Virtual Key</span>
-            <div className="rounded-md border border-border bg-muted px-4 py-3.5 font-mono text-base break-all text-foreground">
-              {regeneratedKey}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs text-muted-foreground">Virtual Key</span>
+              <div className="rounded-md border border-border bg-muted px-4 py-3.5 font-mono text-base break-all text-foreground">
+                {regeneratedKey}
+              </div>
             </div>
           </div>
-        </div>
-      ) : (
-        <TooltipProvider>
-          <form onSubmit={(event) => event.preventDefault()} noValidate className="mt-1">
-            <FieldGroup>
-              <FormField control={form.control} name="key_alias" label="Key Alias">
-                {({ ref, value, ...field }) => <Input {...field} ref={ref} value={value ?? ""} disabled />}
-              </FormField>
-
-              <div className="grid grid-cols-3 gap-3">
-                <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-                  {({ ref, value, onChange, ...field }) => (
-                    <Input
-                      {...field}
-                      ref={ref}
-                      type="number"
-                      step={0.01}
-                      value={value ?? ""}
-                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
-                    />
-                  )}
+        ) : (
+          <TooltipProvider>
+            <form onSubmit={(event) => event.preventDefault()} noValidate className="mt-1">
+              <FieldGroup>
+                <FormField control={form.control} name="key_alias" label="Key Alias">
+                  {({ ref, value, ...field }) => <Input {...field} ref={ref} value={value ?? ""} disabled />}
                 </FormField>
 
-                <FormField control={form.control} name="tpm_limit" label="TPM Limit">
-                  {({ ref, value, onChange, ...field }) => (
-                    <Input
-                      {...field}
-                      ref={ref}
-                      type="number"
-                      value={value ?? ""}
-                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
-                    />
-                  )}
-                </FormField>
+                <div className="grid grid-cols-3 gap-3">
+                  <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
+                    {({ ref, value, onChange, ...field }) => (
+                      <Input
+                        {...field}
+                        ref={ref}
+                        type="number"
+                        step={0.01}
+                        value={value ?? ""}
+                        onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                      />
+                    )}
+                  </FormField>
 
-                <FormField control={form.control} name="rpm_limit" label="RPM Limit">
-                  {({ ref, value, onChange, ...field }) => (
-                    <Input
-                      {...field}
-                      ref={ref}
-                      type="number"
-                      value={value ?? ""}
-                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
-                    />
-                  )}
-                </FormField>
-              </div>
+                  <FormField control={form.control} name="tpm_limit" label="TPM Limit">
+                    {({ ref, value, onChange, ...field }) => (
+                      <Input
+                        {...field}
+                        ref={ref}
+                        type="number"
+                        value={value ?? ""}
+                        onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                      />
+                    )}
+                  </FormField>
 
-              <div className="grid grid-cols-2 gap-3">
-                <FormField
-                  control={form.control}
-                  name="duration"
-                  label="Expire Key"
-                  description={
-                    <span className="flex flex-col gap-0.5 text-xs">
-                      <span className={keyIsExpired ? "text-destructive" : "text-muted-foreground"}>
-                        Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
-                        {keyIsExpired && " (expired)"}
+                  <FormField control={form.control} name="rpm_limit" label="RPM Limit">
+                    {({ ref, value, onChange, ...field }) => (
+                      <Input
+                        {...field}
+                        ref={ref}
+                        type="number"
+                        value={value ?? ""}
+                        onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                      />
+                    )}
+                  </FormField>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField
+                    control={form.control}
+                    name="duration"
+                    label="Expire Key"
+                    description={
+                      <span className="flex flex-col gap-0.5 text-xs">
+                        <span className={keyIsExpired ? "text-destructive" : "text-muted-foreground"}>
+                          Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
+                          {keyIsExpired && " (expired)"}
+                        </span>
+                        {newExpiryTime && <span className="text-success">New expiry: {newExpiryTime}</span>}
                       </span>
-                      {newExpiryTime && (
-                        <span className="text-green-600 dark:text-green-400">New expiry: {newExpiryTime}</span>
-                      )}
-                    </span>
-                  }
-                >
-                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. 30s, 30h, 30d" />}
-                </FormField>
+                    }
+                  >
+                    {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. 30s, 30h, 30d" />}
+                  </FormField>
 
-                <FormField
-                  control={form.control}
-                  name="grace_period"
-                  label={labelWithHint(
-                    "Grace Period",
-                    "Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke.",
-                  )}
-                  description={<span className="text-xs">Recommended: 24h to 72h for production keys</span>}
-                >
-                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. 24h, 2d" />}
-                </FormField>
-              </div>
-            </FieldGroup>
-          </form>
-        </TooltipProvider>
-      )}
-    </Modal>
+                  <FormField
+                    control={form.control}
+                    name="grace_period"
+                    label={labelWithHint(
+                      "Grace Period",
+                      "Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke.",
+                    )}
+                    description={<span className="text-xs">Recommended: 24h to 72h for production keys</span>}
+                  >
+                    {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. 24h, 2d" />}
+                  </FormField>
+                </div>
+              </FieldGroup>
+            </form>
+          </TooltipProvider>
+        )}
+        <DialogFooter>
+          {regeneratedKey ? (
+            <>
+              <Button variant="outline" onClick={handleClose}>
+                Close
+              </Button>
+              <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
+                <Button>
+                  {copied ? <Check /> : <Copy />}
+                  {copied ? "Copied" : "Copy Key"}
+                </Button>
+              </CopyToClipboard>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button onClick={handleRegenerateKey} disabled={isRegenerating} aria-busy={isRegenerating}>
+                <RefreshCw />
+                Regenerate
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
