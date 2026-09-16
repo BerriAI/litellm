@@ -14668,8 +14668,21 @@ _EXISTING_TEAM_MODEL_CAPS: Final = {
         {"claude-sonnet-4-6": _EXISTING_TEAM_MODEL_CAPS["claude-sonnet-4-6"]},
         {},
         None,
+        {**_EXISTING_TEAM_MODEL_CAPS, "openai/gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        {**_EXISTING_TEAM_MODEL_CAPS, "openai/gpt-4o": {"max_budget": 10.0, "budget_duration": "30d"}},
+        {**_EXISTING_TEAM_MODEL_CAPS, "anthropic/claude-sonnet-4-6": {"budget_duration": "7d"}},
     ],
-    ids=["raise", "change_duration", "drop_cap_value", "remove_model", "clear_all", "clear_with_null"],
+    ids=[
+        "raise",
+        "change_duration",
+        "drop_cap_value",
+        "remove_model",
+        "clear_all",
+        "clear_with_null",
+        "raise_via_provider_alias",
+        "rewindow_via_provider_alias",
+        "uncap_via_provider_alias",
+    ],
 )
 def test_team_admin_cannot_loosen_team_model_caps(requested) -> None:
     from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
@@ -14690,8 +14703,9 @@ def test_team_admin_cannot_loosen_team_model_caps(requested) -> None:
         {**_EXISTING_TEAM_MODEL_CAPS, "gpt-4o": {"max_budget": 2.0, "budget_duration": "1d"}},
         {**_EXISTING_TEAM_MODEL_CAPS, "gpt-4o-mini": {"max_budget": 1.0, "budget_duration": "1d"}},
         dict(_EXISTING_TEAM_MODEL_CAPS),
+        {**_EXISTING_TEAM_MODEL_CAPS, "openai/gpt-4o": {"max_budget": 2.0, "budget_duration": "1d"}},
     ],
-    ids=["lower", "add_model", "unchanged"],
+    ids=["lower", "add_model", "unchanged", "tighten_via_provider_alias"],
 )
 def test_team_admin_can_tighten_or_keep_team_model_caps(requested) -> None:
     from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority

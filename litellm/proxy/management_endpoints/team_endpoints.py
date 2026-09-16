@@ -96,7 +96,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    build_model_max_budget_usage,
+    resolve_model_budget,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
@@ -1194,31 +1197,37 @@ def _check_team_model_budget_update_authority(
     requested: Final[Mapping[str, BudgetConfig]] = data.model_max_budget or {}
     for model_name, raw_existing in existing_model_max_budget.items():
         existing = _existing_model_cap(raw_existing)
-        if existing is None or existing.max_budget is None:
+        if existing is None or existing.max_budget is None or model_name in requested:
             continue
-        proposed = requested.get(model_name)
-        if proposed is None:
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": (
-                        f"Only a proxy admin can remove a team's model_max_budget for {model_name!r}. "
-                        f"Current max_budget={existing.max_budget}."
-                    )
-                },
-            )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    f"Only a proxy admin can remove a team's model_max_budget for {model_name!r}. "
+                    f"Current max_budget={existing.max_budget}."
+                )
+            },
+        )
+    for model_name, proposed in requested.items():
+        governing = resolve_model_budget(model=model_name, model_max_budget=existing_model_max_budget)
+        if governing is None:
+            continue
+        cap = governing.budget_config
+        if cap.max_budget is None:
+            continue
         if (
             proposed.max_budget is None
-            or proposed.max_budget > existing.max_budget
-            or proposed.budget_duration != existing.budget_duration
+            or proposed.max_budget > cap.max_budget
+            or proposed.budget_duration != cap.budget_duration
         ):
             raise HTTPException(
                 status_code=403,
                 detail={
                     "error": (
                         f"Only a proxy admin can raise a team's model_max_budget for {model_name!r} or change its "
-                        f"budget_duration. Current max_budget={existing.max_budget} per {existing.budget_duration}, "
-                        f"requested={proposed.max_budget} per {proposed.budget_duration}."
+                        f"budget_duration. Current max_budget={cap.max_budget} per {cap.budget_duration} "
+                        f"(entry {governing.budget_model!r}), requested={proposed.max_budget} per "
+                        f"{proposed.budget_duration}."
                     )
                 },
             )
