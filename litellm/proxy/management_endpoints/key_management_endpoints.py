@@ -1574,6 +1574,28 @@ def _maybe_add_key_team_limit_warnings(
     )  # mutable-ok: GenerateKeyResponse/tests expect list warnings
 
 
+async def _soft_resolve_existing_key_team_for_warnings(
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> LiteLLM_TeamTableCachedObj | None:
+    """Resolve the existing key's team for warning payloads only; ignore missing teams."""
+    team_id = getattr(existing_key_row, "team_id", None)
+    if team_id is None or prisma_client is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+    except HTTPException as e:
+        if e.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+        return None
+
+
 async def _check_team_key_limits(
     team_table: LiteLLM_TeamTableCachedObj,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -2622,8 +2644,8 @@ async def _process_single_key_update(
     _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
 
     # Get team object and check team limits if team_id is provided on the request.
-    # Existing-key team is soft-resolved below for warnings only — a missing team
-    # must not block an otherwise valid update (custom key policy runs later).
+    # Existing-key team is soft-resolved for warnings only — a missing team must not
+    # block an otherwise valid update (custom key policy runs later).
     team_obj: LiteLLM_TeamTableCachedObj | None = None
     if update_key_request.team_id is not None:
         team_obj = await get_team_object(
@@ -2639,18 +2661,12 @@ async def _process_single_key_update(
                 data=update_key_request,
                 prisma_client=prisma_client,
             )
-    elif getattr(existing_key_row, "team_id", None) is not None and prisma_client is not None:
-        try:
-            team_obj = await get_team_object(
-                team_id=existing_key_row.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                check_db_only=True,
-            )
-        except HTTPException as e:
-            if e.status_code != status.HTTP_404_NOT_FOUND:
-                raise
-            team_obj = None
+    else:
+        team_obj = await _soft_resolve_existing_key_team_for_warnings(
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     # Validate team change if team is being changed
     if is_different_team(data=update_key_request, existing_key_row=existing_key_row):
