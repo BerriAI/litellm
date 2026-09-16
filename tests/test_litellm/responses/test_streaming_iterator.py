@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+from pydantic_core import PydanticSerializationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -887,10 +888,11 @@ async def test_completed_event_with_a_dict_response_is_typed_and_billed():
         request_data={"input": "count these input tokens please"},
     )
 
-    async for _ in iterator:
-        pass
+    yielded: Final = [chunk async for chunk in iterator]
 
-    completed_response: Final = iterator.completed_response.response
+    terminal_event: Final = iterator.completed_response
+    assert yielded[-1] is terminal_event
+    completed_response: Final = terminal_event.response
     assert isinstance(completed_response, ResponsesAPIResponse)
     usage: Final = completed_response.usage
     assert usage is not None
@@ -898,3 +900,45 @@ async def test_completed_event_with_a_dict_response_is_typed_and_billed():
     assert usage.output_tokens > 0
     assert usage.cost == pytest.approx(0.000704)
     logging_obj._response_cost_calculator.assert_any_call(result=completed_response)
+
+
+def test_billed_terminal_response_keeps_a_response_that_already_has_usage():
+    from litellm.responses.streaming_iterator import _billed_terminal_response
+
+    response: Final = _responses_api_response_with_usage()
+
+    assert _billed_terminal_response(response, None) is response
+
+
+def test_billed_terminal_response_copies_when_estimating_and_leaves_the_original_untouched():
+    from litellm.responses.streaming_iterator import _billed_terminal_response
+
+    response: Final = _responses_api_response_without_usage()
+    estimated: Final = ResponseAPIUsage(input_tokens=3, output_tokens=4, total_tokens=7)
+
+    billed: Final = _billed_terminal_response(response, lambda: estimated)
+
+    assert billed is not response
+    assert billed.usage is estimated
+    assert response.usage is None
+
+
+def test_persist_completed_response_to_cache_survives_an_unserializable_response(monkeypatch):
+    bad_response: Final = ResponsesAPIResponse.model_construct(id="r", output=[object()], usage=None)
+    with pytest.raises(PydanticSerializationError):
+        bad_response.model_dump_json()
+
+    logging_obj: Final = _logging_obj_stub()
+    caching_handler: Final = Mock()
+    caching_handler.request_kwargs = {"stream": True}
+    logging_obj._llm_caching_handler = caching_handler
+    iterator: Final = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    iterator.completed_response = ResponseCompletedEvent.model_construct(
+        type="response.completed", response=bad_response
+    )
+    cache: Final = Mock()
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    iterator._persist_completed_response_to_cache(is_async=False)
+
+    cache.add_cache.assert_not_called()

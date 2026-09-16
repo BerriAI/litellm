@@ -427,38 +427,44 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
-                    self.completed_response = openai_responses_api_chunk
                     _response_obj: Final[object] = getattr(openai_responses_api_chunk, "response", None)
-                    _typed_response: Final[ResponsesAPIResponse | None] = (
-                        ResponsesAPIResponse.model_construct(**_response_obj)  # pyright: ignore[reportUnknownArgumentType]  # the model_constructed terminal event leaves response as an untyped dict
-                        if isinstance(_response_obj, dict)
-                        else _response_obj
-                        if isinstance(_response_obj, ResponsesAPIResponse)
-                        else None
+                    _estimate_wanted: Final[bool] = _chunk_type in (
+                        openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                        openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     )
-                    if (
-                        _typed_response is not None
-                        and _chunk_type
-                        in (
-                            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    _billed_response: Final[ResponsesAPIResponse | None] = _billed_terminal_response(
+                        _response_obj,
+                        (
+                            lambda: (
+                                _estimate_usage_safely(
+                                    self.model or "",
+                                    self.request_data.get("input"),
+                                    self.request_data,
+                                    self._generated_content + self._generated_tool_arguments,
+                                )
+                                if _estimate_wanted
+                                else None
+                            )
+                        ),
+                    )
+                    _terminal_chunk: Final = (
+                        openai_responses_api_chunk
+                        if _billed_response is None or _billed_response is _response_obj
+                        else (
+                            openai_responses_api_chunk.model_copy(update={"response": _billed_response})
+                            if issubclass(type(openai_responses_api_chunk), BaseModel)  # pyright: ignore[reportUnnecessaryIsInstance]  # test stubs use spec'd Mocks whose __class__ reports BaseModel but whose model_copy returns a Mock
+                            else _replace_response(openai_responses_api_chunk, _billed_response)
                         )
-                        and _typed_response.usage is None
-                    ):
-                        _typed_response.usage = _estimate_usage_safely(
-                            self.model or "",
-                            self.request_data.get("input"),
-                            self.request_data,
-                            self._generated_content + self._generated_tool_arguments,
-                        )
-                    if _typed_response is not None and _typed_response is not _response_obj:
-                        openai_responses_api_chunk.response = _typed_response  # pyright: ignore[reportAttributeAccessIssue]  # reached only on the dict path, which only response-carrying terminal events produce
-                    _stamp_responses_usage_cost(_typed_response, self.logging_obj)
+                    )
+                    self.completed_response = _terminal_chunk
+                    _stamp_responses_usage_cost(_billed_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
                     else:
                         self._handle_logging_completed_response()
+
+                    return _terminal_chunk
 
                 return openai_responses_api_chunk
 
@@ -688,7 +694,9 @@ class BaseResponsesAPIStreamingIterator:
         if cache is None:
             return
 
-        cached_response: Final = response_obj.model_dump_json()
+        cached_response: Final = _dump_json_safely(response_obj)
+        if cached_response is None:
+            return
         if is_async:
             from litellm.caching.caching_handler import create_cache_write_task
 
@@ -1332,6 +1340,38 @@ def _add_text_like_part_events(
                 refusal=refusal,
             )
         )
+
+
+def _billed_terminal_response(
+    response_obj: object, estimate: Callable[[], ResponseAPIUsage | None] | None
+) -> ResponsesAPIResponse | None:
+    if isinstance(response_obj, ResponsesAPIResponse):
+        return (
+            response_obj
+            if response_obj.usage is not None or estimate is None
+            else response_obj.model_copy(update={"usage": estimate()})
+        )
+    if not isinstance(response_obj, dict):
+        return None
+    usage: Final[object] = response_obj.get("usage")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a model_constructed terminal event leaves response as an untyped dict
+    return ResponsesAPIResponse.model_construct(
+        **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # same untyped dict spread
+    )
+
+
+def _replace_response(
+    event: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse
+) -> ResponsesAPIStreamingResponse:
+    setattr(event, "response", response)
+    return event
+
+
+def _dump_json_safely(response: BaseModel) -> str | None:
+    try:
+        return response.model_dump_json()
+    except Exception as exc:
+        verbose_logger.debug("could not serialize completed response for cache: %s", exc)
+        return None
 
 
 def _logging_copy(event: object) -> object:
