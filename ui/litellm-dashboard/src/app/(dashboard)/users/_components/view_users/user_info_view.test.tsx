@@ -1,6 +1,13 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import {
+  render as renderBare,
+  renderWithProviders as render,
+  screen,
+  waitFor,
+  within,
+} from "../../../../../../tests/test-utils";
 import UserInfoView from "./user_info_view";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
@@ -290,6 +297,113 @@ describe("UserInfoView", () => {
     await user.click(screen.getByRole("tab", { name: "Details" }));
 
     expect(screen.getByText("list_issues")).toBeVisible();
+  });
+
+  describe("detail tab and edit mode in the URL", () => {
+    const lastParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+    it("opens on the Details tab named by ?user_tab=", async () => {
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" />, {
+        searchParams: "?user=user-123&user_tab=details",
+      });
+
+      expect(await screen.findByRole("tab", { name: "Details" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("User Settings")).toBeVisible();
+      expect(screen.queryByText("Save Changes")).not.toBeInTheDocument();
+    });
+
+    it("writes the chosen tab to the URL and drops it again for the overview default", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" />, {
+        searchParams: "?user=user-123",
+        onUrlUpdate,
+      });
+
+      await user.click(await screen.findByRole("tab", { name: "Details" }));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.get("user_tab")).toBe("details"));
+      expect(lastParams(onUrlUpdate)?.get("user")).toBe("user-123");
+      expect(screen.getByText("User Settings")).toBeVisible();
+
+      await user.click(screen.getByRole("tab", { name: "Overview" }));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("user_tab")).toBe(false));
+      expect(screen.getByText("User Settings")).not.toBeVisible();
+    });
+
+    it("falls back to Overview for an unknown ?user_tab= and removes it from the URL", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderBare(
+        <NuqsTestingAdapter
+          searchParams="?user=user-123&user_tab=keys"
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <UserInfoView {...defaultProps} userRole="proxy_admin" />
+        </NuqsTestingAdapter>,
+      );
+
+      expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastParams(onUrlUpdate)?.has("user_tab")).toBe(false);
+      expect(lastParams(onUrlUpdate)?.get("user")).toBe("user-123");
+    });
+
+    it("opens the settings editor when the URL asks for edit mode", async () => {
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" />, {
+        searchParams: "?user=user-123&user_tab=details&edit=true",
+      });
+
+      expect(await screen.findByText("Save Changes")).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
+    });
+
+    it("keeps a role without write access out of the editor even when the URL asks for it", async () => {
+      render(<UserInfoView {...defaultProps} userRole="Admin Viewer" />, {
+        searchParams: "?user=user-123&user_tab=details&edit=true",
+      });
+
+      expect(await screen.findByText("User Settings")).toBeVisible();
+      expect(screen.queryByText("Save Changes")).not.toBeInTheDocument();
+    });
+
+    it("records edit mode in the URL and clears it on cancel", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" />, {
+        searchParams: "?user=user-123&user_tab=details",
+        onUrlUpdate,
+      });
+
+      await user.click(await screen.findByRole("button", { name: "Edit Settings" }));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.get("edit")).toBe("true"));
+      expect(screen.getByText("Save Changes")).toBeVisible();
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("edit")).toBe(false));
+      expect(screen.queryByText("Save Changes")).not.toBeInTheDocument();
+      expect(lastParams(onUrlUpdate)?.get("user_tab")).toBe("details");
+    });
+
+    it("leaves edit mode and clears it from the URL once a save succeeds", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" />, {
+        searchParams: "?user=user-123&user_tab=details&edit=true",
+        onUrlUpdate,
+      });
+
+      await user.click(await screen.findByText("Save Changes"));
+
+      await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("edit")).toBe(false));
+      expect(await screen.findByRole("button", { name: "Edit Settings" })).toBeVisible();
+    });
   });
 
   describe("MCP permissions", () => {

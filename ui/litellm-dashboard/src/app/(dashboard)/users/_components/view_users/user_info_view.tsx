@@ -44,6 +44,7 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useUserDetailUrlState } from "./useUserDetailUrlState";
 
 interface UserInfoViewProps {
   userId: string;
@@ -91,12 +92,15 @@ export default function UserInfoView({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(startInEditMode);
+  const { tab, setTab, isEditing, setIsEditing } = useUserDetailUrlState({
+    userRole,
+    defaultTab: initialTab === 1 ? "details" : "overview",
+    defaultEditing: startInEditMode,
+  });
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
   const [isAddTeamModalOpen, setIsAddTeamModalOpen] = useState(false);
@@ -467,7 +471,7 @@ export default function UserInfoView({
         confirmLoading={isDeletingUser}
       />
 
-      <Tabs value={activeTab} onValueChange={(v: unknown) => setActiveTab(String(v))} className="gap-0">
+      <Tabs value={tab} onValueChange={setTab} className="gap-0">
         <TabsList variant="line" className="mb-4">
           <TabsTrigger value="overview" className="flex-none data-active:text-primary after:bg-primary">
             Overview

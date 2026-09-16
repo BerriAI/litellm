@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,8 +33,15 @@ vi.mock("@/components/networking", () => ({
 
 // The detail view has its own test; stub it so this file covers the parent's swap.
 vi.mock("./view_users/user_info_view", () => ({
-  default: function UserInfoViewMock({ userId, startInEditMode }: { userId: string; startInEditMode?: boolean }) {
-    return <div data-testid="user-info-view">{`detail:${userId}:${String(Boolean(startInEditMode))}`}</div>;
+  default: function UserInfoViewMock({ userId, onClose }: { userId: string; onClose: () => void }) {
+    return (
+      <div data-testid="user-info-view">
+        {`detail:${userId}`}
+        <button type="button" onClick={onClose}>
+          Back to Users
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -66,6 +74,14 @@ const makeUser = (userId: string, email: string) => ({
   budget_duration: null,
 });
 
+const manyUsers = {
+  users: [makeUser("user-1", "test@example.com")],
+  total: 500,
+  page: 1,
+  page_size: 25,
+  total_pages: 20,
+};
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -84,12 +100,36 @@ const defaultProps = {
   teams: [],
 };
 
-const renderDashboard = (overrides: Partial<typeof defaultProps> = {}) =>
-  renderWithProviders(
-    <QueryClientProvider client={createQueryClient()}>
-      <ViewUserDashboard {...defaultProps} {...overrides} />
-    </QueryClientProvider>,
+interface UrlOptions {
+  searchParams?: string;
+  onUrlUpdate?: OnUrlUpdateFunction;
+}
+
+const dashboard = (overrides: Partial<typeof defaultProps>) => (
+  <QueryClientProvider client={createQueryClient()}>
+    <ViewUserDashboard {...defaultProps} {...overrides} />
+  </QueryClientProvider>
+);
+
+const renderDashboard = (overrides: Partial<typeof defaultProps> = {}, urlOptions: UrlOptions = {}) =>
+  renderWithProviders(dashboard(overrides), urlOptions);
+
+const renderDashboardKeepingMountWrites = (overrides: Partial<typeof defaultProps>, urlOptions: UrlOptions) =>
+  render(
+    <NuqsTestingAdapter
+      searchParams={urlOptions.searchParams}
+      onUrlUpdate={urlOptions.onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      {dashboard(overrides)}
+    </NuqsTestingAdapter>,
   );
+
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+const lastUserListArgs = (): unknown[] => userListCall.mock.lastCall ?? [];
 
 describe("ViewUserDashboard", () => {
   beforeEach(() => {
@@ -193,32 +233,72 @@ describe("ViewUserDashboard", () => {
     expect(screen.getAllByText("user-1").length).toBeGreaterThan(0);
   });
 
-  it("should swap to the detail view when the identity cell is clicked", async () => {
-    const user = userEvent.setup();
-    renderDashboard();
+  describe("user detail in the URL", () => {
+    it("swaps to the detail view and pushes only the user when the identity cell is clicked", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { searchParams: "?user_tab=details&edit=true", onUrlUpdate });
 
-    await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /user-1/ }));
+
+      expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1");
+      expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+      expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      const [update] = onUrlUpdate.mock.calls[0];
+      expect(update.searchParams.get("user")).toBe("user-1");
+      expect(update.searchParams.has("user_tab")).toBe(false);
+      expect(update.searchParams.has("edit")).toBe(false);
+      expect(update.options.history).toBe("push");
     });
 
-    await user.click(screen.getByRole("button", { name: /user-1/ }));
+    it("opens the Details tab in edit mode with one URL write from the row actions menu", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { onUrlUpdate });
 
-    expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:false");
-    expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
-  });
+      await waitFor(() => {
+        expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      });
 
-  it("should open the detail view in edit mode from the row actions menu", async () => {
-    const user = userEvent.setup();
-    renderDashboard();
+      await user.click(screen.getByTestId("user-actions-user-1"));
+      await user.click(await screen.findByTestId("user-action-edit"));
 
-    await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1");
+      expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      const [update] = onUrlUpdate.mock.calls[0];
+      expect(update.searchParams.get("user")).toBe("user-1");
+      expect(update.searchParams.get("user_tab")).toBe("details");
+      expect(update.searchParams.get("edit")).toBe("true");
+      expect(update.options.history).toBe("push");
     });
 
-    await user.click(screen.getByTestId("user-actions-user-1"));
-    await user.click(await screen.findByTestId("user-action-edit"));
+    it("opens the detail view for a ?user= deep link", async () => {
+      renderDashboard({}, { searchParams: "?user=user-9" });
 
-    expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:true");
+      expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-9");
+      expect(screen.queryByTestId("datatable-search")).not.toBeInTheDocument();
+    });
+
+    it("drops the user, detail tab and edit flag in one pushed entry when the detail view closes", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { searchParams: "?user=user-9&user_tab=details&edit=true&filter_team=t-1", onUrlUpdate });
+
+      await user.click(await screen.findByRole("button", { name: "Back to Users" }));
+
+      expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+      expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      const [update] = onUrlUpdate.mock.calls[0];
+      expect(update.searchParams.has("user")).toBe(false);
+      expect(update.searchParams.has("user_tab")).toBe(false);
+      expect(update.searchParams.has("edit")).toBe(false);
+      expect(update.searchParams.get("filter_team")).toBe("t-1");
+      expect(update.options.history).toBe("push");
+    });
   });
 
   describe("bulk edit selection", () => {
@@ -269,6 +349,45 @@ describe("ViewUserDashboard", () => {
 
       await user.click(screen.getByTestId("datatable-select-all"));
       expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (2 selected)");
+    });
+
+    it("clears the selection when the sort changes", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      await user.click(screen.getByTestId("datatable-select-row-user-1"));
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
+
+      await user.click(screen.getByTestId("sort-header-user_email"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (0 selected)");
+      });
+    });
+
+    it("clears the selection when the page changes", async () => {
+      userListCall.mockResolvedValue({ ...manyUsers, users: [makeUser("user-1", "ada@example.com")] });
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      await user.click(screen.getByTestId("datatable-select-row-user-1"));
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
+
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (0 selected)");
+      });
     });
 
     it("clears the selection when selection mode is cancelled", async () => {
@@ -325,7 +444,6 @@ describe("ViewUserDashboard", () => {
     });
 
     it("sends the toolbar search as the combined search param instead of user_email", async () => {
-      const user = userEvent.setup();
       renderDashboard();
 
       await waitFor(() => {
@@ -333,7 +451,7 @@ describe("ViewUserDashboard", () => {
       });
 
       const searchedUserId = "a6f5c02b-0163-45ce-815f-f88d10e95686";
-      await user.type(screen.getByPlaceholderText("Search by email or ID…"), searchedUserId);
+      fireEvent.change(screen.getByPlaceholderText("Search by email or ID…"), { target: { value: searchedUserId } });
 
       await waitFor(() => {
         const latest = userListCall.mock.calls[userListCall.mock.calls.length - 1];
@@ -354,6 +472,174 @@ describe("ViewUserDashboard", () => {
 
       expect(await screen.findByText("Loading users…")).toBeInTheDocument();
       expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("table state in the URL", () => {
+    it("reads search, sort, page, page size and every filter from the URL into the user list request", async () => {
+      userListCall.mockResolvedValue(manyUsers);
+      renderDashboard(
+        {},
+        {
+          searchParams:
+            "?user_search=ada&sort_by=spend&sort_order=asc&page=3&page_size=50" +
+            "&filter_user_id=u-1&filter_sso_id=sso-1&filter_role=User&filter_team=team-1",
+        },
+      );
+
+      await waitFor(() => expect(userListCall).toHaveBeenCalled());
+      expect(lastUserListArgs()).toEqual([
+        "test-token",
+        ["u-1"],
+        3,
+        50,
+        null,
+        "User",
+        "team-1",
+        "sso-1",
+        "spend",
+        "asc",
+        null,
+        "ada",
+      ]);
+      expect(screen.getByPlaceholderText("Search by email or ID…")).toHaveValue("ada");
+      expect(screen.getByTestId("filter-chip-user_role")).toHaveTextContent("User");
+      expect(screen.getByTestId("filter-chip-sso_user_id")).toHaveTextContent("sso-1");
+      expect(await screen.findByTestId("pagination-page")).toHaveTextContent("Page 3 of 10");
+    });
+
+    it("falls back to created_at for a sort_by that is not a sortable column", async () => {
+      renderDashboard({}, { searchParams: "?sort_by=user_alias&sort_order=asc" });
+
+      await waitFor(() => expect(userListCall).toHaveBeenCalled());
+      expect(lastUserListArgs()[8]).toBe("created_at");
+      expect(lastUserListArgs()[9]).toBe("asc");
+    });
+
+    it("sends every sortable column header's id as the requested sort", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+      await screen.findByText("test@example.com");
+
+      const sortableIds = screen
+        .getAllByTestId(/^sort-header-/)
+        .map((header) => header.getAttribute("data-testid")?.replace("sort-header-", "") ?? "")
+        .filter((columnId) => columnId !== "created_at");
+      expect(sortableIds).toContain("user_email");
+
+      for (const columnId of sortableIds) {
+        await user.click(screen.getByTestId(`sort-header-${columnId}`));
+        await waitFor(() => expect(lastUserListArgs()[8]).toBe(columnId));
+      }
+    });
+
+    it("writes the sort to the URL and goes back to the first page", async () => {
+      userListCall.mockResolvedValue(manyUsers);
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { searchParams: "?page=2", onUrlUpdate });
+      await screen.findByText("test@example.com");
+
+      await user.click(screen.getByTestId("sort-header-user_email"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("sort_by")).toBe("user_email"));
+      expect(lastUrl(onUrlUpdate)?.get("sort_order")).toBe("asc");
+      expect(lastUrl(onUrlUpdate)?.has("page")).toBe(false);
+    });
+
+    it("writes the search box to user_search and goes back to the first page", async () => {
+      userListCall.mockResolvedValue(manyUsers);
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { searchParams: "?page=2", onUrlUpdate });
+      await screen.findByText("test@example.com");
+
+      fireEvent.change(screen.getByPlaceholderText("Search by email or ID…"), { target: { value: "grace" } });
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("user_search")).toBe("grace"));
+      expect(lastUrl(onUrlUpdate)?.has("page")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.has("search")).toBe(false);
+    });
+
+    it("writes applied drawer filters under their filter_ keys and requests them", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { onUrlUpdate });
+      await screen.findByText("test@example.com");
+
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      fireEvent.change(await screen.findByTestId("users-filter-user-id"), { target: { value: "u-7" } });
+      fireEvent.change(screen.getByTestId("users-filter-sso-id"), { target: { value: "sso-7" } });
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("filter_user_id")).toBe("u-7"));
+      expect(lastUrl(onUrlUpdate)?.get("filter_sso_id")).toBe("sso-7");
+      expect(lastUrl(onUrlUpdate)?.has("filter_sso_user_id")).toBe(false);
+      await waitFor(() => {
+        expect(lastUserListArgs()[1]).toEqual(["u-7"]);
+        expect(lastUserListArgs()[7]).toBe("sso-7");
+      });
+    });
+
+    it("writes the next page to the URL and requests it", async () => {
+      userListCall.mockResolvedValue(manyUsers);
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { onUrlUpdate });
+      await screen.findByText("test@example.com");
+
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("page")).toBe("2"));
+      await waitFor(() => expect(lastUserListArgs()[2]).toBe(2));
+    });
+
+    it("keeps ?page= in the URL when the user list request fails", async () => {
+      userListCall.mockRejectedValue(new Error("boom"));
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboardKeepingMountWrites({}, { searchParams: "?page=3", onUrlUpdate });
+
+      expect(await screen.findByText("No users found")).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 3");
+      expect(onUrlUpdate.mock.calls.every(([update]) => update.searchParams.get("page") === "3")).toBe(true);
+      expect(userListCall.mock.calls.every((args) => args[2] === 3)).toBe(true);
+    });
+  });
+
+  describe("top-level tab in the URL", () => {
+    it("opens the Default User Settings tab named by ?tab=", async () => {
+      renderDashboard({}, { searchParams: "?tab=default-settings" });
+
+      expect(await screen.findByRole("tab", { name: "Default User Settings" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(screen.getByRole("region", { name: "Default user settings panel" })).toBeVisible();
+    });
+
+    it("writes the chosen tab to the URL and drops it again for the users default", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboard({}, { onUrlUpdate });
+
+      await user.click(await screen.findByRole("tab", { name: "Default User Settings" }));
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("tab")).toBe("default-settings"));
+
+      await user.click(screen.getByRole("tab", { name: "Users" }));
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.has("tab")).toBe(false));
+    });
+
+    it("drops ?tab=default-settings for a non-admin, who has no settings tab", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderDashboardKeepingMountWrites(
+        { userRole: "Internal User" },
+        { searchParams: "?tab=default-settings&user_search=ada", onUrlUpdate },
+      );
+
+      expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.has("tab")).toBe(false));
+      expect(lastUrl(onUrlUpdate)?.get("user_search")).toBe("ada");
     });
   });
 });
