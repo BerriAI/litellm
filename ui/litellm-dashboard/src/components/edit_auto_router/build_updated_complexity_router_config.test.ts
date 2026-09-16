@@ -46,6 +46,43 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each(["capability", "llm_v2", "heuristic"] as const)(
+    "handles enabled stored overrides when editing %s with or without keyword form state",
+    (classifier_type) => {
+      const stored = {
+        ...STORED,
+        classifier_type,
+        adaptive: classifier_type !== "llm_v2",
+        adaptive_weights: { quality: 0.6, cost: 0.4 },
+        adaptive_eligible: "all",
+        tier_distance_penalty: 0.8,
+        enable_context_window_escalation: true,
+        context_window_escalation_buffer: 0.9,
+      };
+      const value = hydrateComplexityRouterConfig(stored, undefined);
+      for (const keywordState of [undefined, hydratedState]) {
+        const saved = buildUpdatedComplexityRouterConfig(stored, value, undefined, keywordState);
+        const forecast = classifier_type !== "heuristic";
+        expect(saved.adaptive).toBe(!forecast);
+        expect(saved.enable_context_window_escalation).toBe(!forecast);
+        expect(saved.escalation_keywords).toEqual(forecast ? [] : stored.escalation_keywords);
+        for (const key of [
+          "adaptive_weights",
+          "adaptive_eligible",
+          "tier_distance_penalty",
+          "context_window_escalation_buffer",
+        ]) {
+          expect(Object.hasOwn(saved, key)).toBe(!forecast);
+        }
+        expect(saved.keyword_tier_rules).toEqual(STORED.keyword_tier_rules);
+        expect(saved.semantic_keyword_matching).toBe(true);
+        expect(saved.some_future_backend_key).toEqual(STORED.some_future_backend_key);
+      }
+      expect(value.enable_context_window_escalation).toBe(true);
+      expect(stored.escalation_keywords).toEqual(["urgent", "outage"]);
+    },
+  );
+
   it("round-trips an untouched edit without changing any keyword-matching value", () => {
     // Opening the modal hydrates state from STORED; saving with nothing changed must be a
     // no-op. These keys are now MANAGED, so a hydration bug silently wipes them.
@@ -675,7 +712,11 @@ describe("managed keys survive an untouched open-and-save", () => {
 
   // The opt-in fifth tier requires the LLM classifier, which this heuristic_first fixture is not,
   // so it gets its own round trip below.
-  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set(["enable_non_reasoning_tier"]);
+  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set([
+    "capability_classifier_config",
+    "llm_v2_config",
+    "enable_non_reasoning_tier",
+  ]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
@@ -850,7 +891,12 @@ describe("LLM V2 configuration preservation", () => {
     harness: "Shell access, one attempt",
     max_quality_gap: 0.03,
     response_format: "json_object",
-    calibration: { version: "pair-v1", prompt_version: "llm-v2-1" },
+    calibration: {
+      version: "pair-v1",
+      prompt_version: "llm-v2-1",
+      efficient: { slope: 1.2, intercept: -0.3 },
+      capable: { slope: 0.9, intercept: 0.1 },
+    },
   };
   const stored = {
     tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
