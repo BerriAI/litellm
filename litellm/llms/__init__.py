@@ -14,6 +14,21 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 
 
+def get_cost_for_google_maps_grounding_request(
+    custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo"
+) -> float | None:
+    """
+    Get the cost of Grounding with Google Maps for a given model. Only Gemini models on the
+    Gemini API and Vertex AI can populate the Maps grounding counter, so every other provider
+    returns None.
+    """
+    if custom_llm_provider != "gemini" and not custom_llm_provider.startswith("vertex_ai"):
+        return None
+    from .gemini.cost_calculator import cost_per_google_maps_grounding_request
+
+    return cost_per_google_maps_grounding_request(usage=usage, model_info=model_info)
+
+
 def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
     """
     Get the cost for a web search request for a given model.

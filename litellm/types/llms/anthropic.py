@@ -1,14 +1,15 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import NotRequired, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from .openai import (
     ChatCompletionCachedContent,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
+    PromptCacheBreakpoint,
 )
 
 
@@ -35,6 +36,7 @@ AnthropicInputSchema = TypedDict(
 class AnthropicOutputSchema(TypedDict, total=False):
     type: Required[Literal["json_schema"]]
     schema: Required[dict]
+    strict: ReadOnly[bool]
 
 
 class AnthropicOutputConfig(TypedDict, total=False):
@@ -48,6 +50,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
     input_schema: AnthropicInputSchema | None
+    strict: ReadOnly[bool]
     type: Literal["custom"]
     cache_control: dict | ChatCompletionCachedContent | None
     defer_loading: bool
@@ -200,6 +203,7 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     type: Required[Literal["text"]]
     text: Required[str]
     cache_control: dict | ChatCompletionCachedContent | None
+    prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
 class AnthropicMessagesToolUseParam(TypedDict, total=False):
@@ -250,6 +254,17 @@ class AnthropicContentParamSourceFileId(TypedDict):
     file_id: str
 
 
+class AnthropicContentParamSourceText(TypedDict):
+    type: ReadOnly[Literal["text"]]
+    media_type: ReadOnly[Literal["text/plain"]]
+    data: ReadOnly[str]
+
+
+class AnthropicContentParamSourceContent(TypedDict):
+    type: ReadOnly[Literal["content"]]
+    content: ReadOnly[str | Sequence["AnthropicMessagesTextParam | AnthropicMessagesImageParam"]]
+
+
 class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
     type: Required[Literal["container_upload"]]
     file_id: str
@@ -260,6 +275,7 @@ class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
     source: Required[AnthropicContentParamSource | AnthropicContentParamSourceFileId | AnthropicContentParamSourceUrl]
     cache_control: dict | ChatCompletionCachedContent | None
+    prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
 class CitationsObject(TypedDict):
@@ -300,7 +316,13 @@ AnthropicCitation = AnthropicCitationPageLocation | AnthropicCitationCharLocatio
 
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
-    source: Required[AnthropicContentParamSource | AnthropicContentParamSourceFileId | AnthropicContentParamSourceUrl]
+    source: Required[
+        AnthropicContentParamSource
+        | AnthropicContentParamSourceFileId
+        | AnthropicContentParamSourceUrl
+        | AnthropicContentParamSourceText
+        | AnthropicContentParamSourceContent
+    ]
     cache_control: dict | ChatCompletionCachedContent | None
     title: str
     context: str
@@ -319,7 +341,12 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     is_error: bool
     content: (
         str
-        | Iterable[AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam]
+        | Iterable[
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
+        ]
     )
     cache_control: dict | ChatCompletionCachedContent | None
 
@@ -346,6 +373,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     type: str
     text: str
     cache_control: dict | ChatCompletionCachedContent | None
+    prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
 class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
@@ -492,8 +520,19 @@ ContentBlockContentBlockDict = ToolUseBlock | TextBlock | ChatCompletionThinking
 ContentBlockStart = ContentBlockStartToolUse | ContentBlockStartText
 
 
+class AnthropicStopDetails(TypedDict, total=False):
+    type: ReadOnly[Literal["refusal"]]
+    category: ReadOnly[str | None]
+    explanation: ReadOnly[str | None]
+
+
 class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
+    stop_details: ReadOnly[AnthropicStopDetails]
+
+
+class ServerToolUsage(TypedDict, total=False):
+    web_search_requests: ReadOnly[int]
 
 
 class UsageDelta(TypedDict, total=False):
@@ -501,6 +540,7 @@ class UsageDelta(TypedDict, total=False):
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+    server_tool_use: ReadOnly[ServerToolUsage]
 
 
 class AppliedEdit(TypedDict, total=False):
@@ -619,7 +659,13 @@ class AnthropicResponseUsageBlock(BaseModel):
     output_tokens: int
 
 
-AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
+class AnthropicOutputTokensDetails(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    thinking_tokens: int | None = None
+
+
+AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"]
 
 
 class AnthropicResponse(BaseModel):
@@ -672,8 +718,9 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 
 
 class AnthropicThinkingParam(TypedDict, total=False):
-    type: Literal["enabled", "adaptive"]
+    type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
     budget_tokens: int
+    display: ReadOnly[Literal["summarized", "omitted"]]
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):
@@ -699,6 +746,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
+    PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

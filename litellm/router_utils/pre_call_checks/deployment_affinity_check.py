@@ -13,23 +13,23 @@ where routing to a consistent deployment is still beneficial.
 """
 
 import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
+from litellm.caching.affinity_cache import claim_affinity_pin, claim_affinity_pin_in_memory, set_local_affinity_pin
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY
+from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
 
-class DeploymentAffinityCacheValue(TypedDict):
-    model_id: str
+class DeploymentAffinityCacheValue(TypedDict, closed=True):
+    model_id: ReadOnly[str]
 
 
 VALID_MODEL_GROUP_AFFINITY_FLAGS: Final = frozenset(
@@ -60,19 +60,6 @@ def warn_on_unknown_model_group_affinity_flags(model_group_affinity_config: Mapp
             )
 
 
-_CLAIM_PIN_SCRIPT: Final = """
-local current = redis.call('GET', KEYS[1])
-if current == false then
-  redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-  return ARGV[1]
-end
-if current == ARGV[1] then
-  redis.call('EXPIRE', KEYS[1], ARGV[2])
-end
-return current
-"""
-
-
 class DeploymentAffinityCheck(CustomLogger):
     """
     Router deployment affinity callback.
@@ -82,6 +69,7 @@ class DeploymentAffinityCheck(CustomLogger):
     """
 
     CACHE_KEY_PREFIX = "deployment_affinity:v1"
+    USER_ID_AFFINITY_PREFIX: Final = "user_id:"
 
     def __init__(
         self,
@@ -254,53 +242,51 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.CACHE_KEY_PREFIX}:session:{model_group}:{hashed_user_key}:{session_id}"
 
     @staticmethod
-    def _get_user_key_from_metadata_dict(metadata: dict) -> str | None:
-        # NOTE: affinity is keyed on the *API key hash* provided by the proxy (not the
-        # OpenAI `user` parameter, which is an end-user identifier).
-        user_key: Final = metadata.get("user_api_key_hash")
-        if user_key is None:
-            return None
-        return str(user_key)
-
-    @staticmethod
-    def _get_session_id_from_metadata_dict(metadata: dict) -> str | None:
+    def _get_session_id_from_metadata_dict(metadata: Mapping[object, object]) -> str | None:
         session_id: Final = metadata.get("session_id")
-        if session_id is None:
+        if session_id is None or metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
             return None
         return str(session_id)
 
     @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
+    def _iter_metadata_dicts(request_kwargs: Mapping[str, object]) -> tuple[Mapping[object, object], ...]:
         """
         Return all metadata dicts available on the request.
 
         Depending on the endpoint, Router may populate `metadata` or `litellm_metadata`.
         Users may also send one or both, so we check both (rather than using `or`).
         """
-        metadata_dicts: Final[list[dict]] = []
-        for key in ("litellm_metadata", "metadata"):
-            md = request_kwargs.get(key)
-            if isinstance(md, dict):
-                metadata_dicts.append(md)
-        return metadata_dicts
+        return tuple(
+            cast(Mapping[object, object], metadata)  # cast-ok: isinstance proves mapping shape; values remain opaque
+            for key in ("litellm_metadata", "metadata")
+            if isinstance(metadata := request_kwargs.get(key), dict)
+        )
 
     @staticmethod
-    def _get_user_key_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _first_metadata_value(metadata_dicts: Sequence[Mapping[object, object]], key: str) -> str | None:
+        value: Final = next((metadata[key] for metadata in metadata_dicts if metadata.get(key) is not None), None)
+        return None if value is None else str(value)
+
+    @classmethod
+    def get_user_key_from_request_kwargs(cls, request_kwargs: Mapping[str, object]) -> str | None:
         """
         Extract a stable affinity key from request kwargs.
 
-        Source (proxy): `metadata.user_api_key_hash`
+        Source (proxy): `metadata.user_api_key_hash` for virtual-key callers. JWT-authenticated
+        callers carry no key hash, so their `metadata.user_api_key_user_id` stands in for it,
+        namespaced under `USER_ID_AFFINITY_PREFIX` so a user id can never alias a key hash.
 
         Note: the OpenAI `user` parameter is an end-user identifier and is intentionally
         not used for deployment affinity.
         """
-        # Check metadata dicts (Proxy usage)
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            user_key = DeploymentAffinityCheck._get_user_key_from_metadata_dict(metadata=metadata)
-            if user_key is not None:
-                return user_key
-
-        return None
+        metadata_dicts: Final = cls._iter_metadata_dicts(request_kwargs)
+        user_api_key_hash: Final = cls._first_metadata_value(metadata_dicts, "user_api_key_hash")
+        if user_api_key_hash is not None:
+            return user_api_key_hash
+        user_id: Final = cls._first_metadata_value(metadata_dicts, "user_api_key_user_id")
+        if user_id is None:
+            return None
+        return f"{cls.USER_ID_AFFINITY_PREFIX}{user_id}"
 
     @staticmethod
     def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
@@ -334,72 +320,17 @@ class DeploymentAffinityCheck(CustomLogger):
         return None
 
     def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
-        """The one owner of authoritative local pin writes: a plain set keeps a live
-        key's original expiry (`allow_ttl_override`), so the entry is replaced to make
-        the TTL real. Every local pin write goes through here so the redis-winner sync
-        and the pod-local claim can never disagree about expiry again."""
-        self.cache.in_memory_cache.delete_cache(cache_key)
-        self.cache.in_memory_cache.set_cache(cache_key, value, ttl=ttl_seconds)
+        set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
 
     async def _claim_pin(self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int) -> str | None:
-        """First-writer-wins pin write: store `pin_value` only when the key is absent and
-        return the deployment id the key holds afterwards, so a caller learns whether it won
-        by comparing against its own id, and None when the stored value is one no reader can
-        interpret. Concurrent claimers converge on the
-        first write instead of the last. Re-claiming with the stored value refreshes its
-        TTL, the same keepalive the complexity router's model pin documents: an active
-        session must not lose its pin mid-conversation just because it outlives the
-        original write, so `session_affinity_ttl_seconds` bounds idle time, not total
-        session length. On Redis one Lua script does the get-or-set-or-refresh
-        atomically (same registration seam the rate limiters use) and the in-memory
-        tier is synchronized to the winner; without Redis, and whenever Redis is
-        unreachable, the pod-local check-and-set below stands in and is atomic because it
-        runs synchronously on the event loop. Degrading to a pod-local claim rather than
-        propagating the fault is what keeps same-pod stickiness through a Redis blip: the
-        caller only logs this result, so an escaping error would leave the session with no
-        pin at all and reshuffle every turn for the outage, which is worse than losing
-        cross-pod agreement. The redis tier is
-        resolved per call because the proxy attaches it after Router construction
-        (`Router._update_redis_cache`); the compiled script is cached per event loop
-        underneath the registration seam.
-        """
-        redis_cache: Final = self.cache.redis_cache
-        if redis_cache is not None:
-            try:
-                claim_script: Final = redis_cache.async_register_script(_CLAIM_PIN_SCRIPT)
-                raw: Final = await claim_script(keys=(cache_key,), args=(json.dumps(pin_value), int(ttl_seconds)))
-                decoded: Final = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                if not isinstance(decoded, str):
-                    return pin_value["model_id"]
-                try:
-                    winner: object = json.loads(decoded)
-                except json.JSONDecodeError:
-                    winner = decoded
-                self._set_local_pin(cache_key=cache_key, value=winner, ttl_seconds=ttl_seconds)
-                return self._pinned_model_id(winner)
-            except Exception as e:  # noqa: BLE001  # any Redis/Lua failure degrades to the pod-local claim, never unpins
-                verbose_router_logger.debug(
-                    "DeploymentAffinityCheck: redis pin claim failed, falling back to pod-local claim. error=%s", e
-                )
-
-        return self._claim_pin_in_memory(cache_key=cache_key, pin_value=pin_value, ttl_seconds=ttl_seconds)
+        winner: Final = await claim_affinity_pin(self.cache, cache_key, pin_value, ttl_seconds)
+        return self._pinned_model_id(winner)
 
     def _claim_pin_in_memory(
         self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int
     ) -> str | None:
-        """Pod-local half of the claim, used when no Redis tier is attached and as the
-        fallback when the Redis claim fails. Mirrors the Lua script exactly, including
-        the keepalive: re-claiming with the stored value slides the idle window through
-        `_set_local_pin`. Both branches stay synchronous, hence atomic on the event
-        loop."""
-        existing: Final = self.cache.in_memory_cache.get_cache(cache_key)
-        if existing is not None:
-            existing_model_id: Final = self._pinned_model_id(existing)
-            if existing_model_id == pin_value["model_id"]:
-                self._set_local_pin(cache_key=cache_key, value=pin_value, ttl_seconds=ttl_seconds)
-            return existing_model_id
-        self._set_local_pin(cache_key=cache_key, value=pin_value, ttl_seconds=ttl_seconds)
-        return pin_value["model_id"]
+        winner: Final = claim_affinity_pin_in_memory(self.cache, cache_key, pin_value, ttl_seconds)
+        return self._pinned_model_id(winner)
 
     @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
@@ -427,6 +358,8 @@ class DeploymentAffinityCheck(CustomLogger):
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        if request_kwargs.get("_target_order") is not None:
+            return typed_healthy_deployments
 
         (
             enable_user_key,
@@ -461,7 +394,7 @@ class DeploymentAffinityCheck(CustomLogger):
             enable_session_id or self._get_marker_session_affinity_ttl(request_kwargs=request_kwargs) is not None
         )
         user_key: Final = (
-            self._get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
+            self.get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
             if (session_affinity_active or enable_user_key)
             else None
         )
@@ -531,9 +464,9 @@ class DeploymentAffinityCheck(CustomLogger):
             return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "DeploymentAffinityCheck: api-key affinity hit -> deployment=%s user_key=%s",
+            "DeploymentAffinityCheck: caller affinity hit -> deployment=%s user_key=%s",
             model_id,
-            self._shorten_for_logs(user_key),
+            self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
 
@@ -576,7 +509,7 @@ class DeploymentAffinityCheck(CustomLogger):
             return None
 
         user_key: Final = (
-            self._get_user_key_from_request_kwargs(request_kwargs=kwargs)
+            self.get_user_key_from_request_kwargs(request_kwargs=kwargs)
             if (enable_user_key or session_affinity_active)
             else None
         )
@@ -624,7 +557,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         deployment_model_name,
                         model_id,
                         self.ttl_seconds,
-                        self._shorten_for_logs(user_key),
+                        self._shorten_for_logs(self._hash_user_key(user_key)),
                     )
                 else:
                     verbose_router_logger.debug(

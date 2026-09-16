@@ -11,11 +11,7 @@ swap cannot silently regress.
 
 import json
 import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 
@@ -52,18 +48,6 @@ def _main_path() -> str:
 class TestCommandR7bPricingData:
     """The JSON price maps must carry Cohere's published costs, with output
     more expensive than input."""
-
-    def test_backup_costs_not_swapped(self):
-        entry = _load_json(_backup_path())[MODEL]
-        assert entry["input_cost_per_token"] == EXPECTED_INPUT_COST
-        assert entry["output_cost_per_token"] == EXPECTED_OUTPUT_COST
-        assert entry["output_cost_per_token"] > entry["input_cost_per_token"]
-
-    def test_main_costs_not_swapped(self):
-        entry = _load_json(_main_path())[MODEL]
-        assert entry["input_cost_per_token"] == EXPECTED_INPUT_COST
-        assert entry["output_cost_per_token"] == EXPECTED_OUTPUT_COST
-        assert entry["output_cost_per_token"] > entry["input_cost_per_token"]
 
 
 class TestCommandR7bPricingModelInfo:

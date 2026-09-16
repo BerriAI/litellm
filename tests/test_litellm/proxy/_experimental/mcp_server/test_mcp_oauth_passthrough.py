@@ -8,7 +8,6 @@ Covers:
 """
 
 import asyncio
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +15,6 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request
 
-sys.path.insert(0, "../../../../../")
 
 
 from litellm.proxy._experimental.mcp_server import discoverable_endpoints

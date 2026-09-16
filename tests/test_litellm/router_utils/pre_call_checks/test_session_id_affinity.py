@@ -1,16 +1,17 @@
-import os
-import sys
+import asyncio
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import json
 
 import litellm
+from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -181,6 +182,47 @@ async def test_async_session_id_affinity_priority_over_user_key():
 
     assert len(filtered) == 1
     assert filtered[0]["model_info"]["id"] == "deployment-2"
+
+
+@pytest.mark.asyncio
+async def test_proxy_generated_session_id_does_not_pin_a_deployment():
+    """A session id the proxy generated for a request that had none is per request, so a
+    pin stored under it must be ignored and none must be written."""
+    cache = DualCache()
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=123,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    healthy_deployments = [
+        {"model_name": "model_group", "litellm_params": {"model": "model_1"}, "model_info": {"id": "deployment-1"}},
+        {"model_name": "model_group", "litellm_params": {"model": "model_2"}, "model_info": {"id": "deployment-2"}},
+    ]
+    await cache.async_set_cache(
+        DeploymentAffinityCheck.get_session_affinity_cache_key("model_group", "generated-1", user_key="user1"),
+        {"model_id": "deployment-2"},
+    )
+    request_kwargs = {
+        "metadata": {"user_api_key_hash": "user1", "session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True}
+    }
+
+    filtered = await callback.async_filter_deployments(
+        model="model_group", healthy_deployments=healthy_deployments, messages=[], request_kwargs=request_kwargs
+    )
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "metadata": {**request_kwargs["metadata"], "deployment_model_name": "model_group"},
+            "model_info": {"id": "deployment-1"},
+        },
+        call_type=None,
+    )
+
+    assert len(filtered) == 2
+    assert await cache.async_get_cache(
+        DeploymentAffinityCheck.get_session_affinity_cache_key("model_group", "generated-1", user_key="user1")
+    ) == {"model_id": "deployment-2"}
 
 
 MOCK_RESPONSES_API_RESPONSE = {
@@ -518,6 +560,124 @@ async def test_claim_pin_falls_back_to_pod_local_when_redis_is_down():
 
     second = await callback._claim_pin(cache_key=key, pin_value={"model_id": "another-deployment"}, ttl_seconds=777)
     assert second == "our-deployment"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ({"model": "first"}, {"model": "first"}),
+        ('{ "model" : "first" }', {"model": "first"}),
+        ({"model": "removed"}, {"model": "second"}),
+        ({"model": "first", "extra": "stale"}, {"model": "second"}),
+        ({"model_id": "first"}, {"model": "second"}),
+        ("first", {"model": "second"}),
+        (None, {"model": "second"}),
+    ],
+)
+async def test_eligible_affinity_claim_replaces_stale_pins_and_slides_ttl(
+    stored: object, expected: object
+) -> None:
+    clock: Final = MagicMock(return_value=100.0)
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    cache.in_memory_cache.set_cache("tier-pin", stored, ttl=10)
+    clock.return_value = 105.0
+
+    winner: Final = await claim_affinity_pin(
+        cache, "tier-pin", {"model": "second"}, 30,
+        eligible_values=({"model": "first"}, {"model": "second"}),
+    )
+
+    assert winner == expected
+    assert cache.in_memory_cache.ttl_dict["tier-pin"] == 135.0
+    clock.return_value = 111.0
+    assert cache.in_memory_cache.get_cache("tier-pin") == expected
+    clock.return_value = 136.0
+    assert cache.in_memory_cache.get_cache("tier-pin") is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_eligible_claims_return_one_winner() -> None:
+    cache: Final = DualCache()
+    candidates: Final = ({"model": "first"}, {"model": "second"})
+    winners: Final = await asyncio.gather(*(
+        claim_affinity_pin(
+            cache, "tier-pin", candidates[index % 2], 30,
+            eligible_values=candidates,
+        )
+        for index in range(20)
+    ))
+
+    assert winners == [{"model": "first"}] * 20
+    assert cache.in_memory_cache.get_cache("tier-pin") == {"model": "first"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "expected", "refresh"),
+    [
+        ({"model_id": 7}, "7", True),
+        ({"model_id": "other"}, "other", False),
+        ({"model": "7"}, None, False),
+        (["7"], None, False),
+    ],
+)
+async def test_legacy_deployment_claim_retains_decoder_and_keepalive(
+    stored: object, expected: str | None, refresh: bool
+) -> None:
+    clock: Final = MagicMock(return_value=100.0)
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache, ttl_seconds=30,
+        enable_user_key_affinity=False, enable_responses_api_affinity=False,
+    )
+    cache.in_memory_cache.set_cache("deployment-pin", stored, ttl=10)
+    clock.return_value = 105.0
+
+    winner: Final = await callback._claim_pin(
+        "deployment-pin", {"model_id": "7"}, 30
+    )
+
+    assert winner == expected
+    assert cache.in_memory_cache.ttl_dict["deployment-pin"] == (
+        135.0 if refresh else 110.0
+    )
+    assert cache.in_memory_cache.get_cache("deployment-pin") == (
+        {"model_id": "7"} if refresh else stored
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "expected", "stored"),
+    [
+        (b'{"model_id": "winner"}', "winner", {"model_id": "winner"}),
+        ('"winner"', "winner", "winner"),
+        ("winner", "winner", "winner"),
+        (b"winner", "winner", "winner"),
+        ('{"model": "winner"}', None, {"model": "winner"}),
+        (None, "candidate", None),
+        (123, "candidate", None),
+        ({"model_id": "winner"}, "candidate", None),
+    ],
+)
+async def test_redis_deployment_claim_preserves_legacy_result_decoding(
+    raw: object, expected: str | None, stored: object
+) -> None:
+    redis: Final = MagicMock()
+    redis.async_register_script.return_value = AsyncMock(return_value=raw)
+    cache: Final = DualCache(redis_cache=redis)
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache, ttl_seconds=30,
+        enable_user_key_affinity=False, enable_responses_api_affinity=False,
+    )
+
+    winner: Final = await callback._claim_pin(
+        "deployment-pin", {"model_id": "candidate"}, 30
+    )
+
+    assert winner == expected
+    assert cache.in_memory_cache.get_cache("deployment-pin") == stored
 
 
 @pytest.mark.asyncio
