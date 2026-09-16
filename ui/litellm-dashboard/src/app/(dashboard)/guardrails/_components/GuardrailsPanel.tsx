@@ -14,6 +14,7 @@ import { cn } from "@/lib/cva.config";
 import AddGuardrailForm from "./add_guardrail_form";
 import GuardrailTable from "./guardrail_table";
 import { isAdminRole } from "@/utils/roles";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import GuardrailInfoView from "./guardrail_info";
 import GuardrailTestPlayground from "./GuardrailTestPlayground";
 import { toast } from "@/lib/toast";
@@ -23,6 +24,11 @@ import { formatGuardrailMode, getGuardrailLogoAndName } from "./guardrail_info_h
 import { CustomCodeModal } from "./custom_code";
 import GuardrailGarden from "./guardrail_garden";
 import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
+import { GUARDRAIL_DETAIL_TAB_KEY } from "./useGuardrailDetailTab";
+
+const ADMIN_TABS = ["garden", "guardrails", "test", "submitted"] as const;
+type GuardrailsTab = (typeof ADMIN_TABS)[number];
+const MEMBER_TABS: readonly GuardrailsTab[] = ["submitted"];
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -45,7 +51,9 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     "guardrail",
     parseAsString.withOptions({ history: "push" }),
   );
+  const [, setDetailTab] = useQueryState(GUARDRAIL_DETAIL_TAB_KEY);
   const isAdmin = userRole ? isAdminRole(userRole) : false;
+  const [activeTab, setActiveTab] = useUrlTab(isAdmin ? ADMIN_TABS : MEMBER_TABS, isAdmin ? "guardrails" : "submitted");
 
   const fetchGuardrails = async () => {
     if (!accessToken) {
@@ -69,6 +77,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
 
   const closeGuardrailDetail = () => {
     void setSelectedGuardrailId(null, { history: "replace" });
+    void setDetailTab(null);
   };
 
   const handleAddGuardrail = () => {
@@ -133,7 +142,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <Tabs defaultValue="guardrails">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList variant="line">
           {isAdmin && (
             <>
@@ -143,7 +152,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               <TabsTrigger value="guardrails" className="flex-none">
                 Guardrails
               </TabsTrigger>
-              <TabsTrigger value="playground" className="flex-none" disabled={!accessToken}>
+              <TabsTrigger value="test" className="flex-none" disabled={!accessToken}>
                 Test Playground
               </TabsTrigger>
             </>
@@ -231,7 +240,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               />
             </TabsContent>
 
-            <TabsContent value="playground" keepMounted>
+            <TabsContent value="test" keepMounted>
               <GuardrailTestPlayground
                 guardrailsList={guardrailsList}
                 isLoading={isLoading}

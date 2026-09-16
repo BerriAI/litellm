@@ -1,9 +1,10 @@
+import moment from "moment";
 import { type UrlUpdateEvent } from "nuqs/adapters/testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import GuardrailsMonitorView from "./GuardrailsMonitorView";
 import * as networking from "@/components/networking";
-import { renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsUsageLogs: vi.fn(),
@@ -147,6 +148,73 @@ describe("GuardrailsMonitorView", () => {
       expect(lastUpdate.searchParams.has("guardrail")).toBe(false);
       expect(lastUpdate.options.history).toBe("replace");
       expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeInTheDocument();
+    });
+  });
+
+  describe("date range in the URL (?start_date= and ?end_date=)", () => {
+    const lastOverviewRange = () => {
+      const [options] = mockUseGuardrailsUsageOverview.mock.calls.at(-1) as [{ startDate: string; endDate: string }];
+      return { startDate: options.startDate, endDate: options.endDate };
+    };
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("should request usage for the range in the URL and show it in the picker", () => {
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, {
+        searchParams: "?start_date=2026-01-05&end_date=2026-01-20",
+      });
+
+      expect(lastOverviewRange()).toEqual({ startDate: "2026-01-05", endDate: "2026-01-20" });
+      expect(screen.getByRole("button", { name: "5 Jan, 00:00 - 20 Jan, 23:59" })).toBeInTheDocument();
+    });
+
+    it("should pass the URL range to the detail view as well", () => {
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, {
+        searchParams: "?guardrail=gr-pii&start_date=2026-01-05&end_date=2026-01-20",
+      });
+
+      expect(mockUseGuardrailsUsageDetail).toHaveBeenLastCalledWith(
+        "gr-pii",
+        expect.objectContaining({ startDate: "2026-01-05", endDate: "2026-01-20" }),
+      );
+    });
+
+    it("should default to a seven day range ending today when the URL has none", () => {
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />);
+
+      const { startDate, endDate } = lastOverviewRange();
+      expect(endDate).toBe(moment().format("YYYY-MM-DD"));
+      expect(moment(endDate).diff(moment(startDate), "days")).toBe(7);
+    });
+
+    it("should ignore a malformed date and keep the other one", () => {
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, {
+        searchParams: "?start_date=2026-02-30&end_date=2026-01-20",
+      });
+
+      const { startDate, endDate } = lastOverviewRange();
+      expect(endDate).toBe("2026-01-20");
+      expect(startDate).toBe(moment().subtract(7, "days").format("YYYY-MM-DD"));
+    });
+
+    it("should write the applied range to the URL and request usage for it", async () => {
+      vi.stubGlobal("requestIdleCallback", (callback: () => void) => setTimeout(callback, 0));
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, {
+        searchParams: "?start_date=2026-01-05&end_date=2026-01-20",
+        onUrlUpdate,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "5 Jan, 00:00 - 20 Jan, 23:59" }));
+      fireEvent.change(screen.getByDisplayValue("2026-01-05"), { target: { value: "2026-03-01" } });
+      fireEvent.change(screen.getByDisplayValue("2026-01-20"), { target: { value: "2026-03-15" } });
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("start_date")).toBe("2026-03-01"));
+      expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("end_date")).toBe("2026-03-15");
+      expect(lastOverviewRange()).toEqual({ startDate: "2026-03-01", endDate: "2026-03-15" });
+      expect(screen.getByRole("button", { name: "1 Mar, 00:00 - 15 Mar, 23:59" })).toBeInTheDocument();
     });
   });
 });
