@@ -1151,6 +1151,29 @@ async def test_set_customer_budget_metrics_after_api_request_without_end_user_is
 
 
 @pytest.mark.asyncio
+async def test_set_customer_budget_metrics_after_api_request_skips_cache_when_end_user_tracking_off(
+    prometheus_logger, monkeypatch
+):
+    import sys
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "enable_end_user_cost_tracking_prometheus_only", False)
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", False)
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock()
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        await prometheus_logger._set_customer_budget_metrics_after_api_request(
+            end_user_id="cust-off",
+            response_cost=1.0,
+        )
+
+    mock_proxy_server.user_api_key_cache.async_get_cache.assert_not_awaited()
+    assert prometheus_logger.litellm_remaining_customer_budget_metric._metrics == {}
+
+
+@pytest.mark.asyncio
 async def test_initialize_customer_budget_metrics_emits_gauges_for_budgeted_customers(
     prometheus_logger, customer_metrics_enabled
 ):

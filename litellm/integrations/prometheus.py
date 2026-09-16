@@ -4204,7 +4204,7 @@ class PrometheusLogger(CustomLogger):
         end_user_id: str | None,
         response_cost: float,
     ):
-        if self._customer_budget_gauges_are_noop():
+        if self._customer_budget_gauges_are_noop() or not _customer_budget_metrics_enabled():
             return
 
         if not end_user_id:
