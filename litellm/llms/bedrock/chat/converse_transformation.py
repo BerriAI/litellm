@@ -3098,7 +3098,7 @@ class AmazonConverseConfig(BaseConfig):
         initial_finish_reason: Final = (
             "stop"
             if resolved_json_mode and not filtered_tools and tools and mapped_finish_reason == "tool_calls"
-            else mapped_finish_reason
+            else completion_response["stopReason"]
         )
 
         (
