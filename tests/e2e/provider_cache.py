@@ -167,7 +167,10 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
             values: Final = tuple(JSON_VALUE.validate_json(event) for event in events if event != "[DONE]")
         except (UnicodeDecodeError, ValidationError):
             return False
-        if not values or any(not isinstance(value, dict) or "error" in value or value.get("type") == "error" for value in values):
+        if not values or any(
+            not isinstance(value, dict) or value.get("error") is not None or value.get("type") == "error"
+            for value in values
+        ):
             return False
         if urlsplit(url).path == "/v1/responses":
             return complete_responses_stream(values)
@@ -187,7 +190,7 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
         value: Final = JSON_VALUE.validate_json(body)
     except ValidationError:
         return False
-    if not isinstance(value, dict) or "error" in value:
+    if not isinstance(value, dict) or value.get("error") is not None:
         return False
     path: Final = urlsplit(url).path
     if path == "/v1/messages":
