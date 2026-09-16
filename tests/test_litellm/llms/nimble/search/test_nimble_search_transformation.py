@@ -100,6 +100,14 @@ def test_transform_search_request_max_results_is_not_clamped():
 def test_transform_search_request_uppercases_country():
     assert _config().transform_search_request("q", {"country": "us"})["country"] == "US"
 
+def test_transform_search_request_date_range_passes_through_native_names():
+    """Nimble already uses the unified spec's own field names for date filtering."""
+    data = _config().transform_search_request(
+        "q", {"start_date": "1999-03-20", "end_date": "1999-04-20"}
+    )
+    assert data["start_date"] == "1999-03-20"
+    assert data["end_date"] == "1999-04-20"
+
 
 def test_transform_search_request_drops_max_tokens_per_page():
     assert "max_tokens_per_page" not in _config().transform_search_request("q", {"max_tokens_per_page": 1024})

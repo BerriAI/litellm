@@ -16,6 +16,9 @@ _ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
 _UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
 BRAVE_SECTIONS: Final = ["web", "discussions", "faqs", "faq", "news", "videos"]
 
+import litellm
+from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -175,6 +178,11 @@ class BraveSearchConfig(BaseSearchConfig):
         - max_results → count
         - search_domain_filter → q (append domain filters)
         - country → country
+        - start_date + end_date → freshness (combined as "YYYY-MM-DDtoYYYY-MM-DD";
+        only sent when both are provided — Brave's custom range requires both); If only one is
+        provided then a raise/warn will occur depending on `drop_params`. If `drop_params` is False
+        and a fallback is provided with `freshness` an exception will be thrown. If `drop_params` is True
+        then native `freshness` will be passed in if present (otherwise warning).
         - max_tokens_per_page → (not applicable, ignored)
 
         All other Brave Search API-specific parameters are passed through as-is.
@@ -190,36 +198,73 @@ class BraveSearchConfig(BaseSearchConfig):
             # Brave Search API only supports single string queries
             query = " ".join(query)
 
+        consumed_keys: set[str] = {"include_fetch_metadata"}
+
         request_data: Final[BraveSearchRequest] = {
             "q": query,
         }
 
         # Only include "include_fetch_metadata" if it is not explicitly set to False
         # This parameter results (more often than not) in a timestamp which we can use for last_updated
-        if "include_fetch_metadata" in optional_params and optional_params["include_fetch_metadata"] is False:
+        if optional_params.get("include_fetch_metadata") is False:
             request_data["include_fetch_metadata"] = False
         else:
             request_data["include_fetch_metadata"] = True
 
         # Transform unified spec parameters to Brave Search API format
         if "max_results" in optional_params:
+            consumed_keys.add("max_results")
             # Brave Search API supports 1-20 results per /web/search request
             num_results: Final = min(optional_params["max_results"], 20)
             request_data["count"] = num_results
 
-        if "search_domain_filter" in optional_params:
+        if optional_params.get("search_domain_filter"):
+            consumed_keys.add("search_domain_filter")
             # Convert to multiple "site:domain" clauses, joined by OR
             domains: Final = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
                 request_data["q"] = self._append_domain_filters(request_data["q"], domains)
 
+        start_date = optional_params.get("start_date")
+        end_date = optional_params.get("end_date")
+        if start_date and end_date:
+            request_data["freshness"] = f"{start_date}to{end_date}"
+            # unified value replaces native in this case
+            consumed_keys.add("freshness")
+        elif start_date or end_date:
+            message = (
+                "Brave's `freshness` field does not support one-sided date ranges; "
+                "both start_date and end_date are required together. "
+                "If a native `freshness` value was also provided, it will be used instead."
+            )
+
+            if litellm.drop_params:
+                verbose_logger.warning(message)
+            else:
+                raise UnsupportedParamsError(
+                    message=message,
+                    model="brave",
+                )
+
+        # query is a required unified arg; it always wins over native `q`
+        consumed_keys.add("q")
+
+        if optional_params.get("max_results"):
+            consumed_keys.add("count")
+
+        if "country" in optional_params:
+            consumed_keys.add("country")
+            request_data["country"] = optional_params["country"]
+
+        consumed_keys.add("max_tokens_per_page")
+
+        remaining = {k: v for k, v in optional_params.items() if k not in consumed_keys}
+
         # Convert to dict before dynamic key assignments
         result_data: Final = dict(request_data)
 
-        # Pass through all other parameters as-is
-        for param, value in optional_params.items():
-            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
-                result_data[param] = value
+        # Pass through anything the function did not explicitly consume
+        result_data.update(remaining)
 
         # Store params in special key for URL building (Brave Search API uses GET not POST)
         # Return a wrapper dict that stores params for get_complete_url to use

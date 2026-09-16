@@ -104,6 +104,8 @@ class LinkupSearchConfig(BaseSearchConfig):
         - max_results -> maxResults
         - search_domain_filter -> includeDomains
         - country -> (not directly supported)
+        - start_date -> fromDate
+        - end_date -> toDate
         - max_tokens_per_page -> (not applicable)
 
         All other Linkup-specific parameters are passed through as-is.
@@ -119,6 +121,8 @@ class LinkupSearchConfig(BaseSearchConfig):
             # Linkup only supports single string queries, join with spaces
             query = " ".join(query)
 
+        consumed_keys: set[str] = {"depth", "outputType"}
+
         request_data: Final[LinkupSearchRequest] = {
             "q": query,
             "depth": optional_params.get("depth", "standard"),
@@ -127,18 +131,31 @@ class LinkupSearchConfig(BaseSearchConfig):
 
         # Transform Perplexity unified spec parameters to Linkup format
         if "max_results" in optional_params:
+            consumed_keys.add("max_results")
             request_data["maxResults"] = optional_params["max_results"]
 
         if "search_domain_filter" in optional_params:
+            consumed_keys.add("search_domain_filter")
             request_data["includeDomains"] = optional_params["search_domain_filter"]
+
+        if "start_date" in optional_params:
+            consumed_keys.add("start_date")
+            request_data["fromDate"] = optional_params["start_date"]
+
+        if "end_date" in optional_params:
+            consumed_keys.add("end_date")
+            request_data["toDate"] = optional_params["end_date"]
+
+        if "max_tokens_per_page" in optional_params:
+            consumed_keys.add("max_tokens_per_page")
+
+        remaining = {k: v for k, v in optional_params.items() if k not in consumed_keys}
 
         # Convert to dict before dynamic key assignments
         result_data: Final = dict(request_data)
 
-        # pass through all other parameters as-is
-        for param, value in optional_params.items():
-            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
-                result_data[param] = value
+        # Pass through any unhandled data
+        result_data.update(remaining)
 
         return result_data
 
@@ -189,7 +206,7 @@ class LinkupSearchConfig(BaseSearchConfig):
             elif result_type == "image":
                 # For image results, use the URL as both title and snippet if name not provided
                 search_result = SearchResult(
-                    title=result.get("name", result.get("url", "")),
+                    title=result.get("name") or result.get("url", ""),
                     url=result.get("url", ""),
                     snippet=result.get("content", ""),
                     date=None,
