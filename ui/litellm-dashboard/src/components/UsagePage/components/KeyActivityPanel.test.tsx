@@ -1,6 +1,7 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 
 import type { ModelActivityData } from "../types";
@@ -44,6 +45,10 @@ const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
   onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
 
 describe("KeyActivityPanel", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders every key and the full count before searching", () => {
     renderWithProviders(<KeyActivityPanel keyMetrics={keyMetrics} />);
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alicehash-bob");
@@ -88,8 +93,36 @@ describe("KeyActivityPanel", () => {
 
     fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "user-alice" } });
     await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("key_search")).toBe("user-alice"));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("replace");
 
     fireEvent.click(screen.getByLabelText("Clear key search"));
     await waitFor(() => expect(lastUrl(onUrlUpdate)?.has("key_search")).toBe(false));
+  });
+
+  it("writes ?key_search= at most once every 300ms while typing", async () => {
+    vi.useFakeTimers();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    render(<KeyActivityPanel keyMetrics={keyMetrics} />, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <NuqsTestingAdapter onUrlUpdate={onUrlUpdate} hasMemory rateLimitFactor={1} resetUrlUpdateQueueOnMount={false}>
+          {children}
+        </NuqsTestingAdapter>
+      ),
+    });
+    const input = screen.getByLabelText("Search keys");
+
+    fireEvent.change(input, { target: { value: "a" } });
+    await act(() => vi.runAllTimersAsync());
+    expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(input, { target: { value: "bob" } });
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-bob");
+    expect(screen.getByTestId("rendered-keys")).not.toHaveTextContent("hash-alice");
+
+    await act(() => vi.advanceTimersByTimeAsync(250));
+    expect(onUrlUpdate).toHaveBeenCalledTimes(2);
+    expect(lastUrl(onUrlUpdate)?.get("key_search")).toBe("bob");
   });
 });

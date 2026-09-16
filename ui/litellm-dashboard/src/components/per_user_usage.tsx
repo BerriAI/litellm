@@ -34,6 +34,8 @@ interface PerUserAnalyticsResponse {
   total_pages: number;
 }
 
+const NO_RESULTS: PerUserMetrics[] = [];
+
 interface PerUserUsageProps {
   accessToken: string | null;
   selectedTags: string[];
@@ -43,13 +45,10 @@ interface PerUserUsageProps {
 const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, formatAbbreviatedNumber }) => {
   // Maximum number of user agent categories to show in charts to prevent color palette overflow
   const MAX_USER_AGENTS = 8;
-  const [perUserData, setPerUserData] = useState<PerUserAnalyticsResponse>({
-    results: [],
-    total_count: 0,
-    page: 1,
-    page_size: 50,
-    total_pages: 0,
-  });
+  const [perUserData, setPerUserData] = useState<PerUserAnalyticsResponse | null>(null);
+  const [fetchFailed, setFetchFailed] = useState(false);
+  const results = perUserData?.results ?? NO_RESULTS;
+  const awaitingFirstResponse = Boolean(accessToken) && perUserData === null && !fetchFailed;
 
   const [activeTab, setActiveTab] = useUrlTab(PER_USER_TABS, "details", "per_user_tab");
   const { pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
@@ -75,8 +74,12 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       .then((response) => {
         if (stale) return;
         setPerUserData(response);
+        setFetchFailed(false);
       })
-      .catch((error) => console.error("Failed to fetch per-user data:", error));
+      .catch((error) => {
+        console.error("Failed to fetch per-user data:", error);
+        if (!stale) setFetchFailed(true);
+      });
 
     return () => {
       stale = true;
@@ -154,12 +157,14 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
         <TabsContent value="details" keepMounted>
           <DataTable
             columns={columns}
-            data={perUserData.results}
+            data={results}
             getRowId={(row) => row.user_id}
             paginationMode="server"
             pagination={pagination}
             onPaginationChange={handlePaginationChange}
-            rowCount={perUserData.total_count}
+            rowCount={perUserData?.total_count ?? 0}
+            isLoading={awaitingFirstResponse}
+            isError={fetchFailed}
             noDataMessage="No per-user usage data"
             size="compact"
           />
@@ -176,7 +181,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
             data={(() => {
               // Get top user agents by frequency first
               const userAgentCounts = new Map<string, number>();
-              perUserData.results.forEach((item: PerUserMetrics) => {
+              results.forEach((item: PerUserMetrics) => {
                 const agent = item.user_agent || "Unknown";
                 userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
               });
@@ -197,7 +202,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
               };
 
               // Count users in each category by user agent (only for top user agents)
-              perUserData.results.forEach((item: PerUserMetrics) => {
+              results.forEach((item: PerUserMetrics) => {
                 const successCount = item.successful_requests;
                 const userAgent = item.user_agent || "Unknown";
 
@@ -230,7 +235,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
             categories={(() => {
               // Count user agents by frequency and get top ones
               const userAgentCounts = new Map<string, number>();
-              perUserData.results.forEach((item: PerUserMetrics) => {
+              results.forEach((item: PerUserMetrics) => {
                 const agent = item.user_agent || "Unknown";
                 userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
               });

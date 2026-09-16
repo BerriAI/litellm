@@ -119,6 +119,8 @@ describe("TopModelView", () => {
 
     expect(showsChart(container)).toBe(false);
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Table View" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Chart View" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("writes ?top_models_view=chart and drops it again for the default table", async () => {

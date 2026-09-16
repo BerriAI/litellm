@@ -21,7 +21,12 @@ vi.mock("./networking", () => ({
 
 // Mock PerUserUsage component
 vi.mock("./per_user_usage", () => ({
-  default: () => <div>Per User Usage</div>,
+  default: ({ selectedTags }: { selectedTags: string[] }) => (
+    <>
+      <div>Per User Usage</div>
+      <div data-testid="per-user-agents">{JSON.stringify(selectedTags)}</div>
+    </>
+  ),
 }));
 
 describe("UserAgentActivity", () => {
@@ -383,6 +388,29 @@ describe("UserAgentActivity", () => {
       });
       expect(screen.getByLabelText("Chrome/1.0")).toBeInTheDocument();
       expect(screen.getByLabelText("Firefox/2.0")).toBeInTheDocument();
+      expect(screen.getByTestId("per-user-agents")).toHaveTextContent(JSON.stringify([CHROME, FIREFOX]));
+    });
+
+    it("keeps an agent whose name contains a comma as one filter value in both directions", async () => {
+      const commaAgent = "User-Agent: my-cli/2.0 (external, cli)";
+      const encodedCommaAgent = "User-Agent: my-cli/2.0 (external%2C cli)";
+      mockTagDistinctCall.mockResolvedValue({ results: [...mockDistinctTagsData.results, { tag: commaAgent }] });
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UserAgentActivity {...defaultProps} />, {
+        searchParams: { agents: encodedCommaAgent },
+        onUrlUpdate,
+      });
+
+      await waitFor(() => {
+        expect(mockTagDauCall).toHaveBeenCalledWith("test-token", expect.any(Date), undefined, [commaAgent]);
+      });
+      expect(screen.getByTestId("per-user-agents")).toHaveTextContent(JSON.stringify([commaAgent]));
+
+      await user.click(screen.getByLabelText("All User Agents"));
+      await user.click(await screen.findByRole("option", { name: "Firefox/2.0" }));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("agents")).toBe(`${encodedCommaAgent},${FIREFOX}`));
     });
 
     it("clearing the agent filter drops ?agents= and refetches unfiltered", async () => {

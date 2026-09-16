@@ -74,6 +74,12 @@ describe("TopKeyView", () => {
 
   const oneKey = [{ api_key: "key-123", key_alias: "Test Key", spend: 100 }];
 
+  const openFirstKey = async (user: ReturnType<typeof userEvent.setup>) => {
+    const keyIdButton = screen.getByText("key-123").closest("button");
+    expect(keyIdButton).not.toBeNull();
+    await user.click(keyIdButton as HTMLButtonElement);
+  };
+
   beforeEach(() => {
     testQueryClient.clear();
     mockUseAuthorized.mockReturnValue(mockAuth);
@@ -421,10 +427,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
-    if (keyIdButton) {
-      await user.click(keyIdButton);
-    }
+    await openFirstKey(user);
 
     await waitFor(() => {
       expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-123");
@@ -450,10 +453,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
-    if (keyIdButton) {
-      await user.click(keyIdButton);
-    }
+    await openFirstKey(user);
 
     await waitFor(() => {
       expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
@@ -482,10 +482,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
-    if (keyIdButton) {
-      await user.click(keyIdButton);
-    }
+    await openFirstKey(user);
 
     await waitFor(() => {
       expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
@@ -513,19 +510,15 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
-    if (keyIdButton) {
-      await user.click(keyIdButton);
-    }
+    await openFirstKey(user);
 
     await waitFor(() => {
       expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
     });
 
     const modalBackdrop = container.querySelector(".fixed.inset-0");
-    if (modalBackdrop) {
-      await user.click(modalBackdrop);
-    }
+    expect(modalBackdrop).not.toBeNull();
+    await user.click(modalBackdrop as HTMLElement);
 
     await waitFor(() => {
       expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument();
@@ -554,10 +547,7 @@ describe("TopKeyView", () => {
       { onUrlUpdate },
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
-    if (keyIdButton) {
-      await user.click(keyIdButton);
-    }
+    await openFirstKey(user);
 
     await waitFor(() => {
       expect(mockKeyInfoV1Call).not.toHaveBeenCalled();
@@ -584,10 +574,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
-    if (keyIdButton) {
-      await user.click(keyIdButton);
-    }
+    await openFirstKey(user);
 
     await waitFor(() => {
       expect(mockKeyInfoV1Call).toHaveBeenCalled();
@@ -647,12 +634,6 @@ describe("TopKeyView", () => {
   });
 
   describe("URL state", () => {
-    const openFirstKey = async (user: ReturnType<typeof userEvent.setup>) => {
-      const keyIdButton = screen.getByText("key-123").closest("button");
-      expect(keyIdButton).not.toBeNull();
-      await user.click(keyIdButton as HTMLButtonElement);
-    };
-
     it("opens the key detail named by ?key= without a click", async () => {
       renderWithProviders(<TopKeyView {...baseProps} topKeys={oneKey} />, { searchParams: "?key=key-123" });
 
@@ -693,6 +674,20 @@ describe("TopKeyView", () => {
       await waitFor(() => expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument());
       expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("key")).toBe(false);
       expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("view")).toBe("team");
+    });
+
+    it("leaves the URL alone when Escape is pressed with no key open", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<TopKeyView {...baseProps} topKeys={oneKey} />, {
+        searchParams: "?view=team",
+        onUrlUpdate,
+      });
+
+      await user.keyboard("{Escape}");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(onUrlUpdate).not.toHaveBeenCalled();
     });
 
     it("repoints ?key= at the rotated hash without adding a history entry", async () => {

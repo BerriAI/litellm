@@ -1,14 +1,28 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import type { ReactNode } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ReactElement, ReactNode } from "react";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import PerUserUsage from "./per_user_usage";
 import * as networking from "./networking";
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
   onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+const renderAtUrl = (ui: ReactElement, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+  render(ui, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <NuqsTestingAdapter
+        searchParams={searchParams}
+        onUrlUpdate={onUrlUpdate}
+        hasMemory
+        resetUrlUpdateQueueOnMount={false}
+      >
+        {children}
+      </NuqsTestingAdapter>
+    ),
+  });
 
 vi.mock("./networking", () => ({
   perUserAnalyticsCall: vi.fn(),
@@ -110,18 +124,25 @@ describe("PerUserUsage", () => {
       return Array.from({ length: count }, (_, index) => userRow(`user-${start + index + 1}`, "curl/8.0", 5));
     };
 
-    const serveUsers = (total: number) => {
-      mockPerUserAnalyticsCall.mockImplementation(async (_token, page = 1, pageSize = 50) => ({
-        results: pageOfUsers(page, pageSize, total),
-        total_count: total,
-        page,
-        page_size: pageSize,
-        total_pages: Math.ceil(total / pageSize),
-      }));
+    const serveUsers = (total: number, delayMs = 0) => {
+      mockPerUserAnalyticsCall.mockImplementation(async (_token, page = 1, pageSize = 50) => {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return {
+          results: pageOfUsers(page, pageSize, total),
+          total_count: total,
+          page,
+          page_size: pageSize,
+          total_pages: Math.ceil(total / pageSize),
+        };
+      });
     };
 
     beforeEach(() => {
       serveUsers(TOTAL_USERS);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
     });
 
     const lastCall = () => mockPerUserAnalyticsCall.mock.calls[mockPerUserAnalyticsCall.mock.calls.length - 1];
@@ -277,14 +298,46 @@ describe("PerUserUsage", () => {
     });
 
     it("starts on the page and page size named by ?per_user_page= and ?per_user_page_size=", async () => {
-      renderWithProviders(<PerUserUsage {...defaultProps} />, {
-        searchParams: "?per_user_page=2&per_user_page_size=25",
-      });
+      serveUsers(TOTAL_USERS, 50);
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderAtUrl(<PerUserUsage {...defaultProps} />, "?per_user_page=2&per_user_page_size=25", onUrlUpdate);
 
       expect(await screen.findByText("user-26")).toBeInTheDocument();
-      expect(lastCall()).toEqual(["test-token", 2, 25, undefined]);
+      expect(mockPerUserAnalyticsCall.mock.calls).toEqual([["test-token", 2, 25, undefined]]);
       expect(screen.getAllByRole("row")).toHaveLength(26);
       expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 26-50 of 120");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("keeps a deep-linked ?per_user_page= when the first request fails", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      mockPerUserAnalyticsCall.mockRejectedValue(new Error("upstream unavailable"));
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderAtUrl(<PerUserUsage {...defaultProps} />, "?per_user_page=3", onUrlUpdate);
+
+      await waitFor(() =>
+        expect(consoleError).toHaveBeenCalledWith("Failed to fetch per-user data:", expect.any(Error)),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(mockPerUserAnalyticsCall.mock.calls).toEqual([["test-token", 3, 50, undefined]]);
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+      expect(screen.getByText("Page 3 of 1")).toBeInTheDocument();
+    });
+
+    it("moves a deep-linked page past the end back to the last page once a retry succeeds", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      serveUsers(60);
+      mockPerUserAnalyticsCall.mockRejectedValueOnce(new Error("upstream unavailable"));
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const { rerender } = renderAtUrl(<PerUserUsage {...defaultProps} />, "?per_user_page=3", onUrlUpdate);
+      await waitFor(() => expect(consoleError).toHaveBeenCalledTimes(1));
+
+      rerender(<PerUserUsage {...defaultProps} accessToken="refreshed-token" />);
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("per_user_page")).toBe("2"));
+      expect(await screen.findByText("user-60")).toBeInTheDocument();
+      expect(mockPerUserAnalyticsCall).toHaveBeenLastCalledWith("refreshed-token", 2, 50, undefined);
     });
 
     it("writes ?per_user_page= when the page changes and ?per_user_page_size= when the size changes", async () => {
@@ -304,12 +357,11 @@ describe("PerUserUsage", () => {
     });
 
     it("drops ?per_user_page= when the tag filter changes so the new filter starts on the first page", async () => {
+      serveUsers(TOTAL_USERS, 50);
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      const { rerender } = renderWithProviders(<PerUserUsage {...defaultProps} />, {
-        searchParams: "?per_user_page=2",
-        onUrlUpdate,
-      });
+      const { rerender } = renderAtUrl(<PerUserUsage {...defaultProps} />, "?per_user_page=2", onUrlUpdate);
       await screen.findByText("user-51");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
 
       rerender(<PerUserUsage {...defaultProps} selectedTags={["curl/8.0"]} />);
 
@@ -329,18 +381,7 @@ describe("PerUserUsage", () => {
 
     it("falls back to User Details and clears ?per_user_tab= when it names an unknown tab", async () => {
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      render(<PerUserUsage {...defaultProps} />, {
-        wrapper: ({ children }: { children: ReactNode }) => (
-          <NuqsTestingAdapter
-            searchParams="?per_user_tab=heatmap&view=user-agent-activity"
-            onUrlUpdate={onUrlUpdate}
-            hasMemory
-            resetUrlUpdateQueueOnMount={false}
-          >
-            {children}
-          </NuqsTestingAdapter>
-        ),
-      });
+      renderAtUrl(<PerUserUsage {...defaultProps} />, "?per_user_tab=heatmap&view=user-agent-activity", onUrlUpdate);
 
       expect(screen.getByRole("tab", { name: "User Details" })).toHaveAttribute("aria-selected", "true");
       expect(screen.getByRole("tab", { name: "Usage Distribution" })).toHaveAttribute("aria-selected", "false");

@@ -607,6 +607,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 topModels={getTopAgents(agentSpendData.results, topAgentsLimit)}
                 topModelsLimit={topAgentsLimit}
                 setTopModelsLimit={setTopAgentsLimit}
+                viewModeUrlKey="top_agents_view"
               />
             </CardContent>
           </ShadcnCard>
