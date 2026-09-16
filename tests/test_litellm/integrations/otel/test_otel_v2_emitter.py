@@ -662,8 +662,12 @@ def test_indexed_messages_follow_the_providers_own_span_limits(monkeypatch):
     assert _indexed_messages(unbounded.attributes, "llm.input_messages") == list(range(60))
 
 
-def test_indexed_messages_follow_the_span_limits_of_a_per_request_tracer_override(monkeypatch):
-    """A routed ``tracer`` builds the span, so its provider's limits set the budget, not the bound tracer's."""
+@pytest.mark.parametrize("opened_at_boundary", [False, True], ids=["emit", "start_span+finish_span"])
+def test_indexed_messages_follow_the_span_limits_of_a_per_request_tracer_override(monkeypatch, opened_at_boundary):
+    """A routed ``tracer`` builds the span, so its provider's limits set the budget, not the bound tracer's.
+
+    Holds whether the span is emitted in one shot or opened at the pre_call boundary and finished later.
+    """
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
     cfg = OpenTelemetryV2Config(
         exporter="in_memory", mapper_names=["genai", "openinference"], capture_message_content="span_only"
@@ -671,11 +675,13 @@ def test_indexed_messages_follow_the_span_limits_of_a_per_request_tracer_overrid
     bound_provider, _ = _provider_with_limits(SpanLimits(max_span_attributes=1000))
     routed_provider, routed_exporter = _provider_with_limits(SpanLimits(max_span_attributes=40))
     engine = SpanEmitter(providers.get_tracer(bound_provider, "litellm-test"), cfg)
-    engine.emit(
-        SpanRole.LLM_CALL,
-        LLMCallSpanData.from_standard_logging_payload(_conversation_payload(60), capture_content=True),
-        tracer=providers.get_tracer(routed_provider, "litellm-routed"),
-    )
+    routed_tracer = providers.get_tracer(routed_provider, "litellm-routed")
+    data = LLMCallSpanData.from_standard_logging_payload(_conversation_payload(60), capture_content=True)
+    if opened_at_boundary:
+        opened = engine.start_span(SpanRole.LLM_CALL, "chat", tracer=routed_tracer)
+        engine.finish_span(SpanRole.LLM_CALL, opened, data)
+    else:
+        engine.emit(SpanRole.LLM_CALL, data, tracer=routed_tracer)
     (span,) = routed_exporter.get_finished_spans()
     _assert_core_intact(span)
     assert 39 <= len(span.attributes) <= 40
