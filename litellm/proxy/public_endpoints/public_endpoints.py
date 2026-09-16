@@ -3,6 +3,7 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from functools import lru_cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -205,6 +206,65 @@ def _load_endpoints() -> list[_EndpointEntry]:
     return _build_endpoints(raw)
 
 
+BundledRecord = Mapping[str, object]
+
+
+def _read_bundled_json(filename: str) -> tuple[BundledRecord, ...]:
+    """Read one of the JSON data files bundled alongside this module."""
+    with open(os.path.join(os.path.dirname(__file__), filename), "r") as f:
+        loaded: object = json.load(f)
+    if not isinstance(loaded, Sequence):
+        return ()
+    return tuple(record for record in loaded if isinstance(record, Mapping))
+
+
+def _credential_fields(record: BundledRecord) -> tuple[BundledRecord, ...]:
+    """A record's ``credential_fields``, empty when the key is absent or not a list."""
+    fields: Final = record.get("credential_fields")
+    if not isinstance(fields, Sequence) or isinstance(fields, (str, bytes)):
+        return ()
+    return tuple(field for field in fields if isinstance(field, Mapping))
+
+
+@lru_cache(maxsize=1)
+def _get_provider_create_fields() -> tuple[BundledRecord, ...]:
+    """Provider metadata for the dashboard create-model flow, read from disk once per process."""
+    return _read_bundled_json("provider_create_fields.json")
+
+
+def _agent_with_inherited_credentials(agent: BundledRecord, provider_map: Mapping[str, BundledRecord]) -> BundledRecord:
+    """One agent entry with its provider's credential fields appended after its own.
+
+    ``inherit_credentials_from_provider`` is dropped from the result; the frontend
+    does not consume it. Inherited fields are marked ``include_in_litellm_params``.
+    """
+    inherit_from: Final = agent.get("inherit_credentials_from_provider")
+    provider: Final = provider_map.get(inherit_from) if isinstance(inherit_from, str) else None
+    merged: Final[dict[str, object]] = {
+        key: value for key, value in agent.items() if key != "inherit_credentials_from_provider"
+    }
+
+    if provider is not None:
+        inherited: Final = tuple({**field, "include_in_litellm_params": True} for field in _credential_fields(provider))
+        merged["credential_fields"] = _credential_fields(agent) + inherited
+
+    return merged
+
+
+@lru_cache(maxsize=1)
+def _get_agent_create_fields() -> tuple[BundledRecord, ...]:
+    """Agent metadata for the dashboard create-agent flow, built once per process."""
+    provider_map: Final = {
+        name: provider
+        for provider in _get_provider_create_fields()
+        if isinstance(name := provider.get("provider"), str)
+    }
+    return tuple(
+        _agent_with_inherited_credentials(agent, provider_map)
+        for agent in _read_bundled_json("agent_create_fields.json")
+    )
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -387,19 +447,12 @@ async def get_supported_providers() -> list[str]:
 async def get_provider_fields() -> list[ProviderCreateInfo]:
     """
     Return provider metadata required by the dashboard create-model flow.
+
+    Reads from the bundled local file. Result is cached in-process for the
+    lifetime of the server process.
     """
 
-    provider_create_fields_path: Final = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "proxy",
-        "public_endpoints",
-        "provider_create_fields.json",
-    )
-
-    with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = json.load(f)
-
-    return provider_create_fields
+    return _get_provider_create_fields()  # pyright: ignore[reportReturnType]  # response_model validates the dicts
 
 
 @router.get(
@@ -576,39 +629,8 @@ async def get_agent_fields() -> list[AgentCreateInfo]:
 
     If an agent has `inherit_credentials_from_provider`, the provider's credential
     fields are automatically appended to the agent's credential_fields.
+
+    Reads from the bundled local files. Result is cached in-process for the
+    lifetime of the server process.
     """
-    base_path: Final = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "proxy",
-        "public_endpoints",
-    )
-
-    agent_create_fields_path: Final = os.path.join(base_path, "agent_create_fields.json")
-    provider_create_fields_path: Final = os.path.join(base_path, "provider_create_fields.json")
-
-    with open(agent_create_fields_path, "r") as f:
-        agent_create_fields: Final = json.load(f)
-
-    with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = json.load(f)
-
-    # Build a lookup map for providers by name
-    provider_map: Final = {p["provider"]: p for p in provider_create_fields}
-
-    # Merge inherited credential fields
-    for agent in agent_create_fields:
-        inherit_from = agent.get("inherit_credentials_from_provider")
-        if inherit_from and inherit_from in provider_map:
-            provider = provider_map[inherit_from]
-            # Copy provider fields and mark them for inclusion in litellm_params
-            inherited_fields = []
-            for field in provider.get("credential_fields", []):
-                field_copy = field.copy()
-                field_copy["include_in_litellm_params"] = True
-                inherited_fields.append(field_copy)
-            # Append provider credential fields after agent's own fields
-            agent["credential_fields"] = agent.get("credential_fields", []) + inherited_fields
-        # Remove the inherit field from response (not needed by frontend)
-        agent.pop("inherit_credentials_from_provider", None)
-
-    return agent_create_fields
+    return _get_agent_create_fields()  # pyright: ignore[reportReturnType]  # response_model validates the dicts

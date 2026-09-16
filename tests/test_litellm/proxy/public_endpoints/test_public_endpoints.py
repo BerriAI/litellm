@@ -1,4 +1,7 @@
+import builtins
+import os
 import re
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1159,7 +1162,6 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     app.dependency_overrides.clear()
 
 
-
 @pytest.fixture
 def reset_autorouter_presets_cache():
     from litellm.proxy.public_endpoints.public_endpoints import _AutoRouterPresetsCache
@@ -1407,3 +1409,115 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
     response.json = MagicMock(return_value={})
     with pytest.raises(ValueError, match="empty"):
         await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+
+
+# ---------------------------------------------------------------------------
+# /public/providers/fields + /public/agents/fields are cached in-process
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def reset_create_fields_caches():
+    """Clear the create-fields memoization before and after each test."""
+    _pe_module._get_provider_create_fields.cache_clear()
+    _pe_module._get_agent_create_fields.cache_clear()
+    yield
+    _pe_module._get_provider_create_fields.cache_clear()
+    _pe_module._get_agent_create_fields.cache_clear()
+
+
+@contextmanager
+def _bundled_file_opens():
+    """Record which bundled create-fields files get opened from disk inside the block."""
+    real_open = builtins.open
+    opened = []
+
+    def counting_open(file, *args, **kwargs):
+        name = os.path.basename(str(file))
+        if name in ("provider_create_fields.json", "agent_create_fields.json"):
+            opened.append(name)
+        return real_open(file, *args, **kwargs)
+
+    with patch("builtins.open", counting_open):
+        yield opened
+
+
+def test_get_provider_fields_reads_from_disk_once(reset_create_fields_caches):
+    """provider_create_fields.json is read once per process, not once per request."""
+    client = _make_client()
+
+    with _bundled_file_opens() as opened:
+        first = client.get("/public/providers/fields")
+        second = client.get("/public/providers/fields")
+        third = client.get("/public/providers/fields")
+
+    assert first.status_code == 200
+    reads = opened.count("provider_create_fields.json")
+    assert reads == 1, f"expected 1 disk read across 3 requests, got {reads}"
+    assert first.json() == second.json() == third.json()
+
+
+def test_get_agent_fields_reads_each_file_from_disk_once(reset_create_fields_caches):
+    """Both bundled files backing /public/agents/fields are read once, not per request."""
+    client = _make_client()
+
+    with _bundled_file_opens() as opened:
+        first = client.get("/public/agents/fields")
+        second = client.get("/public/agents/fields")
+        third = client.get("/public/agents/fields")
+
+    assert first.status_code == 200
+    agent_reads = opened.count("agent_create_fields.json")
+    provider_reads = opened.count("provider_create_fields.json")
+    assert agent_reads == 1, f"expected 1 agent-file read, got {agent_reads}"
+    assert provider_reads == 1, f"expected 1 provider-file read, got {provider_reads}"
+    assert first.json() == second.json() == third.json()
+
+
+def test_get_agent_fields_merge_does_not_compound_across_requests(
+    reset_create_fields_caches,
+):
+    """The inherited-credentials merge runs once, so credential_fields cannot grow per request.
+
+    Caching the raw file contents instead of the merged result would let the merge
+    append inherited fields again on every request.
+    """
+    client = _make_client()
+
+    def counts():
+        return {
+            agent["agent_type"]: len(agent.get("credential_fields") or [])
+            for agent in client.get("/public/agents/fields").json()
+        }
+
+    first = counts()
+    assert first, "expected at least one agent type"
+    assert first == counts() == counts()
+
+
+def test_get_agent_fields_still_merges_inherited_provider_credentials(
+    reset_create_fields_caches,
+):
+    """Caching must not change what the merge produces."""
+    agents = _make_client().get("/public/agents/fields").json()
+
+    inheriting = [
+        agent
+        for agent in agents
+        if any(field.get("include_in_litellm_params") for field in (agent.get("credential_fields") or []))
+    ]
+    assert inheriting, "expected at least one agent to inherit provider credential fields"
+    assert all("inherit_credentials_from_provider" not in agent for agent in agents)
+
+
+def test_provider_fields_cache_is_shared_with_agent_fields(reset_create_fields_caches):
+    """Warming /public/providers/fields means /public/agents/fields re-reads only its own file."""
+    client = _make_client()
+    client.get("/public/providers/fields")
+
+    with _bundled_file_opens() as opened:
+        response = client.get("/public/agents/fields")
+
+    assert response.status_code == 200
+    assert opened.count("provider_create_fields.json") == 0
+    assert opened.count("agent_create_fields.json") == 1
