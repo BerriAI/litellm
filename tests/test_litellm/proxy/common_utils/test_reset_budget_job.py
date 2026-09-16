@@ -4,7 +4,7 @@ import sys
 import types
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from typing import Any, Dict, Final, List
+from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -16,6 +16,7 @@ from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+    RESET_BUDGET_JOB_BATCH_SIZE,
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
@@ -35,9 +36,24 @@ class MockTable:
     def set_find_many_results(self, results: List[Any]):
         self._find_many_results = results
 
-    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
-        self.find_many_calls.append({"where": where})
-        return self._find_many_results
+    async def find_many(
+        self,
+        where: Dict[str, Any],
+        order: Optional[Dict[str, str]] = None,
+        take: Optional[int] = None,
+    ) -> List[Any]:
+        """Replays canned rows, honouring the keyset cursor + ``take`` a paged
+        caller relies on: without that a paged walk never advances and the
+        test would hang instead of failing."""
+        paging = {k: v for k, v in (("order", order), ("take", take)) if v is not None}
+        self.find_many_calls.append({"where": where, **paging})
+        rows = list(self._find_many_results)
+        for field, condition in where.items():
+            if isinstance(condition, dict) and "gt" in condition and field != "spend":
+                rows = [row for row in rows if getattr(row, field, "") > condition["gt"]]
+        for field, direction in (order or {}).items():
+            rows.sort(key=lambda row: getattr(row, field, ""), reverse=direction == "desc")
+        return rows[:take] if take is not None else rows
 
     async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         self.update_many_calls.append({"where": where, "data": data})
@@ -784,10 +800,16 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
         },
     ]
 
-    # Verify find_many was called to fetch NULL-budget-id end users
+    # The post-commit invalidation walk covers both branches, so implicitly
+    # created customers on the default tier get their cached spend dropped too,
+    # and it is paged rather than reading the whole customer population.
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
     assert len(find_many_calls) == 1
-    assert find_many_calls[0]["where"] == {"budget_id": None, "spend": {"gt": 0}}
+    assert find_many_calls[0]["where"]["OR"] == [
+        {"budget_id": {"in": [default_budget_id]}},
+        {"budget_id": None},
+    ]
+    assert find_many_calls[0]["take"] == RESET_BUDGET_JOB_BATCH_SIZE
 
     litellm.max_end_user_budget_id = None
 
@@ -818,9 +840,12 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_configured(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    # Should NOT have queried for NULL-budget-id end users
+    # The invalidation walk must not reach for NULL-budget-id customers: they
+    # ride a default tier that is not expiring, so their spend stays put.
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    assert len(find_many_calls) == 0
+    assert [call["where"] for call in find_many_calls] == [
+        {"budget_id": {"in": ["some-budget"]}, "user_id": {"gt": ""}}
+    ]
 
     litellm.max_end_user_budget_id = None
 
@@ -855,9 +880,12 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    # Should NOT have queried for NULL-budget-id end users
+    # The invalidation walk must not reach for NULL-budget-id customers: they
+    # ride a default tier that is not expiring, so their spend stays put.
     find_many_calls = mock_prisma_client.db.litellm_endusertable.find_many_calls
-    assert len(find_many_calls) == 0
+    assert [call["where"] for call in find_many_calls] == [
+        {"budget_id": {"in": ["other-budget"]}, "user_id": {"gt": ""}}
+    ]
 
     litellm.max_end_user_budget_id = None
 
@@ -1235,6 +1263,21 @@ def _make_counter_invalidation_job(monkeypatch):
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_delete_cache = AsyncMock()
 
+    # Batch deletes fan out to the same per-key calls the real DualCache makes,
+    # so an assertion reads "this key was invalidated" whether the caller went
+    # one key at a time or a page at a time.
+    async def _delete_counter_keys(keys):
+        for key in keys:
+            spend_counter_cache.in_memory_cache.delete_cache(key=key)
+            await spend_counter_cache.redis_cache.async_delete_cache(key=key)
+
+    async def _delete_management_keys(keys):
+        for key in keys:
+            await user_api_key_cache.async_delete_cache(key=key)
+
+    spend_counter_cache.async_delete_cache_keys = AsyncMock(side_effect=_delete_counter_keys)
+    user_api_key_cache.async_delete_cache_keys = AsyncMock(side_effect=_delete_management_keys)
+
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
     fake_module.user_api_key_cache = user_api_key_cache
@@ -1569,7 +1612,7 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
             "user_id": "customer-42",
         },
     )
-    mock_prisma_client.data["enduser"] = [test_enduser]
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results([test_enduser])
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
@@ -1577,6 +1620,50 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:end_user:customer-42")
     deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:customer-42" in deleted
+
+
+def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma_client, monkeypatch):
+    """The post-commit invalidation walk stays bounded in memory and in round trips.
+
+    Reading every customer on an expiring tier into one result set puts a
+    customer-count-sized list in the proxy's heap on every tick, which is an OOM
+    on a large enough deployment rather than a slow tick. Awaiting one cache call
+    per customer makes the last customer wait out every customer ahead of it.
+    Both regress silently, so pin the page size, the strictly advancing cursor,
+    and one batched call per page.
+    """
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-1")]
+    population: Final = RESET_BUDGET_JOB_BATCH_SIZE * 2 + 3
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results(
+        [
+            type("EndUser", (), {"user_id": f"cust-{i:06d}", "spend": 5.0, "budget_id": "budget-1"})
+            for i in range(population)
+        ]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    reads: Final = mock_prisma_client.db.litellm_endusertable.find_many_calls
+    assert [read["take"] for read in reads] == [RESET_BUDGET_JOB_BATCH_SIZE] * 3
+    assert [read["where"]["user_id"]["gt"] for read in reads] == [
+        "",
+        f"cust-{RESET_BUDGET_JOB_BATCH_SIZE - 1:06d}",
+        f"cust-{RESET_BUDGET_JOB_BATCH_SIZE * 2 - 1:06d}",
+    ]
+
+    assert counter_cache.async_delete_cache_keys.await_count == 3
+    assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 3
+    counter_cache.async_delete_cache.assert_not_called()
+
+    invalidated: Final = {
+        key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
+    }
+    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)}
+    evicted: Final = {
+        key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
+    }
+    assert evicted == {f"end_user_id:cust-{i:06d}" for i in range(population)}
 
 
 
