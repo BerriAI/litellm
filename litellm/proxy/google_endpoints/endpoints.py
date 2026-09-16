@@ -14,6 +14,11 @@ router: Final = APIRouter(
 )
 
 
+def _provider_from_query(request: Request) -> str:
+    """The provider that owns the interaction; Gemini unless ``?custom_llm_provider=`` says otherwise."""
+    return request.query_params.get("custom_llm_provider") or "gemini"
+
+
 @router.post(
     "/v1beta/models/{model_name:path}:generateContent",
     dependencies=[Depends(user_api_key_auth)],
@@ -340,7 +345,7 @@ async def get_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": _provider_from_query(request)}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -408,7 +413,7 @@ async def delete_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": _provider_from_query(request)}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -476,7 +481,7 @@ async def cancel_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": _provider_from_query(request)}
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:

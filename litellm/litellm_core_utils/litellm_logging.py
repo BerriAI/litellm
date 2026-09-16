@@ -2415,11 +2415,18 @@ class Logging(LiteLLMLoggingBaseClass):
         with the price, so ``model_id`` and ``litellm_model_name`` go with it.
         Left in place they overwrite the create's real deployment with the
         poll's empty one in the payload every logging integration reads.
+
+        An agent interaction is created without a model, so the settled body
+        is the first place the model is known; it is adopted so the spend log
+        and the token price name the model that actually ran.
         """
         settled_hidden_params: Final = getattr(result, "_hidden_params", None)
         if isinstance(settled_hidden_params, dict):
             for poll_scoped_key in ("response_cost", "model_id", "litellm_model_name"):
                 settled_hidden_params.pop(poll_scoped_key, None)
+        if not self.model and result.model:
+            self.model = result.model
+            self.model_call_details["model"] = result.model
         self._reset_success_emission_dedupe()
         await self.async_success_handler(result=result)
 

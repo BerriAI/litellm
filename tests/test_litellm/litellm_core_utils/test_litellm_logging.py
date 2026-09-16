@@ -3977,9 +3977,7 @@ def test_get_standard_logging_object_payload_carries_matched_access_groups(loggi
             "model": "gpt-4o",
             "messages": [],
             "litellm_params": {
-                "metadata": {
-                    "user_api_key_matched_model_access_groups": ["premium-pool", "shared-pool"]
-                },
+                "metadata": {"user_api_key_matched_model_access_groups": ["premium-pool", "shared-pool"]},
                 "proxy_server_request": {"body": {}},
             },
         },
@@ -4063,9 +4061,7 @@ def _model_router_response(selected_model: str, stamp: bool):
     from litellm.types.utils import ModelResponse
 
     response = ModelResponse(model=selected_model)
-    response._hidden_params = (
-        {AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model} if stamp else {}
-    )
+    response._hidden_params = {AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model} if stamp else {}
     return response
 
 
@@ -4089,9 +4085,7 @@ def test_standard_logging_payload_uses_stamped_model_router_model(logging_obj):
             "messages": [],
             "litellm_params": {"metadata": {}},
         },
-        init_response_obj=_model_router_response(
-            "azure_ai/grok-4-1-fast-reasoning", stamp=True
-        ),
+        init_response_obj=_model_router_response("azure_ai/grok-4-1-fast-reasoning", stamp=True),
         start_time=now,
         end_time=now,
         logging_obj=logging_obj,
@@ -4123,9 +4117,7 @@ def test_standard_logging_payload_keeps_requested_model_without_router_stamp(
             "messages": [],
             "litellm_params": {"metadata": {}},
         },
-        init_response_obj=_model_router_response(
-            "azure_ai/grok-4-1-fast-reasoning", stamp=False
-        ),
+        init_response_obj=_model_router_response("azure_ai/grok-4-1-fast-reasoning", stamp=False),
         start_time=now,
         end_time=now,
         logging_obj=logging_obj,
@@ -4920,6 +4912,92 @@ async def test_background_interaction_completion_rebills_after_in_progress_succe
 
 
 @pytest.mark.asyncio
+async def test_background_interaction_completion_adopts_the_model_of_an_agent_create():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = LitellmLogging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="acreate",
+        start_time=time.time(),
+        litellm_call_id="interactions-call-id",
+        function_id="interactions-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="", custom_llm_provider="gemini", input="hi"
+    )
+    in_progress = InteractionsAPIResponse(id="interactions/abc", agent="deep-research", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress, start_time=dt.datetime.now(), end_time=dt.datetime.now()
+    )
+    assert not logging_obj.model_call_details.get("model")
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        agent="deep-research",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["model"] == "gemini-2.5-flash"
+    assert logging_obj.model_call_details["standard_logging_object"]["model"] == "gemini-2.5-flash"
+    assert logging_obj.model_call_details["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_bills_a_provider_reported_price_as_is():
+    """A settled body that carries the provider's own price (an Anthropic managed agent session's
+    list cost) is billed at that price, not repriced from its token counts."""
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="sesn_1", model="claude-haiku-4-5", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress, start_time=dt.datetime.now(), end_time=dt.datetime.now()
+    )
+
+    completed = InteractionsAPIResponse(
+        id="sesn_1",
+        model="claude-haiku-4-5",
+        status="completed",
+        steps=[],
+        usage={"total_input_tokens": 100, "total_cached_tokens": 0, "total_output_tokens": 50, "total_tokens": 150},
+    )
+    completed._hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": 1.87}}
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["response_cost"] == 1.87
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == 1.87
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_keeps_the_model_the_create_named():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.0-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["model"] == "gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
 async def test_background_interaction_completion_prices_the_settled_body_itself():
     """
     The poll fetches the settled body through its own client call, which
@@ -5613,9 +5691,7 @@ class TestNonInferenceCallTypesAreNotBilled:
             init_response_obj=self._retrieved_response(),
             start_time=now,
             end_time=now,
-            logging_obj=self._logging_obj(
-                "aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA
-            ),
+            logging_obj=self._logging_obj("aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA),
             status="success",
         )
 
@@ -5861,9 +5937,7 @@ async def test_streaming_success_callbacks_survive_cost_calculation_failure():
     releasing.async_log_success_event = AsyncMock()
 
     patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
-    with patcher, patch.object(
-        logging_obj, "_response_cost_calculator", side_effect=ValueError("bad usage block")
-    ):
+    with patcher, patch.object(logging_obj, "_response_cost_calculator", side_effect=ValueError("bad usage block")):
         await logging_obj.async_success_handler(result=_assembled_stream_result())
 
     assert logging_obj.model_call_details["response_cost"] is None
@@ -5876,8 +5950,9 @@ async def test_streaming_success_callbacks_survive_standard_logging_payload_fail
     releasing.async_log_success_event = AsyncMock()
 
     patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
-    with patcher, patch.object(
-        logging_obj, "_build_standard_logging_payload", side_effect=ValueError("incomplete stream")
+    with (
+        patcher,
+        patch.object(logging_obj, "_build_standard_logging_payload", side_effect=ValueError("incomplete stream")),
     ):
         await logging_obj.async_success_handler(result=_assembled_stream_result())
 
@@ -6225,6 +6300,8 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
             )
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
+
+
 def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
     """With LITELLM_OTEL_V2 on and operator credentials present, the "newrelic"
     callback builds the OTel v2 logger (per-team credential routing); with the
@@ -6380,7 +6457,9 @@ def test_get_error_information_skips_traceback_for_budget_rejection_with_provide
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     assert litellm.log_client_error_tracebacks is False
-    over_budget = _raise_and_catch(litellm.BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic"))
+    over_budget = _raise_and_catch(
+        litellm.BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic")
+    )
     result = StandardLoggingPayloadSetup.get_error_information(over_budget)
     assert result["error_code"] == "429"
     assert result["llm_provider"] == "anthropic"
@@ -6953,9 +7032,7 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
             ],
             "model": "EmbeddingsGigaR",
         },
-        request=httpx.Request(
-            "POST", "https://gigachat.devices.sberbank.ru/api/v1/embeddings"
-        ),
+        request=httpx.Request("POST", "https://gigachat.devices.sberbank.ru/api/v1/embeddings"),
     )
 
     _, _, swapped_result = logging_obj._success_handler_helper_fn(
@@ -6974,12 +7051,14 @@ def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervene
     request-level guardrail_status but never mask an intervention."""
     flagged = {"guardrail_status": "guardrail_flagged"}
 
-    assert _get_status_fields(
-        "success", [{"guardrail_status": "success"}, flagged], None
-    )["guardrail_status"] == "guardrail_flagged"
-    assert _get_status_fields(
-        "success", [flagged, {"guardrail_status": "guardrail_intervened"}], None
-    )["guardrail_status"] == "guardrail_intervened"
+    assert (
+        _get_status_fields("success", [{"guardrail_status": "success"}, flagged], None)["guardrail_status"]
+        == "guardrail_flagged"
+    )
+    assert (
+        _get_status_fields("success", [flagged, {"guardrail_status": "guardrail_intervened"}], None)["guardrail_status"]
+        == "guardrail_intervened"
+    )
 
 
 def test_get_error_information_redacts_provider_key_from_upstream_url():
@@ -7032,22 +7111,41 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
 
             return httpx.Response(200, json=mock_responses_api_response(content).model_dump())
         if provider == "anthropic":
-            return httpx.Response(200, json={
-                "id": "msg-audit", "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
-                "content": [{"type": "text", "text": content}], "stop_reason": "end_turn",
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg-audit",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-haiku-4-5",
+                    "content": [{"type": "text", "text": content}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            )
         if provider == "bedrock":
-            return httpx.Response(200, json={
-                "output": {"message": {"role": "assistant", "content": [{"text": content}]}},
-                "stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
-                "metrics": {"latencyMs": 1},
-            })
-        return httpx.Response(200, json={
-            "id": "chatcmpl-audit", "object": "chat.completion", "created": 0, "model": "gpt-5.6",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        })
+            return httpx.Response(
+                200,
+                json={
+                    "output": {"message": {"role": "assistant", "content": [{"text": content}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+                    "metrics": {"latencyMs": 1},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-audit",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
 
     async def capture(kwargs, response_obj, start_time, end_time):
         logs.put_nowait(kwargs["standard_logging_object"])
@@ -7058,11 +7156,15 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
         handler.client = http_client
         client: Final = (
             AsyncAzureOpenAI(
-                api_key="transport-only", azure_endpoint="https://azure.invalid",
-                api_version="2025-04-01-preview", http_client=http_client,
+                api_key="transport-only",
+                azure_endpoint="https://azure.invalid",
+                api_version="2025-04-01-preview",
+                http_client=http_client,
             )
-            if provider == "azure" else AsyncOpenAI(api_key="transport-only", http_client=http_client)
-            if provider == "openai" else handler
+            if provider == "azure"
+            else AsyncOpenAI(api_key="transport-only", http_client=http_client)
+            if provider == "openai"
+            else handler
         )
         model: Final = {
             "openai": "openai/gpt-5.6",
@@ -7075,23 +7177,44 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
         async def run(marker: str) -> None:
             if provider == "responses":
                 await litellm.aresponses(
-                    model=model, api_key="transport-only", client=client, max_output_tokens=128,
-                    instructions="classifier-rubric", input=marker,
+                    model=model,
+                    api_key="transport-only",
+                    client=client,
+                    max_output_tokens=128,
+                    instructions="classifier-rubric",
+                    input=marker,
                     metadata={"internal_call_origin": "autorouter_classifier"},
                     proxy_server_request={"body": {}, "originating_request_masked": {"input": f"source-only-{marker}"}},
-                    success_callback=[capture], num_retries=0,
+                    success_callback=[capture],
+                    num_retries=0,
                 )
                 return
             await litellm.acompletion(
-                model=model, api_key="transport-only", client=client, max_tokens=128,
-                aws_access_key_id="transport-only", aws_secret_access_key="transport-only", aws_region_name="us-east-1",
+                model=model,
+                api_key="transport-only",
+                client=client,
+                max_tokens=128,
+                aws_access_key_id="transport-only",
+                aws_secret_access_key="transport-only",
+                aws_region_name="us-east-1",
                 messages=[{"role": "system", "content": "classifier-rubric"}, {"role": "user", "content": marker}],
                 metadata={"internal_call_origin": "autorouter_classifier"},
                 proxy_server_request={"body": {}, "originating_request_masked": {"input": f"source-only-{marker}"}},
-                success_callback=[capture], num_retries=0,
-                **({"api_base": "https://azure.invalid", "api_version": "2025-04-01-preview"} if provider == "azure" else {}),
-                **({"extra_body": {"audit_context": "provider-extra"}, "extra_headers": {"X-Audit": "header-only-secret"}}
-                   if provider in ("openai", "azure") else {}),
+                success_callback=[capture],
+                num_retries=0,
+                **(
+                    {"api_base": "https://azure.invalid", "api_version": "2025-04-01-preview"}
+                    if provider == "azure"
+                    else {}
+                ),
+                **(
+                    {
+                        "extra_body": {"audit_context": "provider-extra"},
+                        "extra_headers": {"X-Audit": "header-only-secret"},
+                    }
+                    if provider in ("openai", "azure")
+                    else {}
+                ),
             )
 
         await asyncio.gather(run("request-one"), run("request-two"))
@@ -7115,14 +7238,17 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
 @pytest.mark.parametrize("redaction", ["none", "global", "request", "header"])
 @pytest.mark.parametrize("status", ["success", "failure"])
 @pytest.mark.parametrize("call_type", ["completion", "acompletion", "responses", "aresponses"])
-def test_classifier_audit_obeys_message_logging_before_payload_emission(logging_obj, monkeypatch, redaction, status, call_type):
+def test_classifier_audit_obeys_message_logging_before_payload_emission(
+    logging_obj, monkeypatch, redaction, status, call_type
+):
     from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 
     monkeypatch.setattr(litellm, "turn_off_message_logging", redaction == "global")
     params: Final = {
-        "metadata": {"internal_call_origin": "autorouter_classifier", **(
-            {"headers": {"x-litellm-enable-message-redaction": "true"}} if redaction == "header" else {}
-        )},
+        "metadata": {
+            "internal_call_origin": "autorouter_classifier",
+            **({"headers": {"x-litellm-enable-message-redaction": "true"}} if redaction == "header" else {}),
+        },
         "proxy_server_request": {"body": {}, "originating_request_masked": {"input": "source-only"}},
     }
     logging_obj.call_type = call_type
@@ -7135,8 +7261,12 @@ def test_classifier_audit_obeys_message_logging_before_payload_emission(logging_
     )
     now: Final = datetime.datetime.now()
     payload: Final = get_standard_logging_object_payload(
-        kwargs={**logging_obj.model_call_details, "call_type": call_type}, init_response_obj={},
-        start_time=now, end_time=now, logging_obj=logging_obj, status=status,
+        kwargs={**logging_obj.model_call_details, "call_type": call_type},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status=status,
     )
     assert payload is not None
     if redaction == "none":
