@@ -31,9 +31,14 @@ def _collect_without_injected_pythonpath(target: str) -> subprocess.CompletedPro
 
 
 def _assert_collected(result: subprocess.CompletedProcess[str], target: str) -> None:
-    assert result.returncode == 0, f"{target} exited {result.returncode}\n{result.stdout}\n{result.stderr}"
+    # The exit code cannot carry this: tests/integration/conftest.py raises a UsageError
+    # under GITHUB_ACTIONS to keep these contracts owned by CircleCI, so a healthy
+    # collection and a failed import both exit 4. Only the summary line separates them.
     match: Final = COLLECTED_COUNT.search(result.stdout)
-    assert match is not None, f"{target} reported no collection summary\n{result.stdout}"
+    assert match is not None, (
+        f"{target} never reached a collection summary, so its imports did not resolve\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
     assert int(match.group(1)) > 0, f"{target} collected nothing, so nothing was verified\n{result.stdout}"
 
 
