@@ -15,8 +15,6 @@ from litellm.types.utils import (
 
 MODEL = "accounts/fireworks/models/glm-5p2"
 INPUT_COST = 1.4e-06
-# Read the cached rate from the price map so this test tracks the shipped value
-# (glm-5p2 is $0.14/1M) instead of hardcoding a number that breaks when it changes.
 CACHE_READ_COST = litellm.get_model_info(model=MODEL, custom_llm_provider="fireworks_ai")["cache_read_input_token_cost"]
 OUTPUT_COST = 4.4e-06
 
