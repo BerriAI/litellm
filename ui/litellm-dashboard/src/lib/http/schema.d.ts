@@ -9676,6 +9676,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nvidia_nim/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        get: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__get"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        put: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__put"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        post: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__post"];
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        delete: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Nvidia Nim Proxy Route
+         * @description Relay a native NVIDIA NIM request through a LiteLLM model group.
+         *
+         *     `{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's
+         *     `api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through
+         *     virtual key auth, model access checks, and spend logging.
+         */
+        patch: operations["nvidia_nim_proxy_route_nvidia_nim__endpoint__patch"];
+        trace?: never;
+    };
     "/ocr": {
         parameters: {
             query?: never;
@@ -53481,6 +53537,161 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nvidia_nim_proxy_route_nvidia_nim__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
