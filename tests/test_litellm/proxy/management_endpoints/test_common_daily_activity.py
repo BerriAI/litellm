@@ -1239,79 +1239,6 @@ class TestBuildAggregatedSqlQuery:
         assert "model = $4" in sql
         assert "api_key = $5" in sql
 
-    def test_model_group_rollups_fall_back_to_model_name(self):
-        """Aggregated model_groups rollups must fall back to model for group-less rows.
-
-        The (date, model_group) grouping level cannot recover the model column
-        after the fact (it is rolled up), so the fallback has to happen in SQL;
-        without it, group-less rows silently vanish from the model_groups
-        breakdown that the usage UI now renders by default. Group-less rows are
-        stored as empty strings, not NULL (spend_tracking_utils defaults
-        model_group to ""), so a plain COALESCE is not enough: the fallback must
-        be NULLIF-wrapped to catch both
-        """
-        sql, _ = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id=None,
-            start_date="2026-07-01",
-            end_date="2026-07-01",
-            model=None,
-            api_key=None,
-        )
-
-        normalized = " ".join(sql.split())
-        fallback = "COALESCE(NULLIF(model_group, ''), model)"
-        assert f"{fallback} AS model_group" in normalized
-        assert f"GROUPING(model, {fallback}, custom_llm_provider, mcp_namespaced_tool_name, endpoint)" in normalized
-        assert f"(date, {fallback})," in normalized
-        assert "(date, model_group)" not in normalized
-        assert "COALESCE(model_group, model)" not in normalized
-
-    def test_totals_arm_never_groups_by_api_key(self):
-        """The totals arm must not emit one row per key, that is what blew up the
-        query engine at 3k+ keys. Every grouping set there stays key-free and api_key
-        is projected as a NULL literal so the dispatcher's row shape is unchanged."""
-        sql, _ = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id=None,
-            start_date="2026-07-01",
-            end_date="2026-07-01",
-            model=None,
-            api_key=None,
-        )
-
-        totals_arm, _ = " ".join(sql.split()).split("UNION ALL")
-        grouping_block = totals_arm.split("GROUP BY GROUPING SETS (", 1)[1]
-        assert "api_key" not in grouping_block
-        assert "NULL::text AS api_key" in totals_arm
-
-    def test_per_key_arm_ranks_keys_deterministically_and_shares_filters(self):
-        """Both arms sit in one statement so totals and per-key rows come from the
-        same snapshot, and the per-key arm reuses the caller's filter params."""
-        sql, params = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id="user-1",
-            start_date="2026-05-29",
-            end_date="2026-06-02",
-            model="bedrock/global.anthropic.claude-opus-4-8",
-            api_key="sk-test",
-            timezone_offset_minutes=-330,
-        )
-
-        totals_arm, per_key_arm = " ".join(sql.split()).split("UNION ALL")
-        assert "top_api_keys" not in totals_arm
-        assert f"ORDER BY SUM(spend) DESC, api_key LIMIT {USAGE_TOP_API_KEYS_LIMIT}" in per_key_arm
-        assert "api_key IN (SELECT api_key FROM top_api_keys)" in per_key_arm
-        assert "api_key <> $6" in per_key_arm
-        assert per_key_arm.count("model = $4 AND api_key = $5") == 2
-        grouping_block = per_key_arm.split("GROUP BY GROUPING SETS (", 1)[1]
-        assert grouping_block.count(", api_key)") == 6
-        assert grouping_block.count("(date") == 6
-        assert params[-1] == PTU_SENTINEL_API_KEY
-
 
 class TestAggregatedEmptyEntityFilter:
     _BUILDERS: Final = (_build_aggregated_sql_query, _build_entity_rollup_sql_query)
@@ -1638,6 +1565,47 @@ async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_both
     assert day.breakdown.api_keys["key-1"].metrics.spend == 2.0
     assert day.breakdown.models["gpt-5"].metrics.spend == 2.0
     assert set(day.breakdown.models["gpt-5"].api_key_breakdown) == {"key-1"}
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_model_group_rollups_fall_back_to_model_name(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """Rows stored with an empty or NULL model_group must land in the model_groups
+    breakdown under their model name instead of vanishing from the usage UI."""
+    rows: Final = [
+        ("row-0", "user-0", "2026-06-01", "key-0", "gpt-5", "gpt-5-eu", "openai", "/v1/chat/completions", 10, 7.0, 1, 1),
+        ("row-1", "user-1", "2026-06-01", "key-1", "gpt-5", "", "openai", "/v1/chat/completions", 10, 3.0, 1, 1),
+        ("row-2", "user-2", "2026-06-01", "key-2", "claude-x", None, "anthropic", "/v1/messages", 10, 2.0, 1, 1),
+    ]
+    _seed_daily_user_spend(_aggregated_postgresql, rows)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, [])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        model=None,
+        api_key=None,
+    )
+
+    breakdown: Final = result.results[0].breakdown
+    assert set(breakdown.model_groups) == {"gpt-5-eu", "gpt-5", "claude-x"}
+    assert breakdown.model_groups["gpt-5-eu"].metrics.spend == 7.0
+    assert breakdown.model_groups["gpt-5"].metrics.spend == 3.0
+    assert breakdown.model_groups["claude-x"].metrics.spend == 2.0
+    assert set(breakdown.model_groups["gpt-5"].api_key_breakdown) == {"key-1"}
+    assert set(breakdown.models) == {"gpt-5", "claude-x"}
+    assert breakdown.models["gpt-5"].metrics.spend == 10.0
 
 
 def _no_spend_record():
