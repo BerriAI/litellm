@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+import litellm.exceptions
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -362,5 +363,5 @@ class TestApplyOutputConfigDegradation:
             return_value=True,
         ):
             cfg = AnthropicConfig()
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.exceptions.BadRequestError, match="Invalid effort value"):
                 cfg._apply_output_config({}, "test-model", {"output_config": {"effort": "bogus"}})
