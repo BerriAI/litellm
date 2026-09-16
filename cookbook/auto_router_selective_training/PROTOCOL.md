@@ -4,6 +4,19 @@ The target is preserving stronger-model task quality while reducing total infere
 
 The primary model pair is GPT-5.6 Luna and GPT-5.6 Sol at high effort. Sonnet-5 and Opus-5 are additional final-evaluation controls. Model identities and gateway billing must match each response. The original capability classifier and fused V2 are baselines, both using the same Luna judge
 
+The final allocation below supersedes the initial targets and intermediate preparation counts recorded in the amendment history. Training uses 160 tasks, validation uses 64 eligible tasks, and final evaluation uses 125 tasks. Each final task has one independent attempt from each of the four models, for 500 attempts
+
+| Benchmark | Training | Validation | Final |
+|---|---:|---:|---:|
+| MBPP+ | 80 | 29 | 50 |
+| LiveCodeBench | 50 | 20 | 25 |
+| SWE-bench Verified | 25 | 10 | 25 |
+| Terminal-Bench | 5 | 5 | 25 |
+
+The initial final runner used three concurrent SWE task workers and two concurrent Terminal trials. The corrected Anthropic-control rerun uses one SWE worker and two Terminal trials, prioritizing remaining Luna/Sol Terminal attempts. These limits share the machine with other work and do not change individual model budgets. The benchmark selection and offline environment controls make this an adapted subset, not an official leaderboard submission
+
+The following paragraphs preserve the initial plan and its amendments, including why some preparation targets changed
+
 Development uses 25 SWE-bench Verified training tasks and 10 validation tasks, plus 80 MBPP+ training tasks and 30 validation tasks. Terminal-Bench task counts will be fixed after environment-only eligibility checks, targeting at least 15 training and 10 validation tasks. Final evaluation uses 25 SWE-bench, 25 Terminal-Bench and 50 MBPP+ tasks. SWE-bench repositories are disjoint across splits; previously inspected tasks are excluded. Terminal-Bench variants of the same mechanism must remain in the same split
 
 Solver outcomes are new independent paired attempts. No gold fixes, future Git objects, hidden tests, prior trajectories or benchmark results are exposed to solvers. Docker hosts, credentials and task sources are not mounted into solver environments. SWE-bench uses a one-commit Git database with no unreachable objects. Terminal-Bench tests and reference solution are uploaded only in isolated control or grading phases. MBPP solutions are generated from prompts only and executed in a sandbox by EvalPlus
@@ -49,3 +62,49 @@ Final solver scheduling uses up to four concurrent tasks/trials per agentic benc
 Development allocation is now fixed at 160 paired training tasks and 64 eligible validation tasks: 80/29 MBPP+, 50/20 LiveCodeBench, 25/10 SWE-bench and 5/5 Terminal-Bench. Additional control-eligible Terminal tasks are reserved for final evaluation or left unused. This keeps card synthesis and all calibration fits on one fixed training corpus while final environment preparation continues
 
 Before final inference, freeze a diagnostic ablation per classifier, card variant, stage and training family. Each uses the same validation criterion of zero Sol-only losses, no per-benchmark quality loss and cost no greater than Sol. If no family candidate qualifies, record an explicit always-Sol fallback. Report all of these ablations, without selecting another winner from final scores, to distinguish card changes, probability fitting and threshold fitting
+
+During final execution, a cost audit read a completed Terminal attempt ledger while the periodic exporter was copying that same ledger over its destination. A subsequent read matched the saved run cost exactly. Exported records now use atomic file replacement so concurrent readers never see a partially copied file. No solver attempt, billed response, grade, fitted policy or routing decision was changed
+
+
+## Terminal runner interruption, September 16 UTC
+
+At 00:06 UTC the Terminal runner, review watcher and keep-awake processes were absent. No terminating error was recorded; the cause remains unknown. The two active Scheme-interpreter containers were still running and neither had a completed agent record or trial result. Their partial transcripts, 95 billed responses ($4.252549 known), outstanding request IDs and container diffs were archived in `infrastructure_interruptions/20260916-terminal-process-loss`. Two outstanding requests have unknown billing and are not assumed free
+
+The 58 completed Terminal trial results were hashed and preserved, without consulting their quality labels. Harbor resumed the identical job configuration and reran only the two interrupted attempts and 40 unstarted trials. The custom agent has no supported trajectory-resume path. The restarted processes use independent process sessions; inference budgets, model settings, task allocation and frozen policies are unchanged. Archived interruption costs belong to research overhead, separately from deployment policy cost. No completed attempt was rerun because of its outcome
+
+
+## Response-limit diagnostics
+
+Metadata inspection during the still-blinded final run found repeated length-stopped responses that used all 8,192 completion tokens without producing a tool call or visible text. Further inspection discovered the Anthropic message-preservation defect documented below. The affected agentic controls are superseded; their costs remain research overhead, and their responses are excluded from final quality and execution tables. The defect's effect on empty responses has not been established. `execution_diagnostics.json` describes only retained attempts. Empty length stops in corrected attempts are billed behavior under the frozen budget and do not themselves trigger a retry
+
+## Anthropic tool-continuation correction, September 16 UTC
+
+The benchmark client reconstructed assistant messages from content, tool calls and OpenAI reasoning items. This discarded Anthropic `thinking_blocks` and `provider_specific_fields`, which must be preserved on tool continuation. The corrected adapter returns the complete Anthropic assistant message unchanged. Both Sonnet and Opus passed live thinking-plus-tool round trips through the gateway. See the [provider's thinking/tool documentation](https://platform.claude.com/docs/en/build-with-claude/thinking-tool-workflows) and `harness_corrections/anthropic_thinking/live_probe.json`
+
+All 50 SWE and 50 Terminal Anthropic controls are run under the correction, regardless of old outcomes. Fifty completed SWE attempts, 32 completed Terminal attempts and two in-progress Terminal trials were archived with hashes before restarting. The old final quality labels were not inspected. Single-response Anthropic MBPP+/LiveCodeBench controls are unaffected because they have no tool continuation. The OpenAI message merger is unchanged across 3,218 saved responses; 2,691 saved OpenAI tool turns were checked, including 2,678 containing intact reasoning items. All Luna/Sol training, validation, final attempts, frozen coefficients, thresholds and route selections are retained
+
+The archive records 5,360 unaffected files verified unchanged, the preserved trial-result locations, canceled request IDs and the replacement schedule. Superseded controls, interrupted requests and adapter probes are included separately in research spending. Unknown outstanding-request bills are not assumed zero. SWE reruns use the retained peer's image digest and a fresh model-specific grader run prefix. No task, individual inference budget, prompt, grading criterion or fitted policy changed. The corrected Terminal agent identifies itself as adapter3
+
+Once all 250 Luna/Sol final attempts and their grades are complete and the post-attempt routing plan is frozen, a primary-pair report may be generated while the additional Anthropic controls finish. This is an early release of the same prespecified comparison, with all 125 final tasks included; it does not select new policies or refit using final outcomes. The complete report still requires all 500 valid final attempts
+
+
+## Review-route readiness guard
+
+Before freezing the post-attempt routing plan, the runner now requires each Terminal Luna attempt to have completed grading with no infrastructure exception. Normal agent timeouts remain eligible. This guard inspects only completion and exception metadata; success labels and rewards are not inputs to any routing decision. A synthetic regression check verifies the same readiness result for successful and unsuccessful attempts and rejects transport failures. Learned coefficients, thresholds, features and candidate selections are unchanged
+
+
+## Host low-power sleep and partial billing, September 16 UTC
+
+The host entered low-power sleep at 02:42:53 UTC with 1% battery and woke on AC at 03:07:43 UTC, a 1,490-second pause despite the existing idle-sleep assertion. All benchmark processes survived. The in-flight Luna requests on regex-chess and path-tracing returned transport ReadError; the pinned mini-swe-agent model wrapper retried them automatically and both attempts continued. No whole attempt was rerun and no global power settings were changed. Power events and request IDs are retained in infrastructure_interruptions/20260916-low-power-sleep
+
+Known billed responses stay attached to their attempts. The two interrupted requests have unknown charges. Policy reports count every unmetered request in the selected solver attempt, classifier/reviewer calls and discarded Luna attempt on escalation. Affected costs are lower bounds; savings versus a fully metered Sol baseline are upper bounds. Missing bills are not assumed zero. If a baseline is also unmetered, its cost comparison is marked unresolved. Cost uncertainty intervals use recorded bills only. This accounting change does not alter coefficients, thresholds or routes
+
+Saved wall durations include host sleep. Elapsed duration is absent from both deterministic route features and reviewer evidence, so the pause itself is not used as a predictive feature. The report makes no latency comparison based on these durations
+
+
+## Execution budget clarification
+
+SWE solver containers have a 45-minute configured lifetime in both the original and corrected runner. Each shell command has a 90-second timeout with a five-second kill grace. Terminal agent and verifier timeouts come from each pinned task configuration. These environment limits apply in addition to the 150-call, USD 5 pre-query and 8,192-token response limits; this study does not measure unrestricted model performance.
+
+
+The final primary billing audit also found one earlier DNA-assembly review ConnectTimeout with no successful response ledger. This is separate from the two host-sleep solver interruptions. Research accounting now discovers transport-only ledgers as well as billed-response ledgers. Review-cascade cost comparisons therefore carry three unmetered requests, while Luna-only comparisons carry two
