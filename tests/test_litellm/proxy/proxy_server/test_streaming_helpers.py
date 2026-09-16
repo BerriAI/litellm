@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -271,9 +273,9 @@ def test_restamp_streaming_chunk_model_overrides_model_on_basemodel():
     snapshot = {
         "model": new_chunk.model,
         "logged": logged,
-        "same_object": new_chunk is chunk,
+        "retained_model": chunk.model,
     }
-    assert snapshot == {"model": "gpt-4", "logged": True, "same_object": True}
+    assert snapshot == {"model": "gpt-4", "logged": True, "retained_model": "openai/internal-x"}
 
 
 @pytest.mark.parametrize("return_raw_model_name", [False, True])
@@ -300,6 +302,7 @@ def test_restamp_streaming_chunk_model_overrides_model_on_dict():
         model_mismatch_logged=True,
     )
     assert new_chunk["model"] == "gpt-4"
+    assert chunk["model"] == "internal"
     assert logged is True
 
 
@@ -314,6 +317,7 @@ def test_restamp_streaming_chunk_model_uses_fallback_model_from_metadata():
         fallback_model_from_metadata="fallback-model",
     )
     assert new_chunk.model == "fallback-model"
+    assert chunk.model == "openai/internal-fallback"
     assert logged is True
 
 
@@ -627,6 +631,94 @@ def test_format_streaming_sse_chunk_invalid_empty_string_still_wraps():
 # ---------------------------------------------------------------------------
 # async_data_generator
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_usage", [False, True])
+async def test_async_data_generator_preserves_anthropic_alias_stream_cost(include_usage: bool):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    provider_model: Final = "claude-sonnet-4-6"
+    public_model: Final = "claude-sonnet-4.6"
+    final_log: Final = asyncio.get_running_loop().create_future()
+
+    async def record_cost(kwargs, completion_response, start_time, end_time):
+        final_log.set_result((kwargs["response_cost"], completion_response))
+
+    logging_obj: Final = Logging(
+        model=provider_model,
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="alias-stream-cost",
+        function_id="alias-stream-cost",
+        dynamic_async_success_callbacks=[record_cost],
+    )
+    logging_obj.update_environment_variables(
+        model=provider_model,
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="anthropic",
+    )
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg-test",
+                "type": "message",
+                "role": "assistant",
+                "model": provider_model,
+                "content": [],
+                "usage": {"input_tokens": 8, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 23}},
+        {"type": "message_stop"},
+    )
+    stream: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseIterator(
+            streaming_response=_async_iter(tuple(f"data: {json.dumps(event)}" for event in events)),
+            sync_stream=False,
+        ),
+        model=provider_model,
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": include_usage},
+    )
+    output: Final = [
+        part
+        async for part in async_data_generator(
+            response=stream,
+            user_api_key_dict=_user_auth(),
+            request_data={"model": public_model},
+        )
+    ]
+    billed_cost, completed = await asyncio.wait_for(final_log, timeout=10)
+    expected_cost: Final = litellm.completion_cost(
+        completion_response=litellm.ModelResponse(
+            model=provider_model,
+            usage=Usage(prompt_tokens=8, completion_tokens=23, total_tokens=31),
+        ),
+        custom_llm_provider="anthropic",
+    )
+    assert output[-1] == "data: [DONE]\n\n"
+    payloads: Final = tuple(
+        json.loads(part.removeprefix("data: "))
+        for part in (item.decode() if isinstance(item, bytes) else item for item in output[:-1])
+    )
+    assert all(payload["model"] == public_model for payload in payloads)
+    assert completed.usage.prompt_tokens == 8
+    assert completed.usage.completion_tokens == 23
+    assert billed_cost == pytest.approx(expected_cost)
+    assert billed_cost > 0
+    if include_usage:
+        assert payloads[-1]["usage"]["cost"] == pytest.approx(expected_cost)
 
 
 def _patch_logging_flags(monkeypatch, needs_wrap=False, needs_per_chunk=False):
