@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
 const { GET, PUT, DELETE, userRole } = vi.hoisted(() => ({
   GET: vi.fn(),
@@ -40,14 +42,21 @@ const FREE_GROUP = {
   budget: null,
 };
 
-const renderPanel = () => {
+const renderPanel = (url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  return renderWithProviders(
     <QueryClientProvider client={queryClient}>
       <AccessGroupBudgetsPanel />
     </QueryClientProvider>,
+    url,
   );
 };
+
+const groupNamesInOrder = () =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => within(row).getAllByRole("cell")[0].textContent);
 
 const openActions = async (accessGroup: string) => {
   await userEvent.click(await screen.findByTestId(`access-group-actions-${accessGroup}`));
@@ -161,5 +170,55 @@ describe("AccessGroupBudgetsPanel", () => {
         params: { path: { access_group: "premium" } },
       }),
     );
+  });
+
+  describe("URL table state", () => {
+    const manyGroups = Array.from({ length: 27 }, (_, index) => ({
+      ...FREE_GROUP,
+      access_group: `group-${String(index + 1).padStart(2, "0")}`,
+    }));
+
+    it("sorts by the column and direction named in the URL", async () => {
+      renderPanel({ searchParams: "?ag_budgets_sort_by=spend&ag_budgets_sort_order=asc" });
+
+      await screen.findByText("premium");
+
+      expect(groupNamesInOrder()).toEqual(["shared", "premium"]);
+    });
+
+    it("writes a header sort to the URL", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderPanel({ onUrlUpdate });
+      await screen.findByText("premium");
+
+      await userEvent.click(screen.getByTestId("sort-header-access_group"));
+
+      await waitFor(() =>
+        expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("ag_budgets_sort_order")).toBe("desc"),
+      );
+      expect(groupNamesInOrder()).toEqual(["shared", "premium"]);
+    });
+
+    it("opens on the page named in the URL once the groups load", async () => {
+      GET.mockResolvedValue({ data: { access_groups: manyGroups } });
+
+      renderPanel({ searchParams: "?ag_budgets_page=2" });
+
+      expect(await screen.findByText("group-27")).toBeInTheDocument();
+      expect(groupNamesInOrder()).toEqual(["group-26", "group-27"]);
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    });
+
+    it("writes a page change to the URL", async () => {
+      GET.mockResolvedValue({ data: { access_groups: manyGroups } });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderPanel({ onUrlUpdate });
+      await screen.findByText("group-01");
+
+      await userEvent.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("ag_budgets_page")).toBe("2"));
+      expect(groupNamesInOrder()).toEqual(["group-26", "group-27"]);
+    });
   });
 });

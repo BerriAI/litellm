@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 import type { PaginationState, RowSelectionState } from "@tanstack/react-table";
-import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
+
+import { renderWithProviders, screen } from "../../../tests/test-utils";
 
 import { HealthChecksTable } from "./HealthChecksTable";
 import type { HealthCheckData, HealthStatus } from "./HealthChecksTableColumns";
@@ -63,7 +65,7 @@ const rowIds = (): string[] =>
 describe("HealthChecksTable client sorting", () => {
   it("orders health status healthy > checking > unknown > unhealthy", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithProviders(
       <Harness
         data={[
           makeRow({ id: "unhealthy-row", health_status: "unhealthy" }),
@@ -81,7 +83,7 @@ describe("HealthChecksTable client sorting", () => {
 
   it("floats in-progress checks to the top, sinks never-checked, and sorts real checks most-recent-first", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithProviders(
       <Harness
         data={[
           makeRow({ id: "never", last_check: "Never checked" }),
@@ -100,7 +102,7 @@ describe("HealthChecksTable client sorting", () => {
   // "Never succeeded" is ranked below "None" -- both sink, but not to the same slot.
   it("sinks None below real successes and Never succeeded below None", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithProviders(
       <Harness
         data={[
           makeRow({ id: "never", last_success: "Never succeeded" }),
@@ -117,9 +119,71 @@ describe("HealthChecksTable client sorting", () => {
   });
 });
 
+const statusRows = [
+  makeRow({ id: "unhealthy-row", health_status: "unhealthy" }),
+  makeRow({ id: "healthy-row", health_status: "healthy" }),
+  makeRow({ id: "weird-row", health_status: "some-other-status" }),
+  makeRow({ id: "checking-row", health_status: "checking" }),
+];
+
+const lastUrl = (onUrlUpdate: Mock<OnUrlUpdateFunction>): URLSearchParams => {
+  const lastCall = onUrlUpdate.mock.calls.at(-1);
+  if (!lastCall) throw new Error("expected a URL update");
+  return lastCall[0].searchParams;
+};
+
+describe("HealthChecksTable URL sort state", () => {
+  it("keeps the fetched row order when the URL names no sort column", () => {
+    renderWithProviders(<Harness data={statusRows} />);
+
+    expect(rowIds()).toEqual(["unhealthy-row", "healthy-row", "weird-row", "checking-row"]);
+  });
+
+  it("sorts by health_sort_by and health_sort_order from the URL", () => {
+    renderWithProviders(<Harness data={statusRows} />, {
+      searchParams: "?health_sort_by=health_status&health_sort_order=desc",
+    });
+
+    expect(rowIds()).toEqual(["weird-row", "unhealthy-row", "checking-row", "healthy-row"]);
+  });
+
+  it("writes header clicks to the URL and toggles direction from the URL value", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<Harness data={statusRows} />, { onUrlUpdate });
+
+    await user.click(screen.getByTestId("sort-header-health_status"));
+
+    expect(lastUrl(onUrlUpdate).get("health_sort_by")).toBe("health_status");
+    expect(lastUrl(onUrlUpdate).get("health_sort_order")).toBeNull();
+    expect(rowIds()).toEqual(["healthy-row", "checking-row", "unhealthy-row", "weird-row"]);
+
+    await user.click(screen.getByTestId("sort-header-health_status"));
+
+    expect(lastUrl(onUrlUpdate).get("health_sort_by")).toBe("health_status");
+    expect(lastUrl(onUrlUpdate).get("health_sort_order")).toBe("desc");
+    expect(rowIds()).toEqual(["weird-row", "unhealthy-row", "checking-row", "healthy-row"]);
+  });
+
+  it("keeps the fetched page when sorting, since the sort only reorders that page", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<Harness data={statusRows} />, {
+      searchParams: "?health_page=3&health_page_size=25",
+      onUrlUpdate,
+    });
+
+    await user.click(screen.getByTestId("sort-header-model_name"));
+
+    expect(lastUrl(onUrlUpdate).get("health_sort_by")).toBe("model_name");
+    expect(lastUrl(onUrlUpdate).get("health_page")).toBe("3");
+    expect(lastUrl(onUrlUpdate).get("health_page_size")).toBe("25");
+  });
+});
+
 describe("HealthChecksTable rows", () => {
   it("renders the live checking cell while a row is loading and disables its run button", () => {
-    render(<Harness data={[makeRow({ id: "busy", health_loading: true, health_status: "checking" })]} />);
+    renderWithProviders(<Harness data={[makeRow({ id: "busy", health_loading: true, health_status: "checking" })]} />);
 
     expect(screen.getByText("Checking...")).toBeInTheDocument();
     expect(screen.getByTestId("run-health-check-btn")).toBeDisabled();
@@ -128,7 +192,7 @@ describe("HealthChecksTable rows", () => {
   it("runs a health check for the row's model id", async () => {
     const user = userEvent.setup();
     const onRunHealthCheck = vi.fn();
-    render(<Harness data={[makeRow({ id: "deployment-9" })]} onRunHealthCheck={onRunHealthCheck} />);
+    renderWithProviders(<Harness data={[makeRow({ id: "deployment-9" })]} onRunHealthCheck={onRunHealthCheck} />);
 
     await user.click(screen.getByTestId("run-health-check-btn"));
 
@@ -138,7 +202,7 @@ describe("HealthChecksTable rows", () => {
   it("opens the model detail from the identity cell", async () => {
     const user = userEvent.setup();
     const onSelectModel = vi.fn();
-    render(<Harness data={[makeRow({ id: "deployment-9" })]} onSelectModel={onSelectModel} />);
+    renderWithProviders(<Harness data={[makeRow({ id: "deployment-9" })]} onSelectModel={onSelectModel} />);
 
     await user.click(screen.getByRole("button", { name: /deployment-9/ }));
 
@@ -146,7 +210,7 @@ describe("HealthChecksTable rows", () => {
   });
 
   it("surfaces the error detail button only when a fuller error exists", () => {
-    const { rerender } = render(
+    const { rerender } = renderWithProviders(
       <Harness
         data={[makeRow({ id: "m1", health_status: "unhealthy" })]}
         modelHealthStatuses={{
@@ -168,7 +232,7 @@ describe("HealthChecksTable rows", () => {
   });
 
   it("renders the empty state when the page has no models", () => {
-    render(<Harness data={[]} />);
+    renderWithProviders(<Harness data={[]} />);
 
     expect(screen.getByText("No models found")).toBeInTheDocument();
   });

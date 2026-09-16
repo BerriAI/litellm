@@ -1,12 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { parseAsString, useQueryState } from "nuqs";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import { getCallbacksCall } from "@/components/networking";
 import { useUpdateRetryPolicy } from "@/app/(dashboard)/hooks/routerSettings/useUpdateRetryPolicy";
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
+import { useUrlTab } from "@/hooks/useUrlTab";
+
+const GLOBAL_SCOPE = "global";
+const RETRY_SCOPE_KEY = "retry_scope";
 
 interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
@@ -24,10 +29,16 @@ interface RouterSettings {
 
 export default function ModelRetrySettingsPanel() {
   const { accessToken, userId: userID, userRole } = useAuthorized();
-  const { availableModelGroups } = useModelDashboardData();
+  const { availableModelGroups, isLoading: isLoadingModelGroups } = useModelDashboardData();
   const updateRetryPolicy = useUpdateRetryPolicy(accessToken);
 
-  const [retryScope, setRetryScope] = useState<string | null>("global");
+  const [requestedScope] = useQueryState(RETRY_SCOPE_KEY, parseAsString.withDefault(GLOBAL_SCOPE));
+  const allowedScopes = useMemo(
+    () => [GLOBAL_SCOPE, ...(isLoadingModelGroups ? [requestedScope] : availableModelGroups)],
+    [isLoadingModelGroups, requestedScope, availableModelGroups],
+  );
+  const [retryScope, setRetryScope] = useUrlTab(allowedScopes, GLOBAL_SCOPE, RETRY_SCOPE_KEY);
+  const selectRetryScope = useCallback((scope: string | null) => setRetryScope(scope ?? GLOBAL_SCOPE), [setRetryScope]);
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
   const [globalRetryPolicy, setGlobalRetryPolicy] = useState<GlobalRetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
@@ -86,7 +97,7 @@ export default function ModelRetrySettingsPanel() {
   return (
     <ModelRetrySettingsTab
       selectedModelGroup={retryScope}
-      setSelectedModelGroup={setRetryScope}
+      setSelectedModelGroup={selectRetryScope}
       availableModelGroups={availableModelGroups}
       globalRetryPolicy={globalRetryPolicy}
       setGlobalRetryPolicy={setGlobalRetryPolicy}

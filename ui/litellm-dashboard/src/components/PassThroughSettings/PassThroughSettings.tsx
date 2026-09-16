@@ -14,6 +14,7 @@ import AddPassThroughEndpoint from "../add_pass_through";
 import PassThroughInfoView from "../pass_through_info";
 import { toast } from "@/lib/toast";
 import { PassThroughEndpointsTable } from "./PassThroughEndpointsTable";
+import { findPassThroughEndpoint, usePassThroughDetailRouting } from "./passThroughDetailRouting";
 
 interface PassThroughSettingsProps {
   accessToken: string | null;
@@ -40,7 +41,7 @@ export interface passThroughItem {
 const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
+  const { endpointKey, openEndpoint, closeEndpoint } = usePassThroughDetailRouting();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [endpointToDelete, setEndpointToDelete] = useState<string | null>(null);
 
@@ -103,8 +104,12 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
     return null;
   }
 
-  if (selectedEndpointId) {
-    const selectedEndpoint = generalSettings.find((endpoint) => endpoint.id === selectedEndpointId);
+  if (endpointKey && isLoading) {
+    return <div className="p-4">Loading...</div>;
+  }
+
+  if (endpointKey) {
+    const selectedEndpoint = findPassThroughEndpoint(generalSettings, endpointKey);
 
     if (!selectedEndpoint) {
       return <div>Endpoint not found</div>;
@@ -112,8 +117,9 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
 
     return (
       <PassThroughInfoView
+        key={selectedEndpoint.id ?? selectedEndpoint.path}
         endpointData={selectedEndpoint}
-        onClose={() => setSelectedEndpointId(null)}
+        onClose={closeEndpoint}
         accessToken={accessToken}
         isAdmin={userRole === "Admin" || userRole === "admin"}
         premiumUser={premiumUser}
@@ -139,7 +145,7 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
       <PassThroughEndpointsTable
         endpoints={generalSettings}
         isLoading={isLoading}
-        onEndpointClick={setSelectedEndpointId}
+        onEndpointClick={openEndpoint}
         onDeleteClick={handleDelete}
       />
 

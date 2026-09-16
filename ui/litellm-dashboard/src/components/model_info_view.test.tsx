@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import React, { ReactNode } from "react";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
@@ -186,8 +187,15 @@ describe("ModelInfoView", () => {
     mockCredentialCreateCall.mockResolvedValue({});
   });
 
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
+  const wrapperWithUrl = (searchParams = "", onUrlUpdate?: OnUrlUpdateFunction) =>
+    function UrlWrapper({ children }: { children: ReactNode }) {
+      return (
+        <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={onUrlUpdate} hasMemory>
+          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        </NuqsTestingAdapter>
+      );
+    };
+  const wrapper = wrapperWithUrl();
 
   it("should render", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
@@ -398,6 +406,46 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: /overview/i })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /raw json/i })).toBeInTheDocument();
+    });
+  });
+
+  describe("model_tab in the URL", () => {
+    const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => {
+      const lastCall = onUrlUpdate.mock.calls.at(-1);
+      if (!lastCall) throw new Error("expected a URL update");
+      return lastCall[0].searchParams;
+    };
+
+    it("opens on the Raw JSON tab named in the URL", async () => {
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper: wrapperWithUrl("?model=123&model_tab=raw") });
+
+      expect(await screen.findByRole("tab", { name: /raw json/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText(/"model_name": "GPT-4"/, { selector: "pre" })).toBeVisible();
+    });
+
+    it("writes the selected tab to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper: wrapperWithUrl("?model=123", onUrlUpdate) });
+
+      await user.click(await screen.findByRole("tab", { name: /raw json/i }));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).get("model_tab")).toBe("raw"));
+      expect(lastUrl(onUrlUpdate).get("model")).toBe("123");
+    });
+
+    it("drops the tab from the URL when going back to the models list", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const onClose = vi.fn();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onClose={onClose} />, {
+        wrapper: wrapperWithUrl("?model=123&model_tab=raw", onUrlUpdate),
+      });
+
+      await user.click(await screen.findByRole("button", { name: /back to models/i }));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(lastUrl(onUrlUpdate).has("model_tab")).toBe(false));
     });
   });
 

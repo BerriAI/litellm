@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { render, renderWithProviders, screen, testQueryClient, waitFor } from "../../tests/test-utils";
 import PassThroughInfoView from "./pass_through_info";
 
 const updatePassThroughEndpoint = vi.fn();
@@ -178,5 +180,54 @@ describe("pass_through_info update payload", () => {
 
     await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
     expect(updatePassThroughEndpoint).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pass_through_info detail tab in the URL", () => {
+  const renderWithUrl = (isAdmin: boolean, searchParams: string, onUrlUpdate?: OnUrlUpdateFunction) =>
+    render(
+      <PassThroughInfoView endpointData={endpoint} onClose={vi.fn()} accessToken="test-token" isAdmin={isAdmin} />,
+      {
+        wrapper: ({ children }) => (
+          <NuqsTestingAdapter
+            searchParams={searchParams}
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+          </NuqsTestingAdapter>
+        ),
+      },
+    );
+
+  it("opens on the Settings tab named in the URL", () => {
+    renderWithUrl(true, "?endpoint=ep-1&endpoint_tab=settings");
+
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Edit Settings" })).toBeVisible();
+  });
+
+  it("writes the selected tab to the URL and clears it again on Overview", async () => {
+    const user = setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithUrl(true, "?endpoint=ep-1", onUrlUpdate);
+
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("endpoint_tab")).toBe("settings"));
+
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("endpoint_tab")).toBe(false));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("endpoint")).toBe("ep-1");
+  });
+
+  it("falls back to Overview and drops a Settings tab a non-admin cannot see", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithUrl(false, "?endpoint=ep-1&endpoint_tab=settings", onUrlUpdate);
+
+    expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("endpoint_tab")).toBe(false));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("endpoint")).toBe("ep-1");
   });
 });
