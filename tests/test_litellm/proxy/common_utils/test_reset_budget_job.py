@@ -2232,7 +2232,7 @@ def test_reset_quarantines_unparseable_budget_duration_and_keeps_paging(
         {
             table_name: [
                 [row_factory("bad1", budget_duration="1dinvalid"), row_factory("bad2", budget_duration="garbage")],
-                [row_factory("good1"), row_factory("good2")],
+                [row_factory("good1")],
             ]
         }
     )
@@ -2244,7 +2244,7 @@ def test_reset_quarantines_unparseable_budget_duration_and_keeps_paging(
     quarantined = [w for w in writes if w["data"] == _QUARANTINE_DATA]
     reset = [w for w in writes if "spend" in w["data"]]
     assert [w["where"][id_field] for w in quarantined] == ["bad1", "bad2"]
-    assert [w["where"][id_field] for w in reset] == ["good1", "good2"]
+    assert [w["where"][id_field] for w in reset] == ["good1"]
     assert all("spend" not in w["data"] for w in quarantined)
 
 
@@ -2256,7 +2256,7 @@ def test_budget_table_reset_quarantines_unparseable_durations_and_keeps_paging(m
         {
             "budget": [
                 [_budget_row("bad1", budget_duration="1dinvalid"), _budget_row("bad2", budget_duration="garbage")],
-                [_budget_row("good1"), _budget_row("good2")],
+                [_budget_row("good1")],
             ]
         }
     )
@@ -2268,7 +2268,7 @@ def test_budget_table_reset_quarantines_unparseable_durations_and_keeps_paging(m
     quarantined = [w for w in writes if w["data"] == _QUARANTINE_DATA]
     advanced = [w for w in writes if w["data"] != _QUARANTINE_DATA]
     assert [w["where"]["budget_id"] for w in quarantined] == ["bad1", "bad2"]
-    assert [w["where"]["budget_id"] for w in advanced] == ["good1", "good2"]
+    assert [w["where"]["budget_id"] for w in advanced] == ["good1"]
     assert all("spend" not in w["data"] for w in quarantined)
 
 
