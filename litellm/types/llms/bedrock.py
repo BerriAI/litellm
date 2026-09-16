@@ -557,7 +557,6 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     message: str  # Specifies any errors that occur during generation.
 
 
-# TwelveLabs Marengo Embed types
 TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
 TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
 

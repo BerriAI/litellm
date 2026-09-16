@@ -119,14 +119,15 @@ def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
 
 
 def _mcp_proxy_identity(tool: Tool) -> MCPProxyToolIdentity:
-    identity: Final = (tool.meta or {}).get(_MCP_PROXY_IDENTITY_META_KEY)  # mutable-ok: absent metadata default
+    identity: Final = None if tool.meta is None else tool.meta.get(_MCP_PROXY_IDENTITY_META_KEY)
     if not isinstance(identity, Mapping):
         raise TypeError("MCP proxy tool identity is missing")
     server_id: Final = identity.get("server_id")
     tool_name: Final = identity.get("tool_name")
     if not isinstance(server_id, str) or not isinstance(tool_name, str):
         raise TypeError("MCP proxy tool identity is invalid")
-    return {"server_id": server_id, "tool_name": tool_name}  # mutable-ok: TypedDict identity payload
+    resolved: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool_name}
+    return resolved
 
 
 def mcp_proxy_tool_id(tool: Tool) -> str:
