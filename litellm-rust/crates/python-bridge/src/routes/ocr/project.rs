@@ -36,12 +36,7 @@ pub(super) struct PythonOcrInput<'a, 'py> {
     pub kwargs: &'a Bound<'py, PyDict>,
 }
 
-struct PythonOcrFields<'a, 'py> {
-    request: &'a Bound<'py, PyAny>,
-    kwargs: &'a Bound<'py, PyDict>,
-}
-
-impl<'py> PythonOcrFields<'_, 'py> {
+impl<'py> PythonOcrInput<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
         match self.kwargs.get_item(name)? {
             Some(value) => Ok(value),
@@ -86,35 +81,16 @@ impl<'py> PythonOcrFields<'_, 'py> {
     }
 }
 
-enum ProjectedDocument {
-    File { wire: Value, retained: Py<PyAny> },
-    Other { wire: Value, retained: Py<PyAny> },
-}
-
-impl ProjectedDocument {
-    fn project(py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let kind: String = document.get_item("type")?.extract()?;
-        if kind != "file" {
-            return Ok(Self::Other {
-                wire: from_py(document)?,
-                retained: document.clone().unbind(),
-            });
-        }
-        let input = document.extract()?;
-        let encoded = super::document::file_document(py, input)?;
-        let wire = serde_json::to_value(encoded)
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        Ok(Self::File {
-            retained: to_py(py, &wire)?,
-            wire,
-        })
+fn project_document(py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<(Value, Py<PyAny>)> {
+    let kind: String = document.get_item("type")?.extract()?;
+    if kind != "file" {
+        return Ok((from_py(document)?, document.clone().unbind()));
     }
-
-    fn into_parts(self) -> (Value, Py<PyAny>) {
-        match self {
-            Self::File { wire, retained } | Self::Other { wire, retained } => (wire, retained),
-        }
-    }
+    let encoded = super::document::file_document(py, document.extract()?)?;
+    let wire = serde_json::to_value(encoded)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let retained = to_py(py, &wire)?;
+    Ok((wire, retained))
 }
 
 impl TryFrom<PythonOcrInput<'_, '_>> for ProjectedOcrCall {
@@ -125,11 +101,10 @@ impl TryFrom<PythonOcrInput<'_, '_>> for ProjectedOcrCall {
         let kwargs = input.kwargs;
         let py = request.py();
         let boundary_request = request.clone().unbind();
-        let arguments = PythonOcrFields { request, kwargs };
+        let arguments = input;
         let model = arguments.model()?;
         let custom_llm_provider = arguments.custom_llm_provider()?;
-        let (wire_document, retained_document) =
-            ProjectedDocument::project(py, &arguments.document()?)?.into_parts();
+        let (wire_document, retained_document) = project_document(py, &arguments.document()?)?;
         let api_key = arguments.api_key()?;
         let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
             .map_err(ocr_error_to_pyerr)?;
@@ -215,15 +190,8 @@ mod tests {
     fn arguments<'a, 'py>(
         request: &'a Bound<'py, PyAny>,
         kwargs: &'a Bound<'py, PyDict>,
-    ) -> PythonOcrFields<'a, 'py> {
-        PythonOcrFields { request, kwargs }
-    }
-
-    fn project_document(
-        py: Python<'_>,
-        document: &Bound<'_, PyAny>,
-    ) -> PyResult<(Value, Py<PyAny>)> {
-        ProjectedDocument::project(py, document).map(ProjectedDocument::into_parts)
+    ) -> PythonOcrInput<'a, 'py> {
+        PythonOcrInput { request, kwargs }
     }
 
     fn stub_timeout_conversion(py: Python<'_>) {

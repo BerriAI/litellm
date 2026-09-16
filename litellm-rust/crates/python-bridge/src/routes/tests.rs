@@ -9,11 +9,7 @@ fn sync_and_async_route_signatures_match_the_python_contract() {
         let module = PyModule::new(py, "routes").expect("module should be created");
         register(&module).expect("routes should register");
         let routes = [
-            (
-                "ocr",
-                "aocr",
-                "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None)",
-            ),
+            ("ocr", "aocr", "(*args, **kwargs)"),
             (
                 "transcription",
                 "atranscription",
@@ -98,22 +94,20 @@ fn sync_and_async_routes_apply_the_same_input_validation() {
             .expect("kwargs should accept extra_headers");
         let document = PyDict::new(py);
 
-        for (sync_name, async_name) in [("ocr", "aocr"), ("transcription", "atranscription")] {
-            let sync_error = module
-                .getattr(sync_name)
-                .and_then(|function| function.call(("model", &document), Some(&kwargs)))
-                .expect_err("sync route should reject non-dict extra_headers");
-            let async_error = module
-                .getattr(async_name)
-                .and_then(|function| function.call(("model", &document), Some(&kwargs)))
-                .expect_err("async route should reject non-dict extra_headers");
+        let sync_error = module
+            .getattr("transcription")
+            .and_then(|function| function.call(("model", &document), Some(&kwargs)))
+            .expect_err("sync route should reject non-dict extra_headers");
+        let async_error = module
+            .getattr("atranscription")
+            .and_then(|function| function.call(("model", &document), Some(&kwargs)))
+            .expect_err("async route should reject non-dict extra_headers");
 
-            assert_eq!(
-                sync_error.to_string(),
-                "ValueError: extra_headers must be a dict"
-            );
-            assert_eq!(async_error.to_string(), sync_error.to_string());
-        }
+        assert_eq!(
+            sync_error.to_string(),
+            "ValueError: extra_headers must be a dict"
+        );
+        assert_eq!(async_error.to_string(), sync_error.to_string());
     });
 }
 
@@ -162,15 +156,13 @@ fn route_input_validation_preserves_left_to_right_order() {
 
         let invalid_payload =
             PyModule::new(py, "invalid_payload").expect("invalid payload should be created");
-        for name in ["ocr", "transcription"] {
-            let error = module
-                .getattr(name)
-                .and_then(|function| {
-                    function.call(("model", &invalid_payload), Some(&headers_kwargs))
-                })
-                .expect_err("payload should be validated before headers");
-            assert!(!error.to_string().contains("extra_headers"));
-        }
+        let error = module
+            .getattr("transcription")
+            .and_then(|function| {
+                function.call(("model", &invalid_payload), Some(&headers_kwargs))
+            })
+            .expect_err("payload should be validated before headers");
+        assert!(!error.to_string().contains("extra_headers"));
     });
 }
 

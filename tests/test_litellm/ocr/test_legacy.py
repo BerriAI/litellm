@@ -17,7 +17,7 @@ from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.ocr.legacy import _prepare_ocr_request
 from litellm.rust_bridge import bindings, configuration
-from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
+from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR
 
 
 @pytest.fixture
@@ -45,7 +45,8 @@ async def provider(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[Mock]:
             monkeypatch.setattr(llm_http_handler, "_get_httpx_client", lambda: sync_handler)
             monkeypatch.setattr(llm_http_handler, "get_async_httpx_client", lambda llm_provider: async_handler)
             yield handler
-    NATIVE_OCR_LIFECYCLE.reset()
+    NATIVE_OCR.reset()
+    NATIVE_AOCR.reset()
     configuration.reset_rust_configuration()
 
 
@@ -60,7 +61,9 @@ async def test_python_request_response_and_callbacks(
 
     if dispatch != "disabled":
         monkeypatch.setenv("LITELLM_RUST", "1")
-        NATIVE_OCR_LIFECYCLE.override(Mock(side_effect=Declined()) if dispatch == "declined" else None)
+        (NATIVE_AOCR if mode == "async" else NATIVE_OCR).override(
+            Mock(side_effect=Declined()) if dispatch == "declined" else None
+        )
         main: Final = importlib.import_module("litellm.ocr.main")
         monkeypatch.setattr(main, "native_exception_types", lambda: (Declined, RuntimeError))
     logger: Final = Mock(spec=CustomLogger)

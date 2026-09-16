@@ -7,7 +7,106 @@ from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from ...models import RouteFixture, RouteSpec, TraceScenario, TraceSuite
 
 
-def _fixture(model: str, document: dict[str, str] | None = None) -> RouteFixture:
+SUCCESS_CALLBACK_SYNC_MAPPING: Final = mapping(
+    rust_span="success_callback",
+    python_frame=r"BoundedLoggingThreadPoolExecutor\.submit$",
+)
+SUCCESS_CALLBACK_ASYNC_MAPPING: Final = mapping(
+    rust_span="success_callback",
+    python_frame=r"Logging\.async_success_handler$",
+)
+FAILURE_CALLBACK_MAPPING: Final = mapping(
+    rust_span="failure_callback",
+    python_frame=r"Logging\.(?:async_)?failure_handler$",
+)
+IGNORED_SUCCESS_CALLBACK_MAPPING: Final = mapping(rust_span="success_callback")
+
+SYNC_MAPPINGS: Final = (
+    *COMMON_MAPPINGS,
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    mapping(span="python_transform_ocr_response_wrapper", python_frame=r"BaseLLMHTTPHandler\._transform_ocr_response$"),
+    mapping(
+        rust_span="transform_ocr_response",
+        python_frame=r"MistralOCRConfig\.transform_ocr_response$",
+    ),
+)
+
+ASYNC_MAPPINGS: Final = (
+    *COMMON_MAPPINGS,
+    mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
+    mapping(
+        rust_span="transform_ocr_response",
+        python_frame=r"MistralOCRConfig\.transform_ocr_response$",
+    ),
+)
+
+PUBLIC_RUST_DISPATCH_MAPPINGS: Final = (
+    mapping(span="public_sdk_entrypoint", python_frame=r"ocr/main\.py:\d+ a?ocr$"),
+    mapping(span="public_request", python_frame=r"rust_bridge/ocr\.py:\d+ bind_request$"),
+    mapping(span="bind_request", python_frame=r"rust_bridge/ocr\.py:\d+ _bind_request$"),
+    mapping(span="rust_ocr_enabled", python_frame=r"rust_bridge/configuration\.py:\d+ rust_ocr_enabled$"),
+    mapping(span="load_native_bridge", python_frame=r"rust_bridge/bindings\.py:\d+ NativeBinding\.load$"),
+    mapping(span="native_call_setup", python_frame=r"rust_bridge/lifecycle\.py:\d+ setup$"),
+    mapping(span="native_response", python_frame=r"rust_bridge/ocr\.py:\d+ build_response$"),
+    mapping(span="native_call_finalize", python_frame=r"rust_bridge/lifecycle\.py:\d+ finalize$"),
+    mapping(
+        span="native_success_bookkeeping",
+        python_frame=r"rust_bridge/lifecycle\.py:\d+ success_bookkeeping$",
+    ),
+    *(mapping(rust_span=item.rust) for item in SYNC_MAPPINGS if item.rust is not None),
+)
+
+CALLBACK_SUCCESS_SYNC_MAPPINGS: Final = (*SYNC_MAPPINGS, SUCCESS_CALLBACK_SYNC_MAPPING)
+CALLBACK_SUCCESS_ASYNC_MAPPINGS: Final = (*ASYNC_MAPPINGS, SUCCESS_CALLBACK_ASYNC_MAPPING)
+CALLBACK_FAILURE_SYNC_MAPPINGS: Final = (
+    *COMMON_MAPPINGS,
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    FAILURE_CALLBACK_MAPPING,
+)
+CALLBACK_FAILURE_ASYNC_MAPPINGS: Final = (
+    *COMMON_MAPPINGS,
+    mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
+    FAILURE_CALLBACK_MAPPING,
+)
+
+
+AZURE_COMMON_MAPPINGS: Final = (
+    *COMMON_MAPPINGS[:7],
+    mapping(
+        rust_span="transform_ocr_request",
+        python_frame=(
+            r"AzureAIOCRConfig\.(?:async_)?transform_ocr_request$"
+            r"|MistralOCRConfig\.transform_ocr_request$"
+        ),
+    ),
+    COMMON_MAPPINGS[-1],
+)
+AZURE_SYNC_MAPPINGS: Final = (
+    *AZURE_COMMON_MAPPINGS,
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    mapping(
+        span="python_transform_ocr_response_wrapper",
+        python_frame=r"BaseLLMHTTPHandler\._transform_ocr_response$",
+    ),
+    mapping(
+        rust_span="transform_ocr_response",
+        python_frame=r"MistralOCRConfig\.transform_ocr_response$",
+    ),
+)
+AZURE_ASYNC_MAPPINGS: Final = (
+    *AZURE_COMMON_MAPPINGS,
+    mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
+    mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
+    mapping(
+        rust_span="transform_ocr_response",
+        python_frame=r"MistralOCRConfig\.transform_ocr_response$",
+    ),
+)
+
+
+def _fixture(engine: Engine, model: str, document: dict[str, str] | None = None) -> RouteFixture:
     response: Final = json.dumps(
         {
             "pages": [{"index": 0, "markdown": "hello"}],

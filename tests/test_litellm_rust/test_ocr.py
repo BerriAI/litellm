@@ -20,7 +20,6 @@ from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.reducto.ocr.transformation import ReductoParseLegacyConfig, ReductoParseV3Config
 from litellm.llms.vertex_ai.ocr.deepseek_transformation import VertexAIDeepSeekOCRConfig
 from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
-from litellm.rust_bridge import ocr as rust_ocr_bridge
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -168,6 +167,8 @@ def test_native_provider_transforms_match_python_shapes(
     options: dict[str, object],
     payload: dict[str, object],
 ) -> None:
+    from litellm.rust_bridge import _native
+
     model: Final = (
         "deepseek-ocr"
         if isinstance(config, VertexAIDeepSeekOCRConfig)
@@ -197,17 +198,17 @@ def test_native_provider_transforms_match_python_shapes(
     ).model_dump()
     with recording_service() as server:
         server.enqueue(ResponseSpec(body=payload))
-        response: Final = rust_ocr_bridge.ocr(
+        response: Final = _native.ocr(
             model=model,
             document={**document},
             api_key="test-key",
             api_base=server.base_url,
             custom_llm_provider=provider,
             extra_headers=None,
-            optional_params={**options, **({"vertex_project": "project"} if provider == "vertex_ai" else {})},
             timeout=3,
+            **{**options, **({"vertex_project": "project"} if provider == "vertex_ai" else {})},
         )
-        assert response == expected_response
+        assert response.model_dump() == expected_response
         assert server.requests[0].body == expected_request
 
 
@@ -272,24 +273,25 @@ def ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[dict[str, object]]
 def test_native_ocr_with_compiled_rust_extension(
     ocr_server: tuple[ThreadingHTTPServer, list[dict[str, object]]],
 ) -> None:
+    from litellm.rust_bridge import _native
+
     server, requests = ocr_server
     address: Final = server.server_address
     host: Final = str(address[0])
     port: Final = int(address[1])
 
-    response: Final = rust_ocr_bridge.ocr(
+    response: Final = _native.ocr(
         model="mistral-ocr-latest",
         document={"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
         api_key="test-key",
         api_base=f"http://{host}:{port}",
         custom_llm_provider="mistral",
         extra_headers=None,
-        optional_params={},
         timeout=None,
     )
 
     assert response is not None
-    assert response["pages"][0]["markdown"] == "native OCR response"
+    assert response.pages[0].markdown == "native OCR response"
     assert len(requests) == 1
     assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
     assert requests[0]["body"] == {
@@ -417,12 +419,18 @@ async def test_native_ocr_failures_do_not_retry_on_python(ocr_server, asynchrono
     assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
 
 
-@pytest.mark.parametrize("custom_provider", ["mistral", "not-a-provider"])
-def test_native_ocr_rejects_invalid_input_before_network(ocr_server, custom_provider):
+@pytest.mark.parametrize(
+    "custom_provider,error_type,message",
+    [
+        ("mistral", litellm.BadRequestError, "document"),
+        ("not-a-provider", litellm.APIConnectionError, "invalid provider"),
+    ],
+)
+def test_native_ocr_rejects_invalid_input_before_network(ocr_server, custom_provider, error_type, message):
     from litellm.rust_bridge import _native
 
     server, requests = ocr_server
-    with pytest.raises(ValueError, match="Document URL is required"):
+    with pytest.raises(error_type, match=message):
         _native.ocr(
             model="mistral-ocr-latest",
             custom_llm_provider=custom_provider,

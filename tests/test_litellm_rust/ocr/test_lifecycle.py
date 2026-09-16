@@ -65,6 +65,45 @@ def ocr_server(recording_server: RecordingServer) -> RecordingServer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_native_bindings_run_callbacks_and_send_their_mutations(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    from litellm.rust_bridge import _native
+    from tests.test_litellm_rust.support.requests import ocr_arguments
+
+    pages: Final = [0]
+    marker: Final = object()
+    observed: Final = []
+
+    class Observe(Logging):
+        def pre_call(self, input, api_key, additional_args):
+            body: Final = additional_args["complete_input_dict"]
+            assert body["pages"] is pages
+            observed.append(self.model_call_details["litellm_params"]["metadata"]["marker"])
+            body["pages"].append(2)
+            additional_args["headers"]["x-callback"] = "native"
+
+    logger: Final = Observe(
+        model="mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr" if asynchronous else "ocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="direct-native",
+        function_id="direct-native",
+    )
+    arguments: Final = ocr_arguments(ocr_server, pages=pages, metadata={"marker": marker}, litellm_logging_obj=logger)
+    response: Final = await _native.aocr(**arguments) if asynchronous else _native.ocr(**arguments)
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert observed == [marker] and observed[0] is marker
+    assert len(ocr_server.requests) == 1
+    assert ocr_server.requests[0].body["pages"] == [0, 2]
+    assert ocr_server.requests[0].headers["x-callback"] == "native"
+
+
+@pytest.mark.asyncio
 async def test_proxy_metadata_remains_python_owned(ocr_server: RecordingServer) -> None:
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -77,6 +116,21 @@ async def test_proxy_metadata_remains_python_owned(ocr_server: RecordingServer) 
     assert response.pages[0].markdown == "native OCR response"
     assert events[0].kwargs["litellm_params"]["metadata"]["user_api_key_auth"].user_id == "ocr-user"
     assert "metadata" not in ocr_server.requests[0].body
+
+
+@pytest.mark.parametrize("name", ["ocr", "aocr"])
+def test_native_bindings_reject_argument_errors_before_consuming_inputs(name: str) -> None:
+    from litellm.rust_bridge import _native
+
+    class File:
+        def read(self):
+            raise AssertionError("invalid binding must not read the file")
+
+    native: Final = getattr(_native, name)
+    with pytest.raises(TypeError, match=rf"{name}\(\) got multiple values for argument 'model'"):
+        native("mistral/model", {"type": "file", "file": File()}, model="duplicate")
+    with pytest.raises(TypeError, match=rf"{name}\(\) missing 1 required positional argument: 'document'"):
+        native("mistral/model")
 
 
 @pytest.mark.asyncio
@@ -623,7 +677,6 @@ async def test_retained_argument_aliases_and_body_roots_survive_envelope_replace
 
 
 def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_server: RecordingServer) -> None:
-    from litellm.ocr.main import _public_request
     from litellm.rust_bridge import _native
 
     ocr_server.expected_requests = 0
@@ -637,7 +690,7 @@ def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_serv
     def create():
         file: Final = File()
         kwargs: Final = {"model": "mistral/mistral-ocr-latest", "document": {"type": "file", "file": file}}
-        coroutine: Final = _native._ocr_lifecycle(_public_request("aocr", (), kwargs), (), kwargs, True)
+        coroutine: Final = _native.aocr(**kwargs)
         file.owner = coroutine
         coroutine.close()
         return weakref.ref(file)
