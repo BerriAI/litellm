@@ -1569,7 +1569,7 @@ def _maybe_add_key_team_limit_warnings(
     warnings = _collect_key_team_limit_warnings(data=data, team_table=team_table)
     if not warnings:
         return payload
-    return MappingProxyType({**payload, "warnings": warnings})
+    return MappingProxyType({**payload, "warnings": list(warnings)})
 
 
 async def _check_team_key_limits(
@@ -2005,7 +2005,7 @@ async def generate_key_fn(
             team_table=team_table,
         )
         if team_limit_warnings:
-            response.warnings = team_limit_warnings
+            response.warnings = list(team_limit_warnings)
         return response
 
     except Exception as e:
@@ -2177,7 +2177,7 @@ async def generate_service_account_key_fn(
         team_table=team_table,
     )
     if team_limit_warnings:
-        response.warnings = team_limit_warnings
+        response.warnings = list(team_limit_warnings)
     return response
 
 
@@ -3274,7 +3274,7 @@ async def update_key_fn(
 
         updated_key_info: Final[Mapping[str, object]] = MappingProxyType({"key": key, **response["data"]})
         if team_limit_warnings:
-            return MappingProxyType({**updated_key_info, "warnings": team_limit_warnings})
+            return MappingProxyType({**updated_key_info, "warnings": list(team_limit_warnings)})
         return updated_key_info
         # update based on remaining passed in values
     except Exception as e:
