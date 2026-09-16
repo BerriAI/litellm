@@ -30470,6 +30470,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
             /** S3 Output Bucket Name */
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
@@ -40852,6 +40854,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
             /** S3 Output Bucket Name */
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
