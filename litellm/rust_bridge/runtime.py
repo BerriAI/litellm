@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final, Generic, NoReturn, TypeAlias, TypeVar, assert_never
+from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
+
+from typing_extensions import assert_never
 
 from litellm.exceptions import APIError
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
