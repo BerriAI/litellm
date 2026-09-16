@@ -2354,6 +2354,34 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
+    @staticmethod
+    def _get_deployment_failure_model_id(
+        request_kwargs: Mapping[str, object], standard_logging_payload: StandardLoggingPayload
+    ) -> str | None:
+        exception: Final = request_kwargs.get("exception")
+        failed_deployment_id: Final = getattr(exception, "failed_deployment_id", None)
+        if isinstance(failed_deployment_id, str) and failed_deployment_id:
+            return failed_deployment_id
+
+        standard_model_id: Final = standard_logging_payload.get("model_id")
+        if standard_model_id:
+            return standard_model_id
+
+        litellm_params: Final = request_kwargs.get("litellm_params")
+        if not isinstance(litellm_params, Mapping):
+            return None
+        for metadata_key in ("litellm_metadata", "metadata"):
+            metadata = litellm_params.get(metadata_key)
+            if not isinstance(metadata, Mapping):
+                continue
+            model_info = metadata.get("model_info")
+            if not isinstance(model_info, Mapping):
+                continue
+            model_id = model_info.get("id")
+            if isinstance(model_id, str) and model_id:
+                return model_id
+        return None
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
@@ -2377,6 +2405,13 @@ class PrometheusLogger(CustomLogger):
         user_api_team: Final = standard_logging_payload["metadata"]["user_api_key_team_id"]
         user_api_team_alias: Final = standard_logging_payload["metadata"]["user_api_key_team_alias"]
         user_api_key_org_id: Final = standard_logging_payload["metadata"].get("user_api_key_org_id")
+        model_id: Final = (
+            self._get_deployment_failure_model_id(
+                request_kwargs=kwargs,
+                standard_logging_payload=standard_logging_payload,
+            )
+            or ""
+        )
 
         try:
             enum_values: Final = UserAPIKeyLabelValues(
@@ -2387,7 +2422,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_team,
                 team_alias=user_api_team_alias,
                 user=user_id,
-                model_id=standard_logging_payload.get("model_id", ""),
+                model_id=model_id,
                 custom_metadata_labels=get_custom_labels_from_metadata(
                     metadata=_get_combined_custom_metadata_from_standard_logging_payload(
                         standard_logging_payload=standard_logging_payload
@@ -2787,17 +2822,11 @@ class PrometheusLogger(CustomLogger):
             litellm_model_name: Final = request_kwargs.get("model", None)
             model_group = standard_logging_payload.get("model_group", None)
             api_base: Final = standard_logging_payload.get("api_base", None)
-            model_id = standard_logging_payload.get("model_id", None)
             exception: Final = request_kwargs.get("exception", None)
-
-            # Fallback: model_id from litellm_metadata.model_info
-            if model_id is None:
-                _model_info: Final = (
-                    (_litellm_params.get("litellm_metadata") or {}).get("model_info")
-                    or (_litellm_params.get("metadata") or {}).get("model_info")
-                    or {}
-                )
-                model_id = _model_info.get("id")
+            model_id: Final = self._get_deployment_failure_model_id(
+                request_kwargs=request_kwargs,
+                standard_logging_payload=standard_logging_payload,
+            )
 
             # Fallback: model_group from litellm_metadata
             if model_group is None:

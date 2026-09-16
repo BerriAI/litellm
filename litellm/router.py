@@ -8599,6 +8599,7 @@ class Router:
                 try:
                     await _callback.async_pre_call_check(deployment, parent_otel_span)
                 except litellm.RateLimitError as e:
+                    self._set_failed_deployment_id_on_exception(e, deployment)
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
                         asyncio.create_task(
@@ -8617,6 +8618,7 @@ class Router:
                     )
                     raise e
                 except Exception as e:
+                    self._set_failed_deployment_id_on_exception(e, deployment)
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
                         asyncio.create_task(

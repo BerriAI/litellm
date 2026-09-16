@@ -83,6 +83,11 @@ def _requested_model_values(metric) -> set[str]:
     return {sample_key[index] for sample_key in metric._metrics}
 
 
+def _model_id_values(metric) -> set[str]:
+    index = metric._labelnames.index("model_id")
+    return {sample_key[index] for sample_key in metric._metrics}
+
+
 def _series_count(metric) -> int:
     return len(metric._metrics)
 
@@ -192,6 +197,85 @@ async def test_sdk_router_originated_metrics_keep_labels_without_proxy_router():
 
     assert _requested_model_values(logger.litellm_deployment_failure_responses) == {"sdk-deployment-group"}
     assert _requested_model_values(logger.litellm_deployment_failed_fallbacks) == {"sdk-fallback-group"}
+
+
+def test_deployment_failure_prefers_stamped_failed_deployment_id_over_mutated_metadata():
+    logger = PrometheusLogger()
+    exception = _ClientSideError("deployment-a exceeded its TPM limit")
+    exception.failed_deployment_id = "deployment-a"
+
+    logger.set_llm_deployment_failure_metrics(
+        request_kwargs={
+            "model": "model-group",
+            "litellm_params": {"metadata": {"model_info": {"id": "deployment-b"}}},
+            "standard_logging_object": {"model_id": "deployment-b"},
+            "exception": exception,
+        }
+    )
+
+    assert _model_id_values(logger.litellm_deployment_failure_responses) == {"deployment-a"}
+
+
+@pytest.mark.asyncio
+async def test_async_failure_metrics_prefer_stamped_failed_deployment_id():
+    logger = PrometheusLogger()
+    exception = _ClientSideError("deployment-a exceeded its TPM limit")
+    exception.failed_deployment_id = "deployment-a"
+
+    await logger.async_log_failure_event(
+        kwargs={
+            "model": "model-group",
+            "litellm_params": {"metadata": {"model_info": {"id": "deployment-b"}}},
+            "standard_logging_object": {
+                "model_id": "deployment-b",
+                "model_group": "model-group",
+                "metadata": {
+                    "user_api_key_user_id": "user",
+                    "user_api_key_hash": "hash",
+                    "user_api_key_alias": "alias",
+                    "user_api_key_team_id": "team",
+                    "user_api_key_team_alias": "team-alias",
+                },
+            },
+            "exception": exception,
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert _model_id_values(logger.litellm_llm_api_failed_requests_metric) == {"deployment-a"}
+    assert _model_id_values(logger.litellm_deployment_failure_responses) == {"deployment-a"}
+
+
+def test_deployment_failure_model_id_falls_back_to_nested_metadata():
+    logger = PrometheusLogger()
+
+    model_id = logger._get_deployment_failure_model_id(
+        request_kwargs={
+            "litellm_params": {"litellm_metadata": {"model_info": {"id": "deployment-a"}}},
+        },
+        standard_logging_payload={},
+    )
+
+    assert model_id == "deployment-a"
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {},
+        {"litellm_params": {"metadata": {"model_info": {}}}},
+    ],
+)
+def test_deployment_failure_model_id_returns_none_without_a_model_id(request_kwargs):
+    assert (
+        PrometheusLogger._get_deployment_failure_model_id(
+            request_kwargs=request_kwargs,
+            standard_logging_payload={},
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
