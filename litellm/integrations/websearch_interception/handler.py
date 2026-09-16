@@ -243,9 +243,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self._request_has_websearch = False  # Track if current request has web search
 
     def _is_web_search_tool(self, tool: dict[str, Any]) -> bool:
-        return is_web_search_tool(
-            tool, recognize_conventional_name=self.recognize_conventional_web_search_name
-        )
+        return is_web_search_tool(tool, recognize_conventional_name=self.recognize_conventional_web_search_name)
 
     def _is_web_search_tool_chat_completion(self, tool: dict[str, Any]) -> bool:
         return is_web_search_tool_chat_completion(
