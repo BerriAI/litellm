@@ -891,6 +891,7 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         )
         if isinstance(edge_server.backend, CacheEdge) and duplicate_headers:
             edge_server.backend.counters.increment("duplicate_header_bypass")
+            edge_server.backend.counters.increment("upstream_attempts")
         outcome: Final = handle_edge_request(
             selected_backend,
             edge_server.mounts,

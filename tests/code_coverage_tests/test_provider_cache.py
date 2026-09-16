@@ -11,8 +11,10 @@ from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
+from urllib.parse import urlsplit
 
 import pytest
 from e2e_http import NetworkError, PreparedForward, RawResponse, StreamChunk, StreamHead, forward, prepare_forward
@@ -407,3 +409,24 @@ def test_enabled_environment_reuses_store_across_fresh_backends(
         assert configured_cache_backend() is None
     finally:
         configured_cache.cache_clear()
+
+
+def test_duplicate_headers_bypass_cache_and_count_live_calls(store: RedisResponseStore, provider: Provider) -> None:
+    cache: Final = CacheEdge(store, SECRET)
+    with edge(cache, provider) as url:
+        parsed: Final = urlsplit(url)
+        for _ in range(2):
+            connection = HTTPConnection(str(parsed.hostname), parsed.port, timeout=5)
+            try:
+                connection.putrequest("POST", parsed.path)
+                connection.putheader("content-length", str(len(BODY)))
+                connection.putheader("content-type", "application/json")
+                connection.putheader("x-duplicate", "first")
+                connection.putheader("x-duplicate", "second")
+                connection.endheaders(BODY)
+                assert connection.getresponse().read() == SUCCESS
+            finally:
+                connection.close()
+    assert len(provider.hits) == 2
+    assert dict(cache.counters.counts)["duplicate_header_bypass"] == 2
+    assert dict(cache.counters.counts)["upstream_attempts"] == 2
