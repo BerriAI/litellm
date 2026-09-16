@@ -1095,8 +1095,8 @@ class ChunkProcessor:
                 returned_usage.completion_tokens_details = completion_tokens_details
 
         if reasoning_tokens is not None:
+            capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
             if returned_usage.completion_tokens_details is None:
-                capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
                 returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
                     reasoning_tokens=capped_reasoning_tokens,
                     text_tokens=returned_usage.completion_tokens - capped_reasoning_tokens,
@@ -1105,13 +1105,10 @@ class ChunkProcessor:
                 returned_usage.completion_tokens_details is not None
                 and returned_usage.completion_tokens_details.reasoning_tokens is None
             ):
-                existing_capped_reasoning_tokens: Final = min(
-                    max(0, reasoning_tokens), returned_usage.completion_tokens
-                )
-                returned_usage.completion_tokens_details.reasoning_tokens = existing_capped_reasoning_tokens
+                returned_usage.completion_tokens_details.reasoning_tokens = capped_reasoning_tokens
                 if returned_usage.completion_tokens_details.text_tokens is None:
                     returned_usage.completion_tokens_details.text_tokens = (
-                        returned_usage.completion_tokens - existing_capped_reasoning_tokens
+                        returned_usage.completion_tokens - capped_reasoning_tokens
                     )
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
