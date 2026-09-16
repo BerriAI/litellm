@@ -8,9 +8,8 @@ import { LOCAL_DATETIME_FORMAT, useLogsTimeRange, type LogsTimeRange } from "./u
 const renderTimeRange = (searchParams = "") => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
   const onChange = vi.fn();
-  const hook = renderHook(() => useLogsTimeRange(onChange), {
-    wrapper: withNuqsTestingAdapter({ searchParams, onUrlUpdate, hasMemory: true }),
-  });
+  const adapterProps = { searchParams, onUrlUpdate, hasMemory: true, resetUrlUpdateQueueOnMount: false };
+  const hook = renderHook(() => useLogsTimeRange(onChange), { wrapper: withNuqsTestingAdapter(adapterProps) });
   return { ...hook, onUrlUpdate, onChange };
 };
 
@@ -125,13 +124,66 @@ describe("useLogsTimeRange", () => {
     );
     expect(result.current.timeRange).toEqual({ range: "custom", startTime, endTime });
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggling Custom Range off returns to the preset picked before it, with bounds refreshed from now", async () => {
+    const { result, onUrlUpdate, onChange } = renderTimeRange("?range=4h");
+
+    act(() => result.current.toggleCustomRange());
+    await waitFor(() => expect(lastParams(onUrlUpdate).get("range")).toBe("custom"));
+    act(() => result.current.setStartTime("2026-07-01T10:00"));
+    await waitFor(() =>
+      expect(lastParams(onUrlUpdate).get("start")).toBe(moment("2026-07-01T10:00").utc().format("YYYY-MM-DDTHH:mm[Z]")),
+    );
+    expect(result.current.timeRange.startTime).toBe("2026-07-01T10:00");
+
+    vi.setSystemTime(new Date("2026-07-07T11:30:00Z"));
+    act(() => result.current.toggleCustomRange());
+
+    await waitFor(() => expect(lastParams(onUrlUpdate).get("range")).toBe("4h"));
+    expect(lastParams(onUrlUpdate).has("start")).toBe(false);
+    expect(lastParams(onUrlUpdate).has("end")).toBe(false);
+    await waitFor(() => expect(result.current.timeRange.range).toBe("4h"));
+    expect(result.current.timeRange.endTime).toBe(moment().format(LOCAL_DATETIME_FORMAT));
+    expect(minutesBetween(result.current.timeRange.startTime, result.current.timeRange.endTime)).toBe(4 * 60);
+    expect(onChange).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls back to the default preset when a custom range restored from the URL is toggled off", async () => {
+    const { result, onUrlUpdate } = renderTimeRange("?range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z");
 
     act(() => result.current.toggleCustomRange());
 
-    await waitFor(() => expect(lastParams(onUrlUpdate).has("range")).toBe(false));
+    await waitFor(() => expect(result.current.timeRange.range).toBe("24h"));
+    expect(lastParams(onUrlUpdate).has("range")).toBe(false);
     expect(lastParams(onUrlUpdate).has("start")).toBe(false);
-    expect(result.current.timeRange.range).toBe("24h");
+    expect(result.current.timeRange.endTime).toBe(moment().format(LOCAL_DATETIME_FORMAT));
     expect(minutesBetween(result.current.timeRange.startTime, result.current.timeRange.endTime)).toBe(24 * 60);
+  });
+
+  it("re-anchors from now when the URL leaves a custom range for the preset it started from", () => {
+    const seen: LogsTimeRange[] = [];
+    function Probe() {
+      seen.push(useLogsTimeRange(vi.fn()).timeRange);
+      return null;
+    }
+    const tree = (searchParams: string) => (
+      <NuqsTestingAdapter searchParams={searchParams} hasMemory>
+        <Probe />
+      </NuqsTestingAdapter>
+    );
+    const view = render(tree("?range=1h"));
+    view.rerender(tree("?range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z"));
+    expect(seen.at(-1)?.range).toBe("custom");
+
+    vi.setSystemTime(new Date("2026-07-07T12:00:00Z"));
+    view.rerender(tree("?range=1h"));
+
+    const restored = seen.at(-1);
+    if (!restored) throw new Error("hook did not re-render");
+    expect(restored.range).toBe("1h");
+    expect(restored.endTime).toBe(moment().format(LOCAL_DATETIME_FORMAT));
+    expect(minutesBetween(restored.startTime, restored.endTime)).toBe(60);
   });
 
   it("reset clears every time range key and refreshes the default bounds from now", async () => {

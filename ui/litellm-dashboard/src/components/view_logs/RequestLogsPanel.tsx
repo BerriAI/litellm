@@ -39,22 +39,11 @@ const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId 
 const findLogById = (logs: readonly LogEntry[], logId: string): LogEntry | null =>
   logs.find((log) => log.request_id === logId) ?? logs.find((log) => log.litellm_call_id === logId) ?? null;
 
-const FILTER_COLUMNS = [
-  LOG_FILTER_IDS.TEAM_ID,
-  LOG_FILTER_IDS.STATUS,
-  LOG_FILTER_IDS.CACHE_STATUS,
-  LOG_FILTER_IDS.KEY_ALIAS,
-  LOG_FILTER_IDS.END_USER,
-  LOG_FILTER_IDS.ERROR_CODE,
-  LOG_FILTER_IDS.ERROR_MESSAGE,
-  LOG_FILTER_IDS.KEY_HASH,
-  LOG_FILTER_IDS.SESSION_ID,
-  LOG_FILTER_IDS.MODEL_ID,
-  LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL,
-  LOG_FILTER_IDS.REQUEST_ID,
-  LOG_FILTER_IDS.USER_ID,
-] as const;
-type FilterColumn = (typeof FILTER_COLUMNS)[number];
+type LogFilterId = (typeof LOG_FILTER_IDS)[keyof typeof LOG_FILTER_IDS];
+type FilterColumn = Exclude<LogFilterId, typeof LOG_FILTER_IDS.SEARCH>;
+
+const isFilterColumn = (id: LogFilterId): id is FilterColumn => id !== LOG_FILTER_IDS.SEARCH;
+const FILTER_COLUMNS: readonly FilterColumn[] = Object.values(LOG_FILTER_IDS).filter(isFilterColumn);
 
 const TABLE_STATE_OPTIONS: UrlTableStateOptions<FilterColumn> = {
   sortFields: Object.keys(LOGS_SORT_FIELD_MAP),
@@ -76,6 +65,14 @@ const withSearchFilter = (filters: ColumnFiltersState, search: string): ColumnFi
 const searchFilterValue = (filters: ColumnFiltersState): string => {
   const value = filters.find((filter) => filter.id === LOG_FILTER_IDS.SEARCH)?.value;
   return typeof value === "string" ? value : "";
+};
+
+const tableRowCount = (response: PaginatedResponse, { pageIndex, pageSize }: PaginationState): number => {
+  const pageRows = response.data.length;
+  if (pageRows === 0 && pageIndex > 0) return response.total;
+  const rowsThroughThisPage = pageIndex * pageSize + pageRows;
+  const isLastPage = response.has_more === false || (response.has_more === undefined && pageRows < pageSize);
+  return isLastPage ? rowsThroughThisPage : Math.max(response.total, rowsThroughThisPage);
 };
 
 interface RequestLogsPanelProps {
@@ -225,10 +222,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const isDrawerOpen = displayLog !== null || displaySessionId !== null;
 
   const rows: LogEntry[] = filteredLogs.data;
-  const rowsThroughThisPage = pagination.pageIndex * pagination.pageSize + rows.length;
-  const isLastPage =
-    filteredLogs.has_more === false || (filteredLogs.has_more === undefined && rows.length < pagination.pageSize);
-  const rowCount = isLastPage ? rowsThroughThisPage : Math.max(filteredLogs.total, rowsThroughThisPage);
+  const rowCount = tableRowCount(filteredLogs, pagination);
 
   const handleSearchChange = useCallback(
     (value: string) => {

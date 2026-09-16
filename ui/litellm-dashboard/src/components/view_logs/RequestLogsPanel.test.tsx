@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chooseSelectOption, render, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { LogEntry } from "./columns";
@@ -189,6 +189,10 @@ describe("RequestLogsPanel", () => {
     testQueryClient.clear();
     respondWith([]);
     debounce.settled = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("server-grouped session pagination (#38060)", () => {
@@ -610,6 +614,34 @@ describe("RequestLogsPanel", () => {
       expect(lastCall()?.page).toBe(1);
     });
 
+    it("toggling Custom Range off goes back to the preset picked before it, anchored at the current time", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-07T10:00:00Z"));
+      const user = userEvent.setup();
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Last Hour" }));
+      await user.click(await screen.findByRole("button", { name: /Last Hour/i }));
+      await user.click(await screen.findByRole("button", { name: "Custom Range" }));
+      await waitFor(() => expect(urlParams().get("range")).toBe("custom"));
+      fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "2026-07-01T10:00" } });
+      await waitFor(() =>
+        expect(lastCall()?.start_date).toBe(moment("2026-07-01T10:00").utc().format("YYYY-MM-DD HH:mm:ss")),
+      );
+
+      vi.setSystemTime(new Date("2026-07-07T10:05:00Z"));
+      await user.click(screen.getByRole("button", { name: "Custom Range" }));
+
+      await waitFor(() => expect(urlParams().get("range")).toBe("1h"));
+      expect(urlParams().get("start")).toBeNull();
+      expect(urlParams().get("end")).toBeNull();
+      expect(screen.queryByLabelText("Start time")).not.toBeInTheDocument();
+      await waitFor(() => expect(lastCall()?.end_date).toBe("2026-07-07 10:05:00"));
+      expect(lastCall()?.start_date).toBe("2026-07-07 09:05:00");
+    });
+
     it("Reset Filters clears the range, bounds and filters from the URL", async () => {
       const user = userEvent.setup();
       renderPanel("?range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z&filter_team=team-1&log_search=abc");
@@ -968,6 +1000,23 @@ describe("RequestLogsPanel", () => {
       expect(screen.getByTestId("log-details-drawer")).toHaveTextContent("closed");
     });
 
+    it("clamps a URL page past the end straight to the last page without requesting the pages in between", async () => {
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page }) => {
+        const shared = { total: 60, page, page_size: 25, total_pages: 3 };
+        if (page === 40) return { ...shared, data: [], next_session_cursor: null, has_more: false };
+        if (page === 3)
+          return { ...shared, data: fullPage(10, "req-last"), next_session_cursor: null, has_more: false };
+        return { ...shared, data: fullPage(25), next_session_cursor: SESSION_CURSOR, has_more: true };
+      });
+      renderPanel("?page=40");
+
+      await waitFor(() => expect(row("req-last-0")).not.toBeNull());
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 3 of 3");
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-60 of 60");
+      expect(urlParams().get("page")).toBe("3");
+      expect(vi.mocked(uiSpendLogsCall).mock.calls.map(([options]) => options.page)).toEqual([40, 3]);
+    });
+
     it("falls back to the default sort column when ?sort_by= is not a sortable log field", async () => {
       renderPanel("?sort_by=api_key&sort_order=asc");
 
@@ -1094,6 +1143,21 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => expect(urlParams().get("key")).toBeNull());
       expect(await screen.findByTestId("datatable-search")).toBeInTheDocument();
+    });
+
+    it("Back after opening a key closes KeyInfoView and shows the logs table again", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-1", metadata: { user_api_key: "sk-hash-9" } })]);
+      const { goBack } = renderPanelWithHistory();
+
+      await waitFor(() => expect(row("req-1")).not.toBeNull());
+      await user.click(screen.getByText("sk-hash-9"));
+      await waitFor(() => expect(keyInfoView()).toHaveAttribute("data-key-id", "sk-hash-9"));
+
+      goBack();
+
+      await waitFor(() => expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument());
+      expect(row("req-1")).not.toBeNull();
     });
   });
 

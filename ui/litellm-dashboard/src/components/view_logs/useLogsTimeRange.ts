@@ -40,17 +40,30 @@ export interface LogsTimeRange {
   endTime: string;
 }
 
-const DEFAULT_PRESET =
-  QUICK_SELECT_OPTIONS.find((option) => option.id === DEFAULT_QUICK_SELECT_PRESET) ?? QUICK_SELECT_OPTIONS[0];
+interface PresetWindow {
+  preset: QuickSelectPresetId;
+  startTime: string;
+  endTime: string;
+}
 
-const presetBounds = (range: LogsRange): LogsTimeRange => {
-  const preset = QUICK_SELECT_OPTIONS.find((option) => option.id === range) ?? DEFAULT_PRESET;
+interface Anchor {
+  range: LogsRange;
+  window: PresetWindow;
+}
+
+const presetWindow = (preset: QuickSelectPresetId): PresetWindow => {
+  const option = QUICK_SELECT_OPTIONS.find((candidate) => candidate.id === preset) ?? QUICK_SELECT_OPTIONS[0];
   const now = moment();
   return {
-    range,
-    startTime: now.clone().subtract(preset.value, preset.unit).format(LOCAL_DATETIME_FORMAT),
+    preset,
+    startTime: now.clone().subtract(option.value, option.unit).format(LOCAL_DATETIME_FORMAT),
     endTime: now.format(LOCAL_DATETIME_FORMAT),
   };
+};
+
+const anchorFor = (range: LogsRange, previous: PresetWindow | null): Anchor => {
+  if (range !== CUSTOM_RANGE) return { range, window: presetWindow(range) };
+  return { range, window: previous ?? presetWindow(DEFAULT_QUICK_SELECT_PRESET) };
 };
 
 export interface LogsTimeRangeState {
@@ -64,18 +77,19 @@ export interface LogsTimeRangeState {
 
 export function useLogsTimeRange(onChange: () => void): LogsTimeRangeState {
   const [{ range, start, end }, setParams] = useQueryStates(TIME_RANGE_PARSERS);
-  const [anchored, setAnchored] = useState<LogsTimeRange>(() => presetBounds(range));
-  if (anchored.range !== range) setAnchored(presetBounds(range));
+  const [anchor, setAnchor] = useState<Anchor>(() => anchorFor(range, null));
+  if (anchor.range !== range) setAnchor(anchorFor(range, anchor.window));
 
   const isCustom = range === CUSTOM_RANGE;
-  const startTime = isCustom ? start ?? "" : anchored.startTime;
-  const endTime = isCustom ? end ?? "" : anchored.endTime;
+  const lastPreset = anchor.window.preset;
+  const startTime = isCustom ? start ?? "" : anchor.window.startTime;
+  const endTime = isCustom ? end ?? "" : anchor.window.endTime;
   const timeRange = useMemo<LogsTimeRange>(() => ({ range, startTime, endTime }), [range, startTime, endTime]);
 
   const selectPreset = useCallback(
     (preset: QuickSelectPresetId) => {
       void setParams({ range: preset, start: null, end: null });
-      setAnchored(presetBounds(preset));
+      setAnchor(anchorFor(preset, null));
       onChange();
     },
     [setParams, onChange],
@@ -84,11 +98,11 @@ export function useLogsTimeRange(onChange: () => void): LogsTimeRangeState {
   const toggleCustomRange = useCallback(() => {
     void setParams(
       isCustom
-        ? { range: null, start: null, end: null }
+        ? { range: lastPreset, start: null, end: null }
         : { range: CUSTOM_RANGE, start: startTime || null, end: endTime || null },
     );
     onChange();
-  }, [setParams, isCustom, startTime, endTime, onChange]);
+  }, [setParams, isCustom, lastPreset, startTime, endTime, onChange]);
 
   const setStartTime = useCallback(
     (value: string) => {
@@ -108,7 +122,7 @@ export function useLogsTimeRange(onChange: () => void): LogsTimeRangeState {
 
   const reset = useCallback(() => {
     void setParams(null);
-    setAnchored(presetBounds(DEFAULT_QUICK_SELECT_PRESET));
+    setAnchor(anchorFor(DEFAULT_QUICK_SELECT_PRESET, null));
     onChange();
   }, [setParams, onChange]);
 
