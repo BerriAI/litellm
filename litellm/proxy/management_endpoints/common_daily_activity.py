@@ -761,13 +761,6 @@ def _build_aggregated_sql_query(
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
     """Build the GROUPING SETS query for aggregated daily activity.
 
-    One statement, two UNION ALL arms over the same WHERE clause. The first arm is
-    key-free: grand total, per-date totals and the (date, model / model_group /
-    provider / mcp / endpoint) rollups, so its row count never grows with the number
-    of keys. The second arm emits the (date, <dimension>, api_key) rollups for the
-    USAGE_TOP_API_KEYS_LIMIT highest-spend keys only. Both arms share the 7-bit
-    group_level bitmask (date, api_key, model, model_group, provider, mcp, endpoint).
-
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
     """
@@ -1365,13 +1358,6 @@ async def get_daily_activity_aggregated(
     include_current_utc_day: bool = False,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
-
-    Runs one GROUPING SETS statement with two UNION ALL arms: a key-free one for totals
-    and the model/provider/mcp/endpoint rollups (row count independent of key
-    cardinality) and a bounded one for the per-key rollups of the top
-    USAGE_TOP_API_KEYS_LIMIT keys by spend. breakdown.api_keys and every
-    api_key_breakdown therefore list at most that many keys, while the totals and the
-    key-free rollups cover every key.
 
     include_entity_breakdown runs a small companion rollup query and folds
     `breakdown.entities` onto the response, as entity-scoped views like Team Usage need.
