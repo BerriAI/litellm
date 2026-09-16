@@ -124,6 +124,12 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
     )
 
 
+def _served_model_name(model_version: object) -> str | None:
+    if not isinstance(model_version, str) or not model_version:
+        return None
+    return model_version.split("@", 1)[0]
+
+
 class VertexAIBaseConfig:
     def get_mapped_special_auth_params(self) -> dict:
         """
@@ -1951,6 +1957,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _check_prompt_level_content_filter(
         processed_chunk: GenerateContentResponseBody,
         response_id: str | None,
+        model: str | None = None,
     ) -> Optional["ModelResponseStream"]:
         """
         Check if prompt is blocked due to content filtering at the prompt level.
@@ -1990,7 +1997,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 enhancements=None,
             )
 
-            model_response: Final = ModelResponseStream(choices=[choice], id=response_id)
+            model_response: Final = ModelResponseStream(choices=[choice], id=response_id, model=model)
             return model_response
 
         return None
@@ -2434,8 +2441,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_response = GenerateContentResponseBody(**completion_response)
 
         ## GET MODEL ##
-        model_version: Final = completion_response.get("modelVersion")
-        model_response.model = model_version if isinstance(model_version, str) else model
+        served: Final = _served_model_name(completion_response.get("modelVersion"))
+        model_response.model = served if served is not None else model
 
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response and "blockReason" in completion_response["promptFeedback"]:
@@ -3265,17 +3272,18 @@ class ModelResponseIterator:
 
             processed_chunk: Final = GenerateContentResponseBody(**chunk)
             response_id: Final = processed_chunk.get("responseId")
-            chunk_model_version: Final = processed_chunk.get("modelVersion")
+            served: Final = _served_model_name(processed_chunk.get("modelVersion"))
             model_response = ModelResponseStream(
                 choices=[],
                 id=response_id,
-                model=chunk_model_version if isinstance(chunk_model_version, str) else None,
+                model=served,
             )
 
             # Check if prompt is blocked due to content filtering
             blocked_response: Final = VertexGeminiConfig._check_prompt_level_content_filter(
                 processed_chunk=processed_chunk,
                 response_id=response_id,
+                model=served,
             )
             if blocked_response is not None:
                 model_response = blocked_response

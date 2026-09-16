@@ -5926,3 +5926,36 @@ def test_served_model_version_reaches_assembled_stream_through_custom_stream_wra
         assert chunk._hidden_params["provider_response_model"] == served_model
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
     assert assembled._hidden_params["provider_response_model"] == served_model
+
+
+def test_generate_content_transform_strips_version_suffix_from_model_version():
+    import httpx
+
+    body: Final = {**_generate_content_body(), "modelVersion": "gemini-3.8-flash-001@default"}
+    response: Final = VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+        completion_response=body,
+        model_response=ModelResponse(),
+        model="gemini-3.8-flash",
+        logging_obj=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+    )
+
+    assert response.model == "gemini-3.8-flash-001"
+
+
+def test_prompt_blocked_chunk_keeps_served_model_version():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk: Final = {
+        "promptFeedback": {"blockReason": "SAFETY", "blockReasonMessage": "prompt was blocked"},
+        "modelVersion": "gemini-3.8-flash-001",
+        "responseId": "resp-1",
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
+
+    streaming_chunk: Final = iterator.chunk_parser(chunk)
+
+    assert streaming_chunk.model == "gemini-3.8-flash-001"
+    assert streaming_chunk.choices[0].finish_reason == "content_filter"
