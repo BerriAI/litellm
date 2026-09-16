@@ -492,6 +492,11 @@ def _resolve_responses_api_provider_config(
     return OpenAILikeResponsesConfig()
 
 
+def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
+    api_base: Final = kwargs.get("api_base")
+    return api_base if isinstance(api_base, str) else None
+
+
 def _will_bridge_to_chat_completions(
     model: str,
     custom_llm_provider: str | None,
@@ -622,7 +627,7 @@ async def aresponses(
                     custom_llm_provider,
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
-                    cast(str | None, kwargs.get("api_base")),
+                    _api_base_kwarg(kwargs),
                 ),
             ):
                 (
@@ -792,7 +797,7 @@ def _apply_prompt_management_to_responses_call(
                 custom_llm_provider,
                 use_chat_completions_api,
                 kwargs.get("model_info"),
-                cast(str | None, kwargs.get("api_base")),
+                _api_base_kwarg(kwargs),
             ),
         ):
             (
