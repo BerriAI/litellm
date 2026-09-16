@@ -439,8 +439,7 @@ class BaseResponsesAPIStreamingIterator:
         if self._persist_completed_response_before_logging:
             self._persist_completed_response_to_cache(is_async=is_async)
 
-        logging_response: Final[object] = _logging_copy(self.completed_response)
-        self._restore_provider_response_headers(logging_response)
+        logging_response: Final = self._response_for_success_logging()
 
         end_time: Final = datetime.now()
         if is_async:
@@ -474,6 +473,16 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
             )
         self._run_post_success_hooks(end_time=end_time)
+
+    def _response_for_success_logging(self) -> object:
+        """The handlers only unwrap the completion event in their assembled-stream branch, which a
+        non-streaming caller draining this iterator never reaches, so unwrap the logging copy here."""
+        copied: Final = _logging_copy(self.completed_response)
+        self._restore_provider_response_headers(copied)
+        unwrapped: Final = getattr(copied, "response", None)
+        if getattr(self.logging_obj, "stream", None) is not True and isinstance(unwrapped, ResponsesAPIResponse):
+            return unwrapped
+        return copied
 
     def _restore_provider_response_headers(self, logging_response: object) -> None:
         """Re-apply the provider's response headers to the copy handed to logging callbacks.
