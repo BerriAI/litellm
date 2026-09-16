@@ -6,7 +6,6 @@ import base64
 import logging
 import os
 import random
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -14,11 +13,7 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -41,6 +36,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
 from typing import Literal, Optional
+from litellm.proxy._types import ProxyException
 
 public_key = {
     "kty": "RSA",
@@ -1045,11 +1041,8 @@ async def test_allow_access_by_email(
             assert result is not None  # Adjust this based on your actual response check
         else:
             # Expect the call to fail
-            with pytest.raises(
-                Exception
-            ):  # Replace with the actual exception raised on failure
-                resp = await user_api_key_auth(request=request, api_key=bearer_token)
-                print(resp)
+            with pytest.raises(ProxyException):
+                await user_api_key_auth(request=request, api_key=bearer_token)
 
 
 def test_get_public_key_from_jwk_url():
@@ -1585,7 +1578,7 @@ async def test_auth_jwt_mismatched_key_fails(monkeypatch):
 
     h = JWTHandler()
     with patch.object(h, "get_public_key", new=AsyncMock(return_value=rsa_jwk)):
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(Exception, match='Validation fails: Expecting a PEM-formatted key\\.') as exc:
             await h.auth_jwt(token)
         assert "Validation fails" in str(exc.value)
 
@@ -1828,7 +1821,7 @@ async def test_multi_issuer_jwt_unknown_issuer_without_global_jwks_rejected(
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Missing JWT Public Key URL from environment\\.') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Missing JWT Public Key URL" in str(exc.value)
@@ -1859,7 +1852,7 @@ async def test_multi_issuer_jwt_rejects_wrong_audience(monkeypatch):
         kid="issuer-key",
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match="Validation fails: Audience doesn't match") as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -1902,7 +1895,7 @@ async def test_multi_issuer_jwt_same_kid_does_not_cross_issuer_keys(monkeypatch)
         kid=shared_kid,
     )
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='Validation fails: Signature verification failed') as exc:
         await jwt_handler.auth_jwt(token=token)
 
     assert "Validation fails" in str(exc.value)
@@ -1955,7 +1948,7 @@ def test_multi_issuer_jwt_requires_audience_unless_explicitly_disabled(
     issuer = "https://issuer.example.com"
     jwks_url = f"{issuer}/keys"
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception, match='must configure audience or set') as exc:
         LiteLLM_JWTAuth(
             issuers=[
                 {

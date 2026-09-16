@@ -11,12 +11,11 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { BadgeLink } from "@/components/shared/BadgeLink";
-import type { ColumnsType } from "antd/es/table";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
-import MemberTable from "../common_components/MemberTable";
+import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   Member,
   organizationMemberAddCall,
@@ -71,11 +70,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       };
       await organizationMemberAddCall(accessToken, organizationId, member);
 
-      NotificationsManager.success("Organization member added successfully");
+      toast.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to add organization member");
+      toast.fromError("Failed to add organization member");
       console.error("Error adding organization member:", error);
     }
   };
@@ -91,11 +90,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       };
 
       await organizationMemberUpdateCall(accessToken, organizationId, member);
-      NotificationsManager.success("Organization member updated successfully");
+      toast.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update organization member");
+      toast.fromError("Failed to update organization member");
       console.error("Error updating organization member:", error);
     }
   };
@@ -105,11 +104,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       if (!accessToken) return;
 
       await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
-      NotificationsManager.success("Organization member deleted successfully");
+      toast.success("Organization member deleted successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to delete organization member");
+      toast.fromError("Failed to delete organization member");
       console.error("Error deleting organization member:", error);
     }
   };
@@ -122,23 +121,23 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
-  const orgExtraColumns: ColumnsType<Member> = [
+  const orgMemberById = new Map((orgData.members || []).map((m) => [m.user_id, m]));
+  const orgMemberFor = (record: Member) => (record.user_id != null ? orgMemberById.get(record.user_id) : undefined);
+
+  const orgExtraColumns: MemberTableColumn[] = [
     {
       title: "Spend (USD)",
       key: "spend",
-      render: (_: unknown, record: Member) => {
-        const orgMember =
-          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <MoneyCell value={orgMember?.spend} decimals={4} />;
-      },
+      sortValue: (record: Member) => orgMemberFor(record)?.spend ?? null,
+      render: (record: Member) => <MoneyCell value={orgMemberFor(record)?.spend} decimals={4} />,
     },
     {
       title: "Created At",
       key: "created_at",
-      render: (_: unknown, record: Member) => {
-        const orgMember =
-          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <span>{orgMember?.created_at ? new Date(orgMember.created_at).toLocaleString() : "-"}</span>;
+      sortValue: (record: Member) => orgMemberFor(record)?.created_at ?? null,
+      render: (record: Member) => {
+        const createdAt = orgMemberFor(record)?.created_at;
+        return <span>{createdAt ? new Date(createdAt).toLocaleString() : "-"}</span>;
       },
     },
   ];
@@ -207,8 +206,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               <CardContent>
                 <p className="text-sm text-muted-foreground">Rate Limits</p>
                 <div className="mt-2 text-sm text-foreground">
-                  <p>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</p>
-                  <p>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</p>
+                  <p>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</p>
+                  <p>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</p>
                   {orgData.litellm_budget_table.max_parallel_requests && (
                     <p>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</p>
                   )}
@@ -253,10 +252,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         <TabsContent keepMounted={hasVisited("members")} value="members" className="pt-4">
           <div className="space-y-4">
             <MemberTable
+              key={orgData.organization_id}
               members={(orgData.members || []).map((m) => ({
                 role: m.user_role || "",
                 user_id: m.user_id,
                 user_email: m.user_email,
+                user_alias: m.user?.user_alias ?? null,
               }))}
               canEdit={canEditOrg}
               onEdit={(member) => {
@@ -312,8 +313,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Rate Limits</p>
-                    <div>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</div>
-                    <div>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</div>
+                    <div>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</div>
+                    <div>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Budget</p>

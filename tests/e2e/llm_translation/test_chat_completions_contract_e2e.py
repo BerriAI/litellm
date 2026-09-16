@@ -6,14 +6,14 @@ Exercises the gateway against a live OpenAI deployment using customer request sh
 from __future__ import annotations
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import provider_edge_base, unique_marker
 from e2e_http import StreamingResponse, assert_client_error, require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 OPENAI_BACKEND = "openai/gpt-4o-mini"
 CHAT_PATH = "/chat/completions"
@@ -38,10 +38,15 @@ class ChatErrorEnvelope(BaseModel):
 
 
 def _register_chat_model(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]:
+    base = provider_edge_base("openai")
     model = f"e2e-chat-sec-{unique_marker()}"
     model_id = proxy.create_model(
         model,
-        LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
+        LiteLLMParamsBody(
+            model=OPENAI_BACKEND,
+            api_key="os.environ/OPENAI_API_KEY",
+            api_base=None if base is None else f"{base}/v1",
+        ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model, resources.key()

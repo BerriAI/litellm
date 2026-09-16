@@ -6,12 +6,9 @@ patterns, verifying that regex-based header matching works correctly alongside
 existing tag-based routing.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from unittest.mock import MagicMock
 

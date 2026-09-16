@@ -433,7 +433,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         {isLoadingTools && (
           <div className="flex items-center justify-center gap-3 py-6">
             <UiLoadingSpinner className="size-6 text-muted-foreground" />
-            <p className="text-sm">Loading tools from spec...</p>
+            <p className="text-sm">Loading tools...</p>
           </div>
         )}
 

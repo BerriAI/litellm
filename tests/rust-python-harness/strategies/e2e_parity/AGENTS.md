@@ -1,0 +1,1 @@
+Switches between the Rust implementation and the existing Python core, then compares their observable behavior for parity across SDK objects, exceptions, callbacks, streams, and gateway HTTP responses using generated and recorded inputs.

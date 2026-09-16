@@ -159,20 +159,20 @@ class BaseAnthropicMessagesConfig(ABC):
         and issue one more attempt (bounded by max_retry_on_anthropic_messages_http_error).
         """
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
-        return e.response.status_code == 400 and is_anthropic_invalid_thinking_signature_error(e.response.text)
+        return e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text)
 
     def transform_anthropic_messages_request_on_http_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
         """
         Mutates request_data in place when retrying after a recoverable HTTP error.
         """
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
             strip_thinking_blocks_from_anthropic_messages_request_dict,
         )
 
-        if e.response.status_code == 400 and is_anthropic_invalid_thinking_signature_error(e.response.text):
+        if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
         return request_data

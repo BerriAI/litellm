@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
+    RealtimeInputAudioTranscriptionUsage,
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
@@ -53,8 +55,11 @@ class BaseRealtimeConfig(ABC):
         message: str,
         model: str,
         session_configuration_request: str | None = None,
-    ) -> list[str]:
+    ) -> Sequence[str | bytes]:
         pass
+
+    async def pace_backend_send(self, message: bytes) -> None:
+        return None
 
     def is_setup_message(self, msg_obj: dict) -> bool:
         return False
@@ -70,12 +75,15 @@ class BaseRealtimeConfig(ABC):
     def session_configuration_request(self, model: str) -> str | None:  # message sent to setup the realtime session
         return None
 
+    def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        return None
+
     def transform_session_created_event(
         self,
         model: str,
         logging_session_id: str,
         session_configuration_request: str | None = None,
-    ) -> dict | OpenAIRealtimeStreamSessionEvents | None:
+    ) -> Mapping[str, object] | OpenAIRealtimeStreamSessionEvents | None:
         """
         Optional hook for providers that defer session setup until client `session.update`.
 

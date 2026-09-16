@@ -25,6 +25,8 @@ flag_management:
       carryforward: false
     - name: proxy-db-schema-migration
       carryforward: false
+    - name: circleci
+      carryforward: false
 
 component_management:
   individual_components:

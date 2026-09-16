@@ -1,17 +1,13 @@
 import asyncio
 import json
-import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -1556,6 +1552,7 @@ class TestInterruptedStreamOutputTokenRecovery:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
     _MODEL = "claude-3-5-haiku-20241022"
+    _PRICED_MODEL = "claude-sonnet-5"
     _OUTPUT_TEXT = (
         "The history of computing spans centuries, beginning with mechanical "
         "calculators and the abacus, advancing through Charles Babbage's "
@@ -1564,7 +1561,7 @@ class TestInterruptedStreamOutputTokenRecovery:
         "century that gave rise to the modern information age."
     )
 
-    def _interrupted_chunks(self, *, placeholder_output_tokens: int = 2):
+    def _interrupted_chunks(self, *, placeholder_output_tokens: int = 2, model: str | None = None):
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
@@ -1579,7 +1576,7 @@ class TestInterruptedStreamOutputTokenRecovery:
                         "id": "msg_interrupted",
                         "type": "message",
                         "role": "assistant",
-                        "model": self._MODEL,
+                        "model": model or self._MODEL,
                         "content": [],
                         "stop_reason": None,
                         "stop_sequence": None,
@@ -1680,6 +1677,81 @@ class TestInterruptedStreamOutputTokenRecovery:
         # Terminal message_delta present: recovery must not fire; the authoritative
         # provider count is preserved verbatim.
         assert usage.completion_tokens == final
+
+    @pytest.mark.asyncio
+    async def test_interrupted_stream_logs_cost_of_recovered_tokens(self):
+        """
+        Regression (LIT-6872): stream_chunk_builder stamps usage.cost and
+        _hidden_params["response_cost"] from the message_start placeholder before
+        the interrupted stream is re-tokenized, and the success handler prefers
+        that hidden cost over the recomputed one. The logged cost must price the
+        recovered completion tokens, not the placeholder.
+        """
+        import litellm
+
+        class _SuccessRecorder(CustomLogger):
+            def __init__(self):
+                super().__init__()
+                self.success_kwargs: list = []
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                self.success_kwargs.append(kwargs)
+
+        recorder = _SuccessRecorder()
+        logging_obj = LiteLLMLoggingObj(
+            model=self._PRICED_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="lit-6872",
+            function_id="lit-6872",
+            dynamic_async_success_callbacks=[recorder],
+        )
+        logging_obj.update_environment_variables(
+            model=self._PRICED_MODEL,
+            user="",
+            optional_params={},
+            litellm_params={"custom_llm_provider": "anthropic"},
+            custom_llm_provider="anthropic",
+        )
+        placeholder = 1
+        handled = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": self._PRICED_MODEL, "stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=self._interrupted_chunks(placeholder_output_tokens=placeholder, model=self._PRICED_MODEL),
+            end_time=datetime.now(),
+        )
+        await logging_obj.dispatch_success_handlers(
+            result=handled["result"],
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            prefer_async_handlers=True,
+            **handled["kwargs"],
+        )
+        for _ in range(300):
+            if recorder.success_kwargs:
+                break
+            await asyncio.sleep(0.01)
+
+        assert len(recorder.success_kwargs) == 1
+        logged = recorder.success_kwargs[0]["standard_logging_object"]
+        recovered_tokens = handled["result"].usage.completion_tokens
+        assert recovered_tokens > placeholder
+        assert logged["completion_tokens"] == recovered_tokens
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=self._PRICED_MODEL, prompt_tokens=29, completion_tokens=recovered_tokens
+        )
+        _, placeholder_completion_cost = litellm.cost_per_token(
+            model=self._PRICED_MODEL, prompt_tokens=29, completion_tokens=placeholder
+        )
+        assert logged["response_cost"] == pytest.approx(prompt_cost + completion_cost)
+        assert logged["response_cost"] > prompt_cost + placeholder_completion_cost
 
 
 class TestStreamFalseDeduplication:
@@ -2322,10 +2394,10 @@ class TestAnthropicResponseCostRecordedOnModelCallDetails:
 
 
 class TestAnthropicPassthroughFastMode:
-    """Anthropic charges a provider-specific multiplier for ``speed=fast``, and the
-    multiplier is applied off ``usage.speed``. The pass-through handler only sees the
-    speed in the request body, so it has to thread it into every usage-building path or
-    fast-mode pass-through spend is under-reported."""
+    """Anthropic charges a provider-specific multiplier for ``speed=fast``, applied off
+    ``usage.speed`` and covering every token type, cache included. The response usage
+    carries the served speed when the request asked for one; the request body's value is
+    the fallback, so the handler still threads it into every usage-building path."""
 
     MODEL = "claude-opus-4-8"
     STREAM_CHUNKS = [
@@ -2363,11 +2435,7 @@ class TestAnthropicPassthroughFastMode:
         return litellm.completion_cost(completion_response=response, model=f"anthropic/{self.MODEL}")
 
     def _expected_fast_cost(self, standard_cost: float) -> float:
-        import litellm
-
-        model_info = litellm.get_model_info(model=self.MODEL, custom_llm_provider="anthropic")
-        cache_read_cost = 200 * (model_info.get("cache_read_input_token_cost") or 0.0)
-        return (standard_cost - cache_read_cost) * 2.0 + cache_read_cost
+        return standard_cost * 2.0
 
     def test_non_streaming_applies_fast_multiplier(self):
         import httpx
@@ -2432,3 +2500,109 @@ class TestAnthropicPassthroughFastMode:
 
         assert fast.usage.speed == "fast"
         assert self._cost(fast) == pytest.approx(self._expected_fast_cost(self._cost(standard)))
+
+    def test_usage_only_fallback_prefers_served_speed_from_stream(self):
+        served_standard_chunks = [
+            chunk.replace('"usage": {"input_tokens": 1000', '"usage": {"speed": "standard", "input_tokens": 1000')
+            for chunk in self.STREAM_CHUNKS
+        ]
+        served_standard = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=served_standard_chunks,
+            model=self.MODEL,
+            speed="fast",
+        )
+        standard = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self.STREAM_CHUNKS,
+            model=self.MODEL,
+        )
+
+        assert served_standard.usage.speed == "standard"
+        assert self._cost(served_standard) == pytest.approx(self._cost(standard))
+
+
+class TestRecordPartialUsageForFailure:
+    """A stream that dies mid-way still carries the usage the provider billed in
+    message_start; the failure row must keep it and its cost instead of logging
+    a zero-cost failure (or, worse, a success)."""
+
+    @staticmethod
+    def _sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    @staticmethod
+    def _make_logging_obj() -> LiteLLMLoggingObj:
+        return LiteLLMLoggingObj(
+            model="claude-sonnet-5",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="test-partial-usage-failure",
+            function_id="test-partial-usage-failure",
+        )
+
+    def _interrupted_chunks(self):
+        return [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 52, "output_tokens": 1},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            ),
+            self._sse(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}},
+            ),
+        ]
+
+    def test_stashes_partial_usage_and_cost_from_interrupted_stream(self):
+        logging_obj = self._make_logging_obj()
+
+        AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            all_chunks=self._interrupted_chunks(),
+        )
+
+        usage = logging_obj.model_call_details["combined_usage_object"]
+        assert usage.prompt_tokens == 52
+        assert logging_obj.model_call_details["response_cost"] > 0
+
+    def test_stashes_partial_usage_at_zero_cost_when_model_is_unpriced(self):
+        logging_obj = self._make_logging_obj()
+
+        AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "claude-unpriced-test-model", "stream": True},
+            all_chunks=self._interrupted_chunks(),
+        )
+
+        usage = logging_obj.model_call_details["combined_usage_object"]
+        assert usage.prompt_tokens == 52
+        assert logging_obj.model_call_details["response_cost"] == 0.0
+
+    def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
+        logging_obj = self._make_logging_obj()
+
+        AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            all_chunks=[],
+        )
+
+        assert "combined_usage_object" not in logging_obj.model_call_details
+        assert "response_cost" not in logging_obj.model_call_details

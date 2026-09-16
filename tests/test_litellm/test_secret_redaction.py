@@ -1,8 +1,11 @@
 import logging
 import logging.config
 import sys
+import time
+import traceback
 from collections.abc import Callable
 from io import StringIO
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -11,11 +14,12 @@ from litellm._logging import (
     JsonFormatter,
     _redact_string,
     _secret_filter,
+    redact_internal_details_from_client_message,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
 )
-from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.secret_redaction import redact_internal_details, redact_string
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
@@ -65,6 +69,50 @@ def test_redact_string_catches_secret_patterns():
 
     normal = "Loaded model gpt-4 with 3 replicas on us-east-1"
     assert redact_string(normal) == normal
+
+
+@pytest.mark.parametrize(
+    "connection_string",
+    [
+        "postgres://admin:pass3cret@db.example.com:5432/mydb",
+        "redis://:pass3cret@cache.example.com:6379",
+        "postgres://admin:pass/s3cret@db.example.com:5432/mydb",
+        "amqp://admin:pass:s3cret@rabbit:5672",
+        "https://ad@min:pass3cret@host",
+        # An unencoded "@" inside the password, with a ":" after it
+        "postgresql://admin:p@ss3cret:2026@db.example.com:5432/mydb",
+        "amqp://guest:gu@st3cret:1@rabbit:5672/",
+        # An AWS RDS IAM auth token is a presigned query string used as the
+        # password, so the userinfo runs to several hundred characters.
+        "postgresql://litellm:host%3A5432%2F%3FAction%3Dconnect%26X-Amz-Signature%3D"
+        + "f" * 540
+        + "s3cret@db.host:5432/litellm",
+    ],
+)
+def test_redact_string_still_catches_connection_string_credentials(connection_string):
+    """The bounded userinfo pattern must keep matching real connection strings."""
+    assert "s3cret" not in redact_string(connection_string)
+
+
+def _redaction_cost(url_bytes: int) -> float:
+    url: Final = "/x?u=" + "a://" * (url_bytes // 4)
+
+    def once() -> float:
+        started = time.perf_counter()
+        redact_string(url)
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+def test_redact_string_stays_sub_quadratic_on_a_long_adversarial_url():
+    """Access-log redaction runs on attacker-controlled request lines, so quadrupling
+    a URL of scheme separators must not multiply the cost by sixteen. Comparing two
+    sizes rather than asserting a wall-clock ceiling keeps this honest on a slow box:
+    the unbounded pattern this replaced cost 5s at 4 KB and 314s at 16 KB."""
+    growth: Final = _redaction_cost(16 * 1024) / _redaction_cost(4 * 1024)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the URL length"
 
 
 def test_redact_string_catches_minimum_length_virtual_key():
@@ -145,6 +193,71 @@ def test_filter_redacts_extra_fields():
     assert SECRET not in record.api_key
     assert "REDACTED" in record.api_key
     assert record.region == "us-east-1"
+
+
+def test_filter_preserves_uvicorn_color_message_args():
+    """Regression test: uvicorn's startup banner logs a plain message plus a
+    colorized `extra={"color_message": ...}` copy of the same "%s://%s:%d" template,
+    both meant to be filled in from record.args. uvicorn's own ColourizedFormatter
+    re-substitutes color_message against record.args when writing to a TTY, instead
+    of using the already-formatted record.msg.
+
+    Before this fix, the filter cleared record.args after substituting only
+    record.msg, so color_message was rendered with args=None and the raw
+    "%s://%s:%d" placeholders were printed instead of the real host/port.
+    """
+    from uvicorn.logging import DefaultFormatter
+
+    addr_format = "%s://%s:%d"
+    plain_message = f"Uvicorn running on {addr_format} (Press CTRL+C to quit)"
+    color_message = f"Uvicorn running on {addr_format} (Press CTRL+C to quit)"
+
+    logger = logging.getLogger("uvicorn.error")
+    saved_handlers, saved_level = logger.handlers[:], logger.level
+    buf = StringIO()
+    handler = logging.StreamHandler(buf)
+    formatter = DefaultFormatter("%(levelprefix)s %(message)s")
+    formatter.use_colors = True
+    handler.setFormatter(formatter)
+    logger.handlers = [handler]
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info(
+            plain_message,
+            "http",
+            "0.0.0.0",
+            4000,
+            extra={"color_message": color_message},
+        )
+        output = buf.getvalue()
+    finally:
+        logger.handlers = saved_handlers
+        logger.setLevel(saved_level)
+
+    assert "%s" not in output and "%d" not in output, f"unsubstituted placeholders leaked: {output!r}"
+    assert "http://0.0.0.0:4000" in output
+
+
+def test_filter_redacts_secrets_substituted_into_color_message():
+    """The color_message substitution runs before the extra-field redaction
+    loop, so a secret arriving through record.args lands in color_message and
+    must still be scrubbed. Substituting after that loop would ship the secret
+    to any colorized handler."""
+    record = logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="connecting with %s",
+        args=(SECRET,),
+        exc_info=None,
+    )
+    record.color_message = "connecting with %s"
+
+    _secret_filter.filter(record)
+
+    assert SECRET not in record.color_message
+    assert "REDACTED" in record.color_message
 
 
 def test_disable_redaction_passes_secrets_through():
@@ -495,3 +608,116 @@ def test_redaction_survives_uvicorn_logging_reconfiguration():
             lg.handlers[:] = handlers
             lg.setLevel(level)
             lg.propagate = True
+
+
+def test_aws_credential_redaction_catches_quoted_values():
+    """AWS creds appear as quoted dict-repr values, not just bare key=value."""
+    cases = (
+        "{'aws_secret_access_key': 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY'}",
+        '{"aws_session_token": "IQoJb3JpZ2luX2VjEaCXVzLWVhc3QtMSJHMEUCIQ"}',
+        "aws_session_token: 'FwoGZXIvYXdzEBYaDHh4eHh4eHh4eHh4eCLLAe'",
+        "aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+        "{'aws_access_key_id': 'not-an-akia-shaped-value'}",
+    )
+    for secret_line in cases:
+        result = redact_string(secret_line)
+        assert "REDACTED" in result, f"AWS redaction missed: {secret_line!r}"
+        assert "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY" not in result
+        assert "IQoJb3JpZ2luX2VjEaCXVzLWVhc3QtMSJHMEUCIQ" not in result
+
+    safe = "'aws_region_name': 'us-east-1'"
+    assert redact_string(safe) == safe
+
+
+@pytest.mark.parametrize(
+    "extra",
+    (
+        {"api_base": {f"https://host/v1?key={SECRET}"}},
+        {"blob": {"authorization": f"Bearer {SECRET}"}},
+        {"blob": [f"Bearer {SECRET}"]},
+        {"blob": ({"nested": {"deep": SECRET}},)},
+    ),
+    ids=("set", "dict", "list", "nested"),
+)
+def test_json_formatter_redacts_non_string_extra_values(extra):
+    """SecretRedactionFilter only scrubs str attrs, so containers must be caught on render."""
+    buf = StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
+
+    logger = logging.getLogger("test_json_extra_redaction")
+    logger.handlers = [handler]
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    try:
+        logger.warning("request sent", extra=extra)
+    finally:
+        logger.handlers = []
+
+    output = buf.getvalue()
+    assert output.strip(), "no record captured"
+    assert SECRET not in output, f"non-string extra leaked a secret: {output}"
+    assert "REDACTED" in output
+
+
+@pytest.mark.parametrize(
+    "text,leaked",
+    (
+        ("config file /etc/litellm/secrets/db.yaml", "/etc/litellm/secrets/db.yaml"),
+        ("home dir /Users/admin/.litellm/master_key.txt", "/Users/admin/.litellm/master_key.txt"),
+        ("cache at /var/cache/litellm/tokens.db", "/var/cache/litellm/tokens.db"),
+        ("path C:\\Users\\admin\\secrets.env", "C:\\Users\\admin\\secrets.env"),
+        ("connecting to host 10.20.30.40", "10.20.30.40"),
+        ("connecting to host 192.168.1.5", "192.168.1.5"),
+        ("connecting to host 172.16.0.9", "172.16.0.9"),
+        ("connecting to host 127.0.0.1", "127.0.0.1"),
+        ("connecting to db-primary.internal", "db-primary.internal"),
+        ("connecting to redis.corp", "redis.corp"),
+    ),
+)
+def test_redact_internal_details_catches_paths_and_hostnames(text, leaked):
+    result = redact_internal_details(text)
+    assert leaked not in result, f"{leaked!r} was not redacted"
+    assert "REDACTED" in result
+
+
+def test_redact_internal_details_leaves_public_hostnames_and_routes_alone():
+    """litellm's own error messages rely on routes like /v1/models staying legible."""
+    safe_strings = (
+        "call https://api.openai.com/v1/chat/completions",
+        "/chat/completions: Invalid model name passed in model=gpt-9",
+        "Call `/v1/models` to view available models for your key",
+        "reducto:// file IDs are not accepted through the proxy OCR API",
+    )
+    for text in safe_strings:
+        assert redact_internal_details(text) == text
+
+
+def test_redact_internal_details_layers_on_top_of_credential_redaction():
+    text = "postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod"
+    result = redact_internal_details(text)
+    assert "S3cr3tPGPass" not in result
+    assert "10.20.30.40" not in result
+
+
+def test_redact_internal_details_drops_embedded_traceback():
+    """Regression for LIT-6747: the traceback exception_type() embeds for SDK callers
+    must never reach an HTTP client."""
+    try:
+        raise RuntimeError("socket hung up")
+    except RuntimeError:
+        raw_tb = traceback.format_exc()
+    message = f"litellm.APIConnectionError: MinimaxException - socket hung up\n{raw_tb}"
+
+    result = redact_internal_details(message)
+
+    assert result == "litellm.APIConnectionError: MinimaxException - socket hung up"
+    assert "Traceback (most recent call last)" not in result
+    assert __file__.split("/")[-1] not in result
+
+
+def test_redact_internal_details_from_client_message_respects_disable_flag():
+    with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
+        text = "config file /etc/litellm/secrets/db.yaml"
+        assert redact_internal_details_from_client_message(text) == text

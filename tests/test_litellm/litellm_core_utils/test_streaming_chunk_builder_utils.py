@@ -1,12 +1,9 @@
 import json
-import os
-import sys
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
@@ -597,6 +594,59 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.total_tokens == 77
 
 
+def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
+    from openai.types.completion_usage import CompletionUsage
+
+    content_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513206,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="ok",
+                    role=None,
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513207,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk.usage = CompletionUsage(
+        prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704
+    )
+    assert type(usage_chunk.usage) is CompletionUsage
+
+    chunks = [content_chunk, usage_chunk]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="mantle-claude", completion_output=""
+    )
+
+    assert usage.prompt_tokens == 20
+    assert usage.completion_tokens == 60
+    assert usage.total_tokens == 80
+    assert getattr(usage, "cost", None) == pytest.approx(0.000704)
+
+
 def test_get_model_from_chunks_azure_model_router():
     """
     Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.
@@ -714,6 +764,66 @@ def test_stream_chunk_builder_anthropic_web_search():
     # (which uses attribute access) works. See issue #26153.
     assert isinstance(usage.server_tool_use, ServerToolUse)
     assert usage.server_tool_use.web_search_requests == 2
+
+
+def test_calculate_usage_carries_google_maps_grounding_requests():
+    """
+    The Maps grounding counter set on a streamed usage chunk must survive the stream rebuild even
+    when a later chunk carries its own prompt_tokens_details, or Maps grounding on streaming
+    requests silently bills $0.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Here"),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=15,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(google_maps_grounding_requests=1),
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=None),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=27,
+            prompt_tokens=0,
+            total_tokens=27,
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=0),
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(chunks=chunks, model="gemini-2.5-flash", completion_output="")
+
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
@@ -994,6 +1104,32 @@ def test_cost_field_in_usage_chunks():
     assert usage.completion_tokens == 5
 
 
+def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
+    """Regression for https://github.com/BerriAI/litellm/issues/32051
+
+    The Responses-API bridge yields ModelResponseStream chunks with choices
+    followed by a trailing event object that has no ``choices`` key. Building
+    those chunks used to raise ``KeyError('choices')`` (surfaced as a 500
+    APIError); it must now skip the choices-less chunk and assemble content.
+    """
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+
+    content_chunks = [
+        ModelResponseStream(
+            model="gpt-4o",
+            choices=[StreamingChoices(index=0, delta=Delta(content=part))],
+        )
+        for part in ("Hello", " world")
+    ]
+    trailing_chunk = BaseLiteLLMOpenAIResponseObject()
+    assert "choices" not in trailing_chunk
+
+    response = stream_chunk_builder(chunks=content_chunks + [trailing_chunk])
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+
+
 def test_anthropic_speed_and_geo_survive_stream_assembly():
     """Anthropic prices fast mode and non-global regions with a multiplier read off
     ``usage.speed`` / ``usage.inference_geo``. Dropping them while reassembling a stream
@@ -1262,3 +1398,208 @@ def test_get_combined_tool_content_joins_many_custom_tool_input_fragments_in_ord
     assert isinstance(combined[1], ChatCompletionMessageCustomToolCall)
     assert combined[1].custom.name == "run_script"
     assert combined[1].custom.input == "".join(object_fragments)
+
+
+def _reasoning_stream_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-reasoning",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="10", role="assistant"))],
+    )
+
+
+def test_count_reasoning_tokens_returns_none_for_signature_only_thinking():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="10", role="assistant", reasoning_content=""),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) is None
+
+
+def test_count_reasoning_tokens_counts_visible_reasoning():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="10",
+                    role="assistant",
+                    reasoning_content="let me count the primes under thirty",
+                ),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) > 0
+
+
+@pytest.mark.parametrize(
+    "estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens",
+    [(40, 40, 60), (250, 100, 0)],
+)
+def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
+    estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens
+):
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-unknown-split",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, role=None))],
+        usage=Usage(
+            prompt_tokens=50,
+            completion_tokens=100,
+            total_tokens=150,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None),
+        ),
+    )
+    processor = ChunkProcessor(chunks=[chunk])
+
+    usage = processor.calculate_usage(
+        chunks=[chunk],
+        model="claude-opus-4-8",
+        completion_output="10",
+        reasoning_tokens=estimated_reasoning_tokens,
+    )
+
+    assert usage.completion_tokens == 100
+    assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
+    assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+
+
+def _openai_chunk(
+    choices: Sequence[Mapping[str, object]], usage: Mapping[str, int] | None = None
+) -> dict[str, object]:
+    base: Final = {
+        "id": "chatcmpl-lit6552",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-5.4-mini",
+        "choices": list(choices),
+    }
+    return base if usage is None else {**base, "usage": dict(usage)}
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param([_openai_chunk(choices=[]), _openai_chunk(choices=[])], id="all_empty_choices_dicts"),
+        pytest.param(
+            [ModelResponseStream(model="gpt-5.4-mini", choices=[]) for _ in range(2)],
+            id="all_empty_choices_objects",
+        ),
+    ],
+)
+def test_stream_chunk_builder_survives_all_empty_choices(chunks: Sequence[object]) -> None:
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_keeps_usage_from_usage_only_frames() -> None:
+    usage_frame: Final = _openai_chunk(
+        choices=[], usage={"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10}
+    )
+
+    response: Final = stream_chunk_builder(chunks=[usage_frame])
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.total_tokens == 10
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [pytest.param({"content": "Hi"}, id="delta_without_role"), pytest.param({}, id="empty_delta")],
+)
+def test_stream_chunk_builder_defaults_role_when_delta_omits_it(delta: Mapping[str, str]) -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[{"index": 0, "delta": dict(delta), "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}]),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content == delta.get("content", "") + "!"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_reads_role_from_first_frame_with_choices() -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"role": "user", "content": "Hi"}, "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.role == "user"
+    assert response.choices[0].message.content == "Hi"
+
+
+def _fail_prompt_token_count() -> int:
+    raise AssertionError("prompt tokens must come from the usage chunk, not the tokenizer")
+
+
+def test_calculate_usage_reads_prompt_tokens_from_mock_stream_usage_chunk_without_tokenizer_fallback() -> None:
+    from litellm.utils import mock_completion_streaming_obj
+
+    chunks: Final = list(
+        mock_completion_streaming_obj(
+            ModelResponseStream(model="gpt-5.4-mini"),
+            mock_response="ok",
+            model="gpt-5.4-mini",
+            prompt_tokens=51234,
+        )
+    )
+    assert chunks[-1].choices == []
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=_fail_prompt_token_count,
+    )
+
+    assert usage.prompt_tokens == 51234
+    assert usage.completion_tokens == chunks[-1].usage.completion_tokens
+    assert usage.total_tokens == 51234 + usage.completion_tokens
+
+
+def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_admission_count() -> None:
+    from litellm.utils import mock_completion_streaming_obj
+
+    chunks: Final = list(
+        mock_completion_streaming_obj(
+            ModelResponseStream(model="gpt-5.4-mini"), mock_response="ok", model="gpt-5.4-mini"
+        )
+    )
+    assert all(chunk.choices for chunk in chunks)
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=lambda: 77,
+    )
+
+    assert usage.prompt_tokens == 77
