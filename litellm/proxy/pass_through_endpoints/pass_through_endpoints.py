@@ -26,6 +26,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.routing import Match
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
@@ -2754,6 +2755,63 @@ class SafeRouteAdder:
                     return True
         return False
 
+    # Every generic native-provider route (files, batches, and any future ones) is
+    # registered as "/{provider}/v1/...", so this literal path-parameter name is a
+    # reliable, future-proof marker -- no need to enumerate specific provider routes.
+    _GENERIC_PROVIDER_PATH_MARKER: Final = "{provider}"
+
+    @staticmethod
+    def _move_before_generic_provider_routes(app: FastAPI) -> None:
+        """
+        Custom pass-through routes registered from config.yaml are always appended to
+        app.routes, since they're added during proxy startup, strictly after every
+        built-in router (including the generic "/{provider}/v1/files" and
+        "/{provider}/v1/batches" routes) is mounted at module-import time. Starlette
+        resolves overlapping path templates by registration order, so an appended
+        custom route can never win against those generic routes -- they always match
+        first and misinterpret the custom prefix as a provider name (see
+        https://github.com/BerriAI/litellm/issues/37925).
+
+        Move the just-appended route (the last item in app.routes) to sit immediately
+        before the first generic route whose template would actually capture this
+        route's own path, so it is matched first instead. A route is moved only when
+        that genuine overlap exists: reordering unconditionally on any "{provider}"
+        sighting would also promote unrelated wildcard pass-throughs (e.g. a
+        "/key/{subpath:path}" entry) ahead of every route registered afterward,
+        including unrelated, authenticated built-in routes like "/key/generate" --
+        a real route.matches() check on this route's own path rules that out, since
+        a route path containing its own "{...}" placeholder never structurally
+        matches a "/{provider}/..." template. If no generic provider route captures
+        this path (including when none is registered at all, e.g. a minimal
+        deployment), leave the route appended -- current behavior is preserved as a
+        safe fallback.
+
+        Builds the reordered list in one expression and reassigns app.router.routes
+        wholesale, rather than mutating the existing list in place with pop()/insert().
+        """
+        routes: Final = app.routes
+        new_route: Final = routes[-1]
+        scope: Final = {
+            "type": "http",
+            "method": "GET",
+            "path": new_route.path,
+            "headers": [],
+            "query_string": b"",
+            "root_path": "",
+        }
+        for index, route in enumerate(routes[:-1]):
+            route_path = getattr(route, "path", None)
+            if not (route_path and SafeRouteAdder._GENERIC_PROVIDER_PATH_MARKER in route_path):
+                continue
+            if route.matches(scope)[0] == Match.NONE:
+                continue
+            app.router.routes = [  # mutable-ok: framework's list  # rebind-ok: reordering is the fix
+                *routes[:index],
+                new_route,
+                *routes[index:-1],
+            ]
+            return
+
     @staticmethod
     def add_api_route_if_not_exists(
         app: FastAPI,
@@ -2789,6 +2847,7 @@ class SafeRouteAdder:
             methods=methods,
             dependencies=dependencies,
         )
+        SafeRouteAdder._move_before_generic_provider_routes(app=app)
         verbose_proxy_logger.debug(
             "Successfully added route: %s with methods %s",
             path,
