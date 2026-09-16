@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
     coerce_model_access_groups,
@@ -345,6 +346,9 @@ def _sl_attribution_fallback(
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
     litellm_params: Final = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    declared: Final = declared_authenticating_provider(litellm_params.model, litellm_params.custom_llm_provider)
+    if declared is not None:
+        return declared
     try:
         _, provider, _, _ = litellm.get_llm_provider(
             model=litellm_params.model, custom_llm_provider=litellm_params.custom_llm_provider
@@ -468,15 +472,16 @@ def get_logging_payload(
         hidden_params: Final = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
 
-    custom_llm_provider: Final = (
+    logged_provider: Final = (
         kwargs.get("custom_llm_provider")
         or _sl_attribution_fallback(standard_logging_payload, "custom_llm_provider")
-        or _model_group_provider(_model_group, llm_router)
+        or None
     )
+    custom_llm_provider: Final = logged_provider or _model_group_provider(_model_group, llm_router)
     raw_model: Final = cast(str, kwargs.get("model") or "")
     resolved_model: Final = (
         standard_logging_payload.get("model") if standard_logging_payload is not None else None
-    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    ) or reconstruct_model_name(raw_model, logged_provider, metadata or {})
     failed_with_prompt_shaped_model: Final = (
         _get_status_for_spend_log(metadata=metadata) == "failure"
         and not _model_group
