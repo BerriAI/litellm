@@ -1,13 +1,22 @@
+import logging
+
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
-from litellm.proxy._experimental.mcp_server.idp_token_exchange import identity_from_subject_token
+from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
+    REJECTED_SUBJECT_TOKEN,
+    TokenExchangePrerequisites,
+    identity_from_subject_token,
+    token_exchange_available,
+)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.handle_jwt import JWTHandler
 
 IDP_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.idp-signature"
 REQUEST_HEADERS = {"x-litellm-team-id": "team-b", "user-agent": "lite/0.1"}
+EVERY_GATE_HOLDS = {"jwt_auth_enabled": True, "has_database": True, "licensed": True}
+JWKS_URL = "https://idp.example.com/.well-known/jwks.json"
 
 
 def _authorized(user_id="u1", team_id="team-b"):
@@ -42,16 +51,14 @@ class _Authorizer:
         return self.result
 
 
-async def _identity(authorizer, subject_token=IDP_JWT, **overrides):
-    arguments = {
-        "request_headers": REQUEST_HEADERS,
-        "jwt_auth_enabled": True,
-        "has_database": True,
-        "licensed": True,
-        "is_jwt": JWTHandler.is_jwt,
-        "authorize": authorizer,
-    }
-    return await identity_from_subject_token(subject_token, **{**arguments, **overrides})
+async def _identity(authorizer, subject_token=IDP_JWT, **unmet):
+    return await identity_from_subject_token(
+        subject_token,
+        request_headers=REQUEST_HEADERS,
+        prerequisites=TokenExchangePrerequisites(**{**EVERY_GATE_HOLDS, **unmet}),
+        is_jwt=JWTHandler.is_jwt,
+        authorize=authorizer,
+    )
 
 
 @pytest.mark.asyncio
@@ -70,7 +77,7 @@ async def test_a_jwt_that_resolves_no_team_names_a_teamless_identity():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "overrides, subject_token, error, mentions",
+    "unmet, subject_token, error, mentions",
     [
         ({"jwt_auth_enabled": False}, IDP_JWT, "unsupported_grant_type", "JWT auth is not enabled"),
         ({"has_database": False}, IDP_JWT, "unsupported_grant_type", "no database"),
@@ -79,32 +86,59 @@ async def test_a_jwt_that_resolves_no_team_names_a_teamless_identity():
     ],
 )
 async def test_the_gates_user_api_key_auth_applies_refuse_before_any_verification(
-    overrides, subject_token, error, mentions
+    unmet, subject_token, error, mentions
 ):
     authorizer = _Authorizer()
-    refusal = await _identity(authorizer, subject_token=subject_token, **overrides)
+    refusal = await _identity(authorizer, subject_token=subject_token, **unmet)
     assert isinstance(refusal, SubjectTokenRefusal)
     assert refusal.error == error
     assert mentions in refusal.description
     assert authorizer.calls == []
 
 
+@pytest.mark.parametrize("unmet", [{}, {"jwt_auth_enabled": False}, {"has_database": False}, {"licensed": False}])
+def test_the_grant_is_available_exactly_when_every_gate_holds(unmet):
+    prerequisites = TokenExchangePrerequisites(**{**EVERY_GATE_HOLDS, **unmet})
+    assert prerequisites.available is (unmet == {})
+    assert (prerequisites.refusal() is None) is prerequisites.available
+
+
+@pytest.mark.parametrize(
+    "general_settings, prisma_client, premium_user, expected",
+    [
+        ({"enable_jwt_auth": True}, object(), True, True),
+        ({}, object(), True, False),
+        ({"enable_jwt_auth": True}, None, True, False),
+        ({"enable_jwt_auth": True}, object(), False, False),
+    ],
+)
+def test_availability_is_read_from_the_running_proxy(
+    monkeypatch, general_settings, prisma_client, premium_user, expected
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    assert token_exchange_available() is expected
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "raised, mentions",
+    "raised, reason",
     [
         (HTTPException(status_code=403, detail="User not allowed to access this route"), "not allowed"),
         (ProxyException(message="Token expired", type="auth_error", param="token", code=401), "Token expired"),
         (Exception("Validation fails: signature verification failed"), "signature verification failed"),
         (Exception("Invalid JWT Submitted"), "Invalid JWT"),
+        (Exception(f"Failed to fetch keys from {JWKS_URL}: 502 Bad Gateway from the IdP"), JWKS_URL),
     ],
 )
-async def test_a_jwt_the_proxy_rejects_is_an_invalid_subject_token(raised, mentions):
+async def test_a_jwt_the_proxy_rejects_is_refused_with_the_reason_kept_in_the_log(raised, reason, caplog):
+    """The endpoint is public, so the response never quotes JWT auth's wording (it can name
+    the JWKS URL or relay the IdP's reply); the operator reads the reason in the proxy log."""
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
     refusal = await _identity(_Authorizer(raises=raised))
-    assert isinstance(refusal, SubjectTokenRefusal)
-    assert refusal.error == "invalid_request"
-    assert refusal.description.startswith("subject_token was rejected: ")
-    assert mentions in refusal.description
+    assert refusal == SubjectTokenRefusal(error="invalid_request", description=REJECTED_SUBJECT_TOKEN)
+    assert reason in caplog.text
 
 
 @pytest.mark.asyncio

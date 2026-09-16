@@ -1207,21 +1207,19 @@ async def common_checks(
     return True
 
 
+def effective_user_role(user_role: str | None) -> LitellmUserRoles:
+    try:
+        return LitellmUserRoles(user_role)
+    except ValueError:
+        return LitellmUserRoles.INTERNAL_USER
+
+
 def _get_user_role(
     user_obj: LiteLLM_UserTable | None,
 ) -> LitellmUserRoles | None:
     if user_obj is None:
         return None
-
-    _user: Final = user_obj
-
-    _user_role: Final = _user.user_role
-    try:
-        role: Final = LitellmUserRoles(_user_role)
-    except ValueError:
-        return LitellmUserRoles.INTERNAL_USER
-
-    return role
+    return effective_user_role(user_obj.user_role)
 
 
 def _is_api_route_allowed(

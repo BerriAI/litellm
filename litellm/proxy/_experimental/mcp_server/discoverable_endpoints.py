@@ -46,7 +46,6 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
-    TOKEN_EXCHANGE_GRANT_TYPE,
     VendorCredentialState,
     aggregate_authorize,
     aggregate_token,
@@ -60,9 +59,11 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     register_aggregate_client,
     relative_request_url,
     revoke_refresh_token,
+    supported_grant_types,
 )
 from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     exchange_idp_subject_token,
+    token_exchange_available,
 )
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     RefreshOwnershipProven,
@@ -2142,7 +2143,9 @@ async def introspect_endpoint(token: str = Form(...)) -> Response:
 async def native_client_auth_discovery(request: Request) -> JSONResponse:
     """The versioned contract a native client (``lite login --pkce``, or a CLI in any other
     language) reads to sign a user in through the browser and obtain a proxy credential."""
-    return JSONResponse(native_client_auth_contract(request), headers=TOKEN_NO_CACHE_HEADERS)
+    return JSONResponse(
+        native_client_auth_contract(request, token_exchange_available()), headers=TOKEN_NO_CACHE_HEADERS
+    )
 
 
 # Per RFC 6749 §4.1.2.1, an IdP that rejects an OAuth authorization request
@@ -2630,7 +2633,7 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     }
 
 
-def _build_aggregate_authorization_server_response(request: Request) -> dict:
+def _build_aggregate_authorization_server_response(request: Request, token_exchange_available: bool) -> dict:
     """RFC 8414 metadata for the gateway as the aggregate authorization server.
 
     The issuer is ``{base}/mcp`` and must stay equal to the value the
@@ -2649,7 +2652,7 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
         "registration_endpoint": f"{request_base_url}/register",
         "response_types_supported": ["code"],
         "scopes_supported": [],
-        "grant_types_supported": ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE),
+        "grant_types_supported": supported_grant_types(token_exchange_available),
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
     }
@@ -2687,7 +2690,7 @@ async def oauth_authorization_server_aggregate(request: Request):
     per-server row win here instead would serve an issuer of {base} against a resource that
     advertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.
     """
-    return _build_aggregate_authorization_server_response(request)
+    return _build_aggregate_authorization_server_response(request, token_exchange_available())
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
@@ -2913,7 +2916,9 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
         # advertises that), so this does not affect it. A request without redirect_uris is not
         # a DCR request, so the legacy single-server-or-dummy fallback is kept for it.
         if data.get("redirect_uris"):
-            return await register_aggregate_client(request=request, request_body=data)
+            return await register_aggregate_client(
+                request=request, request_body=data, token_exchange_available=token_exchange_available()
+            )
         resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             return await register_client_with_server(

@@ -8,6 +8,7 @@ from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import ConsentTeam, MintedProxyCredential
 from litellm.proxy._experimental.mcp_server.proxy_api_credentials import lookup_consent_teams, mint_proxy_credential
+from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
 
@@ -67,10 +68,21 @@ async def test_mint_passes_user_lookup_failures_through(failure, load_user, fetc
 
 
 @pytest.mark.asyncio
-async def test_mint_refuses_a_user_without_a_role(load_user, fetch_teams):
-    load_user.return_value = _user(user_role=None)
-    assert await mint_proxy_credential("u1", None) == "no_active_key"
-    fetch_teams.assert_not_awaited()
+@pytest.mark.parametrize(
+    "stored_role, minted_role",
+    [
+        (None, LitellmUserRoles.INTERNAL_USER),
+        ("made_up_role", LitellmUserRoles.INTERNAL_USER),
+        ("proxy_admin", LitellmUserRoles.PROXY_ADMIN),
+    ],
+)
+async def test_mint_carries_the_role_the_proxy_enforces_for_the_user(load_user, fetch_teams, stored_role, minted_role):
+    """A user JWT auth upserted has no role in the database, and the proxy already treats
+    such a user as an internal user on every request, so the credential says the same."""
+    load_user.return_value = _user(user_role=stored_role)
+    minted = await mint_proxy_credential("u1", "team-a")
+    assert isinstance(minted, MintedProxyCredential)
+    assert _decoded(minted).user_role == minted_role
 
 
 @pytest.mark.asyncio

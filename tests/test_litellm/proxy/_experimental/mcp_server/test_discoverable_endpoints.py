@@ -11048,6 +11048,25 @@ def test_native_client_login_walks_discovery_consent_token_refresh_and_revoke(mo
     assert stranger.json()["error"] == "invalid_client"
 
 
+@pytest.mark.parametrize("exchange_servable", [True, False])
+def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serve_it(monkeypatch, exchange_servable):
+    """Every document a native client reads before it picks a grant (the versioned contract, the
+    aggregate authorization-server metadata, and the registration response) lists the RFC 8693
+    exchange exactly when the running proxy can serve it: JWT auth on, a database, and a license."""
+    client, _session_cookie, _minted = _native_client_app(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": exchange_servable})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    exchange_grant = ["urn:ietf:params:oauth:grant-type:token-exchange"] if exchange_servable else []
+    expected = ["authorization_code", "refresh_token", *exchange_grant]
+
+    assert client.get("/.well-known/litellm-cli-auth").json()["grant_types_supported"] == expected
+    assert client.get("/.well-known/oauth-authorization-server/mcp").json()["grant_types_supported"] == expected
+    registered = client.post("/register", json={"redirect_uris": ["http://127.0.0.1:51234/callback"]})
+    assert registered.status_code == 201
+    assert registered.json()["grant_types"] == expected
+
+
 def test_native_client_authorize_without_the_proxy_resource_keeps_the_mcp_flow(monkeypatch):
     """A registered client asking for the MCP resource (or no resource) never sees the consent
     page, so existing MCP clients are untouched by the native-client arm."""

@@ -188,6 +188,17 @@ class MintProxyCredential(Protocol):
 
 
 TOKEN_EXCHANGE_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
+
+
+def supported_grant_types(token_exchange_available: bool) -> tuple[str, ...]:
+    """The grants ``/token`` can serve on this deployment. The RFC 8693 exchange is listed
+    only where the JWT auth that proves a subject token is on, backed by a database, and
+    licensed, so a client never selects a grant the gateway would then refuse."""
+    if token_exchange_available:
+        return ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE)
+    return ("authorization_code", "refresh_token")
+
+
 """RFC 8693: a native client that already holds a token from the customer's identity
 provider trades it for the proxy-API credential without a browser round trip."""
 
@@ -359,7 +370,9 @@ def open_gateway_dcr_client(client_id: str) -> GatewayDcrClient | None:
     return _open_sealed(client_id, GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient, _CLIENT_RECORD_DEBUG_KEY)
 
 
-async def register_aggregate_client(request: Request, request_body: Mapping[str, object]) -> Response:
+async def register_aggregate_client(
+    request: Request, request_body: Mapping[str, object], token_exchange_available: bool
+) -> Response:
     """RFC 7591 dynamic registration against the gateway itself, statelessly.
 
     Only ``redirect_uris`` is authoritative; every client is registered as a public
@@ -423,7 +436,7 @@ async def register_aggregate_client(request: Request, request_body: Mapping[str,
             "client_id_issued_at": int(now.timestamp()),
             "redirect_uris": list(raw_uris),
             "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE],
+            "grant_types": list(supported_grant_types(token_exchange_available)),
             "response_types": ["code"],
         },
     )
@@ -621,7 +634,7 @@ class NativeClientAuthContract(TypedDict):
     revocation_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
 
 
-def native_client_auth_contract(request: Request) -> NativeClientAuthContract:
+def native_client_auth_contract(request: Request, token_exchange_available: bool) -> NativeClientAuthContract:
     """The versioned discovery document at ``/.well-known/litellm-cli-auth``: everything a
     native client (in any language) needs to run the sign-in without reading LiteLLM
     source. ``resource`` is the exact value to send as the RFC 8707 ``resource`` parameter
@@ -636,7 +649,7 @@ def native_client_auth_contract(request: Request) -> NativeClientAuthContract:
         "revocation_endpoint": f"{base_url}/revoke",
         "resource": base_url,
         "response_types_supported": ("code",),
-        "grant_types_supported": ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE),
+        "grant_types_supported": supported_grant_types(token_exchange_available),
         "code_challenge_methods_supported": ("S256",),
         "token_endpoint_auth_methods_supported": ("none",),
         "revocation_endpoint_auth_methods_supported": ("none",),
