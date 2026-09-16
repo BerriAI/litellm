@@ -919,6 +919,53 @@ def test_unbuildable_group_selector_keeps_previous_groups(monkeypatch):
     assert litellm.input_callback == []
 
 
+def test_register_router_selector_wires_only_the_hooks_the_strategy_needs(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router()
+    least_busy = router._build_strategy_selector(
+        strategy="least-busy", routing_strategy_args={}, register_callbacks=False
+    )
+    latency = router._build_strategy_selector(
+        strategy="latency-based-routing", routing_strategy_args={}, register_callbacks=False
+    )
+    assert least_busy is not None and latency is not None
+    assert litellm.callbacks == [] and litellm.input_callback == []
+
+    router._register_router_selector(least_busy)
+    router._register_router_selector(latency)
+
+    assert [cb for cb in litellm.callbacks if cb is least_busy or cb is latency] == [least_busy, latency]
+    assert litellm.input_callback == [least_busy]
+
+
+def test_replace_routing_groups_swaps_state_and_callbacks_in_one_step(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(routing_groups=_single_latency_group())
+    old_selector = router._group_selectors["g1"]["latency-based-routing"]
+    new_selector = router._build_strategy_selector(
+        strategy="least-busy", routing_strategy_args={}, register_callbacks=False
+    )
+    assert new_selector is not None
+
+    router._replace_routing_groups(
+        (
+            (RoutingGroup(group_name="g2", models=["other-model"], routing_strategy="least-busy"), new_selector),
+            (RoutingGroup(group_name="g3", models=["other-model-2"], routing_strategy="simple-shuffle"), None),
+        )
+    )
+
+    assert list(router._routing_groups) == ["g2", "g3"]
+    assert router._model_to_group == {"other-model": "g2", "other-model-2": "g3"}
+    assert router._group_selectors == {"g2": {"least-busy": new_selector}, "g3": {}}
+    assert router._get_routing_context("other-model", None) == ("least-busy", new_selector)
+    assert router._get_routing_context("filtered-model", None)[0] == router.routing_strategy
+    assert all(cb is not old_selector for cb in litellm.callbacks)
+    assert sum(1 for cb in litellm.callbacks if cb is new_selector) == 1
+    assert litellm.input_callback == [new_selector]
+
+
 def test_override_selectors_are_not_registered_process_wide(monkeypatch):
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "input_callback", [])
