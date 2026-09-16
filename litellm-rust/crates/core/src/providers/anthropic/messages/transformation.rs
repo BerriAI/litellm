@@ -1,5 +1,4 @@
-use crate::auth::error::MissingCredential;
-use crate::error::Error;
+use crate::messages::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -18,11 +17,14 @@ pub fn non_empty(value: Option<&str>) -> Option<&str> {
 pub fn resolve_anthropic_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, litellm_auth::Error> {
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::from(crate::AuthError::from(MissingCredential::AnthropicApiKey)))
+        .ok_or(litellm_auth::Error::MissingApiKey {
+            provider: "Anthropic",
+            environment_variable: ANTHROPIC_API_KEY_ENV,
+        })
 }
 
 pub fn complete_anthropic_url(
@@ -42,7 +44,6 @@ pub fn complete_anthropic_url(
 }
 
 impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         api_base: Option<&str>,
@@ -57,7 +58,7 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        resolve_anthropic_api_key(api_key, env_lookup)
+        resolve_anthropic_api_key(api_key, env_lookup).map_err(Error::from)
     }
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {
@@ -115,10 +116,12 @@ mod tests {
             resolve_anthropic_api_key(Some("  "), &with_env).unwrap(),
             "sk-env"
         );
-        assert!(matches!(
-            resolve_anthropic_api_key(None, &|_| None).expect_err("missing key"),
-            Error::Auth(_)
-        ));
+        assert_eq!(
+            resolve_anthropic_api_key(None, &|_| None)
+                .expect_err("missing key")
+                .to_string(),
+            "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY environment variable"
+        );
     }
 
     #[test]

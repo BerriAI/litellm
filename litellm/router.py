@@ -102,6 +102,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -424,10 +425,32 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
+
+
+def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
+    if silent_model is None:
+        return ()
+    try:
+        targets: Final = _SILENT_MODEL_ADAPTER.validate_python(silent_model)
+    except ValidationError:
+        verbose_router_logger.warning(
+            "silent_model must be a model name or a list of model names, got %r; skipping shadow traffic",
+            silent_model,
+        )
+        return ()
+    return (targets,) if isinstance(targets, str) else tuple(targets)
+
+
+def _silent_experiment_kwargs_snapshot(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = kwargs.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return MappingProxyType({**kwargs})
+    return MappingProxyType({**kwargs, "metadata": dict(metadata)})
 
 
 def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
@@ -2454,18 +2477,17 @@ class Router:
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
-            if silent_model is not None:
+            for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
                 # Use threading.Thread (not ThreadPoolExecutor) - executor.submit()
                 # requires pickling args, which fails when kwargs contain unpicklable
                 # objects (e.g. _thread.RLock from OTEL spans, loggers) in deployment.
-                thread: Final = threading.Thread(
+                threading.Thread(
                     target=self._silent_experiment_completion,
-                    args=(silent_model, messages),
-                    kwargs=kwargs,
+                    args=(silent_target, messages),
+                    kwargs=_silent_experiment_kwargs_snapshot(kwargs),
                     daemon=True,
-                )
-                thread.start()
+                ).start()
 
             kwargs.setdefault("messages", messages)
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
@@ -2566,9 +2588,6 @@ class Router:
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
 
-        # Force stream=False so the response is fully consumed and callbacks fire
-        silent_kwargs["stream"] = False
-
         # Pop logging objects and call IDs to ensure a fresh logging context
         # This prevents collisions in the Proxy's database (spend_logs)
         silent_kwargs.pop("litellm_call_id", None)
@@ -2577,6 +2596,23 @@ class Router:
         # DON'T pop proxy_server_request — it's needed for spend log metadata
 
         return silent_kwargs
+
+    async def _run_silent_experiment(
+        self, silent_model: str, messages: Sequence[Mapping[str, str]], silent_kwargs: Mapping[str, object]
+    ) -> None:
+        remaining_kwargs: Final = MappingProxyType(
+            {key: value for key, value in silent_kwargs.items() if key != "stream"}
+        )
+        response: Final = await self.acompletion(
+            model=silent_model,
+            messages=cast(list[AllMessageValues], messages),
+            stream=bool(silent_kwargs.get("stream", False)),
+            **remaining_kwargs,
+        )
+        if not isinstance(response, CustomStreamWrapper):
+            return
+        async for _ in response:
+            pass
 
     def _silent_experiment_completion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
@@ -2603,11 +2639,7 @@ class Router:
             try:
 
                 async def _run_silent_completion():
-                    await self.acompletion(
-                        model=silent_model,
-                        messages=cast(list[AllMessageValues], messages),
-                        **silent_kwargs,
-                    )
+                    await self._run_silent_experiment(silent_model, messages, silent_kwargs)
                     # Drain any fire-and-forget tasks (e.g. alerting hooks)
                     # scheduled via asyncio.create_task during acompletion.
                     pending: Final = asyncio.all_tasks()
@@ -3499,11 +3531,7 @@ class Router:
             silent_kwargs["metadata"]["model_group"] = silent_model
 
             # Trigger the silent request
-            await self.acompletion(
-                model=silent_model,
-                messages=cast(list[AllMessageValues], messages),
-                **silent_kwargs,
-            )
+            await self._run_silent_experiment(silent_model, messages, silent_kwargs)
         except Exception as e:
             verbose_router_logger.error("Silent experiment failed for model %s: %s", silent_model, e)
 
@@ -3562,14 +3590,14 @@ class Router:
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
-            if silent_model is not None:
+            for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
                 # This is a silent experiment, so we don't want to block the primary request
                 asyncio.create_task(
                     self._silent_experiment_acompletion(
-                        silent_model=silent_model,
+                        silent_model=silent_target,
                         messages=messages,  # Use messages instead of *args
-                        **kwargs,
+                        **_silent_experiment_kwargs_snapshot(kwargs),
                     )
                 )
 
@@ -10818,6 +10846,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                     }
                 )
@@ -10896,6 +10925,9 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
+            model_group_info.supports_fast_mode = model_group_info.supports_fast_mode and (
+                AnthropicModelInfo.supports_fast_mode(litellm_model, llm_provider)
+            )
             deployment_reasoning_efforts = (
                 resolve_supported_reasoning_efforts(  # rebind-ok: recalculated per deployment
                     model_info, deployment_is_mapped=deployment_is_mapped

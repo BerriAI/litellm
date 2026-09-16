@@ -853,6 +853,7 @@ def _stream_steps(resp: requests.Response) -> Generator[StreamStep, None, None]:
     the chunks already delivered are exactly what makes a mid-stream failure
     different from a request that never streamed at all."""
     try:
+        yield StreamChunk(b"")
         for piece in cast("Iterator[bytes]", resp.iter_content(chunk_size=None)):
             if piece:
                 yield StreamChunk(data=piece)
@@ -860,6 +861,44 @@ def _stream_steps(resp: requests.Response) -> Generator[StreamStep, None, None]:
         yield StreamTruncation(reason=str(exc))
     finally:
         resp.close()
+
+
+def primed_steps(steps: Generator[StreamStep, None, None]) -> Generator[StreamStep, None, None]:
+    first: Final = next(steps)
+    assert isinstance(first, StreamChunk) and first.data == b""
+    return steps
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PreparedForward:
+    request: requests.PreparedRequest
+    url: str
+    headers: dict[str, str]
+
+
+def prepare_forward(
+    method: str, url: str, headers: dict[str, str], body: bytes | None,
+) -> PreparedForward | NetworkError:
+    try:
+        with requests.Session() as session:
+            request: Final = session.prepare_request(requests.Request(method, url, headers=headers, data=body))
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    assert request.url is not None
+    return PreparedForward(request, request.url, dict(request.headers))
+
+
+def forward_prepared_stream(prepared: PreparedForward, timeout: float) -> StreamHead | NetworkError:
+    try:
+        with requests.Session() as session:
+            settings: Final = session.merge_environment_settings(prepared.url, {}, True, None, None)
+            resp: Final = session.send(prepared.request, timeout=timeout, allow_redirects=False, **settings)
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return StreamHead(
+        resp.status_code, {name.lower(): value for name, value in resp.headers.items()},
+        primed_steps(_stream_steps(resp)),
+    )
 
 
 def open_stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamHead | NetworkError:
@@ -907,5 +946,5 @@ def forward_stream(
     return StreamHead(
         status_code=resp.status_code,
         headers={name.lower(): value for name, value in resp.headers.items()},
-        steps=_stream_steps(resp),
+        steps=primed_steps(_stream_steps(resp)),
     )

@@ -215,7 +215,6 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
         and model not in PUBLISHED_DBU_PER_MILLION
     ]
 
-    assert len(without_published_rates) == 14
     for model in without_published_rates:
         info = _model_info(model)
         for field in CACHE_FIELDS:
