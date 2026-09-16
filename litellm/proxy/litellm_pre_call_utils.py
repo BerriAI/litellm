@@ -111,9 +111,13 @@ def _trace_id_from_traceparent(traceparent: str) -> str | None:
 def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
     if span is None:
         return None
-    span_context: Final = span.get_span_context()
-    trace_id: Final = span_context.trace_id
-    if not span_context.is_valid or not isinstance(trace_id, int):
+    try:
+        span_context: Final = span.get_span_context()
+        is_valid: Final = span_context.is_valid
+        trace_id: Final = span_context.trace_id
+    except AttributeError:
+        return None
+    if not is_valid or not isinstance(trace_id, int):
         return None
     return format(trace_id, "032x")
 
@@ -2074,7 +2078,9 @@ async def add_litellm_data_to_request(
     add_otel_trace_id_to_request(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
-        parent_otel_span=user_api_key_dict.parent_otel_span,
+        parent_otel_span=user_api_key_dict.parent_otel_span
+        if user_api_key_dict.parent_otel_span is not None
+        else getattr(request.state, "parent_otel_span", None),
     )
     apply_missing_session_id_policy(
         data=data,
