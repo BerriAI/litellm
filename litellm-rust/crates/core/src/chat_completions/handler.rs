@@ -11,7 +11,6 @@ use super::types::{
     ResolvedChatCompletionsRequest,
 };
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {

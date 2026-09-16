@@ -45,7 +45,6 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         ]
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_request(
         &self,
         request: AnthropicMessagesRequest,
@@ -53,7 +52,6 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         Ok(request)
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_response(
         &self,
         _model: &str,
