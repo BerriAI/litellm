@@ -27,8 +27,10 @@ jobs:
       - name: Look for an already-open sync PR
         id: existing
         run: |
-          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json headRefName \
-            --jq '[.[].headRefName | select(startswith("litellm_cheaperinference_registry_sync_"))] | first // empty')"
+          # Only a branch in this repository counts: a fork PR could otherwise take a
+          # sync-shaped branch name and suppress every scheduled run from then on.
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json headRefName,isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false) | .headRefName | select(startswith("litellm_cheaperinference_registry_sync_"))] | first // empty')"
           echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
           if [ -n "$open_pr" ]; then
             echo "An open sync PR already exists on branch $open_pr; skipping this run."
