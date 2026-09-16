@@ -562,13 +562,14 @@ def row_source_in(text: str) -> str | None:
 def rewrites_a_log_table(clause: str, region: str, base: int) -> str | None:
     """The keyword to report when an `ALTER TABLE` adds a defaulted column to a request-log
     table, which Postgres 10 answers by rewriting the whole table. The table is read from the
-    region rather than the masked clause, since masking blanks the quoted name in place, and each
-    action of the statement is read on its own so that a `SET DEFAULT` on one column does not
-    stand in for a default on a column another action adds."""
+    region rather than the masked clause, since masking blanks the quoted name in place, after
+    stepping over any comment sitting between `TABLE` and the name, which masking blanked as
+    well. Each action of the statement is read on its own so that a `SET DEFAULT` on one column
+    does not stand in for a default on a column another action adds."""
     altered = ALTERS_A_TABLE.search(clause)
     if altered is None:
         return None
-    named = TABLE_NAME.match(region, base + altered.end())
+    named = TABLE_NAME.match(region, skip_comments(region, base + altered.end()))
     if named is None or named.group(1).strip('"') not in REQUEST_LOG_TABLES:
         return None
     actions = strip_parens(clause[named.end() - base :]).split(",")
@@ -577,9 +578,30 @@ def rewrites_a_log_table(clause: str, region: str, base: int) -> str | None:
     return f"ADD COLUMN ... DEFAULT on {named.group(1)}"
 
 
+def skip_comments(sql: str, start: int) -> int:
+    index = start
+    while index < len(sql):
+        pair = sql[index : index + 2]
+        if pair == "--":
+            stop = sql.find("\n", index)
+            index = len(sql) if stop == -1 else stop
+        elif pair == "/*":
+            index = skip_block_comment(sql, index)
+        elif sql[index].isspace():
+            index += 1
+        else:
+            return index
+    return index
+
+
 def adds_a_defaulted_column(action: str) -> bool:
+    """Whether an `ALTER TABLE` action is an `ADD COLUMN` carrying a column default. A `DEFAULT`
+    right after `SET` is the referential action of an inline foreign key, which fills nothing
+    in, so it does not count."""
     words = tuple(word.group().upper() for word in FIRST_WORD.finditer(action))
-    return words[:1] == ("ADD",) and words[1:2] != ("CONSTRAINT",) and "DEFAULT" in words
+    if words[:1] != ("ADD",) or words[1:2] == ("CONSTRAINT",):
+        return False
+    return any(word == "DEFAULT" and previous != "SET" for previous, word in zip(words, words[1:]))
 
 
 def hands_off_sql(statement: str, executed: frozenset[str]) -> bool:

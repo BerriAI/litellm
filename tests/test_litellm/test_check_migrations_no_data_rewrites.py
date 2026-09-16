@@ -120,6 +120,28 @@ class TestDefaultedColumnsOnRequestLogTables:
         sql = 'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "a" TEXT, ALTER COLUMN "b" SET DEFAULT 1;'
         assert _keywords(tmp_path, sql) == ()
 
+    def test_a_referential_set_default_on_the_new_column_passes(self, tmp_path):
+        sql = (
+            'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "team_id" TEXT '
+            'REFERENCES "LiteLLM_TeamTable"("team_id") ON DELETE SET DEFAULT;'
+        )
+        assert _keywords(tmp_path, sql) == ()
+
+    def test_a_column_default_beside_a_referential_set_default_is_flagged(self, tmp_path):
+        sql = (
+            'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "team_id" TEXT DEFAULT \'t\' '
+            'REFERENCES "LiteLLM_TeamTable"("team_id") ON DELETE SET DEFAULT;'
+        )
+        assert _keywords(tmp_path, sql) == (SPEND_LOGS_DEFAULT,)
+
+    def test_a_block_comment_before_the_table_name_is_flagged(self, tmp_path):
+        sql = 'ALTER TABLE /* audit */ "LiteLLM_SpendLogs" ADD COLUMN "a" TEXT DEFAULT \'x\';'
+        assert _keywords(tmp_path, sql) == (SPEND_LOGS_DEFAULT,)
+
+    def test_a_line_comment_before_the_table_name_is_flagged(self, tmp_path):
+        sql = 'ALTER TABLE IF EXISTS -- audit\n"LiteLLM_SpendLogs" ADD COLUMN "a" TEXT DEFAULT \'x\';'
+        assert _keywords(tmp_path, sql) == (SPEND_LOGS_DEFAULT,)
+
     def test_a_defaulted_column_among_other_actions_is_flagged(self, tmp_path):
         sql = 'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "a" TEXT, ADD COLUMN "b" INTEGER DEFAULT 0;'
         assert _keywords(tmp_path, sql) == (SPEND_LOGS_DEFAULT,)
