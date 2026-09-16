@@ -68,24 +68,25 @@ def _resolve_model_info(model: str) -> ModelInfo:
 
 
 def _with_cache_read_fallback(model_info: ModelInfo) -> ModelInfo:
-    """Most fireworks_ai price-map entries publish no cache-read rate, and the provider bills
-    cached reads at the input rate. generic_cost_per_token prices a missing rate at $0, so the
-    fallback is written into a copy of the entry (the shared model-cost dict must not be
-    mutated), including inside off_peak_pricing so cached reads track the off-peak input rate
-    the way the previous calculator did."""
-    if model_info.get("cache_read_input_token_cost") is not None:
-        return model_info
+    """Most fireworks_ai price-map entries publish no cache-read rate though the provider bills
+    cached reads at the input rate; the shared map is never mutated, so a copy carries the fallback."""
     input_rate: Final = model_info.get("input_cost_per_token")
-    if input_rate is None:
+    if model_info.get("cache_read_input_token_cost") is not None or input_rate is None:
         return model_info
-    effective: Final[dict[str, object]] = dict(model_info)
-    effective["cache_read_input_token_cost"] = input_rate
     off_peak: Final = model_info.get("off_peak_pricing")
-    if off_peak is not None and "cache_read_input_token_cost" not in off_peak:
-        off_peak_copy: Final[dict[str, object]] = dict(off_peak)
-        off_peak_copy["cache_read_input_token_cost"] = off_peak_copy.get("input_cost_per_token", input_rate)
-        effective["off_peak_pricing"] = off_peak_copy
-    return cast(ModelInfo, effective)
+    if off_peak is None or "cache_read_input_token_cost" in off_peak:
+        return cast(ModelInfo, {**model_info, "cache_read_input_token_cost": input_rate})
+    return cast(
+        ModelInfo,
+        {
+            **model_info,
+            "cache_read_input_token_cost": input_rate,
+            "off_peak_pricing": {
+                **off_peak,
+                "cache_read_input_token_cost": off_peak.get("input_cost_per_token", input_rate),
+            },
+        },
+    )
 
 
 def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
