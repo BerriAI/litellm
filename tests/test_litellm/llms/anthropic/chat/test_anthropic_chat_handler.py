@@ -2721,18 +2721,19 @@ class TestRustChatCompletionsHook:
         }
 
 
-def _served_model_stream_chunks(model: str | None) -> list[dict]:
-    message: Final = {
-        "id": "msg_served",
-        "type": "message",
-        "role": "assistant",
-        "content": [],
-        "usage": {"input_tokens": 10, "output_tokens": 1},
-    }
-    if model is not None:
-        message["model"] = model
+def _served_model_stream_chunks(model: str | None) -> list[dict[str, object]]:
     return [
-        {"type": "message_start", "message": message},
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_served",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+                **({"model": model} if model is not None else {}),
+            },
+        },
         {
             "type": "content_block_start",
             "index": 0,
