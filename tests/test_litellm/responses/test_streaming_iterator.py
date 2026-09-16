@@ -816,3 +816,31 @@ async def test_completed_event_survives_a_failing_usage_estimate():
 
     assert yielded
     assert iterator.completed_response.response.usage is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_delta_event_type",
+    ["response.custom_tool_call_input.delta", "response.mcp_call_arguments.delta"],
+)
+async def test_completed_event_without_usage_counts_tool_input_deltas(tool_delta_event_type):
+    """Custom-tool and MCP argument deltas feed the streamed usage fallback the
+    same way function_call_arguments deltas do."""
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": tool_delta_event_type, "delta": '{"query": "weather in sf"}'}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "what is the weather in san francisco"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.output_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
