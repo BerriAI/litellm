@@ -95,9 +95,11 @@ def _request(path="/authorize", query="", cookies=None, method="GET"):
     )
 
 
-async def _register(redirect_uris) -> dict:
+async def _register(redirect_uris, token_exchange_available=True) -> dict:
     response = await register_aggregate_client(
-        request=_request(path="/register", method="POST"), request_body={"redirect_uris": redirect_uris}
+        request=_request(path="/register", method="POST"),
+        request_body={"redirect_uris": redirect_uris},
+        token_exchange_available=token_exchange_available,
     )
     return json.loads(response.body)
 
@@ -120,10 +122,17 @@ async def test_register_mints_stateless_public_client():
 
 
 @pytest.mark.asyncio
+async def test_register_omits_the_exchange_grant_where_the_gateway_cannot_serve_it():
+    body = await _register([REDIRECT_URI], token_exchange_available=False)
+    assert body["grant_types"] == ["authorization_code", "refresh_token"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("redirect_uris", [VSCODE_REDIRECT_URIS, MAX_LENGTH_REDIRECT_URIS])
 async def test_register_four_callbacks_preserves_metadata(redirect_uris: tuple[str, ...]) -> None:
     response: Final = await register_aggregate_client(
         request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
         request_body={
             "client_name": "Visual Studio Code",
             "client_uri": "https://code.visualstudio.com",
@@ -149,6 +158,7 @@ async def test_register_four_callbacks_preserves_metadata(redirect_uris: tuple[s
 async def test_register_rejects_five_valid_callbacks() -> None:
     response: Final = await register_aggregate_client(
         request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
         request_body={"redirect_uris": [*VSCODE_REDIRECT_URIS, "http://127.0.0.1:33419/"]},
     )
     assert response.status_code == 400
@@ -162,6 +172,7 @@ async def test_register_rejects_five_valid_callbacks() -> None:
 async def test_register_four_callbacks_preserves_encoded_size_guard() -> None:
     response: Final = await register_aggregate_client(
         request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
         request_body={"redirect_uris": [f"https://client.example/{index}/".ljust(256, "é") for index in range(4)]},
     )
     assert response.status_code == 400
@@ -214,6 +225,7 @@ async def test_register_rejects_userinfo_spoofed_origin():
     response = await register_aggregate_client(
         request=_request(path="/register", method="POST"),
         request_body={"redirect_uris": ["https://claude.ai@attacker.example/callback"]},
+        token_exchange_available=True,
     )
     assert response.status_code == 400
     assert json.loads(response.body)["error"] == "invalid_redirect_uri"
@@ -234,7 +246,9 @@ async def test_register_rejects_userinfo_spoofed_origin():
 )
 async def test_register_rejects_bad_redirect_uris(redirect_uris):
     response = await register_aggregate_client(
-        request=_request(path="/register", method="POST"), request_body={"redirect_uris": redirect_uris}
+        request=_request(path="/register", method="POST"),
+        request_body={"redirect_uris": redirect_uris},
+        token_exchange_available=True,
     )
     assert response.status_code == 400
     assert json.loads(response.body)["error"] in ("invalid_redirect_uri", "invalid_client_metadata")
@@ -1954,7 +1968,7 @@ async def test_revoke_refuses_unknown_clients_and_a_missing_master_key():
 
 
 def test_native_client_auth_contract_points_every_endpoint_at_this_proxy():
-    assert json.loads(json.dumps(native_client_auth_contract(_request("/.well-known/litellm-cli-auth")))) == {
+    assert json.loads(json.dumps(native_client_auth_contract(_request("/.well-known/litellm-cli-auth"), True))) == {
         "contract_version": 1,
         "issuer": "https://llm.example.com",
         "authorization_endpoint": "https://llm.example.com/authorize",
@@ -1972,6 +1986,11 @@ def test_native_client_auth_contract_points_every_endpoint_at_this_proxy():
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
     }
+
+
+def test_native_client_auth_contract_omits_the_exchange_grant_where_the_gateway_cannot_serve_it():
+    contract = native_client_auth_contract(_request("/.well-known/litellm-cli-auth"), False)
+    assert list(contract["grant_types_supported"]) == ["authorization_code", "refresh_token"]
 
 
 @pytest.mark.parametrize(
