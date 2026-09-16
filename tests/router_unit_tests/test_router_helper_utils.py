@@ -1127,9 +1127,11 @@ async def test_success_callback_running_during_pre_header_increment_does_not_dou
     assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
 
 
-class _FailingFirstIncrementCache(DualCache):
+class _UnavailableIncrementCache(DualCache):
     def __init__(self) -> None:
         super().__init__(in_memory_cache=InMemoryCache())
+        self.first_increment_started = asyncio.Event()
+        self.release_first_increment = asyncio.Event()
         self.increment_calls = 0
 
     async def async_increment_cache_pipeline(
@@ -1141,29 +1143,39 @@ class _FailingFirstIncrementCache(DualCache):
     ) -> list[float] | None:
         self.increment_calls += 1
         if self.increment_calls == 1:
-            raise RuntimeError("cache unavailable")
-        return await super().async_increment_cache_pipeline(
-            increment_list, local_only=local_only, parent_otel_span=parent_otel_span, **kwargs
-        )
+            self.first_increment_started.set()
+            await self.release_first_increment.wait()
+        raise RuntimeError("cache unavailable")
 
 
 @pytest.mark.asyncio
-async def test_success_callback_counts_fully_when_pre_header_increment_fails():
-    router = _rpm_tpm_router("lit-3058-recover")
-    cache = _FailingFirstIncrementCache()
+async def test_callback_observing_stamp_before_pre_header_increment_fails_leaves_no_stamp_behind():
+    router = _rpm_tpm_router("lit-3058-fail")
+    cache = _UnavailableIncrementCache()
     router.cache = cache
+    metadata: dict[str, object] = {}
 
-    response = await router.acompletion(
-        model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong"
+    request = asyncio.ensure_future(
+        router.acompletion(
+            model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong", metadata=metadata
+        )
     )
-
-    expected = (response.usage.total_tokens, 1)
+    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=5)
+    assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 30
     for _ in range(50):
-        if await router.get_model_group_usage("gpt-5-mini") == expected:
+        if get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1:
             break
         await asyncio.sleep(0.1)
-    assert await router.get_model_group_usage("gpt-5-mini") == expected
-    assert cache.increment_calls == 2
+    assert get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1
+    assert cache.increment_calls == 1
+
+    cache.release_first_increment.set()
+    response = await request
+
+    assert response.usage.total_tokens == 30
+    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
+    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 100
+    assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
 
 
 @pytest.mark.asyncio
