@@ -564,16 +564,15 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     return ({"request": vertex_request_body},)
 
 
-def _iter_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[str]:
+def _iter_numbered_stripped_lines(raw_lines: Iterable[str | bytes]) -> Iterator[tuple[int, str]]:
     """Decode (when needed), strip, and drop blank lines from an iterable of lines."""
-    for raw in raw_lines:
-        line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
-        line = line.strip()
+    for lineno, raw in enumerate(raw_lines, start=1):
+        line = (raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw).strip()
         if line:
-            yield line
+            yield lineno, line
 
 
-def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
+def _iter_numbered_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[tuple[int, str]]:
     """
     Yield non-empty JSONL lines one at a time without materializing the whole
     payload, so peak memory stays bounded regardless of payload size. Mirrors
@@ -589,24 +588,26 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
         # into a BytesIO just to iterate it line by line.
         newline: Final = ord("\n")
         start, length = 0, len(content)
+        lineno: int = 0  # rebind-ok: line counter advances for each streamed chunk
         while start < length:
             idx = content.find(newline, start)
             if idx == -1:
                 chunk, start = content[start:], length
             else:
                 chunk, start = content[start:idx], idx + 1
+            lineno += 1
             line = chunk.decode("utf-8").strip()
             if line:
-                yield line
+                yield lineno, line
         return
 
     if isinstance(content, str):
-        yield from _iter_stripped_lines(io.StringIO(content))
+        yield from _iter_numbered_stripped_lines(io.StringIO(content))
         return
 
     if isinstance(content, PathLike):
         with open(str(content), "rb") as handle:
-            yield from _iter_stripped_lines(handle)
+            yield from _iter_numbered_stripped_lines(handle)
         return
 
     if hasattr(content, "read"):
@@ -627,17 +628,28 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
                 "Batch upload file handle must be seekable so it can be re-read "
                 "for the GCS object name and the upload body."
             ) from e
-        yield from _iter_stripped_lines(content)
+        yield from _iter_numbered_stripped_lines(content)
         return
 
     raise ValueError("Unsupported file content type")
 
 
+def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
+    yield from (line for _, line in _iter_numbered_openai_jsonl_lines(openai_file_content))
+
+
 def _iter_openai_jsonl_entries(
     openai_file_content: FileTypes,
 ) -> Iterator[dict[str, Any]]:
-    for line in _iter_openai_jsonl_lines(openai_file_content):
-        yield json.loads(line)
+    for lineno, line in _iter_numbered_openai_jsonl_lines(openai_file_content):
+        try:
+            entry: dict[str, Any] = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise VertexAIError(
+                status_code=400,
+                message=f"Invalid JSON on line {lineno} of batch input file: {e.msg}",
+            ) from e
+        yield entry
 
 
 def _parse_vertex_batch_output_row(line: str) -> _VertexBatchRow:

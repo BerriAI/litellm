@@ -31,16 +31,16 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
-    _OpenAIToVertexBatchUploadStream,
     _get_litellm_batch_custom_id_from_labels,
     _iter_openai_jsonl_entries,
     _iter_openai_jsonl_lines,
     _openai_batch_jsonl_entry_to_vertex_rows,
+    _OpenAIToVertexBatchUploadStream,
 )
 from litellm.types.llms.openai import CreateFileRequest
-from litellm.llms.vertex_ai.common_utils import VertexAIError
 
 
 def _upload_stream(transformed) -> BaseFileUploadStream:
@@ -221,8 +221,10 @@ class TestStreamingLineIterator:
         content = b'{"custom_id": "first"}\nnot-json-at-all\n'
         gen = _iter_openai_jsonl_entries(content)
         assert next(gen)["custom_id"] == "first"
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(VertexAIError) as exc_info:
             next(gen)
+        assert exc_info.value.status_code == 400
+        assert "line 2" in str(exc_info.value)
 
 
 class TestGetObjectNameLazyParse:
@@ -476,6 +478,63 @@ class TestUploadUrl:
 
 
 class TestUploadStreamBody:
+    def test_stream_rejects_malformed_single_row(self):
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=b"this is not json\n",
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        assert exc_info.value.status_code == 400
+        assert "line 1" in str(exc_info.value)
+
+    def test_stream_reports_file_line_number_for_malformed_file_like_input(self):
+        valid_row = json.dumps(
+            {
+                "custom_id": "r1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-2.5-flash",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            }
+        ).encode("utf-8")
+        raw = valid_row + b"\n\nthis is not json\n"
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=io.BytesIO(raw),
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        assert "line 3" in str(exc_info.value)
+
+    def test_stream_reports_file_line_number_for_malformed_bytes_input(self):
+        valid_row = json.dumps(
+            {
+                "custom_id": "r1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-2.5-flash",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            }
+        ).encode("utf-8")
+        raw = valid_row + b"\n\nthis is not json\n"
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=raw,
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        assert "line 3" in str(exc_info.value)
+
+    def test_get_object_name_rejects_malformed_batch_jsonl(self):
+        with pytest.raises(VertexAIError) as exc_info:
+            VertexAIFilesConfig().get_object_name(file_data=b"not json\n", purpose="batch")
+        assert exc_info.value.status_code == 400
+
     def test_stream_matches_legacy_pipeline(self):
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(120)
