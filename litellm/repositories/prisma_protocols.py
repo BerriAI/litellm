@@ -7,7 +7,9 @@ private ones per file.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import LiteralString, Protocol, TypeVar
+from typing import Protocol, TypeVar
+
+from typing_extensions import LiteralString
 
 RowT_co = TypeVar("RowT_co", covariant=True)
 
