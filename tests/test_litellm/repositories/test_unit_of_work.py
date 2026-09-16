@@ -59,6 +59,37 @@ async def test_updates_across_tables_share_one_batch_and_commit_once():
     ]
 
 
+async def test_duration_quarantine_clears_duration_and_reset_without_touching_spend():
+    batch = FakeBatch()
+
+    async with spend_reset_unit_of_work(lambda: batch) as uow:
+        uow.keys.queue_duration_quarantine(token="tok-bad")
+        uow.users.queue_duration_quarantine(user_id="user-bad")
+        uow.teams.queue_duration_quarantine(team_id="team-bad")
+
+    cleared = {"budget_duration": None, "budget_reset_at": None}
+    assert batch.calls == [
+        ("litellm_verificationtoken", {"token": "tok-bad"}, cleared),
+        ("litellm_usertable", {"user_id": "user-bad"}, cleared),
+        ("litellm_teamtable", {"team_id": "team-bad"}, cleared),
+    ]
+
+
+async def test_budget_window_quarantine_clears_duration_and_reset_without_touching_spend():
+    batch = FakeBatch()
+
+    async with budget_cascade_unit_of_work(lambda: batch) as uow:
+        uow.budgets.queue_window_quarantine(budget_id="budget-bad")
+
+    assert batch.calls == [
+        (
+            "litellm_budgettable.update_many",
+            {"budget_id": "budget-bad"},
+            {"budget_duration": None, "budget_reset_at": None},
+        )
+    ]
+
+
 async def test_raising_inside_block_skips_commit():
     batch = FakeBatch()
 

@@ -1158,6 +1158,36 @@ def test_reset_budget_windows_handles_string_budget_limits(monkeypatch):
     prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
 
 
+def test_reset_budget_windows_clears_unparseable_duration_and_still_resets_later_rows(monkeypatch):
+    """An expired window with a duration the new parser rejects must not raise
+    and stall the keyset walk. Clearing reset_at persists so the next tick
+    skips it and later keys still reset."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+    key_rows = [
+        {"token": "sk-bad", "budget_limits": [{"budget_duration": "1dinvalid", "reset_at": expired}]},
+        {"token": "sk-good", "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]},
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    assert prisma_client.db.litellm_verificationtoken.update.await_count == 2
+    first, second = prisma_client.db.litellm_verificationtoken.update.await_args_list
+    assert first.kwargs["where"] == {"token": "sk-bad"}
+    bad_windows = json.loads(first.kwargs["data"]["budget_limits"])
+    assert bad_windows[0]["reset_at"] is None
+    assert second.kwargs["where"] == {"token": "sk-good"}
+    good_windows = json.loads(second.kwargs["data"]["budget_limits"])
+    new_reset_at = datetime.fromisoformat(good_windows[0]["reset_at"].replace("Z", "+00:00")).replace(tzinfo=None)
+    assert new_reset_at > now
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-good:window:1d", value=0.0)
+    touched_keys = [call.kwargs.get("key") for call in spend_counter_cache.in_memory_cache.set_cache.call_args_list]
+    assert "spend:key:sk-bad:window:1dinvalid" not in touched_keys
+
+
 def test_reset_budget_windows_skips_row_with_empty_budget_limits(monkeypatch):
     """A row whose `budget_limits` comes back as an empty/falsy payload
     (shouldn't happen given the WHERE filter, but we guard anyway) must not
@@ -2177,6 +2207,92 @@ def test_budget_table_reset_stops_when_the_new_window_is_not_in_the_future(monke
 
     assert client.fetches_by_table["budget"] == 1
     assert len(_batch_writes(client, "budget", op="update_many")) == 2
+
+
+_QUARANTINE_DATA = {"budget_duration": None, "budget_reset_at": None}
+
+
+@pytest.mark.parametrize(
+    "phase, table_name, row_factory, id_field",
+    [
+        ("reset_budget_for_litellm_keys", "key", _key_row, "token"),
+        ("reset_budget_for_litellm_users", "user", _user_row, "user_id"),
+        ("reset_budget_for_litellm_teams", "team", _team_row, "team_id"),
+    ],
+    ids=["keys", "users", "teams"],
+)
+def test_reset_quarantines_unparseable_budget_duration_and_keeps_paging(
+    monkeypatch, phase, table_name, row_factory, id_field
+):
+    """A due row whose duration the new parser rejects used to raise, stay due,
+    and refill every batch. Clearing duration and reset_at takes it out of the
+    due query so later tenants can reset."""
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    client, job = _chunked_job(
+        {
+            table_name: [
+                [row_factory("bad1", budget_duration="1dinvalid"), row_factory("bad2", budget_duration="garbage")],
+                [row_factory("good1"), row_factory("good2")],
+            ]
+        }
+    )
+
+    asyncio.run(getattr(job, phase)())
+
+    assert client.fetches_by_table[table_name] == 2
+    writes = _batch_writes(client, table_name, op="update")
+    quarantined = [w for w in writes if w["data"] == _QUARANTINE_DATA]
+    reset = [w for w in writes if "spend" in w["data"]]
+    assert [w["where"][id_field] for w in quarantined] == ["bad1", "bad2"]
+    assert [w["where"][id_field] for w in reset] == ["good1", "good2"]
+    assert all("spend" not in w["data"] for w in quarantined)
+
+
+def test_budget_table_reset_quarantines_unparseable_durations_and_keeps_paging(monkeypatch):
+    """The cascade used to raise while building the next window, commit nothing,
+    and leave the invalid tiers at the head of every later fetch."""
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    client, job = _chunked_job(
+        {
+            "budget": [
+                [_budget_row("bad1", budget_duration="1dinvalid"), _budget_row("bad2", budget_duration="garbage")],
+                [_budget_row("good1"), _budget_row("good2")],
+            ]
+        }
+    )
+
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert client.fetches_by_table["budget"] == 2
+    writes = _batch_writes(client, "budget", op="update_many")
+    quarantined = [w for w in writes if w["data"] == _QUARANTINE_DATA]
+    advanced = [w for w in writes if w["data"] != _QUARANTINE_DATA]
+    assert [w["where"]["budget_id"] for w in quarantined] == ["bad1", "bad2"]
+    assert [w["where"]["budget_id"] for w in advanced] == ["good1", "good2"]
+    assert all("spend" not in w["data"] for w in quarantined)
+
+
+def test_budget_table_reset_does_not_sweep_dependents_of_an_unparseable_tier(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Quarantine is not a scheduled reset: linked spend stays put."""
+    _make_counter_invalidation_job(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="bad-tier", budget_duration="1dinvalid")]
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results(
+        [type("Membership", (), {"user_id": "alice", "team_id": "team-x", "budget_id": "bad-tier", "spend": 9.0})()]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    assert _batch_writes(mock_prisma_client, "team_membership") == []
+    assert _batch_writes(mock_prisma_client, "budget", op="update_many") == [
+        {
+            "table": "budget",
+            "op": "update_many",
+            "where": {"budget_id": "bad-tier"},
+            "data": _QUARANTINE_DATA,
+        }
+    ]
 
 
 class PoisonRow:

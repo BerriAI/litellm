@@ -376,7 +376,7 @@ class TestWordFormBudgetDurations(unittest.TestCase):
 
     def test_unparseable_duration_raises_instead_of_midnight_fallback(self):
         base_time = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
-        for duration in ("", "   ", "garbage", "1x"):
+        for duration in ("", "   ", "garbage", "1x", "1dinvalid"):
             with self.assertRaises(ValueError) as ctx:
                 get_next_standardized_reset_time(duration, base_time, "UTC")
             self.assertIn("Invalid budget_duration", str(ctx.exception))
