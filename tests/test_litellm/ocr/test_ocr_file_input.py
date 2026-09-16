@@ -21,7 +21,7 @@ import orjson
 import pytest
 from starlette.datastructures import FormData
 
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
+from litellm.ocr.legacy import convert_file_document_to_url_document, get_mime_type
 
 
 class TestGetMimeType:
@@ -487,9 +487,9 @@ class TestProxySecurityGuard:
 async def test_proxy_upload_stops_reading_at_size_limit() -> None:
     from starlette.datastructures import UploadFile
 
-    from litellm.proxy.ocr_endpoints.endpoints import _parse_multipart_form
+    from litellm.proxy.ocr_endpoints.endpoints import _MAX_FILE_BYTES, _parse_multipart_form
 
-    limit: Final = 50 * 1024 * 1024
+    limit: Final = _MAX_FILE_BYTES
     with tempfile.TemporaryFile() as stream:
         stream.truncate(limit * 2)
         upload: Final = UploadFile(file=stream, filename="large.pdf")
