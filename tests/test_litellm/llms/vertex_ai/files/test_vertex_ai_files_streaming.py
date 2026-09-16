@@ -15,8 +15,13 @@ replaced by a list-based pipeline:
   4. A tuple-wrapped file handle uploaded through the real create_file ordering
      keeps every row, including entry 0 (no partial upload from a consumed
      cursor).
+  5. Downloading a GCS object through ``async_retrieve_file_content_streaming``
+     yields the body as it arrives instead of buffering it, keeps the upstream
+     ``content-type`` / ``content-length``, transforms a Vertex batch output
+     row by row, and closes the response when the consumer is done.
 """
 
+import asyncio
 import gc
 import io
 import json
@@ -27,6 +32,8 @@ import tracemalloc
 import httpx
 import pytest
 
+import litellm
+from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -39,7 +46,7 @@ from litellm.llms.vertex_ai.files.transformation import (
     _iter_openai_jsonl_lines,
     _openai_batch_jsonl_entry_to_vertex_rows,
 )
-from litellm.types.llms.openai import CreateFileRequest
+from litellm.types.llms.openai import CreateFileRequest, FileContentRequest
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 
 
@@ -586,3 +593,271 @@ class TestStreamingMediaUpload:
         monkeypatch.setattr(tempfile, "TemporaryFile", lambda *a, **k: (created.append(1), real_tempfile(*a, **k))[1])
         await self._run(_make_openai_jsonl_bytes(50))
         assert created == []
+
+
+_MANAGED_OUTPUT_FILE_ID = (
+    "gs://test-bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-flash/abc/predictions.jsonl"
+)
+
+
+def _vertex_batch_output_row(custom_id: str, text: str) -> bytes:
+    return json.dumps(
+        {
+            "status": "",
+            "processed_time": "2024-11-01T18:13:16.826+00:00",
+            "request": {"labels": {"litellm_custom_id": custom_id}, "contents": [{"parts": [{"text": "hi"}]}]},
+            "response": {
+                "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2, "totalTokenCount": 3},
+                "modelVersion": "gemini-2.5-flash@default",
+            },
+        }
+    ).encode("utf-8")
+
+
+def _vertex_embeddings_output_row(key: str, values: list[float]) -> bytes:
+    return json.dumps(
+        {
+            "key": key,
+            "request": {"content": {"parts": [{"text": "hello world"}]}},
+            "response": {"embedding": {"values": values}, "usageMetadata": {"promptTokenCount": 2}},
+        }
+    ).encode("utf-8")
+
+
+def _gcs_download_mock(raw_chunks: list[bytes], headers: dict[str, str]):
+    """A fake GCS `alt=media` endpoint that serves the object one raw chunk at a
+    time, recording the request and how many chunks the consumer has pulled so
+    far, so a test can tell streaming apart from buffering."""
+    state = {"urls": [], "headers": [], "served": 0, "closed": False}
+
+    async def body():
+        for chunk in raw_chunks:
+            state["served"] += 1
+            yield chunk
+            await asyncio.sleep(0)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        state["urls"].append(str(request.url))
+        state["headers"].append(dict(request.headers))
+        response = httpx.Response(200, content=body(), headers=headers)
+        original_aclose = response.aclose
+
+        async def aclose():
+            state["closed"] = True
+            await original_aclose()
+
+        response.aclose = aclose
+        return response
+
+    return handler, state
+
+
+class _StaticTokenFilesConfig(VertexAIFilesConfig):
+    """Vertex files config with a fixed access token, so no ADC lookup runs in tests."""
+
+    def get_access_token(self, credentials, project_id, _retry_reauth=False):
+        return "test-token", "test-project"
+
+
+def _stable_row_fields(jsonl: bytes) -> list[tuple]:
+    """Project OpenAI batch output rows onto the fields the transform derives from
+    the Vertex row, leaving out the ids and timestamps it generates per call."""
+    rows = [json.loads(line) for line in jsonl.split(b"\n") if line]
+    return [
+        (
+            row["custom_id"],
+            row["error"],
+            row["response"]["status_code"],
+            row["response"]["body"]["model"],
+            row["response"]["body"]["choices"][0]["message"]["content"],
+            row["response"]["body"]["usage"]["total_tokens"],
+        )
+        for row in rows
+    ]
+
+
+class TestFileContentStreaming:
+    """End-to-end against a faked GCS media endpoint. These fail if the retrieval
+    buffers the object before yielding, drops or duplicates bytes across chunk
+    boundaries, loses the upstream headers, or leaks the httpx response."""
+
+    async def _open(self, raw_chunks: list[bytes], headers: dict[str, str], chunk_size: int = 16):
+        mock, state = _gcs_download_mock(raw_chunks, headers)
+        result = await BaseLLMHTTPHandler().async_retrieve_file_content_streaming(
+            file_content_request=FileContentRequest(file_id=_MANAGED_OUTPUT_FILE_ID),
+            provider_config=_StaticTokenFilesConfig(),
+            litellm_params={"gcs_bucket_name": "test-bucket"},
+            headers={},
+            logging_obj=_logging_obj(),
+            chunk_size=chunk_size,
+            client=_async_handler_with(mock),
+        )
+        return result, state
+
+    async def test_plain_object_streams_through_with_upstream_headers(self):
+        raw = b'{"line": 1}\n{"line": 2}\n' * 40
+        raw_chunks = [raw[i : i + 100] for i in range(0, len(raw), 100)]
+        upstream = {"content-type": "application/octet-stream", "content-length": str(len(raw))}
+
+        result, state = await self._open(raw_chunks, upstream, chunk_size=7)
+
+        assert state["urls"] == [
+            "https://storage.googleapis.com/storage/v1/b/test-bucket/o/"
+            "litellm-vertex-files%2Fpublishers%2Fgoogle%2Fmodels%2Fgemini-2.5-flash%2Fabc%2Fpredictions.jsonl?alt=media"
+        ]
+        assert state["headers"][0]["authorization"] == "Bearer test-token"
+        assert result.headers["content-type"] == "application/octet-stream"
+        assert result.headers["content-length"] == str(len(raw))
+
+        received = [chunk async for chunk in result.stream_iterator]
+        assert b"".join(received) == raw
+        assert len(received) > 1
+        assert state["closed"] is True
+
+    async def test_body_is_yielded_before_the_object_is_fully_served(self):
+        raw_chunks = [b'{"line": %d}\n' % i for i in range(50)]
+        result, state = await self._open(raw_chunks, {"content-type": "application/octet-stream"}, chunk_size=8)
+
+        first = await anext(result.stream_iterator)
+
+        assert first
+        assert state["served"] < len(raw_chunks)
+        assert state["closed"] is False
+
+    async def test_vertex_batch_output_is_transformed_row_by_row(self):
+        rows = [_vertex_batch_output_row(f"request-{i}", f"answer {i}") for i in range(30)]
+        raw = b"\n".join(rows) + b"\n"
+        raw_chunks = [raw[i : i + 333] for i in range(0, len(raw), 333)]
+        expected = VertexAIFilesConfig()._try_transform_vertex_batch_output_to_openai(
+            content=raw, logging_obj=_logging_obj(), model="gemini-2.5-flash"
+        )
+        assert expected != raw
+
+        result, state = await self._open(
+            raw_chunks,
+            {"content-type": "application/octet-stream", "content-length": str(len(raw))},
+            chunk_size=97,
+        )
+        first = await anext(result.stream_iterator)
+        assert json.loads(first)["custom_id"] == "request-0"
+        assert state["served"] < len(raw_chunks)
+
+        rest = [chunk async for chunk in result.stream_iterator]
+        streamed = b"".join([first, *rest])
+        assert _stable_row_fields(streamed) == _stable_row_fields(expected)
+        assert len(_stable_row_fields(streamed)) == len(rows)
+        assert streamed.count(b"\n") == expected.count(b"\n")
+        assert len(rest) == len(rows) - 1
+        assert result.headers["content-type"] == "application/octet-stream"
+        assert "content-length" not in result.headers
+        assert state["closed"] is True
+
+    async def test_transform_opt_out_streams_raw_batch_output(self, monkeypatch):
+        monkeypatch.setattr("litellm.disable_vertex_batch_output_transformation", True)
+        raw = b"\n".join(_vertex_batch_output_row(f"request-{i}", "x") for i in range(3)) + b"\n"
+
+        result, _ = await self._open([raw], {"content-length": str(len(raw))})
+
+        assert b"".join([chunk async for chunk in result.stream_iterator]) == raw
+        assert result.headers["content-length"] == str(len(raw))
+
+    async def test_embeddings_batch_output_is_transformed_with_updated_content_length(self):
+        rows = [_vertex_embeddings_output_row(f"request-{i}", [0.1 * i, 0.2]) for i in range(3)]
+        raw = b"\n".join(rows) + b"\n"
+        raw_chunks = [raw[i : i + 50] for i in range(0, len(raw), 50)]
+
+        result, _ = await self._open(raw_chunks, {"content-length": str(len(raw))}, chunk_size=64)
+        streamed = b"".join([chunk async for chunk in result.stream_iterator])
+
+        transformed = [json.loads(line) for line in streamed.split(b"\n") if line]
+        assert [row["custom_id"] for row in transformed] == ["request-0", "request-1", "request-2"]
+        assert transformed[1]["response"]["body"]["data"][0]["embedding"] == [0.1, 0.2]
+        assert transformed[1]["response"]["body"]["model"] == "gemini-2.5-flash"
+        assert result.headers["content-length"] == str(len(streamed))
+
+    async def test_object_without_newlines_streams_after_the_peek_limit(self):
+        piece = b"\xff" * (1024 * 1024)
+        raw_chunks = [piece] * 40
+
+        result, state = await self._open(raw_chunks, {"content-type": "image/png"}, chunk_size=len(piece))
+        first = await anext(result.stream_iterator)
+
+        assert state["served"] < len(raw_chunks)
+        rest = [chunk async for chunk in result.stream_iterator]
+        assert len(first) + sum(len(chunk) for chunk in rest) == len(piece) * len(raw_chunks)
+        assert set(first) == {0xFF} and all(set(chunk) == {0xFF} for chunk in rest)
+        assert result.headers["content-type"] == "image/png"
+
+    async def test_consumer_stopping_early_closes_the_response(self):
+        raw_chunks = [b'{"line": %d}\n' % i for i in range(50)]
+        result, state = await self._open(raw_chunks, {})
+
+        await anext(result.stream_iterator)
+        await result.stream_iterator.aclose()
+
+        assert state["closed"] is True
+
+    async def test_gcs_error_raises_and_closes_the_response(self):
+        state = {"closed": False}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            response = httpx.Response(403, json={"error": {"message": "forbidden"}})
+            original_aclose = response.aclose
+
+            async def aclose():
+                state["closed"] = True
+                await original_aclose()
+
+            response.aclose = aclose
+            return response
+
+        with pytest.raises(VertexAIError) as exc_info:
+            await BaseLLMHTTPHandler().async_retrieve_file_content_streaming(
+                file_content_request=FileContentRequest(file_id=_MANAGED_OUTPUT_FILE_ID),
+                provider_config=_StaticTokenFilesConfig(),
+                litellm_params={"gcs_bucket_name": "test-bucket"},
+                headers={},
+                logging_obj=_logging_obj(),
+                chunk_size=16,
+                client=_async_handler_with(handler),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "forbidden" in str(exc_info.value)
+        assert state["closed"] is True
+
+    async def test_afile_content_stream_routes_vertex_ai_to_the_gcs_stream(self):
+        raw = b'{"line": 1}\n{"line": 2}\n' * 20
+        mock, state = _gcs_download_mock(
+            [raw[i : i + 64] for i in range(0, len(raw), 64)], {"content-length": str(len(raw))}
+        )
+
+        result = await litellm.afile_content(
+            file_id=_MANAGED_OUTPUT_FILE_ID,
+            custom_llm_provider="vertex_ai",
+            stream=True,
+            api_key="test-token",
+            gcs_bucket_name="test-bucket",
+            client=_async_handler_with(mock),
+        )
+
+        assert isinstance(result, FileContentStreamingResult)
+        assert result.headers["content-length"] == str(len(raw))
+        assert state["urls"][0].endswith("predictions.jsonl?alt=media")
+        assert b"".join([chunk async for chunk in result.stream_iterator]) == raw
+        assert state["closed"] is True
+
+    async def test_afile_content_without_stream_keeps_buffered_vertex_response(self):
+        raw = b'{"line": 1}\n{"line": 2}\n'
+        mock, _ = _gcs_download_mock([raw], {"content-length": str(len(raw))})
+
+        result = await litellm.afile_content(
+            file_id=_MANAGED_OUTPUT_FILE_ID,
+            custom_llm_provider="vertex_ai",
+            api_key="test-token",
+            gcs_bucket_name="test-bucket",
+            client=_async_handler_with(mock),
+        )
+
+        assert result.response.content == raw
