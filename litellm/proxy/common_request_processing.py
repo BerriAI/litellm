@@ -33,7 +33,11 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import (
+    get_or_create_metadata_bucket,
+    independent_snapshot,
+    is_expected_client_error,
+)
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -2041,6 +2045,21 @@ class ProxyBaseLLMRequestProcessing:
     ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
+        original_model: Final = self.data.get("model")
+        fallback_models: Final = (
+            self._resolve_fallback_models(
+                model=original_model,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if original_model
+            and isinstance(original_model, str)
+            and llm_router
+            and not self.data.get("disable_fallbacks")
+            else None
+        )
+        pristine: Final = independent_snapshot(self.data) if fallback_models else None
+
         try:
             return await self.common_processing_pre_call_logic(
                 request=request,
@@ -2059,16 +2078,7 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
         except ProxyRateLimitError as original_exc:
-            original_model: Final = self.data.get("model")
-            if not original_model or not llm_router or self.data.get("disable_fallbacks"):
-                raise
-
-            fallback_models: Final = self._resolve_fallback_models(
-                model=original_model,
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
-            )
-            if not fallback_models:
+            if not fallback_models or pristine is None:
                 raise
 
             verbose_proxy_logger.info(
@@ -2081,7 +2091,7 @@ class ProxyBaseLLMRequestProcessing:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
                         continue
-                    self.data["model"] = fallback_model
+                    self.data = {**independent_snapshot(pristine), "model": fallback_model}
                     try:
                         return await self.common_processing_pre_call_logic(
                             request=request,
@@ -2102,10 +2112,10 @@ class ProxyBaseLLMRequestProcessing:
                     except ProxyRateLimitError:
                         continue
             except BaseException:
-                self.data["model"] = original_model
+                self.data = pristine
                 raise
 
-            self.data["model"] = original_model
+            self.data = pristine
             raise original_exc
 
     def _resolve_fallback_models(
