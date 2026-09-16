@@ -2393,7 +2393,9 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        data = _build_guardrail_request_data(data, request)  # rebind-ok: failure hooks below read the guardrail's metadata
+        data = _build_guardrail_request_data(
+            data, request
+        )  # rebind-ok: failure hooks below read the guardrail's metadata
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
