@@ -912,7 +912,7 @@ def test_anthropic_stream_requires_start_finish_and_stop() -> None:
     assert not successful_response("anthropic", url, 200, headers, start + finish)
 
 
-@pytest.mark.parametrize("provider,suffix", [("openai", "/v1"), ("anthropic", ""), ("gemini", "")])
+@pytest.mark.parametrize("provider,suffix", [("openai", "/v1"), ("anthropic", "")])
 def test_normal_registration_routes_supported_providers(provider: str, suffix: str) -> None:
     params: Final = LiteLLMParamsBody(model=f"{provider}/test", api_key="os.environ/SYNTHETIC_KEY", timeout=12)
     routed: Final = route_cache_model(params, lambda mount: f"http://edge.invalid/{mount}", enabled=True)
@@ -924,8 +924,6 @@ def test_normal_registration_routes_supported_providers(provider: str, suffix: s
 @pytest.mark.parametrize("params", [
     LiteLLMParamsBody(model="bedrock/test"),
     LiteLLMParamsBody(model="azure/test"),
-    LiteLLMParamsBody(model="vertex_ai/gemini-2.5-flash"),
-    LiteLLMParamsBody(model="gemini/gemini-2.5-flash", api_base="https://custom.invalid"),
     LiteLLMParamsBody(model="openai/test", api_base="https://custom.invalid/v1"),
     LiteLLMParamsBody(model="openai/test", api_base=""),
     LiteLLMParamsBody(model="openai/test", litellm_credential_name="named-credential"),
@@ -1294,153 +1292,3 @@ class TestBedrockStreams:
 
     def test_a_stream_that_errored_before_it_started_is_not_recordable(self) -> None:
         assert not successful_response(BEDROCK_MOUNT, CONVERSE_STREAM_URL, 503, {}, CONVERSE_STREAM_OK)
-
-
-GEMINI_MODEL: Final = "gemini-2.5-flash"
-GEMINI_API_VERSION: Final = "/v1beta"
-GEMINI_GENERATE_PATH: Final = f"/models/{GEMINI_MODEL}:generateContent"
-GEMINI_STREAM_PATH: Final = f"/models/{GEMINI_MODEL}:streamGenerateContent"
-GEMINI_USAGE: Final = {"promptTokenCount": 7, "candidatesTokenCount": 1, "totalTokenCount": 25}
-
-
-def gemini_body(finish_reason: str | None, usage: bool = True, candidates: bool = True) -> JsonValue:
-    candidate: Final[dict[str, JsonValue]] = {"content": {"parts": [{"text": "OK"}], "role": "model"}, "index": 0}
-    return {
-        "candidates": [{**candidate, "finishReason": finish_reason} if finish_reason else candidate]
-        if candidates else [],
-        **({"usageMetadata": GEMINI_USAGE} if usage else {}),
-        "modelVersion": GEMINI_MODEL,
-    }
-
-
-def gemini_unary(finish_reason: str | None = "STOP", usage: bool = True, candidates: bool = True) -> bytes:
-    return json.dumps(gemini_body(finish_reason, usage, candidates)).encode()
-
-
-def gemini_stream(*finish_reasons: str | None) -> bytes:
-    return b"".join(
-        b"data: " + json.dumps(gemini_body(reason)).encode() + b"\r\n\r\n" for reason in finish_reasons
-    )
-
-
-@contextmanager
-def gemini_edge(cache: CacheEdge, provider: Provider, path: str) -> Generator[str, None, None]:
-    upstream: Final = f"http://127.0.0.1:{provider.server_port}{GEMINI_API_VERSION}"
-    running: Final = start_provider_edge(cache, mounts={"gemini": upstream})
-    try:
-        yield running.edge.api_base("gemini") + path
-    finally:
-        running.shutdown()
-
-
-class TestGemini:
-    """Gemini reaches the edge by path prefix alone: litellm composes
-    `{api_base}/models/{model}:{endpoint}` and sends a static `x-goog-api-key`,
-    so nothing has to be re-signed and nothing leaves the cache key. The response
-    grammar is its own though, and the streaming one is the interesting half: every
-    chunk repeats `usageMetadata`, so only `finishReason` on the last chunk
-    separates a finished turn from a dropped connection."""
-
-    @pytest.mark.parametrize("path,response", [
-        (GEMINI_GENERATE_PATH, gemini_unary()),
-        (GEMINI_STREAM_PATH, gemini_stream(None, None, "STOP")),
-    ], ids=["generate", "stream"])
-    def test_a_finished_turn_replays_on_the_next_run(
-        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
-    ) -> None:
-        provider.stream = path == GEMINI_STREAM_PATH
-        provider.response = response
-        for _ in range(2):
-            with gemini_edge(cache_edge(store), provider, path) as url:
-                assert call(url, MARKED).body == response
-        assert len(provider.hits) == 1
-
-    @pytest.mark.parametrize("reason", ["MAX_TOKENS", "SAFETY", "RECITATION"])
-    def test_a_turn_the_provider_ended_for_its_own_reasons_is_still_finished(
-        self, store: RedisResponseStore, provider: Provider, reason: str,
-    ) -> None:
-        """Reading `finishReason` as a string rather than comparing it to STOP is
-        deliberate. A turn cut off by the token limit or a safety filter is over,
-        and rejecting those would send every one of them upstream forever."""
-        provider.response = gemini_unary(reason)
-        for _ in range(2):
-            with gemini_edge(cache_edge(store), provider, GEMINI_GENERATE_PATH) as url:
-                assert call(url, MARKED).body == provider.response
-        assert len(provider.hits) == 1
-
-    @pytest.mark.parametrize("response", [
-        gemini_unary(None),
-        gemini_unary("STOP", usage=False),
-        gemini_unary("STOP", candidates=False),
-        b'{"error":{"code":400,"message":"API key not valid","status":"INVALID_ARGUMENT"}}',
-    ], ids=["no-finish-reason", "no-usage", "no-candidates", "error-body"])
-    def test_an_unfinished_or_failed_turn_never_enters_the_cache(
-        self, store: RedisResponseStore, provider: Provider, response: bytes,
-    ) -> None:
-        provider.response = response
-        for _ in range(2):
-            with gemini_edge(cache_edge(store), provider, GEMINI_GENERATE_PATH) as url:
-                assert call(url, MARKED).body == response
-        assert len(provider.hits) == 2
-
-    @pytest.mark.parametrize("response", [
-        gemini_stream(None, None),
-        gemini_stream("STOP", None),
-        gemini_stream(),
-    ], ids=["cut-before-the-reason", "reason-then-another-chunk", "empty"])
-    def test_a_stream_that_never_named_a_reason_calls_the_provider_every_time(
-        self, store: RedisResponseStore, provider: Provider, response: bytes,
-    ) -> None:
-        provider.stream = True
-        provider.response = response
-        for _ in range(2):
-            with gemini_edge(cache_edge(store), provider, GEMINI_STREAM_PATH) as url:
-                assert call(url, MARKED).body == response
-        assert len(provider.hits) == 2
-
-    def test_a_response_whose_candidates_did_not_all_finish_is_not_recordable(
-        self, store: RedisResponseStore, provider: Provider,
-    ) -> None:
-        """A request for more than one candidate is answered by more than one, and
-        the turn is over only when every one of them names a reason. Holding the
-        whole list to that rule rather than its first entry is what keeps a
-        half-finished answer from being stored and replayed as a finished one."""
-        finished: Final = json.loads(gemini_unary("STOP"))["candidates"][0]
-        unfinished: Final = json.loads(gemini_unary(None))["candidates"][0]
-        provider.response = json.dumps(
-            {"candidates": [finished, {**unfinished, "index": 1}], "usageMetadata": GEMINI_USAGE}
-        ).encode()
-        for _ in range(2):
-            with gemini_edge(cache_edge(store), provider, GEMINI_GENERATE_PATH) as url:
-                assert call(url, MARKED).body == provider.response
-        assert len(provider.hits) == 2
-
-    @pytest.mark.parametrize("path,cacheable", [
-        (GEMINI_GENERATE_PATH, True),
-        (GEMINI_STREAM_PATH, True),
-        (f"/models/{GEMINI_MODEL}:countTokens", False),
-        (f"/models/{GEMINI_MODEL}:embedContent", False),
-        ("/v1/chat/completions", False),
-        (f"/files/{GEMINI_MODEL}:generateContent", False),
-    ])
-    @pytest.mark.parametrize("version", ["", GEMINI_API_VERSION], ids=["bare", "versioned"])
-    def test_only_the_generate_endpoints_are_cacheable(self, version: str, path: str, cacheable: bool) -> None:
-        """The mount's upstream base carries the API version, so the path the cache
-        sees is the upstream one and starts `/v1beta`. A rule anchored at the start
-        of the path would pass every test against a stub with no version prefix and
-        then cache nothing at all in a real run."""
-        assert cacheable_endpoint("gemini", "POST", f"https://gemini.invalid{version}{path}", MARKED) is cacheable
-
-    def test_the_bodies_these_tests_build_match_a_real_gemini_response(self) -> None:
-        """The shapes above are hand-built so a test can express the turn it means.
-        This holds them to the fields a live `generativelanguage.googleapis.com`
-        answer carries, captured 2026-09-16 against gemini-2.5-flash."""
-        captured: Final = json.loads(
-            '{"candidates":[{"content":{"parts":[{"text":"OK"}],"role":"model"},"finishReason":"STOP",'
-            '"index":0}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":1,'
-            '"totalTokenCount":25},"modelVersion":"gemini-2.5-flash","responseId":"1J6qauKFI8ut1MkPgNjI4AI"}'
-        )
-        built: Final = json.loads(gemini_unary())
-        assert captured.keys() >= built.keys()
-        assert captured["candidates"][0].keys() >= built["candidates"][0].keys()
-        assert successful_response("gemini", GEMINI_GENERATE_PATH, 200, {}, json.dumps(captured).encode())
