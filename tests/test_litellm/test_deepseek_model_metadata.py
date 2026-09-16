@@ -65,23 +65,13 @@ class TestSupportsResponseSchemaDeepSeek:
         assert supports_response_schema(model="deepseek/deepseek-chat") is False
 
     def test_explicit_provider(self):
-        assert (
-            supports_response_schema(
-                model="deepseek-chat", custom_llm_provider="deepseek"
-            )
-            is False
-        )
+        assert supports_response_schema(model="deepseek-chat", custom_llm_provider="deepseek") is False
 
     def test_reasoner_provider_slash_model(self):
         assert supports_response_schema(model="deepseek/deepseek-reasoner") is False
 
     def test_reasoner_explicit_provider(self):
-        assert (
-            supports_response_schema(
-                model="deepseek-reasoner", custom_llm_provider="deepseek"
-            )
-            is False
-        )
+        assert supports_response_schema(model="deepseek-reasoner", custom_llm_provider="deepseek") is False
 
 
 # ---------------------------------------------------------------------------

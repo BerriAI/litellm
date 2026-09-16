@@ -64,9 +64,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                     else None
                 )
             )
-            json_schema: Final[dict[str, Any] | None] = (
-                raw_schema if isinstance(raw_schema, dict) else None
-            )
+            json_schema: Final[dict[str, Any] | None] = raw_schema if isinstance(raw_schema, dict) else None
 
             if json_schema is not None and not litellm.supports_response_schema(
                 model=model,

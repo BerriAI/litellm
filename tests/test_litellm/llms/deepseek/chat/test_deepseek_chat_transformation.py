@@ -732,7 +732,9 @@ class TestDeepSeekResponseFormatTranslation:
         non_default_params = {"response_format": response_format}
         optional_params = {}
 
-        with patch.object(litellm, "supports_response_schema", return_value=True):  # test-quality-ok: mocking feature support flag for unit test isolation
+        with patch.object(
+            litellm, "supports_response_schema", return_value=True
+        ):  # test-quality-ok: mocking feature support flag for unit test isolation
             result = self.config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
