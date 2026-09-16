@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    CHECK_AND_INCREMENT_BY_N_SCRIPT,
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
     RequestRateLimiterStash,
@@ -6171,6 +6173,441 @@ async def test_success_hook_leaves_stash_untouched_for_non_batch_responses():
         data={}, user_api_key_dict=user, response=ModelResponse(usage=Usage(total_tokens=5))
     )
     assert get_request_stash().batch_enqueued_reservation == reservation
+
+
+def _team_model_limit_auth(api_key: str, team_id: str, **limits) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key=hash_token(api_key),
+        team_id=team_id,
+        team_metadata=dict(limits),
+    )
+
+
+async def _counter_value(handler, counter_key: str) -> int:
+    raw = await handler.internal_usage_cache.async_get_cache(
+        key=counter_key, litellm_parent_otel_span=None, local_only=True
+    )
+    return int(raw or 0)
+
+
+class _RecordingUsageCache(InternalUsageCache):
+    """
+    Injected in place of the handler's usage cache so a test can see which counter
+    keys one request charges, without replacing methods on the handler itself.
+    """
+
+    def __init__(self, dual_cache: DualCache):
+        super().__init__(dual_cache)
+        self.batched_key_reads: List[List[str]] = []
+
+    async def async_batch_get_cache(
+        self,
+        keys,
+        parent_otel_span=None,
+        local_only: bool = False,
+    ):
+        self.batched_key_reads.append([k for k in keys if k is not None])
+        return await super().async_batch_get_cache(
+            keys=keys, parent_otel_span=parent_otel_span, local_only=local_only
+        )
+
+
+def test_deduplicate_descriptors_collapses_repeats_keeping_limits_v3():
+    """
+    The dedup helper keeps one entry per (key, value), preserves its rate_limit
+    and leaves distinct descriptors and their order alone.
+    """
+    limits = {"requests_per_unit": 10, "tokens_per_unit": 100000, "window_size": 60}
+    team = {"key": "model_per_team", "value": "team-dup:gpt-4", "rate_limit": limits}
+    key_scoped = {"key": "model_per_key", "value": "sk-hash:gpt-4", "rate_limit": limits}
+
+    deduped = _PROXY_MaxParallelRequestsHandler._deduplicate_descriptors(
+        [team, key_scoped, dict(team)]
+    )
+
+    assert [(d["key"], d["value"]) for d in deduped] == [
+        ("model_per_team", "team-dup:gpt-4"),
+        ("model_per_key", "sk-hash:gpt-4"),
+    ]
+    assert deduped[0]["rate_limit"]["requests_per_unit"] == 10
+    assert deduped[0]["rate_limit"]["tokens_per_unit"] == 100000
+
+
+@pytest.mark.asyncio
+async def test_model_per_team_counter_charged_once_from_team_metadata_v3():
+    """
+    Regression test: team_metadata model limits must charge their counter once.
+
+    They were appended twice, once inside _create_rate_limit_descriptors and once
+    by _add_team_model_rate_limit_descriptor_from_metadata, so the same counter key
+    landed in one batch read twice and every request incremented it by 2.
+
+    The usage cache is injected rather than patched onto the handler, so the real
+    rate-limit path runs and the test observes it through a real collaborator.
+    """
+    usage_cache = _RecordingUsageCache(DualCache())
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=usage_cache)
+
+    user_api_key_dict = _team_model_limit_auth(
+        "sk-team-dup", "team-dup", model_rpm_limit={"gpt-4": 10}
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=usage_cache.dual_cache,
+        data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="",
+    )
+
+    counter_key = handler.create_rate_limit_keys(
+        "model_per_team", "team-dup:gpt-4", "requests"
+    )
+    charged = [read.count(counter_key) for read in usage_cache.batched_key_reads]
+    assert any(
+        count > 0 for count in charged
+    ), f"model_per_team was never charged; reads={usage_cache.batched_key_reads}"
+    assert all(
+        count <= 1 for count in charged
+    ), f"model_per_team charged more than once in a single read: {charged}"
+
+
+@pytest.mark.asyncio
+async def test_model_per_team_rpm_counter_increments_once_per_request_v3():
+    """
+    Regression test: one request must add exactly 1 to the team per-model RPM
+    counter. The duplicate descriptor put the same counter key into
+    keys_to_fetch twice, so the sliding window incremented it by 2 and the
+    configured RPM was enforced at half its value.
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    assert (
+        handler.batch_rate_limiter_script is None
+    ), "Test premise: no Redis, so the in-memory sliding window does the increment"
+
+    user_api_key_dict = _team_model_limit_auth(
+        "sk-team-count", "team-count", model_rpm_limit={"gpt-4": 100}
+    )
+    counter_key = handler.create_rate_limit_keys(
+        "model_per_team", "team-count:gpt-4", "requests"
+    )
+
+    for expected_count in (1, 2):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="",
+        )
+        assert await _counter_value(handler, counter_key) == expected_count
+
+
+class _ScriptRegisteringRedisCache:
+    """
+    Stand-in for RedisCache carrying only what the handler's constructor uses:
+    it registers Lua scripts. Injecting it through DualCache makes the handler
+    wire up its own Redis reservation path, so the test drives that path without
+    assigning anything onto the handler.
+    """
+
+    def __init__(self, store: Dict[str, int], script_key_calls: List[List[str]]):
+        self._store = store
+        self._script_key_calls = script_key_calls
+
+    def async_register_script(self, script: str):
+        if script is CHECK_AND_INCREMENT_BY_N_SCRIPT:
+            return _fake_check_and_increment_script(self._store, self._script_key_calls)
+        return None
+
+
+def _fake_check_and_increment_script(store: Dict[str, int], key_calls: List[List[str]]):
+    """
+    Stand-in for CHECK_AND_INCREMENT_BY_N_LUA with the Redis INCRBY semantics
+    the real script has. The in-memory fallback snapshots every counter before
+    writing any, so a repeated descriptor there silently overwrites instead of
+    accumulating; only this path shows the double reservation.
+
+    Records every key list it is handed. The emulated arithmetic below is only
+    as trustworthy as this stand-in, so the test asserts the *population* the
+    real script would be given -- one window/counter pair per counter -- which
+    holds whatever the script then does with it.
+    """
+
+    async def script(keys: List[str], args: List[int]) -> List[int]:
+        key_calls.append(list(keys))
+        results: List[int] = [0]
+        for i in range(0, len(keys), 2):
+            window_key = keys[i]
+            counter_key = keys[i + 1]
+            increment = int(args[(i // 2) * 4 + 1])
+            if window_key in store:
+                store[counter_key] = store.get(counter_key, 0) + increment
+            else:
+                store[window_key] = 0
+                store[counter_key] = increment
+            results.extend([store[counter_key], store[window_key]])
+        return results
+
+    return script
+
+
+@pytest.mark.asyncio
+async def test_model_per_team_tpm_reserved_once_per_request_v3():
+    """
+    Regression test: the atomic TPM reservation must charge the team per-model
+    token counter once. reserve_tpm_tokens emits one increment per descriptor
+    and the Redis path INCRBYs each in turn, so the duplicate descriptor
+    reserved the estimate twice and halved the effective TPM.
+    """
+    redis_store: Dict[str, int] = {}
+    script_key_calls: List[List[str]] = []
+    local_cache = DualCache(
+        redis_cache=_ScriptRegisteringRedisCache(redis_store, script_key_calls)
+    )
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    assert handler.tpm_reservation_enabled, "Test premise: reservation path is on"
+
+    user_api_key_dict = _team_model_limit_auth(
+        "sk-team-tpm", "team-tpm", model_tpm_limit={"gpt-4": 100000}
+    )
+    tokens_key = handler.create_rate_limit_keys(
+        "model_per_team", "team-tpm:gpt-4", "tokens"
+    )
+
+    pre_call_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 5,
+    }
+    expected_reservation = handler._estimate_tokens_for_request(data=pre_call_data)
+    assert expected_reservation > 0, "Test premise: something must be reserved"
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=dict(pre_call_data),
+        call_type="",
+    )
+
+    reserved_keys = Counter(key for call in script_key_calls for key in call)
+    assert reserved_keys[tokens_key] == 1, (
+        f"team per-model token counter handed to the reservation script "
+        f"{reserved_keys[tokens_key]} times: {script_key_calls}"
+    )
+    assert redis_store[tokens_key] == expected_reservation
+
+
+@pytest.mark.asyncio
+async def test_model_per_key_rpm_counter_increments_once_per_request_v3():
+    """
+    Guard that the model_per_key path, which was never duplicated, still
+    charges its counter exactly once after the model_per_team dedup.
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    api_key = hash_token("sk-key-count")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        metadata={"model_rpm_limit": {"gpt-4": 100}},
+    )
+    counter_key = handler.create_rate_limit_keys(
+        "model_per_key", f"{api_key}:gpt-4", "requests"
+    )
+
+    for expected_count in (1, 2):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="",
+        )
+        assert await _counter_value(handler, counter_key) == expected_count
+
+
+def _assemble_team_model_descriptors(handler, user_api_key_dict, data):
+    """
+    Run the two assembly sites the pre-call hook runs, in the same order,
+    without the dedup -- so a test can assert the descriptor population the
+    hook starts from.
+    """
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    handler._add_team_model_rate_limit_descriptor_from_metadata(
+        user_api_key_dict=user_api_key_dict,
+        requested_model=data.get("model"),
+        descriptors=descriptors,
+    )
+    return descriptors
+
+
+def test_team_model_descriptor_population_is_two_before_dedup_one_after_v3():
+    """
+    Assert the descriptor multiset for one request, not just the resulting
+    limit behaviour: the counter the limiter charges must be named exactly
+    once.
+
+    Pins both assembly sites in place. `model_per_team` reaches 2 before the
+    dedup because _create_rate_limit_descriptors and
+    _add_team_model_rate_limit_descriptor_from_metadata each append it from the
+    same team_metadata; the dedup collapses it to 1. Reading 3 means a third
+    append site appeared, and reading 0 means an append site was dropped and
+    the limit is no longer enforced at all -- the quiet direction of the same
+    bug, where nothing 429s and no counter moves.
+    """
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    api_key = "sk-team-population"
+    user_api_key_dict = _team_model_limit_auth(
+        api_key, "team-population", model_rpm_limit={"gpt-4": 10}
+    )
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+
+    assembled = _assemble_team_model_descriptors(handler, user_api_key_dict, data)
+    identity = ("model_per_team", "team-population:gpt-4")
+
+    assert Counter((d["key"], d["value"]) for d in assembled)[identity] == 2, (
+        "Test premise: both assembly sites append the team per-model descriptor; "
+        f"assembled={[(d['key'], d['value']) for d in assembled]}"
+    )
+
+    deduped = Counter(
+        (d["key"], d["value"]) for d in handler._deduplicate_descriptors(assembled)
+    )
+    assert deduped[identity] == 1, f"team per-model counter named {deduped[identity]} times"
+    # The collapse is scoped to repeats. A team `model_rpm_limit` is also the
+    # fallback source for the key-scoped model limit
+    # (`get_key_model_rpm_limit` priority 3), so this request is charged
+    # against two genuinely different counters that read the same metadata --
+    # exactly the shape a dedup must not merge.
+    assert deduped == Counter(
+        {
+            identity: 1,
+            ("model_per_key", f"{hash_token(api_key)}:gpt-4"): 1,
+        }
+    ), f"dedup changed the counter population: {deduped}"
+
+
+def test_deduplicate_descriptors_keeps_first_limit_when_repeats_disagree_v3():
+    """
+    A repeat carrying a different limit must not be resolved silently.
+
+    Both team assembly sites read the same team_metadata today, so repeats are
+    identical; if one ever reads a different source, collapsing them drops a
+    configured limit and the counter under-enforces with no 429 and no signal.
+    The kept limit is the first occurrence -- fixed by the descriptor list
+    rather than by whichever site appended last -- and the disagreement is
+    logged.
+    """
+    from unittest.mock import patch
+
+    from litellm._logging import verbose_proxy_logger
+
+    first = {
+        "key": "model_per_team",
+        "value": "team-diverge:gpt-4",
+        "rate_limit": {"requests_per_unit": 10, "tokens_per_unit": None, "window_size": 60},
+    }
+    second = {
+        "key": "model_per_team",
+        "value": "team-diverge:gpt-4",
+        "rate_limit": {"requests_per_unit": 999, "tokens_per_unit": 500, "window_size": 60},
+    }
+
+    with patch.object(verbose_proxy_logger, "warning") as mock_warning:  # test-quality-ok: the warning call is the observable under test
+        deduped = _PROXY_MaxParallelRequestsHandler._deduplicate_descriptors([first, second])
+
+    assert len(deduped) == 1
+    assert deduped[0]["rate_limit"] == first["rate_limit"]
+    assert mock_warning.call_count == 1, "a discarded, disagreeing limit must be logged"
+
+    # Position, not content, decides: the same pair the other way round keeps
+    # the entry that now comes first.
+    with patch.object(verbose_proxy_logger, "warning"):  # test-quality-ok: the warning call is the observable under test
+        reversed_deduped = _PROXY_MaxParallelRequestsHandler._deduplicate_descriptors(
+            [second, first]
+        )
+    assert reversed_deduped[0]["rate_limit"] == second["rate_limit"]
+
+
+def test_deduplicate_descriptors_stays_quiet_for_identical_repeats_v3():
+    """The team/project repeats this fix collapses are identical, so the
+    divergence warning must not fire on the normal path."""
+    from unittest.mock import patch
+
+    from litellm._logging import verbose_proxy_logger
+
+    limits = {"requests_per_unit": 10, "tokens_per_unit": 100000, "window_size": 60}
+    descriptor = {"key": "model_per_team", "value": "team-quiet:gpt-4", "rate_limit": limits}
+
+    with patch.object(verbose_proxy_logger, "warning") as mock_warning:  # test-quality-ok: the warning call is the observable under test
+        deduped = _PROXY_MaxParallelRequestsHandler._deduplicate_descriptors(
+            [descriptor, dict(descriptor)]
+        )
+
+    assert len(deduped) == 1
+    mock_warning.assert_not_called()
+
+
+def test_team_model_assembly_sites_build_the_same_descriptor_v3():
+    """
+    The two sites that append the team per-model descriptor must build the
+    *same* descriptor, limits included -- not merely one entry after the
+    collapse.
+
+    Cardinality alone cannot say this: `Counter(...) == 1` reads the same
+    whether the two sites agreed or one silently won the collapse, and the case
+    worth failing is the day someone changes one site and not the other. This
+    compares them at the point of divergence instead, so a limit read from a
+    different source fails here rather than being absorbed by the collapse
+    (which keeps the first occurrence and only logs the disagreement).
+    """
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    user_api_key_dict = _team_model_limit_auth(
+        "sk-team-agree",
+        "team-agree",
+        model_rpm_limit={"gpt-4": 10},
+        model_tpm_limit={"gpt-4": 100000},
+    )
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+
+    from_create = [
+        d
+        for d in handler._create_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            rpm_limit_type=None,
+            tpm_limit_type=None,
+            model_has_failures=False,
+        )
+        if d["key"] == "model_per_team"
+    ]
+    from_metadata: List[Any] = []
+    handler._add_team_model_rate_limit_descriptor_from_metadata(
+        user_api_key_dict=user_api_key_dict,
+        requested_model="gpt-4",
+        descriptors=from_metadata,
+    )
+
+    assert len(from_create) == 1, f"_create_rate_limit_descriptors: {from_create}"
+    assert len(from_metadata) == 1, f"_add_team_model_..._from_metadata: {from_metadata}"
+    assert from_create[0] == from_metadata[0], (
+        "the two team per-model assembly sites disagree, so collapsing them "
+        f"silently picks one: {from_create[0]} vs {from_metadata[0]}"
+    )
 
 
 @pytest.mark.asyncio

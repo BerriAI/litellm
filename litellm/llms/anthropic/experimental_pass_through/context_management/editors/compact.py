@@ -147,6 +147,10 @@ class _CreateOrgRateLimitDescriptors(Protocol):
     ) -> "Sequence[RateLimitDescriptor]": ...
 
 
+class _DeduplicateDescriptors(Protocol):
+    def __call__(self, descriptors: "Sequence[RateLimitDescriptor]", /) -> "Sequence[RateLimitDescriptor]": ...
+
+
 class _ShouldRateLimit(Protocol):
     def __call__(
         self,
@@ -480,10 +484,17 @@ async def _check_summary_model_rate_limit(
     user RPM or TPM could still drive an extra summary-model completion per
     allowed ``/v1/messages`` request. This mirrors the read side of
     ``_PROXY_MaxParallelRequestsHandler_v3.async_pre_call_hook`` for the
-    summary model: it builds the same descriptor set and runs the check in
-    ``read_only`` mode so no counter is reserved or incremented — the summary
-    call's actual usage is still charged exactly once by the limiter's
-    post-call success hook (via the propagated ``litellm_metadata``).
+    summary model and runs the check in ``read_only`` mode so no counter is
+    reserved or incremented — the summary call's actual usage is still charged
+    exactly once by the limiter's post-call success hook (via the propagated
+    ``litellm_metadata``).
+
+    The descriptor set is the pre-call hook's minus the project-scoped
+    ITPM/OTPM descriptors: those are reserved (never merely read) by
+    ``_reserve_project_io_tokens_or_raise``, which has no read-only mode, so
+    a summary subrequest is not gated on a project's separate input/output
+    token quotas. Every other counter the pre-call hook would check is
+    checked here.
 
     Returns True (allow) outside the proxy, when the active limiter does not
     expose the read-only descriptor check (legacy limiter), or when the
@@ -512,6 +523,11 @@ async def _check_summary_model_rate_limit(
     create_org_descriptors: Final[_CreateOrgRateLimitDescriptors | None] = getattr(
         limiter, "create_organization_rate_limit_descriptor", None
     )
+    # Absence of this one is not a bail-out: a limiter without the collapse is
+    # checked against the descriptor population as assembled, which is what
+    # this call site did before the collapse existed. It is excluded from the
+    # guard below for that reason.
+    deduplicate_descriptors: Final[_DeduplicateDescriptors | None] = getattr(limiter, "_deduplicate_descriptors", None)
     if (
         limiter is None
         or should_rate_limit_check is None
@@ -542,7 +558,22 @@ async def _check_summary_model_rate_limit(
             requested_model=summary_model,
             descriptors=base_descriptors,
         )
-        descriptors: Final = (*base_descriptors, *create_org_descriptors(user_api_key_auth, summary_model))
+        assembled_descriptors: Final = (*base_descriptors, *create_org_descriptors(user_api_key_auth, summary_model))
+        # Same collapse the proxy's pre-call hook applies. The team per-model
+        # limit is appended by two assembly sites -- once inside
+        # ``_create_rate_limit_descriptors`` and once by
+        # ``_add_team_model_rate_limit_descriptor_from_metadata``, both reading
+        # ``team_metadata`` -- and a repeated (key, value) pair is one counter
+        # charged twice. The repeat is harmless *here* only because of the
+        # caller: ``read_only=True`` below reads the pair twice and increments
+        # nothing. That is a property of this call site, not of the code it
+        # calls, and it is one refactor away from being false, so collapse the
+        # population rather than relying on it.
+        descriptors: Final = (
+            deduplicate_descriptors(assembled_descriptors)
+            if deduplicate_descriptors is not None
+            else assembled_descriptors
+        )
         if not descriptors:
             return True
         parent_otel_span: Final[object] = getattr(user_api_key_auth, "parent_otel_span", None)
