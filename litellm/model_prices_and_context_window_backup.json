@@ -3228,7 +3228,7 @@
         ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": false,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -3249,7 +3249,7 @@
         ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -3270,7 +3270,7 @@
         ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -3354,7 +3354,7 @@
         ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -3375,7 +3375,7 @@
         ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -3480,7 +3480,7 @@
         ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": false,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -3503,7 +3503,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/gemini-3.1-flash-lite": {
         "cache_creation_input_token_cost": 6.7113e-08,
@@ -3545,7 +3545,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/gemini-3.1-pro": {
         "cache_creation_input_token_cost": 1.7e-06,
@@ -3645,7 +3645,7 @@
         ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": false,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
