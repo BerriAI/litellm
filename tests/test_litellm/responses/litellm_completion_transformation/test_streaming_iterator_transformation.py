@@ -752,6 +752,19 @@ def test_completed_event_restores_usage_hidden_by_stream_options_none():
     assert completed.response.usage.output_tokens == 5
 
 
+def test_completed_event_reports_why_the_stream_was_cut_short():
+    iterator = _build_iterator([_chunk("partial answ"), _chunk("", finish_reason="length")])
+
+    events = list(iterator)
+
+    completed = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.response.status == "incomplete"
+    assert completed.response.incomplete_details is not None
+    assert completed.response.incomplete_details.reason == "max_output_tokens"
+
+
 def test_object_tool_call_arguments_stream_as_valid_json():
     """A provider that sends decoded object arguments must still stream valid JSON.
 
