@@ -181,8 +181,8 @@ async def test_cold_regime_is_one_mget_one_query_and_the_getters_never_touch_io_
     assert sets == sorted(
         [
             f"SET {TEAM_ID}_{USER_ID} ttl=5",
-            f"SET org_id:{ORG_ID} ttl=5",
-            f"SET org_id:{ORG_ID}:with_budget ttl=5",
+            f"SET org_id:{ORG_ID} ttl=60",
+            f"SET org_id:{ORG_ID}:with_budget ttl=60",
             f"SET {USER_ID} ttl=60",
             f"SET team_id:{TEAM_ID} ttl=60",
             f"SET team_membership:{USER_ID}:{TEAM_ID} ttl=None",
@@ -238,6 +238,21 @@ async def test_hot_regime_costs_nothing():
 
     assert redis.round_trips == 0
     assert prisma.db.mock_calls == []
+
+
+def test_org_json_columns_that_arrive_as_strings_still_validate():
+    org = LiteLLM_OrganizationTable.model_validate({**ORG_ROW, "metadata": "{}", "model_spend": "{}"})
+    assert org.organization_id == ORG_ID
+    assert org.metadata == {}
+    assert org.model_spend == {}
+
+
+@pytest.mark.asyncio
+async def test_org_row_that_arrives_as_a_json_string_is_written_to_cache():
+    prisma = _prisma({**ALL_ROWS, "organization_row": json.dumps(ORG_ROW)})
+    cache = _cache(None)
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
+    assert cache.in_memory_cache.get_cache(key=f"org_id:{ORG_ID}") is not None
 
 
 @pytest.mark.asyncio
