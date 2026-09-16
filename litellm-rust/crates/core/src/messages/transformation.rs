@@ -1,6 +1,5 @@
-use crate::error::CoreResult;
-
 use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
+use crate::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {
@@ -23,16 +22,20 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn auth_strategy(&self) -> MessagesAuthStrategy {
         MessagesAuthStrategy::Header("x-api-key")
+    }
+
+    fn accepts_bearer_auth(&self) -> bool {
+        false
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -42,18 +45,20 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         ]
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_request(
         &self,
         request: AnthropicMessagesRequest,
-    ) -> CoreResult<AnthropicMessagesRequest> {
+    ) -> Result<AnthropicMessagesRequest, Error> {
         Ok(request)
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_response(
         &self,
         _model: &str,
         response: AnthropicMessagesResponse,
-    ) -> CoreResult<AnthropicMessagesResponse> {
+    ) -> Result<AnthropicMessagesResponse, Error> {
         Ok(response)
     }
 }

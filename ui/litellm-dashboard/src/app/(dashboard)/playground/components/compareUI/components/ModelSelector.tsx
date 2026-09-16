@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
-import { Select } from "antd";
-import { TextInput } from "@tremor/react";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Input } from "@/components/ui/input";
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
@@ -22,7 +22,8 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
 
   const selectValue = isAddingCustom ? "__custom__" : value || undefined;
 
-  const handleSelectChange = (selected: string) => {
+  const handleSelectChange = (selected: string | null) => {
+    if (selected === null) return;
     if (selected === "__custom__") {
       setIsAddingCustom(true);
       if (value && !options.includes(value)) {
@@ -50,29 +51,25 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
   };
   return (
     <div className="flex-1 min-w-0">
-      <Select<string>
-        value={selectValue}
-        onChange={handleSelectChange}
+      <SearchSelect
+        options={[
+          ...displayOptions.map((model) => ({ label: model, value: model })),
+          { label: "+ Add custom model", value: "__custom__" },
+        ]}
+        value={selectValue ?? ""}
+        onValueChange={handleSelectChange}
         disabled={disabled}
-        loading={loading}
         placeholder={loading ? "Loading models..." : "Select a model"}
-        className="w-full rounded-md"
-        showSearch
-        optionFilterProp="children"
-      >
-        {displayOptions.map((model) => (
-          <Select.Option key={model} value={model}>
-            {model}
-          </Select.Option>
-        ))}
-        <Select.Option value="__custom__">+ Add custom model</Select.Option>
-      </Select>
+        emptyText="No models found"
+        allowClear={false}
+        className="rounded-md"
+      />
       {isAddingCustom && (
-        <TextInput
+        <Input
           className="mt-2"
           placeholder="Custom Model Name (Enter to add)"
           value={customValue}
-          onValueChange={setCustomValue}
+          onChange={(e) => setCustomValue(e.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();

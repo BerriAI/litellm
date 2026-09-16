@@ -13,8 +13,10 @@ from litellm.proxy.policy_engine.policy_registry import (
     get_policy_registry,
 )
 from litellm.types.proxy.policy_engine import (
+    Policy,
     PolicyCreateRequest,
     PolicyDBResponse,
+    PolicyGuardrails,
     PolicyUpdateRequest,
 )
 
@@ -155,7 +157,7 @@ class TestUpdatePolicyDraftOnly:
         prod_row = _make_row(policy_id="pid-1", version_status="production")
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=prod_row)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Error updating policy in DB: Only draft versions can be') as exc_info:
             await registry.update_policy_in_db(
                 policy_id="pid-1",
                 policy_request=PolicyUpdateRequest(description="new"),
@@ -339,7 +341,7 @@ class TestUpdateVersionStatus:
         draft = _make_row(policy_id="d-1", version_status="draft")
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=draft)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Error updating version status: Cannot promote draft') as exc_info:
             await registry.update_version_status(
                 policy_id="d-1",
                 new_status="production",
@@ -450,3 +452,182 @@ class TestGetPolicyRegistrySingleton:
         a = get_policy_registry()
         b = get_policy_registry()
         assert a is b
+
+
+def _prisma_with_policy_rows(production_rows, non_production_rows=None):
+    prisma = MagicMock()
+    prisma.db.litellm_policytable.find_many = AsyncMock(side_effect=[production_rows, non_production_rows or []])
+    return prisma
+
+
+class TestConfigPoliciesPreservedAcrossDbSync:
+    """Config-defined policies must survive sync_policies_from_db (regression for issue #35255)."""
+
+    @pytest.mark.asyncio
+    async def test_sync_with_empty_db_preserves_config_policies(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"config-policy": {"description": "from config", "guardrails": {"add": ["tooling"]}}})
+
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
+
+        assert registry.has_policy("config-policy")
+        policy = registry.get_policy("config-policy")
+        assert policy is not None
+        assert policy.guardrails.add == ["tooling"]
+        assert registry.get_source("config-policy") == "config"
+
+    @pytest.mark.asyncio
+    async def test_sync_merges_db_policies_with_config_policies(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
+        db_row = _make_row(policy_id="db-1", policy_name="db-policy", guardrails_add=["db-guard"])
+
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([db_row]))
+
+        assert registry.has_policy("config-policy")
+        assert registry.has_policy("db-policy")
+        assert registry.get_source("config-policy") == "config"
+        assert registry.get_source("db-policy") == "db"
+
+    @pytest.mark.asyncio
+    async def test_db_wins_on_policy_name_conflict(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
+        db_row = _make_row(policy_id="db-1", policy_name="shared-name", guardrails_add=["db-guard"])
+
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([db_row]))
+
+        policy = registry.get_policy("shared-name")
+        assert policy is not None
+        assert policy.guardrails.add == ["db-guard"]
+        assert registry.get_source("shared-name") == "db"
+
+    @pytest.mark.asyncio
+    async def test_config_policy_restored_after_conflicting_db_row_deleted(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
+        db_row = _make_row(policy_id="db-1", policy_name="shared-name", guardrails_add=["db-guard"])
+
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([db_row]))
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
+
+        policy = registry.get_policy("shared-name")
+        assert policy is not None
+        assert policy.guardrails.add == ["config-guard"]
+        assert registry.get_source("shared-name") == "config"
+
+    @pytest.mark.asyncio
+    async def test_config_policy_resolves_guardrails_after_sync(self):
+        from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+
+        registry = PolicyRegistry()
+        registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
+
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
+
+        resolved = PolicyResolver.resolve_policy_guardrails(
+            policy_name="config-policy",
+            policies=registry.get_all_policies(),
+            context=None,
+        )
+        assert resolved.guardrails == ["tooling"]
+
+    @pytest.mark.asyncio
+    async def test_add_policy_with_config_source_survives_sync(self):
+        registry = PolicyRegistry()
+        registry.add_policy(
+            "late-config-policy",
+            Policy(guardrails=PolicyGuardrails(add=["tooling"])),
+            source="config",
+        )
+
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
+
+        assert registry.has_policy("late-config-policy")
+        assert registry.get_source("late-config-policy") == "config"
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_config_snapshot_so_sync_does_not_resurrect(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
+
+        registry.clear()
+        await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
+
+        assert not registry.has_policy("config-policy")
+        assert registry.get_source("config-policy") is None
+
+
+class TestRemovePolicyRestoresConfigFallback:
+    """Deleting a same-named DB override must re-activate the config policy immediately, not at the next sync."""
+
+    def test_remove_policy_restores_config_version_immediately(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
+        registry.add_policy("shared-name", Policy(guardrails=PolicyGuardrails(add=["db-guard"])), source="db")
+
+        assert registry.remove_policy("shared-name") is True
+
+        policy = registry.get_policy("shared-name")
+        assert policy is not None
+        assert policy.guardrails.add == ["config-guard"]
+        assert registry.get_source("shared-name") == "config"
+
+    def test_remove_policy_without_config_fallback_removes_entirely(self):
+        registry = PolicyRegistry()
+        registry.add_policy("db-only", Policy(guardrails=PolicyGuardrails(add=["db-guard"])))
+
+        assert registry.remove_policy("db-only") is True
+
+        assert not registry.has_policy("db-only")
+        assert registry.get_source("db-only") is None
+
+    def test_remove_missing_policy_returns_false(self):
+        registry = PolicyRegistry()
+
+        assert registry.remove_policy("missing") is False
+
+    @pytest.mark.asyncio
+    async def test_delete_production_override_reactivates_config_policy_and_says_so(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
+        registry.add_policy("shared-name", Policy(guardrails=PolicyGuardrails(add=["db-guard"])), source="db")
+        prisma = MagicMock()
+        prod_row = _make_row(policy_id="prod-1", policy_name="shared-name", version_status="production")
+        prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=prod_row)
+        prisma.db.litellm_policytable.delete = AsyncMock()
+
+        result = await registry.delete_policy_from_db(policy_id="prod-1", prisma_client=prisma)
+
+        assert "config" in result["warning"]
+        policy = registry.get_policy("shared-name")
+        assert policy is not None
+        assert policy.guardrails.add == ["config-guard"]
+        assert registry.get_source("shared-name") == "config"
+
+    @pytest.mark.asyncio
+    async def test_delete_all_versions_reactivates_config_policy(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"shared-name": {"guardrails": {"add": ["config-guard"]}}})
+        registry.add_policy("shared-name", Policy(guardrails=PolicyGuardrails(add=["db-guard"])), source="db")
+        prisma = MagicMock()
+        prisma.db.litellm_policytable.delete_many = AsyncMock()
+
+        result = await registry.delete_all_versions(policy_name="shared-name", prisma_client=prisma)
+
+        assert registry.get_source("shared-name") == "config"
+        policy = registry.get_policy("shared-name")
+        assert policy is not None
+        assert policy.guardrails.add == ["config-guard"]
+        assert "config" in result["warning"]
+
+    async def test_delete_all_versions_without_config_twin_has_no_warning(self):
+        registry = PolicyRegistry()
+        registry.add_policy("db-only", Policy(guardrails=PolicyGuardrails(add=["db-guard"])), source="db")
+        prisma = MagicMock()
+        prisma.db.litellm_policytable.delete_many = AsyncMock()
+
+        result = await registry.delete_all_versions(policy_name="db-only", prisma_client=prisma)
+
+        assert registry.get_policy("db-only") is None
+        assert "warning" not in result

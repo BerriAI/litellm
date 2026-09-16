@@ -1,21 +1,16 @@
 import json
-import os
-import sys
+import logging
 from typing import Any, Dict, List, Optional, Set, Union
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import asyncio
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisPipelineIncrementOperation
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, RedisPipelineIncrementOperation
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 
 
@@ -152,3 +147,18 @@ async def test_cache_keys_management(base_strategy):
     # Test resetting cache keys
     base_strategy.reset_in_memory_keys_to_update()
     assert len(base_strategy.get_in_memory_keys_to_update()) == 0
+
+
+@pytest.mark.asyncio
+async def test_push_refused_by_the_open_circuit_breaker_is_not_logged_as_an_error(base_strategy, mock_dual_cache, caplog):
+    """The sync loop pushes every 100 ms under usage-based routing, so an open breaker must not add an error line per cycle."""
+    mock_dual_cache.redis_cache.async_increment_pipeline.side_effect = RedisCircuitBreakerOpenError(
+        "Redis circuit breaker is open - skipping async_increment_pipeline"
+    )
+    base_strategy.redis_increment_operation_queue = [{"key": "k", "increment_value": 1.0, "ttl": 60}]
+
+    with caplog.at_level(logging.ERROR):
+        await base_strategy._push_in_memory_increments_to_redis()
+
+    assert caplog.records == []
+    assert base_strategy.redis_increment_operation_queue == []

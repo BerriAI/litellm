@@ -7,21 +7,27 @@ Phoenix + any other OpenInference-aware backend simultaneously.
 """
 
 import json
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_MESSAGE_ATTRS_PER_SPAN,
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
     drop_none,
     json_if,
     message_content,
     output_messages,
+    tool_definition_attrs,
 )
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
     ToolDefinition,
 )
+
+_MAX_INDEXED_MESSAGES: Final = MAX_MESSAGE_ATTRS_PER_SPAN // 2
 
 
 class OpenInferenceMapper:
@@ -70,6 +76,9 @@ class OpenInferenceMapper:
         ),
     }
 
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
@@ -77,29 +86,45 @@ class OpenInferenceMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
+        outputs: Final = output_messages(data)
+        indexed_in, indexed_out = self._indexed_split(len(data.messages_in), len(outputs))
         return {
-            **collect(cls._LLM_CALL_ATTRS, data),
-            **collect(cls._BLOB_ATTRS, data),
-            **cls._messages("llm.input_messages", "input.value", data.messages_in),
-            **cls._messages("llm.output_messages", "output.value", output_messages(data)),
-            **cls._tools(data),
+            **collect(self._LLM_CALL_ATTRS, data),
+            **collect(self._BLOB_ATTRS, data),
+            **self._messages(
+                "llm.input_messages",
+                "input.value",
+                data.messages_in,
+                self._prompt_positions(len(data.messages_in), indexed_in),
+            ),
+            **self._messages("llm.output_messages", "output.value", outputs, range(indexed_out)),
+            **self._tools(data),
         }
 
     @staticmethod
-    def _messages(prefix: str, value_key: str, messages: Sequence[object]) -> AttributeMap:
-        """Per-message ``{prefix}.{idx}.message.*`` keys + the ``value_key`` blob."""
-        parsed = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
-        attrs = drop_none(
+    def _indexed_split(inputs: int, outputs: int) -> tuple[int, int]:
+        """Prompt and response share one allowance; the response is reserved at least half of it."""
+        indexed_out: Final = min(outputs, max(_MAX_INDEXED_MESSAGES // 2, _MAX_INDEXED_MESSAGES - inputs))
+        return _MAX_INDEXED_MESSAGES - indexed_out, indexed_out
+
+    @staticmethod
+    def _prompt_positions(total: int, indexed: int) -> tuple[int, ...]:
+        """Prompt messages that get per-index attributes: message 0 and the most recent turns."""
+        if total <= indexed:
+            return tuple(range(total))
+        return (0, *range(total - indexed + 1, total))
+
+    @staticmethod
+    def _messages(prefix: str, value_key: str, messages: Sequence[object], positions: Sequence[int]) -> AttributeMap:
+        """``{prefix}.{idx}.message.*`` keys for the messages at ``positions`` + the ``value_key`` blob of all."""
+        parsed: Final = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
+        attrs: Final = drop_none(
             {
                 key: value
-                for idx, (role, content) in enumerate(parsed)
+                for idx, (role, content) in ((idx, parsed[idx]) for idx in positions)
                 for key, value in (
-                    (
-                        f"{prefix}.{idx}.message.role",
-                        role if isinstance(role, str) else None,
-                    ),
+                    (f"{prefix}.{idx}.message.role", role if isinstance(role, str) else None),
                     (f"{prefix}.{idx}.message.content", content),
                 )
             }
@@ -108,12 +133,10 @@ class OpenInferenceMapper:
             attrs[value_key] = json.dumps([{"role": role, "content": content} for role, content in parsed])
         return attrs
 
-    @classmethod
-    def _tools(cls, data: LLMCallSpanData) -> AttributeMap:
-        return drop_none(
-            {
-                f"llm.tools.{idx}.{suffix}": extract(tool)
-                for idx, tool in enumerate(data.tools)
-                for suffix, extract in cls._TOOL_ATTRS.items()
-            }
+    def _tools(self, data: LLMCallSpanData) -> AttributeMap:
+        return tool_definition_attrs(
+            lambda idx, suffix: f"llm.tools.{idx}.{suffix}",
+            data.tools,
+            self._TOOL_ATTRS,
+            self._tool_attr_budget,
         )
