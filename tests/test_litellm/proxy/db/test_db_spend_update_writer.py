@@ -1695,13 +1695,12 @@ async def test_commit_spend_updates_to_db_increments_key_total_spend_alongside_s
         "agent_list_transactions": {},
     }
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
-        await db_writer._commit_spend_updates_to_db(
-            prisma_client=mock_prisma_client,
-            n_retry_times=0,
-            proxy_logging_obj=MagicMock(),
-            db_spend_update_transactions=db_spend_update_transactions,
-        )
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+        db_spend_update_transactions=db_spend_update_transactions,
+    )
 
     calls = mock_batcher.litellm_verificationtoken.update_many.call_args_list
     assert [c.kwargs["where"] for c in calls] == [{"token": "hashed_token_abc"}, {"token": "hashed_token_def"}]
