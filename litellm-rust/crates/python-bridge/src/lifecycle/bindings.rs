@@ -42,9 +42,11 @@ pub(super) fn finalize(
     start: &Py<PyAny>,
     end: &Option<Py<PyAny>>,
 ) -> PyResult<()> {
-    py.import("litellm.rust_bridge.lifecycle")?
-        .getattr("finalize")?
-        .call1((response, logger.object(py), kwargs, start, end))?;
+    let model = kwargs.bind(py).get_item("model")?;
+    let model = model.filter(|value| value.is_instance_of::<pyo3::types::PyString>());
+    py.import("litellm.litellm_core_utils.llm_response_utils.response_metadata")?
+        .getattr("update_response_metadata")?
+        .call1((response, logger.object(py), model, kwargs, start, end))?;
     Ok(())
 }
 

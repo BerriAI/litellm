@@ -1,17 +1,8 @@
 from __future__ import annotations
 
-import datetime
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
-from typing import (
-    TYPE_CHECKING,
-    Final,
-    Protocol,
-    cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
-)
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging
+from typing import Final, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,18 +42,6 @@ async def drive(execution: Execution) -> object:
         execution.close()
 
 
-class MetadataUpdater(Protocol):
-    def __call__(
-        self,
-        result: object,
-        logging_obj: Logging,
-        model: str | None,
-        kwargs: dict[str, object],
-        start_time: datetime.datetime,
-        end_time: datetime.datetime,
-    ) -> None: ...
-
-
 def check_limits(kwargs: Mapping[str, object]) -> None:
     import litellm
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
@@ -72,19 +51,3 @@ def check_limits(kwargs: Mapping[str, object]) -> None:
         raise litellm.BudgetExceededError(current_cost=current_cost, max_budget=litellm.max_budget)
     if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
         raise RuntimeError("Max retries per request hit!")
-
-
-def finalize(
-    response: object,
-    logger: Logging,
-    kwargs: dict[str, object],
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
-) -> None:
-    from litellm.litellm_core_utils.llm_response_utils import response_metadata
-
-    model: Final = kwargs.get("model")
-    update: Final = cast(  # cast-ok: legacy metadata function accepts concrete kwargs
-        MetadataUpdater, response_metadata.update_response_metadata
-    )
-    update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)

@@ -647,3 +647,125 @@ pub(super) fn family_targets(
     );
     Ok((targets, ordered))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::{PyDict, PyList};
+
+    fn fixture(py: Python<'_>) -> Bound<'_, PyDict> {
+        let locals = PyDict::new(py);
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import sys, types
+for name in ("litellm", "litellm.integrations", "litellm.integrations.custom_logger"):
+    sys.modules.setdefault(name, types.ModuleType(name))
+class CustomLogger: pass
+sys.modules["litellm.integrations.custom_logger"].CustomLogger = CustomLogger
+sys.modules["litellm"]._known_custom_logger_compatible_callbacks = []
+class Logger: pass
+logger = Logger()
+target = CustomLogger()
+"#
+            ),
+            Some(&locals),
+            Some(&locals),
+        )
+        .unwrap();
+        locals
+    }
+
+    fn runner(py: Python<'_>, locals: &Bound<'_, PyDict>, family: CallbackFamily) -> Runner {
+        let logger = locals.get_item("logger").unwrap().unwrap();
+        let target = locals.get_item("target").unwrap().unwrap();
+        let list = PyList::new(py, [&target]).unwrap().into_any();
+        let (targets, ids) = Targets::read(py, &[list]).unwrap();
+        let ids: Vec<CallbackId> = ids.into_iter().flatten().collect();
+        Runner {
+            cursor: DispatchCursor::start(family, ids.clone(), false, false),
+            job: Job {
+                logger: logger.extract().unwrap(),
+                targets,
+                ids,
+                family,
+                response: Some(target.clone().unbind()),
+                error: None,
+                start: py.None(),
+                end: py.None(),
+                stream: false,
+            },
+            result: Some(target.unbind()),
+            formatted: None,
+            pending: None,
+        }
+    }
+
+    fn assert_collectable(py: Python<'_>, locals: &Bound<'_, PyDict>, handle: Py<PyAny>) {
+        locals.set_item("handle", handle).unwrap();
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import gc
+import weakref
+target.handle = handle
+reference = weakref.ref(target)
+del logger, target, handle
+gc.collect()
+assert reference() is None, "cycle through the retained target was not collected"
+"#
+            ),
+            Some(locals),
+            Some(locals),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn worker_job_collects_cycles_through_logger_targets_and_response() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = fixture(py);
+            let runner = runner(py, &locals, CallbackFamily::SyncSuccess);
+            let handle = Py::new(py, WorkerJob::new(runner)).unwrap().into_any();
+            assert_collectable(py, &locals, handle);
+        });
+    }
+
+    #[test]
+    fn deferred_success_collects_cycles_and_close_is_idempotent() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = fixture(py);
+            let runner = runner(py, &locals, CallbackFamily::AsyncSuccess);
+            let deferred = Py::new(
+                py,
+                super::super::DeferredSuccess {
+                    runner: Some(runner),
+                },
+            )
+            .unwrap();
+            assert_collectable(py, &locals, deferred.into_any());
+        });
+    }
+
+    #[test]
+    fn deferred_success_releases_at_most_once_and_close_prevents_release() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = fixture(py);
+            let runner = runner(py, &locals, CallbackFamily::AsyncSuccess);
+            let deferred = Py::new(
+                py,
+                super::super::DeferredSuccess {
+                    runner: Some(runner),
+                },
+            )
+            .unwrap();
+            deferred.call_method0(py, "close").unwrap();
+            deferred.call_method0(py, "close").unwrap();
+            deferred.call0(py).unwrap();
+            assert!(deferred.borrow(py).runner.is_none());
+        });
+    }
+}
