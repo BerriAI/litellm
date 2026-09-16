@@ -9,6 +9,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -26,8 +27,11 @@ interface BudgetSettingsPageProps {
   accessToken: string | null;
 }
 
+const BUDGET_TABS = ["budgets", "examples"] as const;
+
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const syntaxTheme = useSyntaxTheme(prism);
+  const [tab, setTab] = useUrlTab(BUDGET_TABS, "budgets");
   const [isCreateModelVisible, setIsCreateModelVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
@@ -79,7 +83,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
   return (
     <main className="flex h-full flex-col p-8">
-      <Tabs defaultValue="budgets" className="min-h-0 flex-1 gap-6">
+      <Tabs value={tab} onValueChange={setTab} className="min-h-0 flex-1 gap-6">
         <PageHeader
           icon={<Wallet />}
           title="Budgets"

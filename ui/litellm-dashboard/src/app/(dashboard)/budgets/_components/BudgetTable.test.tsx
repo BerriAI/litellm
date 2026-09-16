@@ -67,6 +67,7 @@ describe("BudgetTable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     testQueryClient.clear();
+    localStorage.clear();
   });
 
   it("should display budget information", () => {
@@ -82,6 +83,27 @@ describe("BudgetTable", () => {
     const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
     expect(headers).toEqual(expect.arrayContaining(["Budget ID", "Max Budget", "TPM", "RPM"]));
     expect(headers).not.toContain("Reset");
+    expect(headers).not.toContain("Created");
+  });
+
+  it("should reopen on the columns the user chose last time", () => {
+    localStorage.setItem("litellm_table_columns_budgets", JSON.stringify({ created_at: true, tpd_limit: false }));
+    renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
+    expect(headers).toContain("Created");
+    expect(headers).not.toContain("TPD (batch)");
+    expect(headers).not.toContain("Reset");
+  });
+
+  it("should remember a column the user turns on across remounts", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    await showColumn(user, "budget_duration");
+    unmount();
+
+    renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
+    expect(headers).toContain("Reset");
     expect(headers).not.toContain("Created");
   });
 
@@ -205,6 +227,28 @@ describe("BudgetTable", () => {
     expect(screen.getByText("You do not have access to budgets")).toBeInTheDocument();
     expect(screen.queryByText("No budgets yet")).not.toBeInTheDocument();
     expect(container.querySelector(".lucide-shield-alert")).not.toBeNull();
+  });
+
+  it("should keep a restored page while the list request is failing", () => {
+    const onPaginationChange = vi.fn();
+    const error = new ApiError("budget store unavailable", 500, null);
+    const failing: Partial<ResourceListResult<budgetItem>> = {
+      rows: [],
+      rowCount: 0,
+      error,
+      pagination: { pageIndex: 4, pageSize: 50 },
+      onPaginationChange,
+    };
+    const list = makeList(failing);
+    renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
+    expect(onPaginationChange).not.toHaveBeenCalled();
+  });
+
+  it("should pull a restored page back to the last page once the count is known", () => {
+    const onPaginationChange = vi.fn();
+    const list = makeList({ rowCount: 60, pagination: { pageIndex: 4, pageSize: 50 }, onPaginationChange });
+    renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
+    expect(onPaginationChange).toHaveBeenCalledWith({ pageIndex: 1, pageSize: 50 });
   });
 
   it("should surface the problem detail for a non-403 failure", () => {
