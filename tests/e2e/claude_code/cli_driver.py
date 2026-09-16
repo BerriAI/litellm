@@ -132,6 +132,57 @@ def _make_isolated_home() -> str:
     return tempfile.mkdtemp(prefix="claude-cli-home-")
 
 
+_FIXED_CLI_USER_ID = "0" * 64
+_FIXED_CLI_SESSION_ID = "00000000-0000-4000-8000-000000000000"
+
+
+def _seed_cli_identity(config_dir: str) -> None:
+    """Pin the device id the CLI would otherwise mint per config directory.
+
+    It mints 32 random bytes on first run, writes them to `.claude.json` as
+    `userID`, and sends them in `metadata.user_id` forever after, so the value
+    is stable for exactly as long as that file lives. Pinning it, and the
+    session id passed beside it, costs nothing: both feed abuse detection
+    rather than quota, caching or continuity."""
+    path = os.path.join(config_dir, ".claude.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            if json.load(handle).get("userID") == _FIXED_CLI_USER_ID:
+                return
+    except (OSError, ValueError):
+        pass
+    staged = f"{path}.{os.getpid()}"
+    with open(staged, "w", encoding="utf-8") as handle:
+        json.dump({"userID": _FIXED_CLI_USER_ID}, handle)
+    os.replace(staged, path)
+
+
+def _stable_cli_state() -> Tuple[str, str]:
+    """Config directory and working directory for the CLI, at fixed paths.
+
+    Both reach the request body. The memory directory the system prompt
+    names is `$CLAUDE_CONFIG_DIR/projects/<cwd slug>/memory`, and a working
+    directory inside a git repository also contributes its branch and recent
+    commits. So a per-invocation config directory rewrites every body, and
+    inheriting the checkout rewrites every body once per candidate, which is
+    why the shared provider cache could never serve a Claude Code cell.
+    Pinning both makes the bodies repeatable across builds.
+
+    This narrows what survives rather than widening it: HOME stays fresh and
+    empty per invocation, so the isolation `_make_isolated_home` describes is
+    unchanged, and the CLI's own state no longer outlives the pod either. The
+    working directory is deliberately not the checkout, so a model-directed
+    `Read` sees an empty directory instead of the repository.
+    """
+    root = os.path.join(tempfile.gettempdir(), f"litellm-e2e-claude-{os.getuid()}")
+    config_dir = os.path.join(root, "config")
+    workspace = os.path.join(root, "workspace")
+    for path in (root, config_dir, workspace):
+        os.makedirs(path, mode=0o700, exist_ok=True)
+    _seed_cli_identity(config_dir)
+    return config_dir, workspace
+
+
 class ClaudeCLIError(RuntimeError):
     """Raised when the `claude` CLI cannot be invoked or returns a fatal error."""
 
@@ -222,6 +273,9 @@ def run_claude(
         "--verbose",
         "--model",
         model,
+        "--session-id",
+        _FIXED_CLI_SESSION_ID,
+        "--no-session-persistence",
     ]
     if extra_args:
         cmd.extend(extra_args)
@@ -244,6 +298,8 @@ def run_claude(
     # regardless of how the subprocess exits.
     isolated_home = _make_isolated_home()
     env["HOME"] = isolated_home
+    config_dir, workspace = _stable_cli_state()
+    env["CLAUDE_CONFIG_DIR"] = config_dir
     if extra_env:
         env.update(extra_env)
 
@@ -262,6 +318,7 @@ def run_claude(
             completed = run_fn(
                 cmd,
                 env=env,
+                cwd=workspace,
                 input=stdin_input,
                 capture_output=True,
                 text=True,
