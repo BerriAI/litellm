@@ -744,7 +744,8 @@ def _count_effective_tokens(
             messages=cast(
                 "list[AllAnthropicPassThroughMessageValues]",
                 messages_without_compaction,
-            )
+            ),
+            preserve_midturn_system=True,
         )
     except Exception as e:
         verbose_logger.debug(
@@ -899,7 +900,8 @@ def _build_summary_messages(
             messages=cast(
                 "list[AllAnthropicPassThroughMessageValues]",
                 stripped,
-            )
+            ),
+            preserve_midturn_system=True,
         )
     except Exception as e:
         verbose_logger.warning(
