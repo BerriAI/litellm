@@ -1,7 +1,6 @@
 use super::super::OcrAdapter;
 use super::validate_destination;
-use crate::Error;
-use crate::auth::vertex::{self, VertexConfig};
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::mistral::{self, MistralOcrParams, MistralOcrResponse};
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
@@ -12,6 +11,7 @@ use crate::ocr::prepare::{
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
+use litellm_auth_gcp::{self as vertex, VertexConfig};
 const DEFAULT_LOCATION: &str = "us-central1";
 
 #[derive(Clone, Debug)]

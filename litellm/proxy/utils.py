@@ -1269,7 +1269,12 @@ class ProxyLogging:
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
-            "metadata": {"headers": kwargs.get("headers") or {}},
+            "metadata": {
+                "headers": kwargs.get("headers") or {},
+                "user_api_key_user_id": kwargs.get("user_api_key_user_id"),
+                "user_api_key_team_id": kwargs.get("user_api_key_team_id"),
+                "user_api_key_end_user_id": kwargs.get("user_api_key_end_user_id"),
+            },
         }
         user_api_key_auth: Final = kwargs.get("user_api_key_auth")
         if isinstance(user_api_key_auth, UserAPIKeyAuth):
@@ -2664,34 +2669,15 @@ class ProxyLogging:
                     user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(user_api_key_dict)
                 else:
                     user_api_key_auth_dict = user_api_key_dict
-                # Add task to list for parallel execution
-                if (
-                    "apply_guardrail" in type(callback).__dict__
-                    and not callback.use_native_lifecycle_hooks
-                    and user_api_key_dict is not None
-                    and not getattr(callback, "use_native_during_call_hook", False)
-                ):
-                    data["guardrail_to_apply"] = callback
-                    guardrail_task = self._run_guardrail_with_metrics(
-                        callback,
-                        unified_guardrail.async_moderation_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            call_type=call_type,
-                        ),
-                        "during_call",
+                guardrail_tasks.append(
+                    self._run_during_call_guardrail(
+                        callback=callback,
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        user_api_key_auth_dict=user_api_key_auth_dict,
+                        call_type=call_type,
                     )
-                else:
-                    guardrail_task = self._run_guardrail_with_metrics(
-                        callback,
-                        callback.async_moderation_hook(
-                            data=data,
-                            user_api_key_dict=user_api_key_auth_dict,
-                            call_type=call_type,
-                        ),
-                        "during_call",
-                    )
-                guardrail_tasks.append(guardrail_task)
+                )
 
         # Step 2: Run all guardrail tasks in parallel
         if guardrail_tasks:
@@ -2702,6 +2688,41 @@ class ProxyLogging:
                 raise e
 
         return data
+
+    async def _run_during_call_guardrail(
+        self,
+        callback: CustomGuardrail,
+        data: dict[str, object],  # mutable-ok: request payload dict, guardrail_to_apply is written in place
+        user_api_key_dict: UserAPIKeyAuth | None,
+        user_api_key_auth_dict: UserAPIKeyAuth | dict[str, object] | None,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        if (
+            "apply_guardrail" in type(callback).__dict__
+            and not callback.use_native_lifecycle_hooks
+            and user_api_key_dict is not None
+            and not callback.use_native_during_call_hook
+        ):
+            data["guardrail_to_apply"] = callback
+            await self._run_guardrail_with_metrics(
+                callback,
+                unified_guardrail.async_moderation_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    call_type=call_type,
+                ),
+                "during_call",
+            )
+            return
+        await self._run_guardrail_with_metrics(
+            callback,
+            callback.async_moderation_hook(
+                data=data,
+                user_api_key_dict=user_api_key_auth_dict,
+                call_type=call_type,
+            ),
+            "during_call",
+        )
 
     async def failed_tracking_alert(
         self,
@@ -4319,6 +4340,7 @@ class PrismaClient:
                             v.*,
                             t.spend AS team_spend,
                             t.max_budget AS team_max_budget,
+                            t.model_max_budget AS team_model_max_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.tpd_limit AS team_tpd_limit
@@ -4758,6 +4780,7 @@ class PrismaClient:
                             t.spend AS team_spend, 
                             t.max_budget AS team_max_budget,
                             t.soft_budget AS team_soft_budget,
+                            t.model_max_budget AS team_model_max_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.tpd_limit AS team_tpd_limit,
