@@ -526,9 +526,12 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "enable_tag_filtering",
         ]
 
-        # Merge override settings into data (only if not already set in request)
+        # Merge override settings into data (only if not already set in request).
+        # A null override means "not configured" and must not be forwarded: it
+        # would shadow the Router's own default (e.g. `fallbacks=None` in kwargs
+        # disables the globally configured fallback chain for the request).
         for key in per_request_settings:
-            if key in override_settings and key not in data:
+            if key in override_settings and override_settings[key] is not None and key not in data:
                 data[key] = override_settings[key]
 
         # Use main router with overridden kwargs
