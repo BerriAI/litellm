@@ -502,11 +502,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    existing_text = cast("dict[str, object]", responses_api_request["text"] if "text" in responses_api_request else {})
-                    responses_api_request["text"] = cast("ResponseText", {**existing_text, **text_format})
+                    responses_api_request["text"] = self._merge_text(responses_api_request, text_format)
             elif key == "verbosity":
-                existing_text = cast("dict[str, object]", responses_api_request["text"] if "text" in responses_api_request else {})
-                responses_api_request["text"] = cast("ResponseText", {**existing_text, "verbosity": value})
+                responses_api_request["text"] = self._merge_text(
+                    responses_api_request, {"verbosity": cast(object, value)}
+                )
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
             elif key == "stream_options":
@@ -521,6 +521,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["reasoning"] = self._map_reasoning_effort(value)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
+
+    @staticmethod
+    def _merge_text(
+        responses_api_request: "ResponsesAPIOptionalRequestParams", update: Mapping[str, object]
+    ) -> "ResponseText":
+        existing: Final = cast(
+            "dict[str, object]", responses_api_request["text"] if "text" in responses_api_request else {}
+        )
+        return cast("ResponseText", {**existing, **update})
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
