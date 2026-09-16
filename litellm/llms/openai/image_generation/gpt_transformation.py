@@ -29,6 +29,7 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
             "quality",
             "size",
             "user",
+            "extra_headers",
         ]
 
     def map_openai_params(
