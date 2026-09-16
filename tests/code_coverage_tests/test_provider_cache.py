@@ -508,10 +508,13 @@ EMBEDDING_SUCCESS: Final = (
     b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],'
     b'"model":"text-embedding-3-small","usage":{"prompt_tokens":2,"total_tokens":2}}'
 )
-RESPONSE_SUCCESS: Final = b'{"id":"resp_synthetic","object":"response","status":"completed","output":[]}'
+RESPONSE_SUCCESS: Final = (
+    b'{"id":"resp_synthetic","object":"response","status":"completed","error":null,'
+    b'"incomplete_details":null,"output":[]}'
+)
 RESPONSE_STREAM_SUCCESS: Final = (
-    b'data: {"type":"response.created","response":{"id":"resp_synthetic"}}\n\n'
-    b'data: {"type":"response.completed","response":{"id":"resp_synthetic","status":"completed"}}\n\n'
+    b'data: {"type":"response.created","response":{"id":"resp_synthetic","error":null}}\n\n'
+    b'data: {"type":"response.completed","response":{"id":"resp_synthetic","status":"completed"},"error":null}\n\n'
 )
 
 
@@ -584,6 +587,39 @@ class TestNonChatOpenAiEndpoints:
         for _ in range(2):
             with openai_edge(cache_edge(store), provider, "/v1/responses") as url:
                 assert call(url, MARKED).body == payload
+        assert len(provider.hits) == 2
+
+    @pytest.mark.parametrize("path,response", [
+        ("/v1/chat/completions", b'{"id":"x","error":null,"choices":[{"message":{"content":"hi"},'
+                                 b'"finish_reason":"stop"}]}'),
+        ("/v1/messages", b'{"id":"msg_x","type":"message","role":"assistant","error":null,'
+                         b'"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}'),
+        ("/v1/responses", RESPONSE_SUCCESS),
+    ])
+    def test_a_null_error_field_is_not_an_error(
+        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+    ) -> None:
+        """Every OpenAI Responses body carries `error: null`, and testing the key's
+        presence rather than its value rejected all of them. The cost was silent:
+        nothing failed, the endpoint simply never cached."""
+        assert b'"error":null' in response
+        provider.response = response
+        for _ in range(2):
+            with openai_edge(cache_edge(store), provider, path) as url:
+                assert call(url, MARKED).body == response
+        assert len(provider.hits) == 1
+
+    @pytest.mark.parametrize("path,response", [
+        ("/v1/chat/completions", b'{"error":{"message":"rate limited","type":"rate_limit_error"}}'),
+        ("/v1/responses", b'{"object":"response","status":"completed","error":{"message":"bad"},"output":[]}'),
+    ])
+    def test_a_populated_error_field_still_rejects(
+        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+    ) -> None:
+        provider.response = response
+        for _ in range(2):
+            with openai_edge(cache_edge(store), provider, path) as url:
+                assert call(url, MARKED).body == response
         assert len(provider.hits) == 2
 
     @pytest.mark.parametrize("path,cacheable", [
