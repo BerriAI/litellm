@@ -2434,7 +2434,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_response = GenerateContentResponseBody(**completion_response)
 
         ## GET MODEL ##
-        model_response.model = model
+        model_version: Final = completion_response.get("modelVersion")
+        model_response.model = model_version if isinstance(model_version, str) else model
 
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response and "blockReason" in completion_response["promptFeedback"]:
@@ -3264,7 +3265,12 @@ class ModelResponseIterator:
 
             processed_chunk: Final = GenerateContentResponseBody(**chunk)
             response_id: Final = processed_chunk.get("responseId")
-            model_response = ModelResponseStream(choices=[], id=response_id)
+            chunk_model_version: Final = processed_chunk.get("modelVersion")
+            model_response = ModelResponseStream(
+                choices=[],
+                id=response_id,
+                model=chunk_model_version if isinstance(chunk_model_version, str) else None,
+            )
 
             # Check if prompt is blocked due to content filtering
             blocked_response: Final = VertexGeminiConfig._check_prompt_level_content_filter(
