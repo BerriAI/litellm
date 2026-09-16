@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
-from litellm.router import Router
+from litellm.router import Router, _has_mcp_tool, _is_silent_experiment_marker
 
 
 class _NonCopyableSpan:
@@ -185,11 +185,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None
@@ -197,11 +193,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the primary call
         primary_call = next(
-            (
-                c
-                for c in call_args_list
-                if not c[1].get("metadata", {}).get("is_silent_experiment")
-            ),
+            (c for c in call_args_list if not c[1].get("metadata", {}).get("is_silent_experiment")),
             None,
         )
         assert primary_call is not None
@@ -270,14 +262,250 @@ def test_router_silent_experiment_completion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None
         assert silent_call[1]["model"] == "openai/gpt-4"
         # Verify model_group is set to the silent model name for correct metric attribution
         assert silent_call[1]["metadata"]["model_group"] == "silent-model"
+
+
+# ---------------------------------------------------------------------------
+# Generic router path (Responses API / Anthropic Messages) — issues #31888, #34890
+# ---------------------------------------------------------------------------
+
+
+def _generic_silent_model_list():
+    return [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "fake-key",
+                "silent_model": "silent-model",
+            },
+        },
+        {
+            "model_name": "silent-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": "fake-key",
+            },
+        },
+    ]
+
+
+def _split_generic_calls(mock):
+    """Return (primary_call, silent_call) from a mocked generic handler."""
+    silent = next(
+        (c for c in mock.call_args_list if (c.kwargs.get("litellm_metadata") or {}).get("is_silent_experiment")),
+        None,
+    )
+    primary = next(
+        (c for c in mock.call_args_list if not (c.kwargs.get("litellm_metadata") or {}).get("is_silent_experiment")),
+        None,
+    )
+    return primary, silent
+
+
+@pytest.mark.asyncio
+async def test_router_silent_experiment_aresponses():
+    """
+    Regression for #31888: silent_model on a deployment must fire a background
+    aresponses call when the primary request goes through /v1/responses.
+    """
+    mock_aresponses = AsyncMock(return_value=MagicMock())
+    mock_aresponses.__name__ = "aresponses"
+
+    router = Router(model_list=_generic_silent_model_list())
+    router.aresponses = router.factory_function(mock_aresponses, call_type="aresponses")
+    await router.aresponses(
+        model="primary-model",
+        input=[{"role": "user", "content": "hi"}],
+        metadata={"trace": "user-supplied"},
+    )
+    await asyncio.sleep(0.1)
+
+    assert mock_aresponses.call_count == 2
+    primary_call, silent_call = _split_generic_calls(mock_aresponses)
+    assert primary_call is not None
+    assert silent_call is not None
+
+    assert primary_call.kwargs["model"] == "openai/gpt-4o-mini"
+    assert primary_call.kwargs["litellm_metadata"]["model_group"] == "primary-model"
+
+    assert silent_call.kwargs["model"] == "openai/gpt-4o"
+    # model_group is overridden so metrics/logging attribute the mirror to the silent model
+    assert silent_call.kwargs["litellm_metadata"]["model_group"] == "silent-model"
+
+    # The router-only setting must never reach the provider handler (#34890)
+    for call in mock_aresponses.call_args_list:
+        assert "silent_model" not in call.kwargs
+
+    # `metadata` is the OpenAI Responses request-body field: the marker must not be
+    # written there, and the caller's value must pass through untouched.
+    assert silent_call.kwargs["metadata"] == {"trace": "user-supplied"}
+    assert primary_call.kwargs["metadata"] == {"trace": "user-supplied"}
+
+
+@pytest.mark.asyncio
+async def test_router_silent_experiment_anthropic_messages():
+    """
+    Regression for #34890: same contract for /v1/messages. Anthropic validates the
+    `metadata` body field strictly, so the marker must live in litellm_metadata.
+    """
+    mock_messages = AsyncMock(return_value=MagicMock())
+    mock_messages.__name__ = "anthropic_messages"
+
+    router = Router(model_list=_generic_silent_model_list())
+    router.aanthropic_messages = router.factory_function(mock_messages, call_type="anthropic_messages")
+    await router.aanthropic_messages(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+    )
+    await asyncio.sleep(0.1)
+
+    assert mock_messages.call_count == 2
+    primary_call, silent_call = _split_generic_calls(mock_messages)
+    assert primary_call is not None
+    assert silent_call is not None
+    assert primary_call.kwargs["model"] == "openai/gpt-4o-mini"
+    assert silent_call.kwargs["model"] == "openai/gpt-4o"
+    assert silent_call.kwargs["litellm_metadata"]["model_group"] == "silent-model"
+    for call in mock_messages.call_args_list:
+        assert "silent_model" not in call.kwargs
+        assert "is_silent_experiment" not in (call.kwargs.get("metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_router_silent_experiment_generic_does_not_corrupt_primary_metadata():
+    """
+    The primary call's litellm_metadata must not see the silent marker or the
+    silent model_group, even when deepcopy falls back to a shared reference.
+    """
+    mock_aresponses = AsyncMock(return_value=MagicMock())
+    mock_aresponses.__name__ = "aresponses"
+
+    router = Router(model_list=_generic_silent_model_list())
+    router.aresponses = router.factory_function(mock_aresponses, call_type="aresponses")
+    litellm_metadata = {
+        "user_api_key_auth": _FakeUserAPIKeyAuth(
+            key_alias="primary-key",
+            parent_otel_span=_NonCopyableSpan(),
+        )
+    }
+    await router.aresponses(
+        model="primary-model",
+        input=[{"role": "user", "content": "hi"}],
+        litellm_metadata=litellm_metadata,
+    )
+    await asyncio.sleep(0.1)
+
+    assert mock_aresponses.call_count == 2
+    primary_call, silent_call = _split_generic_calls(mock_aresponses)
+    assert primary_call is not None
+    assert silent_call is not None
+    assert primary_call.kwargs["litellm_metadata"]["model_group"] == "primary-model"
+    assert "is_silent_experiment" not in primary_call.kwargs["litellm_metadata"]
+    assert silent_call.kwargs["litellm_metadata"]["model_group"] == "silent-model"
+
+
+@pytest.mark.asyncio
+async def test_router_silent_experiment_skips_non_allowlisted_generic_call_types():
+    """
+    Only side-effect-free inference call types are mirrored. The same generic
+    helper serves file/fine-tuning/passthrough calls that must not be replayed
+    against the silent deployment.
+    """
+    sentinel_response = MagicMock()
+    mock_file_content = AsyncMock(return_value=sentinel_response)
+    mock_file_content.__name__ = "afile_content"
+
+    router = Router(model_list=_generic_silent_model_list())
+    router.afile_content = router.factory_function(mock_file_content, call_type="afile_content")
+    response = await router.afile_content(model="primary-model", file_id="file-123")
+    await asyncio.sleep(0.1)
+
+    assert response is sentinel_response
+    assert mock_file_content.call_count == 1
+    assert "silent_model" not in mock_file_content.call_args.kwargs
+
+
+def test_silent_experiment_generic_kwargs_skips_recursion_and_mcp():
+    """
+    The generic-path snapshot must return None when the request is already a
+    silent experiment (marker in either litellm_metadata or metadata) or when it
+    carries MCP tooling that the provider may execute.
+    """
+    router = Router(model_list=_generic_silent_model_list())
+    base = {"input": [{"role": "user", "content": "hi"}]}
+
+    assert router._silent_experiment_generic_kwargs(**base, litellm_metadata={"is_silent_experiment": True}) is None
+    assert router._silent_experiment_generic_kwargs(**base, metadata={"is_silent_experiment": True}) is None
+    assert router._silent_experiment_generic_kwargs(**base, mcp_servers=[{"type": "url", "url": "x"}]) is None
+    assert (
+        router._silent_experiment_generic_kwargs(
+            **base, tools=[{"type": "mcp", "server_label": "x", "require_approval": "never"}]
+        )
+        is None
+    )
+
+    snapshot = router._silent_experiment_generic_kwargs(**base, tools=[{"type": "web_search"}])
+    assert snapshot is not None
+    assert snapshot["litellm_metadata"]["is_silent_experiment"] is True
+    assert snapshot["stream"] is False
+    assert "metadata" not in snapshot
+
+
+def test_silent_experiment_generic_kwargs_snapshots_before_mutation():
+    """
+    Regression: the snapshot is taken synchronously, so metadata merged into the
+    caller's kwargs afterwards (deployment tags etc.) never reaches the mirror.
+    """
+    router = Router(model_list=_generic_silent_model_list())
+    litellm_metadata = {"model_group": "primary-model"}
+    snapshot = router._silent_experiment_generic_kwargs(input="hi", litellm_metadata=litellm_metadata)
+    assert snapshot is not None
+    litellm_metadata["tags"] = ["primary-deployment-tag"]
+    assert "tags" not in snapshot["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_silent_experiment_ageneric_error_is_caught():
+    """
+    A failing mirror must never propagate to the caller.
+    """
+    router = Router(model_list=_generic_silent_model_list())
+
+    with patch.object(
+        router,
+        "_ageneric_api_call_with_fallbacks",
+        new_callable=AsyncMock,
+        side_effect=Exception("downstream failure"),
+    ):
+        result = await router._silent_experiment_ageneric(
+            silent_model="silent-model",
+            original_function=litellm.aresponses,
+            silent_kwargs={"input": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert result is None
+
+
+def test_is_silent_experiment_marker():
+    assert _is_silent_experiment_marker({"is_silent_experiment": True}) is True
+    assert _is_silent_experiment_marker({"is_silent_experiment": False}) is False
+    assert _is_silent_experiment_marker({}) is False
+    assert _is_silent_experiment_marker(None) is False
+    assert _is_silent_experiment_marker("is_silent_experiment") is False
+
+
+def test_has_mcp_tool():
+    assert _has_mcp_tool([{"type": "mcp", "server_label": "x"}]) is True
+    assert _has_mcp_tool([{"type": "web_search"}, {"type": "mcp"}]) is True
+    assert _has_mcp_tool([{"type": "web_search"}]) is False
+    assert _has_mcp_tool([]) is False
+    assert _has_mcp_tool(None) is False
+    assert _has_mcp_tool("mcp") is False
