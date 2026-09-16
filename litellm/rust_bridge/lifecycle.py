@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import uuid
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from typing import (
@@ -62,35 +61,6 @@ class MetadataUpdater(Protocol):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class CallSetup:
-    logger: Logging
-    kwargs: dict[str, object]
-
-
-def setup(
-    call_type: str,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
-    start_time: datetime.datetime,
-    asynchronous: bool,
-) -> CallSetup:
-    from litellm import utils
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
-        "litellm_call_id": str(uuid.uuid4()),
-        **kwargs,
-    }
-    supplied: Final = arguments.get("litellm_logging_obj")
-    if isinstance(supplied, Logging):
-        return CallSetup(supplied, arguments)
-    logger, prepared = utils.function_setup(
-        call_type, utils.Rules(), start_time, *args, is_async_call=asynchronous, **arguments
-    )
-    return CallSetup(logger, prepared)
 
 
 def check_limits(kwargs: Mapping[str, object]) -> None:

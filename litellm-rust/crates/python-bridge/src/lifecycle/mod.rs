@@ -19,6 +19,7 @@ mod arguments;
 mod bindings;
 mod handle;
 mod preparation;
+mod setup;
 
 pub(crate) use arguments::{BoundArguments, Signature};
 use bindings::DeploymentHooks;
@@ -93,6 +94,18 @@ pub(crate) fn run_call<R: PythonRoute + 'static>(
     }
 }
 
+pub(crate) fn debug_setup(
+    py: Python<'_>,
+    call_type: &'static str,
+    args: &Py<PyTuple>,
+    kwargs: &Py<PyDict>,
+    start: &Py<PyAny>,
+    asynchronous: bool,
+) -> PyResult<(Py<PyAny>, Py<PyDict>)> {
+    let result = setup::setup(py, call_type, args, kwargs, start, asynchronous)?;
+    Ok((result.logger.object(py).clone().unbind(), result.kwargs))
+}
+
 pub(crate) fn missing_state() -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err("missing native call state")
 }
@@ -162,7 +175,11 @@ impl<R: PythonRoute> PythonLifecycle<R> {
             HostFailure::Cancelled(native)
         };
         let state = self.route.state_mut();
-        state.retain_first_error(py, error, cancelled && phase != Some(HostPhase::DeploymentFailure));
+        state.retain_first_error(
+            py,
+            error,
+            cancelled && phase != Some(HostPhase::DeploymentFailure),
+        );
         let _ = state.finish(py);
         failure
     }
@@ -385,7 +402,7 @@ impl PythonCallState {
     pub fn setup(&mut self, py: Python<'_>) -> PyResult<()> {
         self.start = now(py)?;
         self.internal = bindings::is_internal_call(py)?;
-        let result = bindings::setup(
+        let result = setup::setup(
             py,
             self.call_type,
             &self.args,
@@ -393,8 +410,8 @@ impl PythonCallState {
             &self.start,
             self.asynchronous,
         )?;
-        self.logger = Some(result.logger()?);
-        self.kwargs = result.kwargs()?;
+        self.logger = Some(result.logger);
+        self.kwargs = result.kwargs;
         Ok(())
     }
 

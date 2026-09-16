@@ -40,17 +40,28 @@ pub(super) struct PythonPayload {
 
 impl PythonPayload {
     fn from_request(py: Python<'_>, request: &OcrDuringCallRequest) -> PyResult<Self> {
-        let body = to_py(py, &request.body)?.into_bound(py).cast_into::<PyDict>()?;
+        let body = to_py(py, &request.body)?
+            .into_bound(py)
+            .cast_into::<PyDict>()?;
         let headers = PyDict::new(py);
         for (name, value) in &request.headers {
             headers.set_item(name, value)?;
         }
-        Ok(Self { body: body.unbind(), headers: headers.unbind() })
+        Ok(Self {
+            body: body.unbind(),
+            headers: headers.unbind(),
+        })
     }
 
-    fn write_back(&self, py: Python<'_>, mut request: OcrDuringCallRequest) -> PyResult<OcrDuringCallRequest> {
+    fn write_back(
+        &self,
+        py: Python<'_>,
+        mut request: OcrDuringCallRequest,
+    ) -> PyResult<OcrDuringCallRequest> {
         request.body = from_py(self.body.bind(py))?;
-        request.headers = self.headers.bind(py)
+        request.headers = self
+            .headers
+            .bind(py)
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
             .collect::<PyResult<Vec<_>>>()?;
@@ -81,7 +92,9 @@ impl PythonOcrHost {
     }
 
     fn project(&mut self, py: Python<'_>) -> PyResult<OcrHostResult> {
-        let arguments = self.signature.bind(self.state.args.bind(py), self.state.kwargs.bind(py))?;
+        let arguments = self
+            .signature
+            .bind(self.state.args.bind(py), self.state.kwargs.bind(py))?;
         let Projection { native, retained } = project(py, &arguments)?;
         let host_token_provider = retained.azure_ad_token_provider.is_some();
         self.retained = Some(retained);
@@ -126,7 +139,11 @@ impl PythonOcrHost {
         py: Python<'_>,
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
-        let payload = self.retained()?.payload.as_ref().ok_or_else(missing_state)?;
+        let payload = self
+            .retained()?
+            .payload
+            .as_ref()
+            .ok_or_else(missing_state)?;
         callbacks::post_call(
             py,
             self.state.logger()?,
@@ -202,9 +219,7 @@ impl PythonRoute for PythonOcrHost {
             OcrHostOperation::AcquireAzureAdToken => {
                 OcrHostResult::AzureAdToken(Ok(self.acquire_azure_ad_token(py)?))
             }
-            OcrHostOperation::PreCall(request) => {
-                OcrHostResult::PreCall(Ok(request))
-            }
+            OcrHostOperation::PreCall(request) => OcrHostResult::PreCall(Ok(request)),
             OcrHostOperation::DuringCall(request) => {
                 OcrHostResult::DuringCall(Ok(self.during_call(py, request)?))
             }

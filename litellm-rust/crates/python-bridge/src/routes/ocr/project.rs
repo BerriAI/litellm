@@ -20,14 +20,18 @@ use crate::marshal::{BoundRouteInputs, Projection};
 /// `optional_params`.
 const BOUND_FIELDS: &[&str] = &["model", "document", "timeout", "input_sources"];
 
-fn project_document(document: &Bound<'_, PyAny>) -> PyResult<Result<FileDocumentInput, litellm_core::ocr::Error>> {
+fn project_document(
+    document: &Bound<'_, PyAny>,
+) -> PyResult<Result<FileDocumentInput, litellm_core::ocr::Error>> {
     let kind: String = document.get_item("type")?.extract()?;
     if kind != "file" {
         let value: serde_json::Value = from_py(document)?;
-        return Ok(OcrDocument::try_from(value).map(|document| FileDocumentInput {
-            input: document.into(),
-            reader: None,
-        }));
+        return Ok(
+            OcrDocument::try_from(value).map(|document| FileDocumentInput {
+                input: document.into(),
+                reader: None,
+            }),
+        );
     }
     document.extract().map(Ok)
 }
@@ -154,10 +158,7 @@ mod tests {
             let document = py
                 .eval(c"{'type': 'mystery', 'mystery': 'x'}", None, None)
                 .unwrap();
-            let error = project_document(&document)
-                .unwrap()
-                .err()
-                .unwrap();
+            let error = project_document(&document).unwrap().err().unwrap();
             assert!(error.to_string().contains("document"));
         });
     }

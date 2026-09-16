@@ -1,3 +1,4 @@
+import datetime
 from asyncio import Future
 from collections.abc import Coroutine, Mapping
 
@@ -111,3 +112,10 @@ class TokenCounter:
     def acount_request(self, body: bytes) -> Future[dict[str, object]]: ...
 
 def gil_stats() -> dict[str, int]: ...
+def _debug_setup(
+    call_type: str,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    start: datetime.datetime,
+    asynchronous: bool,
+) -> tuple[object, dict[str, object]]: ...

@@ -38,7 +38,13 @@ pub(super) fn pre_call(
 ) -> PyResult<()> {
     py.import("litellm.rust_bridge.ocr")?
         .getattr("pre_call")?
-        .call1((logger.object(py), request.api_key.as_deref(), &payload.body, &payload.headers, &request.url))?;
+        .call1((
+            logger.object(py),
+            request.api_key.as_deref(),
+            &payload.body,
+            &payload.headers,
+            &request.url,
+        ))?;
     Ok(())
 }
 
@@ -50,7 +56,12 @@ pub(super) fn post_call(
 ) -> PyResult<()> {
     py.import("litellm.rust_bridge.ocr")?
         .getattr("post_call")?
-        .call1((logger.object(py), to_py(py, original_response)?, &payload.body, &payload.headers))?;
+        .call1((
+            logger.object(py),
+            to_py(py, original_response)?,
+            &payload.body,
+            &payload.headers,
+        ))?;
     Ok(())
 }
 

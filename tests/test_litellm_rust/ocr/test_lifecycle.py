@@ -967,26 +967,18 @@ async def test_terminal_registration_added_during_http_is_observed(
 
 @pytest.fixture
 def created_loggers(monkeypatch: pytest.MonkeyPatch) -> list[Logging]:
-    from litellm import utils
+    from litellm.rust_bridge import setup as native_setup
 
-    original_setup: Final = utils.function_setup
+    original_build: Final = native_setup.build_logging
     loggers: Final[list[Logging]] = []
 
-    def setup(
-        call_type: str,
-        rules: utils.Rules,
-        start: datetime.datetime,
-        *args: object,
-        is_async_call: bool = True,
-        **kwargs: object,
-    ) -> tuple[Logging, dict[str, object]]:
-        logger, prepared = original_setup(call_type, rules, start, *args, is_async_call=is_async_call, **kwargs)
-        assert isinstance(logger, Logging)
+    def build_logging(**kwargs: object) -> Logging:
+        logger: Final = original_build(**kwargs)  # pyright: ignore[reportArgumentType]  # passthrough of the factory signature
         setattr(logger, "_defer_async_logging", True)
         loggers.append(logger)
-        return logger, prepared
+        return logger
 
-    monkeypatch.setattr(utils, "function_setup", setup)
+    monkeypatch.setattr(native_setup, "build_logging", build_logging)
     return loggers
 
 
