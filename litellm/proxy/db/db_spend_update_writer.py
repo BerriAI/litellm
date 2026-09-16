@@ -137,6 +137,19 @@ class _SpendTransactionManager(Protocol):
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
 
 
+def _timed_request_duration_ms(
+    payload: dict | SpendLogsPayload,
+    request_status: Literal["success", "failure"],
+    is_internal_call: bool,
+) -> int | None:
+    if is_internal_call or request_status != "success":
+        return None
+    duration_ms: Final = payload.get("request_duration_ms")
+    if not isinstance(duration_ms, int) or duration_ms < 0:
+        return None
+    return duration_ms
+
+
 def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
     return tx
@@ -2232,6 +2245,7 @@ class DBSpendUpdateWriter:
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
                 billed_at=payload.get("endTime"),
             )
+            timed_duration_ms: Final = _timed_request_duration_ms(payload, request_status, is_internal_call)
 
             daily_transaction: Final = BaseDailySpendTransaction(
                 date=date,
@@ -2259,6 +2273,8 @@ class DBSpendUpdateWriter:
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
                 gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
+                total_response_time_ms=timed_duration_ms or 0,
+                timed_requests=0 if timed_duration_ms is None else 1,
             )
             return daily_transaction
         except Exception as e:

@@ -1167,7 +1167,9 @@ class ModelResponseIterator:
         # (matches OpenAI behavior and non-streaming Anthropic implementation)
         if self.converted_response_format_tool:
             finish_reason = "stop"
-        usage: Final = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+        usage: Final = (
+            self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
+        )
         container: Final = message_delta["delta"].get("container")
         return finish_reason, usage, container
 

@@ -2,7 +2,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
@@ -6790,6 +6790,88 @@ async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_fla
     assert user.teams == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["identity", "authorize", "admit"])
+@pytest.mark.parametrize("existing_user", [False, True])
+@pytest.mark.parametrize("model_allowed", [False, True])
+async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
+    monkeypatch: pytest.MonkeyPatch, operation: str, existing_user: bool, model_allowed: bool
+) -> None:
+    from litellm.proxy._types import ScopeMapping
+    from litellm.proxy.auth.auth_checks import UserNotFoundError
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    private_key, jwk = _get_rsa_key_and_jwk("identity-mode")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("litellm_jwt_auth_keys_https://identity.example/jwks", [jwk])
+    user_id: Final = f"identity-mode-{operation}-{existing_user}-{model_allowed}"
+    user: Final = LiteLLM_UserTable(user_id=user_id, organization_memberships=[])
+    if existing_user:
+        cache.set_cache(user_id, user)
+    database: Final = MagicMock()
+    users: Final = database.db.litellm_usertable
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(return_value=None)
+    users.create = AsyncMock(return_value=user)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=database,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub",
+            user_id_upsert=True,
+            enforce_scope_based_access=True,
+            scope_mappings=[ScopeMapping(scope="allowed", models=["allowed-model"])],
+        ),
+    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://identity.example/jwks")
+    monkeypatch.setenv("JWT_ISSUER", "https://identity.example")
+    monkeypatch.setenv("JWT_AUDIENCE", "gateway")
+    token: Final = _encode_rsa_jwt(
+        private_key, "https://identity.example", "gateway", "identity-mode", {"sub": user_id, "scope": "allowed"}
+    )
+    common: Final = {
+        "api_key": token,
+        "jwt_handler": handler,
+        "prisma_client": database,
+        "user_api_key_cache": cache,
+        "parent_otel_span": None,
+        "proxy_logging_obj": MagicMock(),
+    }
+    if operation == "identity":
+        if not existing_user:
+            with pytest.raises(UserNotFoundError):
+                await JWTAuthManager.resolve_identity(**common)
+        else:
+            identity: Final = await JWTAuthManager.resolve_identity(**common)
+            assert identity.user_id == user_id
+            assert identity.user_object is not None and identity.user_object.user_id == user_id
+        users.create.assert_not_awaited()
+        return
+    authorize: Final = JWTAuthManager.auth_builder if operation == "admit" else JWTAuthManager.authorize_jwt
+    pending: Final = authorize(
+        **common,
+        request_data={"model": "allowed-model" if model_allowed else "forbidden-model"},
+        general_settings={},
+        route="/mcp/example",
+    )
+    if not model_allowed:
+        with pytest.raises(HTTPException) as denial:
+            await pending
+        assert denial.value.status_code == 403
+        users.create.assert_not_awaited()
+        return
+    if operation == "authorize" and not existing_user:
+        with pytest.raises(UserNotFoundError):
+            await pending
+    else:
+        result: Final = await pending
+        assert result["user_id"] == user_id
+        assert result["user_object"] is not None
+        assert result["user_object"].user_id == user_id
+    assert users.create.await_count == (0 if operation == "authorize" or existing_user else 1)
+
+
 def _entra_agent_registry() -> AgentRegistry:
     registry = AgentRegistry()
     registry.register_agent(
@@ -6916,7 +6998,8 @@ def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandl
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_admin_token", [False, True], ids=["standard_jwt", "proxy_admin_jwt"])
-async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_admin_token: bool):
+@pytest.mark.parametrize("identity_only", [False, True])
+async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_admin_token: bool, identity_only: bool):
     """auth_builder carries the resolved agent id into JWTAuthBuilderResult on both the admin and standard paths."""
     jwt_handler, token = _entra_signed_app_token(
         monkeypatch,
@@ -6924,6 +7007,14 @@ async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_a
         scope=LiteLLM_JWTAuth().admin_jwt_scope if is_admin_token else "",
     )
     jwt_handler.bind_agent_lookup(_entra_agent_registry())
+
+    if identity_only:
+        identity = await JWTAuthManager.resolve_identity(
+            api_key=token, jwt_handler=jwt_handler, prisma_client=None,
+            user_api_key_cache=None, parent_otel_span=None, proxy_logging_obj=None,
+        )
+        assert identity.agent_id == "canonical-agent-id"
+        return
 
     result = await JWTAuthManager.auth_builder(
         api_key=token,
@@ -6942,7 +7033,8 @@ async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_a
 
 
 @pytest.mark.asyncio
-async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_check(monkeypatch):
+@pytest.mark.parametrize("identity_only", [False, True])
+async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_check(monkeypatch, identity_only: bool):
     """An unknown agent claim is rejected even when the token would otherwise be a proxy admin."""
     jwt_handler, token = _entra_signed_app_token(
         monkeypatch,
@@ -6951,6 +7043,14 @@ async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_ch
     )
     jwt_handler.bind_agent_lookup(_entra_agent_registry())
 
+    if identity_only:
+        with pytest.raises(HTTPException) as denial:
+            await JWTAuthManager.resolve_identity(
+                api_key=token, jwt_handler=jwt_handler, prisma_client=None,
+                user_api_key_cache=None, parent_otel_span=None, proxy_logging_obj=None,
+            )
+        assert denial.value.status_code == 403
+        return
     with pytest.raises(HTTPException) as exc_info:
         await JWTAuthManager.auth_builder(
             api_key=token,
@@ -6965,3 +7065,36 @@ async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_ch
         )
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admission", [False, True])
+async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatch, admission: bool):
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    handler, token = _entra_signed_app_token(
+        monkeypatch, azp="canonical-agent-id", scope=LiteLLM_JWTAuth().admin_jwt_scope,
+    )
+    handler.bind_agent_lookup(_entra_agent_registry())
+    handler.litellm_jwtauth.team_id_upsert = True
+    handler.litellm_jwtauth.admin_allowed_routes = ["openai_routes"]
+    database = MagicMock()
+    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    create_team = AsyncMock(return_value=LiteLLM_TeamTable(team_id="new-team").model_dump())
+    monkeypatch.setattr(team_endpoints, "new_team", create_team)
+    resolve = JWTAuthManager.auth_builder if admission else JWTAuthManager.authorize_jwt
+
+    result = await resolve(
+        api_key=token, jwt_handler=handler, request_data={}, general_settings={},
+        route="/chat/completions", prisma_client=database,
+        user_api_key_cache=handler.user_api_key_cache, parent_otel_span=None,
+        proxy_logging_obj=MagicMock(), request_headers={"x-litellm-team-id": "new-team"},
+    )
+
+    assert result["is_proxy_admin"] is True
+    if admission:
+        create_team.assert_awaited_once()
+        assert result["team_id"] == "new-team"
+    else:
+        create_team.assert_not_awaited()
+        assert result["team_id"] is None
