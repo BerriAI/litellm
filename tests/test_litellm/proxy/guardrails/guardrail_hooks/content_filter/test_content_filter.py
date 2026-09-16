@@ -115,7 +115,8 @@ class TestContentFilterGuardrail:
 
             assert result["texts"] == ["Call <<PHONE_NUMBER>> about <<KEYWORD>>"]
         finally:
-            litellm.callbacks.remove(guardrail)
+            if guardrail in litellm.callbacks:
+                litellm.callbacks.remove(guardrail)
 
     def test_check_patterns_ssn(self):
         """
