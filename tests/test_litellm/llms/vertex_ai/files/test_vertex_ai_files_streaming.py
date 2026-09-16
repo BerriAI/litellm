@@ -38,16 +38,16 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
-    _OpenAIToVertexBatchUploadStream,
     _get_litellm_batch_custom_id_from_labels,
     _iter_openai_jsonl_entries,
     _iter_openai_jsonl_lines,
     _openai_batch_jsonl_entry_to_vertex_rows,
+    _OpenAIToVertexBatchUploadStream,
 )
 from litellm.types.llms.openai import CreateFileRequest, FileContentRequest
-from litellm.llms.vertex_ai.common_utils import VertexAIError
 
 
 def _upload_stream(transformed) -> BaseFileUploadStream:
@@ -753,6 +753,23 @@ class TestFileContentStreaming:
         assert "content-length" not in result.headers
         assert state["closed"] is True
 
+    async def test_last_row_without_trailing_newline_and_unparseable_row_are_kept(self):
+        broken = b'{"custom_id": "request-1", "response": {"candidates": [}'
+        rows = [_vertex_batch_output_row("request-0", "first"), broken, _vertex_batch_output_row("request-2", "last")]
+        raw = b"\n".join(rows)
+        raw_chunks = [raw[i : i + 41] for i in range(0, len(raw), 41)]
+
+        result, state = await self._open(raw_chunks, {}, chunk_size=29)
+        streamed_lines = b"".join([chunk async for chunk in result.stream_iterator]).split(b"\n")
+
+        assert len(streamed_lines) == len(rows)
+        assert json.loads(streamed_lines[0])["custom_id"] == "request-0"
+        assert json.loads(streamed_lines[0])["response"]["body"]["choices"][0]["message"]["content"] == "first"
+        assert streamed_lines[1] == broken
+        assert json.loads(streamed_lines[2])["custom_id"] == "request-2"
+        assert json.loads(streamed_lines[2])["response"]["body"]["choices"][0]["message"]["content"] == "last"
+        assert state["closed"] is True
+
     async def test_transform_opt_out_streams_raw_batch_output(self, monkeypatch):
         monkeypatch.setattr("litellm.disable_vertex_batch_output_transformation", True)
         raw = b"\n".join(_vertex_batch_output_row(f"request-{i}", "x") for i in range(3)) + b"\n"
@@ -861,3 +878,18 @@ class TestFileContentStreaming:
         )
 
         assert result.response.content == raw
+
+    def test_sync_file_content_stream_is_rejected_for_vertex_ai(self):
+        mock, state = _gcs_download_mock([b"x"], {})
+
+        with pytest.raises(litellm.BadRequestError, match="afile_content"):
+            litellm.file_content(
+                file_id=_MANAGED_OUTPUT_FILE_ID,
+                custom_llm_provider="vertex_ai",
+                stream=True,
+                api_key="test-token",
+                gcs_bucket_name="test-bucket",
+                client=_async_handler_with(mock),
+            )
+
+        assert state["urls"] == []
