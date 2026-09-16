@@ -62,6 +62,44 @@ def _restore_model_cost_entries(original_entries):
     _invalidate_model_cost_lowercase_map()
 
 
+async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    router: Final = Router(model_list=[{
+        "model_name": "local",
+        "litellm_params": {
+            "model": "hosted_vllm/local-model",
+            "api_base": "https://original.test/v1",
+            "api_key": "local-key",
+        },
+        "model_info": {"id": "replaced-deployment"},
+    }])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "original.test":
+            router.upsert_deployment(Deployment(
+                model_name="local",
+                litellm_params=LiteLLM_Params(
+                    model="hosted_vllm/local-model",
+                    api_base="https://replacement.test/v1",
+                    api_key="local-key",
+                ),
+                model_info=ModelInfo(id="replaced-deployment"),
+            ))
+            return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]})
+        assert request.url.host == "replacement.test"
+        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 2048}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        await router._arefresh_deployment_model_info(router.model_list[0], client=handler)
+        assert router.get_configured_token_limits("local") == (None, None)
+        await router.arefresh_model_info(client=handler)
+        assert router.get_configured_token_limits("local") == (2048, 2048)
+    _invalidate_model_cost_lowercase_map()
+
+
 @pytest.mark.parametrize("provider", ("hosted_vllm", "openai", "openai_like", "text-completion-openai"))
 async def test_discovered_limits_are_isolated_overridable_and_refreshable(
     provider: str, monkeypatch: pytest.MonkeyPatch
