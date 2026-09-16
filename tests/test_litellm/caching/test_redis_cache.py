@@ -77,6 +77,52 @@ async def test_async_delete_cache_applies_namespace(
     mock_redis_instance.delete.assert_awaited_once_with(expected_key)
 
 
+@pytest.mark.asyncio
+async def test_async_reset_preserving_delta_evals_with_namespaced_key_and_string_args(
+    monkeypatch, redis_no_ping
+):
+    """The GET/compute/SET has to run as one Lua call, not separate round trips, or a
+    concurrent async_increment between them would be exactly the race this method exists
+    to close. Namespacing and str-ifying every ARGV also has to happen, or redis-py's own
+    encoding (or an ACL scoped to the namespace prefix) breaks the call outright."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="litellm")
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.eval.return_value = "12.5"
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        result = await redis_cache.async_reset_preserving_delta(
+            key="spend:key:abc", new_base=10.0, snapshot=7.5, ttl=60
+        )
+
+    assert result == 12.5
+    mock_redis_instance.eval.assert_awaited_once()
+    lua, numkeys, key, new_base_arg, snapshot_arg, ttl_arg = mock_redis_instance.eval.await_args.args
+    assert numkeys == 1
+    assert key == "litellm:spend:key:abc"
+    assert (new_base_arg, snapshot_arg, ttl_arg) == ("10.0", "7.5", "60")
+    assert "GET" in lua and "SET" in lua and "EXPIRE" in lua
+
+
+@pytest.mark.asyncio
+async def test_async_reset_preserving_delta_decodes_a_bytes_result(monkeypatch, redis_no_ping):
+    """redis-py returns EVAL results as bytes unless decode_responses is set; a caller that
+    compares the return value to a float must not have to know that."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.eval.return_value = b"10.0"
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        result = await redis_cache.async_reset_preserving_delta(key="k", new_base=10.0, snapshot=10.0, ttl=60)
+
+    assert result == 10.0
+
+
 @pytest.mark.parametrize("namespace", [None, "litellm"])
 def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
     """delete_cache must prefix keys with the namespace, matching every other

@@ -2230,6 +2230,23 @@ class _ExpiringRedisCache:
         return None
 
 
+class _FlakyPipelineRedisCache(_ExpiringRedisCache):
+    """_ExpiringRedisCache, but the first ``fail_first_n`` calls to
+    async_increment_pipeline raise instead of applying, so a reconcile retry
+    recovering from a transient Redis failure is what's under test."""
+
+    def __init__(self, fail_first_n: int = 0) -> None:
+        super().__init__()
+        self.fail_first_n = fail_first_n
+        self.pipeline_calls = 0
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        self.pipeline_calls += 1
+        if self.pipeline_calls <= self.fail_first_n:
+            raise RuntimeError("redis down")
+        return await super().async_increment_pipeline(increment_list, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
     spend_counter_state,
@@ -2769,6 +2786,132 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
     ):
         # must return without raising
         await release_budget_reservation_on_cancel(reservation)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_a_second_cancellation_while_shielded():
+    # A second CancelledError arriving while the shielded reconcile is in flight must not
+    # propagate: the reconcile keeps running detached regardless, and there is nothing more
+    # for this call to do but return.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-twice"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=asyncio.CancelledError()),
+    ):
+        # must return without raising, and without taking the finalize-on-failure path either:
+        # a second cancellation isn't a failure, it's the reconcile still running in the background
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_invalidate_failure_after_every_retry_fails():
+    # If both the reconcile retries and the invalidate fallback fail (e.g. a persistent
+    # outage), there is nothing left to try: the failure must be logged and swallowed,
+    # not propagated, and the reservation still ends up finalized so it is not reprocessed.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-double-failure"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ), patch(  # test-quality-ok: invalidate_budget_reservation_counters is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+        new=AsyncMock(side_effect=RuntimeError("redis still down")),
+    ):
+        # must return without raising
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_invalidates_counter_when_reconcile_persistently_fails(
+    spend_counter_state,
+):
+    """
+    Regression for #30460 Path 1: if reconcile keeps failing on the cancel path
+    (e.g. a persistent Redis outage) across every retry, the pre-charge must
+    not be left stuck in the counter with nothing left to correct it. This
+    mirrors what release_or_invalidate_budget_reservation already does on the
+    non-cancel release path: fall back to invalidate_budget_reservation_counters
+    so the next read reseeds from the DB instead of enforcing the stale
+    reservation forever.
+    """
+    counter_cache, _key_cache = spend_counter_state
+    counter_key = "spend:key:key-cancel-redis-down"
+    counter_cache.redis_cache = _FlakyPipelineRedisCache(fail_first_n=99)
+    counter_cache.redis_cache.store[counter_key] = 3.0
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=3.0)
+
+    reservation = {
+        "reserved_cost": 3.0,
+        "input_cost": 0.5,
+        "finalized": False,
+        "entries": [{"counter_key": counter_key, "reserved_cost": 3.0, "applied_adjustment": 0.0}],
+    }
+
+    await release_budget_reservation_on_cancel(reservation)
+
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+    assert reservation["finalized"] is True
+    # Only the first retry reaches the pipeline: its own failure already
+    # invalidates the counter, so later retries take the (here also
+    # unavailable, with no real DB) reseed path instead -- both exhausted
+    # before falling back to invalidate_budget_reservation_counters.
+    assert counter_cache.redis_cache.pipeline_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_retries_before_invalidating(
+    spend_counter_state,
+):
+    """
+    Regression for the cancellation-fallback race (veria-ai finding on
+    budget_reservation.py): invalidate_budget_reservation_counters deletes the
+    whole aggregate counter unconditionally, which would also erase a
+    concurrent request's reservation or recorded spend sharing that same
+    key/user/team counter, not just this reservation's own contribution. A
+    reconcile failure that clears up on retry must settle through the
+    ordinary reconcile machinery instead of falling back to that unconditional
+    delete: here, the first attempt's own failure already invalidates the
+    counter (existing increment_spend_counters_pipeline cleanup), so the retry
+    settles it by reseeding the DB floor and adding this reservation's actual
+    cost, the same recovery path an expired counter already takes elsewhere in
+    this file, rather than being deleted a second time with nothing settled.
+    """
+    import litellm.proxy.proxy_server as ps
+
+    counter_cache, _key_cache = spend_counter_state
+    counter_key = "spend:key:key-cancel-retry-recovers"
+    counter_cache.redis_cache = _FlakyPipelineRedisCache(fail_first_n=1)
+    counter_cache.redis_cache.store[counter_key] = 5.0
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=5.0)
+
+    reservation = {
+        "reserved_cost": 3.0,
+        "input_cost": 0.5,
+        "finalized": False,
+        "entries": [{"counter_key": counter_key, "reserved_cost": 3.0, "applied_adjustment": 0.0}],
+    }
+
+    with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.2)
+    ):
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert counter_cache.redis_cache.pipeline_calls == 1
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.7)
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio

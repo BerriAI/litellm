@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeVar
 
 from typing_extensions import assert_never
 
@@ -65,6 +65,9 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.services import ServiceTypes
+
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
 
 _RowT = TypeVar("_RowT")
 
@@ -531,30 +534,90 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _invalidate_spend_counter(counter_key: str, new_spend: float = 0.0) -> None:
-        """Overwrite a spend counter with the post-reset value (0, or the carried
-        overage when budget rollover is enabled) so a DB-row reset takes effect
-        immediately.
+        """Overwrite a spend counter with the post-reset value. Call AFTER the DB
+        write commits, or get_current_spend can read 0 from Redis while the DB
+        still holds the pre-reset value.
 
-        Call AFTER the DB write commits. Clearing Redis before the DB
-        commit opens a window where get_current_spend reads 0 from Redis
-        while the DB still holds the pre-reset value, allowing bypass.
+        Delta-preserving: holds one pre-reset snapshot fixed across retries so a
+        concurrent async_increment during a retry lands on top of new_spend
+        instead of being overwritten by it. Falls back to delete (reads as cold,
+        reseeds from DB) if every retry fails or the snapshot itself can't be read.
         """
         try:
+            from litellm.constants import RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS
             from litellm.proxy.proxy_server import spend_counter_cache
 
             spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_spend, ttl=60)
-            if spend_counter_cache.redis_cache is not None:
-                try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_spend, ttl=60)
-                except Exception as redis_err:
-                    verbose_proxy_logger.warning(
-                        "Failed to reset spend counter %s in Redis: %s. "
-                        "Budget may be over-enforced until counter expires.",
-                        counter_key,
-                        redis_err,
-                    )
+            redis_cache = spend_counter_cache.redis_cache
+            if redis_cache is None:
+                return
+
+            snapshot = await ResetBudgetJob._snapshot_spend_counter(redis_cache=redis_cache, counter_key=counter_key)
+            if snapshot is not None and await ResetBudgetJob._reset_redis_spend_counter(
+                redis_cache=redis_cache, counter_key=counter_key, new_spend=new_spend, snapshot=snapshot
+            ):
+                return
+            verbose_proxy_logger.error(
+                "Failed to reset spend counter %s in Redis after %d attempts; deleting it instead so the "
+                "next read reseeds from the DB rather than keeping the inflated pre-reset value authoritative.",
+                counter_key,
+                RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS,
+            )
+            try:
+                await redis_cache.async_delete_cache(key=counter_key)
+            except Exception as delete_err:  # noqa: BLE001  # any Redis failure here leaves the pre-reset value stuck; log and move on
+                verbose_proxy_logger.error(
+                    "Failed to delete spend counter %s in Redis after its reset also failed; the "
+                    "pre-reset value stays authoritative until its TTL expires: %s",
+                    counter_key,
+                    delete_err,
+                )
         except Exception as e:
             verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
+
+    @staticmethod
+    async def _snapshot_spend_counter(redis_cache: "RedisCache", counter_key: str) -> float | None:
+        """Pre-reset baseline held fixed across retries. A failed read means no
+        safe baseline, so the caller falls straight back to delete."""
+        try:
+            current = await redis_cache.async_get_cache(key=counter_key)
+            return float(current) if current is not None else 0.0
+        except Exception as redis_err:  # noqa: BLE001  # any Redis failure here means no safe baseline; fall back to delete
+            verbose_proxy_logger.warning(
+                "Failed to read spend counter %s in Redis before reset; skipping the delta-preserving "
+                "reset and falling back to delete: %s",
+                counter_key,
+                redis_err,
+            )
+            return None
+
+    @staticmethod
+    async def _reset_redis_spend_counter(
+        redis_cache: "RedisCache", counter_key: str, new_spend: float, snapshot: float
+    ) -> bool:
+        from litellm.constants import (
+            RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS,
+            RESET_BUDGET_SPEND_COUNTER_RESET_RETRY_DELAY_SECONDS,
+        )
+
+        for attempt in range(RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS):
+            try:
+                await redis_cache.async_reset_preserving_delta(
+                    key=counter_key, new_base=new_spend, snapshot=snapshot, ttl=60
+                )
+                return True
+            except Exception as redis_err:  # noqa: BLE001  # any Redis failure here is worth a retry, not just specific ones
+                is_last_attempt = attempt == RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS - 1
+                verbose_proxy_logger.warning(
+                    "Attempt %d/%d to reset spend counter %s in Redis failed: %s",
+                    attempt + 1,
+                    RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS,
+                    counter_key,
+                    redis_err,
+                )
+                if not is_last_attempt:
+                    await asyncio.sleep(RESET_BUDGET_SPEND_COUNTER_RESET_RETRY_DELAY_SECONDS)
+        return False
 
     @staticmethod
     async def _invalidate_global_proxy_spend_cache() -> None:
@@ -566,20 +629,16 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:
-        """Drop a stale management-cache entry so the next read fetches from DB.
-
-        Tags and end-users are not reseeded by ``SpendCounterReseed.from_db``;
-        for those, when the spend counter expires the budget check falls back
-        to ``cached_obj.spend``. Keys, orgs, and team memberships are reseeded
-        from the DB, but auth still may consult ``user_api_key_cache`` objects
-        whose ``.spend`` field can lag a cross-pod DB reset. Deleting the cache
-        entry forces the next auth-time fetch to reload the zeroed row from
-        Postgres.
-        """
+        """Drop a stale management-cache entry on every pod (LIT-3803 cross-pod
+        eviction), so a pod other than the one that ran the reset doesn't keep
+        serving a cached object with the pre-reset spend."""
         try:
+            from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+                evict_and_broadcast,
+            )
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            await user_api_key_cache.async_delete_cache(key=cache_key)
+            await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to invalidate user_api_key_cache entry %s: %s",
@@ -988,6 +1047,7 @@ class ResetBudgetJob:
                         token = getattr(k, "token", None)
                         if token:
                             await self._invalidate_spend_counter(f"spend:key:{token}", new_spend=k.spend or 0.0)
+                            await self._invalidate_user_api_key_cache_entry(token)
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
@@ -1093,6 +1153,7 @@ class ResetBudgetJob:
                         user_id = getattr(u, "user_id", None)
                         if user_id:
                             await self._invalidate_spend_counter(f"spend:user:{user_id}", new_spend=u.spend or 0.0)
+                            await self._invalidate_user_api_key_cache_entry(user_id)
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
                             await self._invalidate_global_proxy_spend_cache()
 
@@ -1202,6 +1263,7 @@ class ResetBudgetJob:
                         team_id = getattr(t, "team_id", None)
                         if team_id:
                             await self._invalidate_spend_counter(f"spend:team:{team_id}", new_spend=t.spend or 0.0)
+                            await self._invalidate_user_api_key_cache_entry(f"team_id:{team_id}")
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(

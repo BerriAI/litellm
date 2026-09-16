@@ -10,17 +10,22 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import prisma
 import pytest
+from redis.asyncio import Redis
 
-
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_VerificationToken, UserAPIKeyAuth
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
+    RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS,
+)
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    AuthCacheInvalidationSubscriber,
 )
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 
 # Mock classes for testing
@@ -1225,7 +1230,8 @@ def _make_counter_invalidation_job(monkeypatch):
     spend_counter_cache = MagicMock()
     spend_counter_cache.in_memory_cache.set_cache = MagicMock()
     spend_counter_cache.redis_cache = MagicMock()
-    spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+    spend_counter_cache.redis_cache.async_get_cache = AsyncMock(return_value=0.0)
+    spend_counter_cache.redis_cache.async_reset_preserving_delta = AsyncMock()
 
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_delete_cache = AsyncMock()
@@ -1527,7 +1533,9 @@ def test_budget_table_reset_invalidates_counters_and_management_cache(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(key=counter_key, value=0.0, ttl=60)
-    counter_cache.redis_cache.async_set_cache.assert_any_await(key=counter_key, value=0.0, ttl=60)
+    counter_cache.redis_cache.async_reset_preserving_delta.assert_any_await(
+        key=counter_key, new_base=0.0, snapshot=0.0, ttl=60
+    )
     deleted = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert cache_keys <= deleted
 
@@ -1566,7 +1574,9 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:end_user:customer-42", value=0.0, ttl=60)
-    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:end_user:customer-42", value=0.0, ttl=60)
+    counter_cache.redis_cache.async_reset_preserving_delta.assert_any_await(
+        key="spend:end_user:customer-42", new_base=0.0, snapshot=0.0, ttl=60
+    )
     deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:customer-42" in deleted
 
@@ -3132,7 +3142,9 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:end_user:enduser-implicit", value=5.0, ttl=60)
-    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:end_user:enduser-implicit", value=5.0, ttl=60)
+    counter_cache.redis_cache.async_reset_preserving_delta.assert_any_await(
+        key="spend:end_user:enduser-implicit", new_base=5.0, snapshot=0.0, ttl=60
+    )
     deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:enduser-implicit" in deleted
 
@@ -3243,3 +3255,362 @@ def test_window_reset_zeroes_counter_when_rollover_disabled(monkeypatch):
 
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-off:window:1d", value=0.0)
     spend_counter_cache.async_get_cache.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Path 2 (#30460): resetting a key/user/team's own budget must also drop its
+# user_api_key_cache entry, not just the Redis spend counter, and that
+# invalidation must reach every pod, not only the one that ran the sweep.
+# ---------------------------------------------------------------------------
+
+
+def _direct_reset_fake_module(monkeypatch, user_api_key_cache, redis_usage_cache=None):
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.user_api_key_cache = user_api_key_cache
+    fake_module.redis_usage_cache = redis_usage_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    return spend_counter_cache
+
+
+def test_reset_budget_for_keys_invalidates_user_api_key_cache(reset_budget_job, mock_prisma_client, monkeypatch):
+    """
+    A stale user_api_key_cache entry must not survive a key's own budget
+    reset. Before the fix, _get_source_cache_base_spend could read this
+    cached object's pre-reset .spend straight back and re-seed the Redis
+    counter from it on the next request whose DB read fails, reinflating a
+    just-reset budget with no corresponding spend log (#30460 Path 2).
+    """
+    user_api_key_cache = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        "sk-abc", UserAPIKeyAuth(token="sk-abc", spend=100.0, max_budget=50.0), model_type=UserAPIKeyAuth
+    )
+    assert user_api_key_cache.get_cache("sk-abc", model_type=UserAPIKeyAuth) is not None
+    _direct_reset_fake_module(monkeypatch, user_api_key_cache)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {"spend": 100.0, "budget_duration": "30d", "budget_reset_at": now, "id": "key-1", "token": "sk-abc"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert user_api_key_cache.get_cache("sk-abc", model_type=UserAPIKeyAuth) is None
+
+
+def test_reset_budget_for_users_invalidates_user_api_key_cache(reset_budget_job, mock_prisma_client, monkeypatch):
+    """Same Path 2 gap on the user-scoped reset chunk."""
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    user_api_key_cache = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        "alice", LiteLLM_UserTable(user_id="alice", spend=50.0, max_budget=20.0), model_type=LiteLLM_UserTable
+    )
+    assert user_api_key_cache.get_cache("alice", model_type=LiteLLM_UserTable) is not None
+    _direct_reset_fake_module(monkeypatch, user_api_key_cache)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "User",
+            (),
+            {"spend": 50.0, "budget_duration": "7d", "budget_reset_at": now, "id": "user-1", "user_id": "alice"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    assert user_api_key_cache.get_cache("alice", model_type=LiteLLM_UserTable) is None
+
+
+def test_reset_budget_for_teams_invalidates_user_api_key_cache(reset_budget_job, mock_prisma_client, monkeypatch):
+    """Same Path 2 gap on the team-scoped reset chunk; teams cache under
+    ``team_id:{team_id}`` (see auth_checks.get_team_object), not the bare id."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    user_api_key_cache = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        "team_id:team-x",
+        LiteLLM_TeamTable(team_id="team-x", spend=200.0, max_budget=100.0),
+        model_type=LiteLLM_TeamTable,
+    )
+    assert user_api_key_cache.get_cache("team_id:team-x", model_type=LiteLLM_TeamTable) is not None
+    _direct_reset_fake_module(monkeypatch, user_api_key_cache)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["team"] = [
+        type(
+            "Team",
+            (),
+            {"spend": 200.0, "budget_duration": "1mo", "budget_reset_at": now, "id": "team-1", "team_id": "team-x"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
+
+    assert user_api_key_cache.get_cache("team_id:team-x", model_type=LiteLLM_TeamTable) is None
+
+
+class _LoopbackPubSubRedisClient(Redis):
+    """One fake client good enough to both publish() and pubsub() against the
+    same in-process queue, so a test can prove a message one pod publishes is
+    actually delivered to another pod's subscriber."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue = asyncio.Queue()
+
+    async def publish(self, channel: str, message: str) -> int:
+        self._queue.put_nowait({"type": "message", "data": message.encode()})
+        return 1
+
+    def pubsub(self):
+        return self
+
+    async def subscribe(self, *channels: str) -> None:
+        pass
+
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float):
+        try:
+            return await asyncio.wait_for(self._queue.get(), timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _FakeCoordinationRedisCache:
+    def __init__(self, client: object) -> None:
+        self._client = client
+        self.namespace = None
+
+    def init_async_client(self) -> object:
+        return self._client
+
+
+async def test_reset_budget_for_keys_broadcasts_cache_invalidation_to_other_pods(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """
+    Only one pod runs the reset job per tick (_acquire_lease elects one
+    sweeper), so a local-only cache delete would leave every other pod's
+    user_api_key_cache serving the pre-reset spend until its TTL. This proves
+    the invalidation is actually broadcast (LIT-3803) to a second pod that
+    never ran the sweep, closing the multi-pod half of #30460 Path 2.
+    """
+    shared_redis_cache = _FakeCoordinationRedisCache(client=_LoopbackPubSubRedisClient())
+
+    leader_cache = UserApiKeyCache()
+    follower_cache = UserApiKeyCache()
+    for cache in (leader_cache, follower_cache):
+        cache.set_cache(
+            "sk-abc", UserAPIKeyAuth(token="sk-abc", spend=100.0, max_budget=50.0), model_type=UserAPIKeyAuth
+        )
+
+    _direct_reset_fake_module(monkeypatch, leader_cache, redis_usage_cache=shared_redis_cache)
+
+    subscriber = AuthCacheInvalidationSubscriber(redis_cache=shared_redis_cache, user_api_key_cache=follower_cache)
+    subscriber.start()
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {"spend": 100.0, "budget_duration": "30d", "budget_reset_at": now, "id": "key-1", "token": "sk-abc"},
+        )
+    ]
+
+    try:
+        await reset_budget_job.reset_budget_for_litellm_keys()
+
+        for _ in range(200):
+            if follower_cache.get_cache("sk-abc", model_type=UserAPIKeyAuth) is None:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await subscriber.stop()
+
+    assert leader_cache.get_cache("sk-abc", model_type=UserAPIKeyAuth) is None
+    assert follower_cache.get_cache("sk-abc", model_type=UserAPIKeyAuth) is None
+
+
+# ---------------------------------------------------------------------------
+# Path 3 (#30460): a failed Redis SET-to-zero on budget reset must not
+# silently leave the inflated pre-reset counter authoritative in Redis.
+# ---------------------------------------------------------------------------
+
+
+def test_invalidate_spend_counter_retries_then_deletes_on_persistent_redis_failure(monkeypatch):
+    """
+    Every reset attempt fails: the fix must retry a bounded number of
+    times, then fall back to deleting the counter (a missing counter reads as
+    cold and reseeds from the DB, see _ensure_spend_counter_initialized)
+    instead of leaving the old, inflated value authoritative until its TTL.
+    """
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_get_cache = AsyncMock(return_value=80.0)
+    spend_counter_cache.redis_cache.async_reset_preserving_delta = AsyncMock(
+        side_effect=RuntimeError("elasticache timeout")
+    )
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    asyncio.run(ResetBudgetJob._invalidate_spend_counter("spend:key:sk-inflated", new_spend=0.0))
+
+    assert (
+        spend_counter_cache.redis_cache.async_reset_preserving_delta.await_count
+        == RESET_BUDGET_SPEND_COUNTER_RESET_MAX_ATTEMPTS
+    )
+    spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:key:sk-inflated")
+
+
+def test_invalidate_spend_counter_swallows_a_delete_failure_after_reset_already_failed(monkeypatch):
+    """The fallback delete is itself best-effort: if it also fails (e.g. the same
+    outage that broke the reset), there is nothing left to try, and the failure
+    must be logged and swallowed rather than propagate out of the reset job."""
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_get_cache = AsyncMock(return_value=80.0)
+    spend_counter_cache.redis_cache.async_reset_preserving_delta = AsyncMock(
+        side_effect=RuntimeError("elasticache timeout")
+    )
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock(side_effect=RuntimeError("elasticache timeout"))
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    # must not raise
+    asyncio.run(ResetBudgetJob._invalidate_spend_counter("spend:key:sk-double-failure", new_spend=0.0))
+
+    spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:key:sk-double-failure")
+
+
+def test_invalidate_spend_counter_recovers_after_a_transient_redis_failure(monkeypatch):
+    """A reset that fails once and then succeeds must not fall back to delete:
+    the counter ends up reset to the real value, not merely absent."""
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_get_cache = AsyncMock(return_value=80.0)
+    spend_counter_cache.redis_cache.async_reset_preserving_delta = AsyncMock(
+        side_effect=[RuntimeError("elasticache timeout"), 0.0]
+    )
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    asyncio.run(ResetBudgetJob._invalidate_spend_counter("spend:key:sk-recovered", new_spend=0.0))
+
+    assert spend_counter_cache.redis_cache.async_reset_preserving_delta.await_count == 2
+    spend_counter_cache.redis_cache.async_delete_cache.assert_not_awaited()
+
+
+def test_invalidate_spend_counter_skips_straight_to_delete_when_snapshot_read_fails(monkeypatch):
+    """No safe baseline to preserve a concurrent increment against: guessing with
+    a blind reset would reopen the exact race this fix closes, so a failed
+    pre-reset snapshot read must fall straight back to delete instead of
+    attempting the atomic reset at all."""
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_get_cache = AsyncMock(side_effect=RuntimeError("elasticache timeout"))
+    spend_counter_cache.redis_cache.async_reset_preserving_delta = AsyncMock()
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    asyncio.run(ResetBudgetJob._invalidate_spend_counter("spend:key:sk-no-snapshot", new_spend=0.0))
+
+    spend_counter_cache.redis_cache.async_reset_preserving_delta.assert_not_awaited()
+    spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:key:sk-no-snapshot")
+
+
+class _FakeRedisSpendCounter:
+    """A minimal in-process stand-in for the Redis key under test, faithful to
+    async_reset_preserving_delta's GET/compute/SET contract (new_base + max(0,
+    current - snapshot)), so what's actually under test is the retry loop's own
+    behavior of holding one fixed snapshot across attempts rather than re-reading
+    it, which is what makes a concurrent increment during the retry delay survive."""
+
+    def __init__(self, initial: float):
+        self.value = initial
+        self.attempts = 0
+        self.fail_first_n = 0
+
+    async def async_get_cache(self, key):
+        return self.value
+
+    async def async_reset_preserving_delta(self, key, new_base, snapshot, ttl=None):
+        self.attempts += 1
+        if self.attempts <= self.fail_first_n:
+            raise RuntimeError("elasticache timeout")
+        delta = max(0.0, self.value - snapshot)
+        self.value = new_base + delta
+        return self.value
+
+    async def async_increment(self, key, value, refresh_ttl=False):
+        self.value += value
+        return self.value
+
+    async def async_delete_cache(self, key):
+        self.value = None
+
+
+def test_invalidate_spend_counter_preserves_a_concurrent_increment_made_during_the_retry_delay(monkeypatch):
+    """
+    Regression for the reset-retry race (veria-ai finding, reset_budget_job.py):
+    if a request's Redis INCR lands in the delay between a failed reset attempt
+    and its retry, the eventual successful reset must not erase it. Before the
+    fix, the retry replayed an unconditional SET to new_spend and would have
+    wiped the concurrent increment out; the delta-preserving reset must carry
+    it forward instead, since it represents real spend reserved after the
+    reset boundary.
+    """
+    store = _FakeRedisSpendCounter(initial=80.0)
+    store.fail_first_n = 1
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = store
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    concurrent_increment_applied = False
+
+    async def sleep_and_race(_delay):
+        nonlocal concurrent_increment_applied
+        if not concurrent_increment_applied:
+            await store.async_increment(key="spend:key:sk-race", value=5.0)
+            concurrent_increment_applied = True
+
+    monkeypatch.setattr(asyncio, "sleep", sleep_and_race)
+
+    asyncio.run(ResetBudgetJob._invalidate_spend_counter("spend:key:sk-race", new_spend=0.0))
+
+    assert concurrent_increment_applied
+    assert store.value == 5.0
