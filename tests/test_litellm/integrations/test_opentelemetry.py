@@ -5581,21 +5581,28 @@ class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
         otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
         assert "http.route" not in self._attr(span, exp)
 
-    def test_nested_metadata_key_promoted_under_leaf_name(self):
+    def test_nested_metadata_key_promoted_under_caller_path(self):
         """``baggage_metadata_keys: [requester_metadata.trace_id]`` stamps the
-        caller's nested metadata value as ``litellm.metadata.trace_id``; unlisted
-        siblings stay inside the ``metadata.requester_metadata`` blob."""
-        otel = OpenTelemetry(config=OpenTelemetryConfig(baggage_metadata_keys=["requester_metadata.trace_id"]))
+        caller's nested metadata value as ``litellm.metadata.trace_id`` and a deeper
+        path keeps its dotted name; unlisted siblings stay inside the
+        ``metadata.requester_metadata`` blob."""
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(
+                baggage_metadata_keys=["requester_metadata.trace_id", "requester_metadata.nested.deep"]
+            )
+        )
         kwargs = self._kwargs()
         kwargs["standard_logging_object"]["metadata"]["requester_metadata"] = {
             "trace_id": "abc",
-            "nested": {"deep": "x"},
+            "nested": {"deep": "x", "skipped": "y"},
         }
         span, exp = self._span()
         otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
         attrs = self._attr(span, exp)
         assert attrs["litellm.metadata.trace_id"] == "abc"
+        assert attrs["litellm.metadata.nested.deep"] == "x"
         assert "litellm.metadata.deep" not in attrs
+        assert "litellm.metadata.nested.skipped" not in attrs
         assert not any(k.startswith("litellm.metadata.requester_metadata") for k in attrs)
 
     def test_metadata_keys_default_to_none_promoted(self):

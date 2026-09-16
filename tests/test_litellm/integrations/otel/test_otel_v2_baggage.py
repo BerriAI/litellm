@@ -168,31 +168,43 @@ def test_allowlisted_metadata_subkey_promoted_blob_excluded():
     assert all("private_note" not in k for k in span.attributes)
 
 
-def test_nested_metadata_key_promoted_under_leaf_name():
+def test_nested_metadata_key_promoted_under_caller_path():
     """A dotted allowlist entry reads the nested caller metadata the proxy stores
-    under ``requester_metadata`` and lands on the LLM-call span as
-    ``litellm.metadata.<leaf>``; unlisted siblings and the blob stay out."""
+    under ``requester_metadata`` and lands on the LLM-call span under the caller's
+    own path (``litellm.metadata.trace_id``, ``litellm.metadata.nested.deep``);
+    a pre-existing flat dotted key keeps its full name, and unlisted siblings and
+    the blob stay out."""
     engine, exporter = _engine_and_exporter()
     payload = _payload()
+    payload["metadata"]["a.b"] = "flat"
     payload["metadata"]["requester_metadata"] = {
         "trace_id": "abc",
         "attempt": 0,
         "empty": "",
-        "nested": {"deep": "x"},
+        "nested": {"deep": "x", "skipped": "y"},
     }
     data = LLMCallSpanData.from_standard_logging_payload(payload)
     bag = promoted_baggage(
         data.identity,
         data.request_model,
         BAGGAGE_PROMOTED_KEYS,
-        metadata_keys=("requester_metadata.trace_id", "requester_metadata.attempt", "requester_metadata.empty"),
+        metadata_keys=(
+            "requester_metadata.trace_id",
+            "requester_metadata.attempt",
+            "requester_metadata.empty",
+            "requester_metadata.nested.deep",
+            "a.b",
+        ),
     )
     engine.emit(SpanRole.LLM_CALL, data, ctx_mod.set_request_baggage(bag))
     (span,) = exporter.get_finished_spans()
     assert span.attributes[f"{LiteLLM.METADATA_PREFIX}trace_id"] == "abc"
     assert span.attributes[f"{LiteLLM.METADATA_PREFIX}attempt"] == "0"
+    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}nested.deep"] == "x"
+    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}a.b"] == "flat"
     assert f"{LiteLLM.METADATA_PREFIX}empty" not in span.attributes
     assert f"{LiteLLM.METADATA_PREFIX}deep" not in span.attributes
+    assert f"{LiteLLM.METADATA_PREFIX}nested.skipped" not in span.attributes
     assert not any(k.startswith(f"{LiteLLM.METADATA_PREFIX}requester_metadata") for k in span.attributes)
 
 
