@@ -4919,6 +4919,23 @@ def test_transform_verification_tokens_to_deleted_records():
     assert json.loads(record2["budget_fallbacks"]) == {"gpt-4": ["gpt-4o-mini"]}
 
 
+def test_transform_verification_tokens_to_deleted_records_keeps_organization_id():
+    live_row = MagicMock()
+    live_row.model_dump.return_value = {
+        "token": "hashed-token-org",
+        "user_id": "user-123",
+        "team_id": None,
+        "organization_id": "org-finops",
+    }
+
+    records = _transform_verification_tokens_to_deleted_records(
+        keys=[live_row],
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", api_key="sk-admin"),
+    )
+
+    assert records[0]["organization_id"] == "org-finops"
+
+
 def test_transform_verification_tokens_to_deleted_records_empty_list():
     user_api_key_dict = UserAPIKeyAuth(
         user_id="user-123",
@@ -6135,6 +6152,7 @@ def _archived_key_row(token: str, user_id: str) -> MagicMock:
         "key_alias": "finops-2024",
         "user_id": user_id,
         "team_id": None,
+        "organization_id": "org-finops",
         "blocked": None,
         "deleted_at": datetime(2024, 11, 15, 10, 0, tzinfo=timezone.utc),
         "deleted_by": "admin-1",
@@ -6166,6 +6184,7 @@ async def test_info_key_fn_serves_deleted_key_from_archive(monkeypatch):
     info = result["info"]
     assert info["status"] == "deleted"
     assert info["key_alias"] == "finops-2024"
+    assert info["organization_id"] == "org-finops"
     assert info["deleted_by"] == "admin-1"
     assert info["deleted_at"] is not None
     assert "token" not in info
