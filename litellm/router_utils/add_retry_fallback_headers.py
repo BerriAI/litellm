@@ -151,7 +151,7 @@ def apply_quality_router_decision_headers(
             additional_headers[header] = str(decision[field])
 
 
-def response_in_flight_token_count(response: object) -> int:
+def response_total_token_count(response: object) -> int:
     usage: Final = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
     if usage is None:
         return 0
@@ -166,15 +166,10 @@ def response_in_flight_token_count(response: object) -> int:
 def apply_remaining_usage_headers(
     additional_headers: dict[str, object],
     remaining_usage: dict[str, int],
-    in_flight_tokens: int,
 ) -> None:
-    in_flight_delta: Final = {
-        "x-ratelimit-remaining-tokens": in_flight_tokens,
-        "x-ratelimit-remaining-requests": 1,
-    }
     for header, value in remaining_usage.items():
         if value is not None and header not in additional_headers:
-            additional_headers[header] = value - in_flight_delta.get(header, 0)
+            additional_headers[header] = value
 
 
 def _normalize_hidden_params(hidden_params: object) -> dict[str, object]:

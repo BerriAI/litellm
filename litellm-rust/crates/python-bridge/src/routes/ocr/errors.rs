@@ -1,4 +1,5 @@
 use litellm_core::ocr::Error;
+use pyo3::exceptions::{PyFileNotFoundError, PyOSError};
 use pyo3::prelude::*;
 
 use crate::errors::{RustUpstreamError, core_error_to_pyerr};
@@ -7,6 +8,12 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
     let status = error.http_status_code();
     let mapped = match error {
         Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
+        Error::FileRead {
+            path,
+            kind: std::io::ErrorKind::NotFound,
+            ..
+        } => PyFileNotFoundError::new_err(format!("File not found: {}", path.display())),
+        Error::FileRead { message, .. } => PyOSError::new_err(message),
         other => core_error_to_pyerr(other.into()),
     };
     attach_status(mapped, status)
