@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from time import monotonic
 
 import pytest
@@ -197,3 +198,32 @@ def test_prometheus_customer_budget_series_are_capped_per_metric(monkeypatch):
 
     assert set(logger.litellm_remaining_customer_budget_metric._metrics) == {("customer-3",), ("customer-4",)}
     assert set(logger.litellm_customer_max_budget_metric._metrics) == {("customer-3",), ("customer-4",)}
+
+
+def test_prometheus_customer_budget_series_expire_by_ttl(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_end_user_cost_tracking_prometheus_only", True)
+    monkeypatch.setattr(litellm, "prometheus_end_user_metrics_max_series_per_metric", None)
+    monkeypatch.setattr(litellm, "prometheus_end_user_metrics_ttl_seconds", 10.0)
+    monkeypatch.setattr(litellm, "prometheus_end_user_metrics_cleanup_interval_seconds", 0.0)
+    logger = PrometheusLogger()
+
+    current_time = [monotonic()]
+    monkeypatch.setattr(bounded_prometheus_series_tracker.time, "monotonic", lambda: current_time[0])
+    logger._set_customer_budget_metrics(
+        end_user_id="customer-with-removed-budget",
+        spend=1.0,
+        max_budget=10.0,
+        budget_reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    current_time[0] += 11.0
+    logger._set_customer_budget_metrics(
+        end_user_id="customer-still-budgeted",
+        spend=1.0,
+        max_budget=10.0,
+        budget_reset_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    assert set(logger.litellm_remaining_customer_budget_metric._metrics) == {("customer-still-budgeted",)}
+    assert set(logger.litellm_customer_max_budget_metric._metrics) == {("customer-still-budgeted",)}
+    assert set(logger.litellm_customer_budget_remaining_hours_metric._metrics) == {("customer-still-budgeted",)}
