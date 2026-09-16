@@ -102,6 +102,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -116,6 +117,41 @@ describe("TopKeyView", () => {
     expect(screen.getByText(/tag-1/)).toBeInTheDocument();
     expect(screen.getByText(/tag-2/)).toBeInTheDocument();
     expect(screen.getByText("$100.00")).toBeInTheDocument();
+  });
+
+  it("should render User column only when a row has user attribution", () => {
+    const { rerender } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "Key without user",
+            user_email: null,
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+
+    rerender(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "",
+            user_email: "alice@example.com",
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
   });
 
   it("should switch to chart view when chart view button is clicked", async () => {
@@ -142,6 +178,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "A Very Long Key Alias",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -197,6 +234,7 @@ describe("TopKeyView", () => {
           {
             api_key: "sk-1234567890abcdef",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -215,12 +253,13 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "",
+            user_email: null,
             spend: 100,
           },
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-")).toHaveLength(1);
   });
 
   it("should format spend values with two decimal places", () => {
@@ -231,6 +270,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 123.456,
           },
         ]}
@@ -247,6 +287,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 0.004,
           },
         ]}
@@ -263,12 +304,13 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 0,
           },
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-")).toHaveLength(1);
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
@@ -280,6 +322,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
             tags: [],
           },
@@ -298,6 +341,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -315,6 +359,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -340,6 +385,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -367,6 +413,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -404,6 +451,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -438,6 +486,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -475,6 +524,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -511,6 +561,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -550,6 +601,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -580,6 +632,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -610,6 +663,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user_email: null,
             spend: 100,
             tags: [
               { tag: "tag-low", usage: 10 },
@@ -643,6 +697,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "This is a very long key alias",
+            user_email: null,
             spend: 100,
           },
         ]}
@@ -659,11 +714,12 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: null,
+            user_email: null,
             spend: 100,
           },
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-")).toHaveLength(1);
   });
 });

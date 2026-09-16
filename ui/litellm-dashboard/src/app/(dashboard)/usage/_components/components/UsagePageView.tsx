@@ -62,7 +62,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
-import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
@@ -408,7 +408,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [userSpendData.results]);
 
   // Calculate top API keys from the breakdown data
-  const topKeys = useMemo(() => {
+  const topKeys = useMemo<TopKeyItem[]>(() => {
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
@@ -449,6 +449,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       .map(([api_key, metrics]) => ({
         api_key,
         key_alias: keyActivityLabel(metrics.metadata),
+        user_email: metrics.metadata.user_email ?? null,
         tags: metrics.metadata.tags || [],
         spend: metrics.metrics.spend,
       }))
