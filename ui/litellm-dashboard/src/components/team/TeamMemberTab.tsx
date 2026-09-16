@@ -150,9 +150,7 @@ export default function TeamMemberTab({
         <div>
           <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />
           <div className="text-xs text-muted-foreground">
-            {describeCycleWindow(getUserBudgetTable(record.user_id), (iso) =>
-              formatCellDate(new Date(iso), "date"),
-            )}
+            {describeCycleWindow(getUserBudgetTable(record.user_id), (iso) => formatCellDate(new Date(iso), "date"))}
           </div>
         </div>
       ),
