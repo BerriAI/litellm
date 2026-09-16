@@ -955,6 +955,8 @@ def test_source_overrides_pick_the_most_specific_matching_range():
     assert _limit("203.0.1.1") == 100
     assert _limit("192.0.2.1") == 7
     assert _limit("198.51.100.1") == 7, "a garbage limit falls back to the default rather than a huge or zero budget"
+    assert _limit("::ffff:203.0.113.9") == 300, "a mapped address gets the limit of the IPv4 bucket it is counted in"
+    assert _limit("::ffff:203.0.113.10") == 200
 
 
 def test_ipv6_sources_are_grouped_by_their_64_bit_prefix():
