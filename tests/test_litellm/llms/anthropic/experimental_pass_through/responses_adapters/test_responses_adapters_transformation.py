@@ -2078,6 +2078,46 @@ class TestPromptCacheBreakpointToResponses:
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
         ]
 
+    def test_system_with_cache_control_becomes_leading_developer_message(self):
+        request = _make_request(
+            model="bedrock_mantle/openai.gpt-5.6-terra",
+            system=[
+                {"type": "text", "text": "Be concise."},
+                {"type": "text", "text": "Be helpful.", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert "instructions" not in kwargs
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {
+                    "type": "input_text",
+                    "text": "Be helpful.",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+            ],
+        }
+        assert not _contains_key(kwargs["input"][0], "cache_control")
+
+    def test_system_cache_control_does_not_override_explicit_breakpoint(self):
+        request = _make_request(
+            system=[
+                {
+                    "type": "text",
+                    "text": "Be helpful.",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    "prompt_cache_breakpoint": self.EXPLICIT,
+                }
+            ],
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert kwargs["input"][0]["content"] == [
+            {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT}
+        ]
+
     def test_system_without_breakpoint_still_becomes_instructions(self):
         request = _make_request(
             system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}]
@@ -2153,6 +2193,23 @@ class TestPromptCacheBreakpointToResponses:
                 "type": "message",
                 "role": "system",
                 "content": [{"type": "input_text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}],
+            }
+        ]
+
+    def test_midturn_system_block_with_cache_control_carries_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "fix", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                }
+            ]
+        )
+        assert items == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "fix", "prompt_cache_breakpoint": {"mode": "explicit"}}],
             }
         ]
 

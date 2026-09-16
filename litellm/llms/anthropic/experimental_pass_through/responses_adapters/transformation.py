@@ -45,6 +45,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicUsage,
 )
 from litellm.types.llms.openai import (
+    PromptCacheBreakpoint,
     ResponseAPIUsage,
     ResponsesAPIResponse,
 )
@@ -153,11 +154,20 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return []  # mutable-ok: API message payload
         return [  # mutable-ok: API message payload
             with_prompt_cache_breakpoint(
-                {"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint")
+                {"type": "input_text", "text": text},
+                LiteLLMAnthropicToResponsesAPIAdapter._system_block_cache_breakpoint(cast(dict[str, object], block)),
             )  # mutable-ok: API message payload
             for block in content
             if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
         ]
+
+    @staticmethod
+    def _system_block_cache_breakpoint(block: dict[str, object]) -> object | None:
+        """`prompt_cache_breakpoint` wins; an Anthropic `cache_control` marker maps to an explicit breakpoint."""
+        marker: Final = block.get("prompt_cache_breakpoint")
+        if marker is not None:
+            return marker
+        return PromptCacheBreakpoint(mode="explicit") if block.get("cache_control") is not None else None
 
     @staticmethod
     def _summary_part_text(part: object) -> str:
@@ -527,7 +537,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
             if isinstance(system, list)
-            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
+            and any(
+                isinstance(block, dict)
+                and LiteLLMAnthropicToResponsesAPIAdapter._system_block_cache_breakpoint(block) is not None
+                for block in system
+            )
             else ()
         )
         if developer_parts:
