@@ -117,6 +117,9 @@ def azure_prompt_shield_guardrail_cost(
 
 
 class GuardrailProviderCostEntry(BaseModel):
+    """Validated apart from ``GuardrailCostEntry`` so a malformed provider field can
+    never zero the spend path."""
+
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     guardrail_provider: str | None = None
@@ -126,7 +129,6 @@ class GuardrailProviderCostEntry(BaseModel):
 _GUARDRAIL_PROVIDER_COST_ENTRY_ADAPTER: Final[TypeAdapter[GuardrailProviderCostEntry]] = TypeAdapter(
     GuardrailProviderCostEntry
 )
-_GUARDRAIL_INFORMATION_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _prompt_shield_entry_cost(raw: object) -> float | None:
@@ -150,15 +152,11 @@ def prompt_shield_guardrail_cost(guardrail_information: object) -> float | None:
     report-only entries included; None when no such entry carried a cost."""
     if guardrail_information is None:
         return None
-    entries: Final[tuple[object, ...]] = (
-        _GUARDRAIL_INFORMATION_ENTRIES_ADAPTER.validate_python(guardrail_information)
-        if isinstance(guardrail_information, (list, tuple))
-        else (guardrail_information,)
+    entries: Final = (
+        guardrail_information if isinstance(guardrail_information, (list, tuple)) else (guardrail_information,)
     )
-    qualifying_costs: Final = tuple(
-        cost for entry in entries for cost in (_prompt_shield_entry_cost(entry),) if cost is not None
-    )
-    return None if not qualifying_costs else sum(qualifying_costs)
+    qualifying_costs: Final = tuple(cost for entry in entries if (cost := _prompt_shield_entry_cost(entry)) is not None)
+    return sum(qualifying_costs) if qualifying_costs else None
 
 
 def _billable_entry_cost(entry: GuardrailCostEntry) -> float:
