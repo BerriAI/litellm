@@ -361,7 +361,7 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
 interface TimelineEntry {
   type: "request" | "guardrail" | "llm" | "response";
   label: string;
-  offsetMs: number;
+  offsetMs: number | null;
   outcome?: EntryOutcome;
 }
 
@@ -370,17 +370,26 @@ type TimedGuardrailInformation = GuardrailInformation & { start_time: number; en
 const isTimed = (e: GuardrailInformation): e is TimedGuardrailInformation =>
   typeof e.start_time === "number" && typeof e.end_time === "number";
 
+const belongsOnLifecycle = (e: GuardrailInformation): boolean => isTimed(e) || getEntryOutcome(e) !== "not_run";
+
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
-  const sorted = useMemo(() => entries.filter(isTimed).sort((a, b) => a.start_time - b.start_time), [entries]);
+  const sorted = useMemo(() => {
+    const onLifecycle = entries.filter(belongsOnLifecycle);
+    const timed = onLifecycle.filter(isTimed).sort((a, b) => a.start_time - b.start_time);
+    return [...timed, ...onLifecycle.filter((e) => !isTimed(e))];
+  }, [entries]);
 
   const timeline = useMemo(() => {
     if (sorted.length === 0) return [];
 
-    const baseTime = sorted[0].start_time;
+    const timed = sorted.filter(isTimed);
+    const baseTime = timed.length > 0 ? timed[0].start_time : null;
+    const offsetOf = (e: GuardrailInformation): number | null =>
+      baseTime === null || !isTimed(e) ? null : Math.round((e.end_time - baseTime) * 1000);
     const items: TimelineEntry[] = [];
 
     // Request received
-    items.push({ type: "request", label: "Request received", offsetMs: 0 });
+    items.push({ type: "request", label: "Request received", offsetMs: baseTime === null ? null : 0 });
 
     // Pre-call guardrails — use modeMatches so array modes (e.g. ["pre_call", "post_call"])
     // place the entry in every matching bucket.
@@ -391,52 +400,50 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     const duringCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "during_call"));
 
     for (const e of preCalls) {
-      const offsetMs = Math.round((e.end_time - baseTime) * 1000);
       items.push({
         type: "guardrail",
         label: `Pre-call guardrail: ${getDisplayName(e)}`,
-        offsetMs,
+        offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
     }
 
     // LLM call — infer from gap between pre-call end and post-call start
-    const lastPreEnd = preCalls.length > 0 ? Math.max(...preCalls.map((e) => e.end_time)) : baseTime;
-    const firstPostStart = postCalls.length > 0 ? Math.min(...postCalls.map((e) => e.start_time)) : undefined;
-    const llmEndTime = firstPostStart ?? lastPreEnd + 1;
-    const llmOffsetMs = Math.round((llmEndTime - baseTime) * 1000);
+    const timedPre = preCalls.filter(isTimed);
+    const timedPost = postCalls.filter(isTimed);
+    const lastPreEnd = timedPre.length > 0 ? Math.max(...timedPre.map((e) => e.end_time)) : baseTime;
+    const firstPostStart = timedPost.length > 0 ? Math.min(...timedPost.map((e) => e.start_time)) : undefined;
+    const llmEndTime = firstPostStart ?? (lastPreEnd === null ? null : lastPreEnd + 1);
 
     items.push({
       type: "llm",
       label: "LLM call",
-      offsetMs: llmOffsetMs,
+      offsetMs: llmEndTime === null || baseTime === null ? null : Math.round((llmEndTime - baseTime) * 1000),
     });
 
     // During-call guardrails (rare)
     for (const e of duringCalls) {
-      const offsetMs = Math.round((e.end_time - baseTime) * 1000);
       items.push({
         type: "guardrail",
         label: `During-call guardrail: ${getDisplayName(e)}`,
-        offsetMs,
+        offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
     }
 
     // Post-call guardrails
     for (const e of postCalls) {
-      const offsetMs = Math.round((e.end_time - baseTime) * 1000);
       items.push({
         type: "guardrail",
         label: `Post-call guardrail: ${getDisplayName(e)}`,
-        offsetMs,
+        offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
     }
 
     // Response returned
-    const maxEnd = Math.max(...sorted.map((e) => e.end_time));
-    const responseOffsetMs = Math.round((maxEnd - baseTime) * 1000) + 1;
+    const maxEnd = timed.length > 0 ? Math.max(...timed.map((e) => e.end_time)) : null;
+    const responseOffsetMs = maxEnd === null || baseTime === null ? null : Math.round((maxEnd - baseTime) * 1000) + 1;
     items.push({ type: "response", label: "Response returned", offsetMs: responseOffsetMs });
 
     return items;
@@ -475,7 +482,9 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                     {OUTCOME_LABEL[item.outcome]}
                   </span>
                 )}
-                <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
+                <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">
+                  {item.offsetMs === null ? "—" : `T+${item.offsetMs}ms`}
+                </span>
               </div>
             </div>
           </div>

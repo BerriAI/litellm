@@ -24,6 +24,15 @@ const skippedPreCall: Partial<GuardrailInformation> = {
   duration: null,
 };
 
+const untimedPreCall: Partial<GuardrailInformation> = {
+  guardrail_name: "conduct",
+  guardrail_status: "success",
+  guardrail_mode: "pre_call",
+  start_time: null,
+  end_time: null,
+  duration: null,
+};
+
 const ranPostCall: Partial<GuardrailInformation> = {
   guardrail_name: "ran-rail",
   guardrail_status: "success",
@@ -96,6 +105,30 @@ describe("GuardrailViewer", () => {
     expect(screen.getByText("Response returned").parentElement).toHaveTextContent("T+251ms");
     expect(screen.queryByText(/Pre-call guardrail: skipped-rail/)).not.toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("keeps a guardrail that ran without any timing on the lifecycle", () => {
+    renderWithProviders(<GuardrailViewer data={makeGuardrailInformation(untimedPreCall)} />);
+
+    expect(screen.getByText("Request received")).toBeInTheDocument();
+    expect(screen.getByText(/Pre-call guardrail: conduct/)).toBeInTheDocument();
+    expect(screen.getByText("LLM call")).toBeInTheDocument();
+    expect(screen.getByText("Response returned")).toBeInTheDocument();
+    expect(screen.queryByText(/^T\+/)).not.toBeInTheDocument();
+  });
+
+  it("anchors offsets on the timed entries and gives the untimed one no fabricated offset", () => {
+    const untimed = makeGuardrailInformation(untimedPreCall);
+    const ran = makeGuardrailInformation(ranPostCall);
+    renderWithProviders(<GuardrailViewer data={[untimed, ran]} />);
+
+    expect(screen.getByText("Request received").parentElement).toHaveTextContent("T+0ms");
+    expect(screen.getByText(/Post-call guardrail: ran-rail/).parentElement).toHaveTextContent("T+250ms");
+    expect(screen.getByText("Response returned").parentElement).toHaveTextContent("T+251ms");
+
+    const untimedRow = screen.getByText(/Pre-call guardrail: conduct/).parentElement;
+    expect(untimedRow).toHaveTextContent("—");
+    expect(untimedRow).not.toHaveTextContent(/T\+/);
   });
 
   it("calculates and displays masked entity totals", async () => {
