@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import base64
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
 from fastapi import HTTPException
 from pydantic import SecretStr
 from typing_extensions import assert_never
 
-from litellm.experimental_mcp_client.client import strip_auth_scheme, to_basic_credentials
+from litellm.experimental_mcp_client.client import MCPClient, strip_auth_scheme, to_basic_credentials
 from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
     ApiKeyConfig,
@@ -39,7 +41,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPAuthType, MCPTransport
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -385,3 +387,64 @@ def raise_token_exchange_challenge(
         detail="Unauthorized",
         headers={"WWW-Authenticate": www_authenticate},
     )
+
+
+_STATIC_MODES: Final = frozenset(
+    (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.token, MCPAuth.authorization)
+)
+
+
+def _usable_credential_value(auth_type: MCPAuthType, name: str, value: str) -> bool:
+    if not value:
+        return False
+    if auth_type == MCPAuth.authorization or (auth_type == MCPAuth.api_key and name != "authorization"):
+        return True
+    if value.lower() in ("bearer", "basic", "token", "apikey"):
+        return False
+    if auth_type in (MCPAuth.bearer_token, MCPAuth.token):
+        scheme: Final = "Bearer" if auth_type == MCPAuth.bearer_token else "token"
+        credential: Final = strip_auth_scheme(value, scheme).strip()
+        return bool(credential) and credential.lower() != scheme.lower()
+    if auth_type == MCPAuth.basic:
+        parts: Final = value.split(None, 1)
+        if len(parts) != 2 or parts[0].lower() != "basic":
+            return False
+        try:
+            decoded: Final = base64.b64decode(parts[1], validate=True).strip()
+            return b":" in decoded
+        except ValueError:
+            return False
+    return True
+
+
+def validate_static_credential(
+    auth_type: MCPAuthType,
+    headers: Mapping[str, str],
+    upstream_token_header: str | None = None,
+) -> Result[None, CredError]:
+    if auth_type not in _STATIC_MODES:
+        return Ok(None)
+    default_slot: Final = "X-API-Key" if auth_type == MCPAuth.api_key else "Authorization"
+    slots: Final = frozenset(
+        name.lower()
+        for name in (
+            upstream_token_header or default_slot,
+            default_slot,
+            "Authorization",
+        )
+    )
+    values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
+    if any(_usable_credential_value(auth_type, name, value) for name, value in values):
+        return Ok(None)
+    return Error(CredError.of_misconfigured(f"{auth_type} requires a usable upstream credential"))
+
+
+async def prepare_mcp_client(server: MCPServer, client: MCPClient) -> MCPClient:
+    if server.auth_type not in _STATIC_MODES or client.transport_type == MCPTransport.stdio:
+        return client
+    request: Final = await client.prepare_request_auth()
+    match validate_static_credential(server.auth_type, request.headers, server.upstream_token_header):
+        case Error(error):
+            raise_public(error)
+        case Ok():
+            return client
