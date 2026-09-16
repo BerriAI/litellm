@@ -809,6 +809,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             n=1,
             size="1024x1024",
             imageConfig={"aspectRatio": "9:16", "imageSize": "1K"},
+            litellm_call_id=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,

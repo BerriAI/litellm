@@ -8212,7 +8212,7 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     """Regression for LIT-6043: expected 4xx errors log without formatting a
     traceback; unexpected errors keep logger.exception behavior."""
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_request_processing import _log_llm_api_exception
+    from litellm.proxy.common_request_processing import log_llm_api_exception
 
     verbose_proxy_logger.propagate = True
     try:
@@ -8220,7 +8220,7 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
             try:
                 raise exc
             except Exception as raised:
-                _log_llm_api_exception(raised, "call-id-for-traceback-test")
+                log_llm_api_exception(raised, "call-id-for-traceback-test")
     finally:
         verbose_proxy_logger.propagate = False
 
@@ -8778,14 +8778,14 @@ class TestErrorLogCarriesCallId:
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy.common_request_processing import (
             _CLIENT_DISCONNECT_DETAIL,
-            _log_llm_api_exception,
+            log_llm_api_exception,
         )
 
         call_id: Final = str(uuid.uuid4())
         verbose_proxy_logger.propagate = True
         try:
             with caplog.at_level("INFO", logger="LiteLLM Proxy"):
-                _log_llm_api_exception(
+                log_llm_api_exception(
                     HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
                     call_id,
                 )
