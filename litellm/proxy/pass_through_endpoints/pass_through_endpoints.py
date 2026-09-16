@@ -199,15 +199,15 @@ async def chat_completion_pass_through_endpoint(
         version,
     )
 
-    data = {}
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data = {"litellm_call_id": litellm_call_id}
     try:
         body: Final = await request.body()
         body_str: Final = body.decode()
         try:
-            data = ast.literal_eval(body_str)
+            data = ast.literal_eval(body_str) | data
         except Exception:
-            data = json.loads(body_str)
+            data = json.loads(body_str) | data
 
         data["adapter_id"] = adapter_id
 
@@ -228,7 +228,6 @@ async def chat_completion_pass_through_endpoint(
             version=version,
             proxy_config=proxy_config,
         )
-        data["litellm_call_id"] = litellm_call_id
 
         # override with user settings, these are params passed via cli
         if user_temperature:
