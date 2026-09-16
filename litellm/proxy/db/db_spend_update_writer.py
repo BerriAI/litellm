@@ -18,6 +18,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 from urllib.parse import quote, unquote
 
+from typing_extensions import LiteralString
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -73,8 +75,7 @@ from litellm.proxy.spend_tracking.savings import (
     marks_gateway_injection,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
-from litellm.repositories.prisma_protocols import BatchTable, RawQueryTransaction
-from litellm.repositories.team_repository import TEAM_ADVISORY_LOCK_SQL, TeamRepository
+from litellm.repositories.prisma_protocols import BatchTable
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
@@ -128,8 +129,10 @@ class _SpendBatchManager(Protocol):
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
 
 
-class _SpendTransaction(RawQueryTransaction, Protocol):
+class _SpendTransaction(Protocol):
     def batch_(self) -> _SpendBatchManager: ...
+
+    async def execute_raw(self, query: LiteralString, *args: object) -> int: ...
 
 
 class _SpendTransactionManager(Protocol):
@@ -143,47 +146,36 @@ def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     return tx
 
 
-async def _lock_and_read_rosters(
-    prisma_client: PrismaClient, transaction: _SpendTransaction, team_ids: Sequence[str]
-) -> frozenset[tuple[str, str]]:
-    """Take each team's advisory lock on ``transaction`` and return its rostered (user_id, team_id) pairs.
+# One statement adds every member's cost to their membership row. A missing row is created only
+# while the user is still on the team's roster; FOR SHARE on the team row makes that check and
+# the insert atomic against /team/member_delete and /team/delete, which update or delete that row
+# before removing memberships, so a spend flush landing after a removal never recreates the member.
+_TEAM_MEMBER_SPEND_SQL: Final = """
+INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend, total_spend)
+SELECT p.user_id, p.team_id, p.cost, p.cost
+FROM unnest($1::text[], $2::text[], $3::float8[]) AS p(user_id, team_id, cost)
+WHERE EXISTS (
+    SELECT 1 FROM "LiteLLM_TeamTable" t
+    WHERE t.team_id = p.team_id
+      AND t.members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))
+    FOR SHARE
+)
+   OR EXISTS (SELECT 1 FROM "LiteLLM_TeamMembership" m WHERE m.user_id = p.user_id AND m.team_id = p.team_id)
+ON CONFLICT (user_id, team_id) DO UPDATE
+SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
+    total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend
+"""
 
-    A spend flush can land after ``/team/member_delete`` removed the member. Holding the same
-    lock that endpoint takes, until this transaction commits, means a member read here is on
-    the team for the whole flush, so only they may have a missing membership row created.
-    """
-    repository: Final = TeamRepository(prisma_client)
 
-    async def locked_roster(team_id: str) -> tuple[tuple[str, str], ...]:
-        await transaction.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        roster: Final = await repository.get_members_with_roles_locked(transaction, team_id)
-        return tuple((member.user_id, team_id) for member in roster or () if member.user_id is not None)
-
-    rosters: Final = tuple([await locked_roster(team_id) for team_id in sorted(frozenset(team_ids))])
-    return frozenset(pair for roster in rosters for pair in roster)
-
-
-def _queue_team_member_spend(
-    memberships: BatchTable, user_id: str, team_id: str, response_cost: float, rostered: bool
-) -> None:
-    increments: Final = {
-        "spend": {"increment": response_cost},
-        "total_spend": {"increment": response_cost},
-    }
-    if not rostered:
-        memberships.update_many(where={"team_id": team_id, "user_id": user_id}, data=increments)
-        return
-    memberships.upsert(
-        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-        data={
-            "create": {
-                "team_id": team_id,
-                "user_id": user_id,
-                "spend": response_cost,
-                "total_spend": response_cost,
-            },
-            "update": increments,
-        },
+async def _write_team_member_spend(transaction: _SpendTransaction, spend_by_member_key: Mapping[str, float]) -> None:
+    # key is "team_id::<value>::user_id::<value>"; the string sort orders rows by (team_id, user_id),
+    # keeping lock order consistent across pods to prevent deadlocks
+    keys: Final = tuple(sorted(spend_by_member_key))
+    _ = await transaction.execute_raw(
+        _TEAM_MEMBER_SPEND_SQL,
+        [key.split("::")[3] for key in keys],
+        [key.split("::")[1] for key in keys],
+        [spend_by_member_key[key] for key in keys],
     )
 
 
@@ -1708,24 +1700,7 @@ class DBSpendUpdateWriter:
                 start_time = time.time()
                 try:
                     async with _spend_update_tx(prisma_client) as transaction:
-                        rostered_members = await _lock_and_read_rosters(
-                            prisma_client, transaction, tuple(team_id for _, team_id in team_memberships_to_invalidate)
-                        )
-                        async with transaction.batch_() as batcher:
-                            # Sort by composite key for consistent lock ordering across pods to prevent deadlocks.
-                            # Key format "team_id::<v>::user_id::<v>" makes the string sort equivalent to sorting by (team_id, user_id).
-                            for key, response_cost in sorted(team_member_list_transactions.items()):
-                                # key is "team_id::<value>::user_id::<value>"
-                                team_id = key.split("::")[1]
-                                user_id = key.split("::")[3]
-
-                                _queue_team_member_spend(
-                                    batcher.litellm_teammembership,
-                                    user_id,
-                                    team_id,
-                                    response_cost,
-                                    (user_id, team_id) in rostered_members,
-                                )
+                        await _write_team_member_spend(transaction, team_member_list_transactions)
                     # Transaction succeeded, break out of retry loop
                     break
                 except Exception as e:
