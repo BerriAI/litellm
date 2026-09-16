@@ -13,9 +13,14 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.utils import ModelResponse
+from litellm.utils import CustomStreamWrapper
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -493,13 +498,14 @@ async def _process_tool_call(
     chat_messages: list[Mapping[str, object]],
     user_id: str | None,
     is_admin: bool,
+    tool_handlers: Mapping[str, ToolHandler],
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
     fn_name: Final[str] = tc.function.name
     fn_args: Final[Mapping[str, str]] = json.loads(tc.function.arguments)
 
     allowed_names: Final = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
-    handler: Final = TOOL_HANDLERS.get(fn_name)
+    handler: Final = tool_handlers.get(fn_name)
 
     if fn_name not in allowed_names or not handler:
         chat_messages.append(
@@ -530,15 +536,70 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _stream_final_response(model: str, chat_messages: list[Mapping[str, object]]) -> AsyncIterator[str]:
+class CompletionDeps(NamedTuple):
+    """Where to send a chat completion: the proxy's Router when it knows the model, else bare litellm."""
+
+    router: Router | None
+    acompletion: Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]
+
+
+def _default_completion_deps() -> CompletionDeps:
+    from litellm.proxy.proxy_server import llm_router
+
+    return CompletionDeps(router=llm_router, acompletion=litellm.acompletion)
+
+
+def _call_metadata(user_api_key_dict: UserAPIKeyAuth | None) -> Mapping[str, object]:
+    """Stamp the caller's key/user/team identity onto the completion call.
+
+    Without it, spend from these tool-planning and final-response completions is
+    never attributed to the calling key/user/team, so it silently doesn't count
+    against anyone's budget regardless of which model it is routed to.
+    """
+    if user_api_key_dict is None:
+        return {}
+    stamped: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped dict[Unknown, Unknown] signature upstream
+        data={"metadata": {}},
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="metadata",
+    )
+    return cast(Mapping[str, object], stamped["metadata"])
+
+
+def _resolve_completion_fn(
+    model: str, deps: CompletionDeps
+) -> Callable[..., Awaitable[ModelResponse | CustomStreamWrapper]]:
+    """Pick the Router when it knows the model, else a direct litellm call.
+
+    The "Ask AI" dropdown is populated from the proxy's model_list, so `model` is
+    normally a virtual alias (or wildcard / model group alias) that only the Router
+    can resolve to a real provider, model and credentials; bare litellm.acompletion
+    infers the provider from the model string alone and rejects those aliases with
+    "LLM Provider NOT provided". The direct call stays as the fallback for proxies
+    with no Router and for strings the Router does not recognise, such as a genuine
+    provider-prefixed model or an unregistered DEFAULT_COMPETITOR_DISCOVERY_MODEL.
+    """
+    if deps.router is not None and deps.router.get_model_list(model_name=model):
+        return deps.router.acompletion  # pyright: ignore[reportUnknownVariableType]  # untyped upstream signature
+    return deps.acompletion
+
+
+async def _stream_final_response(
+    model: str,
+    chat_messages: list[dict[str, Any]],
+    deps: CompletionDeps,
+    metadata: Mapping[str, object],
+) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response: Final = await litellm.acompletion(
+    acompletion = _resolve_completion_fn(model, deps)
+    response = await acompletion(
         model=model,
         messages=chat_messages,
         stream=True,
         temperature=USAGE_AI_TEMPERATURE,
+        metadata=metadata,
     )
     async for chunk in response:
         delta = chunk.choices[0].delta.content
@@ -551,9 +612,16 @@ async def stream_usage_ai_chat(
     model: str | None = None,
     user_id: str | None = None,
     is_admin: bool = False,
+    *,
+    deps: CompletionDeps | None = None,
+    tool_handlers: Mapping[str, ToolHandler] | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
+    resolved_deps: Final = deps if deps is not None else _default_completion_deps()
+    resolved_handlers: Final = tool_handlers if tool_handlers is not None else TOOL_HANDLERS
     resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    metadata: Final = _call_metadata(user_api_key_dict)
     truncated: Final = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
     chat_messages: Final[list[Mapping[str, object]]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
@@ -562,12 +630,14 @@ async def stream_usage_ai_chat(
 
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
-        tools: Final = get_tools_for_role(is_admin)
-        response: Final = await litellm.acompletion(
+        tools = get_tools_for_role(is_admin)
+        acompletion = _resolve_completion_fn(resolved_model, resolved_deps)
+        response = await acompletion(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
+            metadata=metadata,
         )
         choice: Final = response.choices[0]
 
@@ -579,9 +649,9 @@ async def stream_usage_ai_chat(
 
         chat_messages.append(choice.message.model_dump())
         for tc in choice.message.tool_calls:
-            async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
+            async for event in _process_tool_call(tc, chat_messages, user_id, is_admin, resolved_handlers):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages):
+        async for event in _stream_final_response(resolved_model, chat_messages, resolved_deps, metadata):
             yield event
         yield _sse({"type": "done"})
 

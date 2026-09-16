@@ -8,15 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-    TOOL_HANDLERS,
     TOOLS_ADMIN,
     TOOLS_BASE,
+    CompletionDeps,
     _build_system_prompt,
     _summarise_entity_data,
     _summarise_usage_data,
     stream_usage_ai_chat,
 )
-
 
 SAMPLE_AGGREGATED_RESPONSE = {
     "results": [
@@ -109,6 +108,55 @@ SAMPLE_TEAM_RESPONSE = {
     ],
     "metadata": {"total_spend": 100.0, "total_api_requests": 1000},
 }
+
+
+def _make_tool_call_response():
+    """First-turn LLM response that asks for get_usage_data."""
+    tool_call = MagicMock()
+    tool_call.id = "call_router"
+    tool_call.function.name = "get_usage_data"
+    tool_call.function.arguments = json.dumps({"start_date": "2025-01-01", "end_date": "2025-01-31"})
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.tool_calls = [tool_call]
+    response.choices[0].message.model_dump.return_value = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_router",
+                "type": "function",
+                "function": {
+                    "name": "get_usage_data",
+                    "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
+                },
+            }
+        ],
+    }
+    return response
+
+
+async def _make_stream(content: str):
+    chunk = MagicMock()
+    chunk.choices = [MagicMock()]
+    chunk.choices[0].delta.content = content
+    yield chunk
+
+
+async def _collect_events(**kwargs):
+    return [json.loads(event.removeprefix("data: ").strip()) async for event in stream_usage_ai_chat(**kwargs)]
+
+
+def _usage_tool_handlers():
+    """Tool handler override so no DB query is attempted, injected via `tool_handlers=`."""
+    return {
+        "get_usage_data": {
+            "fetch": AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE),
+            "summarise": _summarise_usage_data,
+            "label": "global usage data",
+        }
+    }
 
 
 class TestToolSchemas:
@@ -411,6 +459,138 @@ class TestStreamUsageAiChat:
             )
 
 
+class TestRouterResolution:
+    """
+    Regression for the Ask AI chat failing on every selectable model: the model
+    dropdown is populated from the proxy's model_list, and bare litellm.acompletion
+    cannot resolve those aliases to a provider ("LLM Provider NOT provided"), which
+    the endpoint reported as a generic internal error.
+    """
+
+    @pytest.mark.asyncio
+    async def test_registered_alias_routes_through_router(self):
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [{"model_name": "my-gpt4"}]
+        mock_router.acompletion = AsyncMock(
+            side_effect=[_make_tool_call_response(), _make_stream("Total spend is $50.25")]
+        )
+        mock_acompletion = AsyncMock()
+
+        events = await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="my-gpt4",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=mock_router, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
+
+        assert [e for e in events if e["type"] == "error"] == []
+        assert [e["status"] for e in events if e["type"] == "tool_call"] == ["running", "complete"]
+        assert [e["content"] for e in events if e["type"] == "chunk"] == ["Total spend is $50.25"]
+        mock_acompletion.assert_not_called()
+
+        mock_router.get_model_list.assert_called_with(model_name="my-gpt4")
+        assert mock_router.acompletion.await_count == 2
+
+        first_call, final_call = mock_router.acompletion.await_args_list
+        assert first_call.kwargs["model"] == "my-gpt4"
+        assert first_call.kwargs["tools"] == TOOLS_ADMIN
+        assert first_call.kwargs.get("stream", False) is False
+        assert final_call.kwargs["model"] == "my-gpt4"
+        assert final_call.kwargs["stream"] is True
+
+    @pytest.mark.asyncio
+    async def test_model_unknown_to_router_falls_back_to_litellm(self):
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = []
+        mock_router.acompletion = AsyncMock()
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Spend summary")])
+
+        events = await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="openai/gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=mock_router, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
+
+        assert [e for e in events if e["type"] == "error"] == []
+        mock_router.acompletion.assert_not_called()
+        assert mock_acompletion.await_count == 2
+        assert mock_acompletion.await_args_list[0].kwargs["model"] == "openai/gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_no_router_configured_uses_litellm(self):
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Spend summary")])
+
+        events = await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=None, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
+
+        assert [e for e in events if e["type"] == "error"] == []
+        assert mock_acompletion.await_count == 2
+
+
+class TestUsageAiChatSpendAttribution:
+    """
+    Regression: completions issued by the Usage dashboard's "Ask AI" chat must
+    carry the caller's key/user/team identity in `metadata`, the same as every
+    other proxied completion, so spend gets attributed and counts against the
+    caller's budget. Previously these completions carried no metadata at all,
+    so their cost was untracked regardless of which model handled them.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_completions_carry_caller_identity_in_metadata(self):
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Total spend is $50.25")])
+
+        await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=None, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed-key",
+                user_id="user-123",
+                team_id="team-456",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+        )
+
+        assert mock_acompletion.await_count == 2
+        for call in mock_acompletion.await_args_list:
+            assert call.kwargs["metadata"]["user_api_key_user_id"] == "user-123"
+            assert call.kwargs["metadata"]["user_api_key_team_id"] == "team-456"
+            assert call.kwargs["metadata"]["user_api_key"] == "hashed-key"
+
+    @pytest.mark.asyncio
+    async def test_metadata_is_empty_without_a_caller_identity(self):
+        mock_acompletion = AsyncMock(side_effect=[_make_tool_call_response(), _make_stream("Spend summary")])
+
+        await _collect_events(
+            messages=[{"role": "user", "content": "What is my total spend?"}],
+            model="gpt-4o-mini",
+            user_id="user-123",
+            is_admin=True,
+            deps=CompletionDeps(router=None, acompletion=mock_acompletion),
+            tool_handlers=_usage_tool_handlers(),
+        )
+
+        for call in mock_acompletion.await_args_list:
+            assert call.kwargs["metadata"] == {}
+
+
 class TestUsageAiChatServiceAccountGuard:
     """
     Security regression: a non-admin caller with user_id=None (service-account
@@ -472,8 +652,9 @@ class TestUsageAiChatKeepalive:
     async def _collect_endpoint_body(self, monkeypatch, interval, delay=0.3) -> tuple[list[bytes], dict]:
         import asyncio
 
-        import litellm
         from fastapi.responses import StreamingResponse
+
+        import litellm
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
             ChatMessage,

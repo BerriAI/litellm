@@ -23,7 +23,15 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 def _dead_db() -> MagicMock:
+    """A Prisma client where only ``db.query_first`` (the prefetch's own raw-SQL entrypoint) exists.
+
+    ``spec`` makes every other ``db.*`` attribute access -- e.g. ``db.litellm_organizationtable``,
+    which the per-object getters' DB fallback reaches for -- raise ``AttributeError`` immediately and
+    name the attribute, instead of silently returning a MagicMock that only fails later, cryptically,
+    at ``await`` time. A getter reaching this at all means the prefetch left its cache entry empty.
+    """
     prisma = MagicMock(name="prisma_client")
+    prisma.db = MagicMock(name="db", spec=["query_first"])
     prisma.db.query_first = AsyncMock(return_value=None)
     return prisma
 
