@@ -377,6 +377,7 @@ def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
     )
 
     router = MagicMock()
+    router.get_deployment = MagicMock(return_value=None)
     router.get_deployment_credentials_with_provider = MagicMock(
         return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
     )
@@ -389,7 +390,37 @@ def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
     assert isinstance(snapshot, MappingProxyType)
     with pytest.raises(TypeError):
         snapshot["s3_bucket_name"] = "attacker-bucket"
-    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1")
+    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1", team_id=None)
+
+
+def test_add_internal_model_credentials_snapshots_a_team_owned_deployment():
+    """The router already picked this deployment, so the snapshot resolves with the
+    deployment's own owner team. Without that, the resolver's team guard drops a
+    team-owned (BYOK) deployment and the batch's cost is silently never recorded."""
+    from litellm import Router
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        add_internal_model_credentials,
+    )
+
+    deployment_id = "team-owned-bedrock-deployment"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-haiku",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-east-1",
+                    "s3_bucket_name": "team-batch-bucket",
+                },
+                "model_info": {"id": deployment_id, "team_id": "team-1"},
+            }
+        ]
+    )
+    data = {"batch_id": "unified-batch-id"}
+
+    add_internal_model_credentials(data=data, llm_router=router, model_id=deployment_id)
+
+    assert data["_litellm_internal_model_credentials"]["s3_bucket_name"] == "team-batch-bucket"
 
 
 @pytest.mark.parametrize(

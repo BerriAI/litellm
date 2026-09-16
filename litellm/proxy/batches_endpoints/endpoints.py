@@ -222,6 +222,7 @@ async def create_batch(
                 llm_router=llm_router,
                 model_id=model_from_file_id,
                 operation_context="batch creation (file created with model)",
+                team_id=user_api_key_dict.team_id,
             )
 
             original_file_id: Final = get_original_file_id(input_file_id)
@@ -314,6 +315,7 @@ async def create_batch(
                     llm_router=llm_router,
                     model_id=model_param,
                     operation_context="batch creation",
+                    team_id=user_api_key_dict.team_id,
                 )
 
                 prepare_data_with_credentials(
@@ -544,6 +546,7 @@ async def retrieve_batch(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 operation_context="batch retrieval (batch created with model)",
+                team_id=user_api_key_dict.team_id,
             )
 
             original_batch_id: Final = get_original_file_id(batch_id)
@@ -768,6 +771,7 @@ async def list_batches(
                 llm_router=llm_router,
                 model_id=model_param,
                 operation_context="batch listing",
+                team_id=user_api_key_dict.team_id,
             )
 
             prepare_data_with_credentials(data=data, credentials=credentials)
@@ -956,6 +960,7 @@ async def cancel_batch(
                 llm_router=llm_router,
                 model_id=model_from_id,
                 operation_context="batch cancellation (batch created with model)",
+                team_id=user_api_key_dict.team_id,
             )
 
             original_batch_id: Final = get_original_file_id(batch_id)

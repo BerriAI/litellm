@@ -346,6 +346,7 @@ def get_credentials_for_model(
     llm_router,  # Router instance
     model_id: str,
     operation_context: str = "file operation",
+    team_id: "str | None" = None,
 ):
     """
     Retrieve API credentials for a model from the LLM Router.
@@ -354,6 +355,8 @@ def get_credentials_for_model(
         llm_router: LiteLLM Router instance
         model_id: Model name or deployment ID
         operation_context: Description for error messages (e.g., "file upload", "batch creation")
+        team_id: Caller's team id; unlocks that team's own deployments and keeps
+            shared model names from resolving another team's credentials
 
     Returns:
         Dictionary with credentials (api_key, api_base, custom_llm_provider, etc.)
@@ -369,7 +372,7 @@ def get_credentials_for_model(
             detail={"error": "Router not initialized. Cannot use model-based routing."},
         )
 
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
 
     if credentials is None:
         raise HTTPException(
@@ -539,7 +542,16 @@ def add_internal_model_credentials(
     if model_id is None:
         return
     try:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+        # Server-side snapshot for a deployment the router already picked, so it
+        # resolves with the deployment's own owner team; the resolver's team
+        # guard would otherwise drop a team-owned (BYOK) deployment here and
+        # silently lose that batch's cost.
+        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        model_info: Final = deployment.model_info if deployment is not None else None
+        owner_team_id: Final = model_info.get("team_id") if model_info is not None else None
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(
+            model_id=model_id, team_id=owner_team_id
+        )
     except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
         return
     if credentials is None:
