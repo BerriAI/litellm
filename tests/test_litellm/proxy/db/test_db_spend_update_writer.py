@@ -17,7 +17,7 @@ from redis.exceptions import DataError
 import litellm
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_spend_update_writer import (
-    _TEAM_ADVISORY_LOCKS_SQL,
+    _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
 )
@@ -930,11 +930,10 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
     )
 
     lock_call, spend_call = mock_transaction.execute_raw.await_args_list
-    lock_statement, locked_team_ids = lock_call.args
-    assert lock_statement is _TEAM_ADVISORY_LOCKS_SQL
-    assert locked_team_ids == [team_id]
-    assert "pg_advisory_xact_lock(hashtext(teams.team_id))" in lock_statement
-    assert "ORDER BY team_id" in lock_statement
+    lock_statement, locked_team_id = lock_call.args
+    assert lock_statement is _TEAM_ADVISORY_LOCK_SQL
+    assert locked_team_id == team_id
+    assert "pg_advisory_xact_lock(hashtext($1))" in lock_statement
     statement, user_ids, team_ids, costs = spend_call.args
     assert statement is _TEAM_MEMBER_SPEND_SQL
     assert (user_ids, team_ids, costs) == ([user_id], [team_id], [response_cost])
@@ -950,7 +949,7 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
     """
     The member spend statement touches rows in the order of its input arrays, so the batch
     is handed over sorted by (team_id, user_id), with each cost kept next to its member, and
-    the advisory lock statement receives the same team ids, so concurrent pods lock in the
+    each distinct team is locked once, in that same order, so concurrent pods lock in the
     same order and cannot deadlock.
     """
     db_writer = DBSpendUpdateWriter()
@@ -973,9 +972,13 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
         ),
     )
 
-    lock_call, spend_call = mock_transaction.execute_raw.await_args_list
+    *lock_calls, spend_call = mock_transaction.execute_raw.await_args_list
     _statement, user_ids, team_ids, costs = spend_call.args
-    assert lock_call.args == (_TEAM_ADVISORY_LOCKS_SQL, ["team_a", "team_a", "team_b", "team_c"])
+    assert [lock_call.args for lock_call in lock_calls] == [
+        (_TEAM_ADVISORY_LOCK_SQL, "team_a"),
+        (_TEAM_ADVISORY_LOCK_SQL, "team_b"),
+        (_TEAM_ADVISORY_LOCK_SQL, "team_c"),
+    ]
     assert list(zip(team_ids, user_ids, costs)) == [
         ("team_a", "user_x", 0.3),
         ("team_a", "user_y", 0.2),
