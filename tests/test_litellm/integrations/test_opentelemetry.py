@@ -5885,13 +5885,11 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                 }
             )
 
-    def test_no_filter_returns_attrs_object_unchanged(self):
-        """The no-config path is a hot-path no-op: it returns the same dict
-        object, so default emission pays zero copy cost. Locking identity makes
-        a future refactor that always copies/filters trip here."""
+    def test_no_filter_keeps_every_attribute(self):
+        """The no-config path drops nothing: every attribute the caller set reaches the meter."""
         otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
         attrs = {"gen_ai.request.model": "m", "hidden_params": "{}"}
-        self.assertIs(otel._filter_metric_attributes(attrs), attrs)
+        self.assertEqual(otel._filter_metric_attributes(attrs), attrs)
 
     def test_token_type_discriminator_rejected_from_either_list(self):
         """gen_ai.token.type is a structural discriminator stamped onto the
@@ -6033,7 +6031,8 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
 
 
 class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
-    """Regression for the OTLP exporter rejecting gen_ai.system=None on every export cycle."""
+    """Regression for the OTLP exporter rejecting a None gen_ai.system or gen_ai.request.model
+    attribute on every export cycle."""
 
     HERE = os.path.dirname(__file__)
     POLL_INTERVAL = 0.05
@@ -6047,7 +6046,12 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
         kwargs["litellm_params"]["custom_llm_provider"] = None
         return kwargs, response_obj
 
-    def _recorded_metrics(self) -> MetricsData | None:
+    def _modelless_kwargs(self) -> tuple[dict[str, object], dict[str, object]]:
+        kwargs, response_obj = self._providerless_kwargs()
+        kwargs["model"] = None
+        return kwargs, response_obj
+
+    def _recorded_metrics(self, kwargs: dict[str, object], response_obj: dict[str, object]) -> MetricsData | None:
         metric_reader = InMemoryMetricReader()
         meter_provider = MeterProvider(metric_readers=[metric_reader])
         tracer_provider = TracerProvider()
@@ -6059,7 +6063,6 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
         )
         otel.tracer = tracer_provider.get_tracer(__name__)
 
-        kwargs, response_obj = self._providerless_kwargs()
         start = datetime.utcnow()
         otel._handle_success(kwargs, response_obj, start, start + timedelta(seconds=1))
 
@@ -6095,8 +6098,8 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
 
         self.assertEqual(len(_encode_attributes(attrs) or []), len(attrs))
 
-    def test_metrics_are_encodable_and_carry_no_provider_label(self):
-        data = self._recorded_metrics()
+    def _recorded_data_points(self, kwargs: dict[str, object], response_obj: dict[str, object]) -> list[object]:
+        data = self._recorded_metrics(kwargs, response_obj)
         self.assertIsNotNone(data, "no metrics were recorded")
         data_points = [
             dp
@@ -6106,8 +6109,18 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
             for dp in m.data.data_points
         ]
         self.assertTrue(data_points, "no metric data points were recorded")
-        for dp in data_points:
+        return data_points
+
+    def test_metrics_are_encodable_and_carry_no_provider_label(self):
+        kwargs, response_obj = self._providerless_kwargs()
+        for dp in self._recorded_data_points(kwargs, response_obj):
             self.assertNotIn("gen_ai.system", dp.attributes)
+            self.assertEqual(dp.attributes["gen_ai.request.model"], kwargs["model"])
+            self._assert_every_attribute_encodes(dict(dp.attributes))
+
+    def test_metrics_are_encodable_and_carry_no_model_label_when_the_call_has_none(self):
+        for dp in self._recorded_data_points(*self._modelless_kwargs()):
+            self.assertNotIn("gen_ai.request.model", dp.attributes)
             self._assert_every_attribute_encodes(dict(dp.attributes))
 
     def test_legacy_content_events_are_encodable_and_carry_no_provider_label(self):
@@ -6116,6 +6129,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
         for log in logs:
             attrs = dict(log.log_record.attributes or {})
             self.assertNotIn("gen_ai.system", attrs)
+            self.assertNotIn(None, attrs.values())
             self._assert_every_attribute_encodes(attrs)
 
     def test_inference_details_event_is_encodable_and_carries_no_provider_label(self):
@@ -6124,6 +6138,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
         attrs = dict(logs[0].log_record.attributes or {})
         self.assertEqual(attrs["event_name"], "gen_ai.client.inference.operation.details")
         self.assertNotIn("gen_ai.provider.name", attrs)
+        self.assertNotIn(None, attrs.values())
         self._assert_every_attribute_encodes(attrs)
 
 

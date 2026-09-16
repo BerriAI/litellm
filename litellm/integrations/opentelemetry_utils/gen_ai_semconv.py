@@ -33,6 +33,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
@@ -195,16 +196,18 @@ class OTELGenAISemconvMixin:
             if value:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str | None) -> dict[str, str]:
+    def _build_inference_details_attrs(
+        self, kwargs: dict, response_obj: dict, provider: str | None
+    ) -> dict[str, str | None]:
         """Build the attribute payload for the inference-details event.
 
-        Always includes operation, and provider when the call carries one;
-        input/output messages are added only when content capture is enabled
-        and non-empty. Mixin-internal.
+        Always includes operation and provider (None when the call carries none,
+        dropped before the event is emitted); input/output messages are added
+        only when content capture is enabled and non-empty. Mixin-internal.
         """
-        attrs: Final[dict[str, str]] = {
+        attrs: Final[dict[str, str | None]] = {
             "event_name": _INFERENCE_DETAILS_EVENT_NAME,
-            **({"gen_ai.provider.name": provider} if provider else {}),
+            "gen_ai.provider.name": provider,
             "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),
         }
         if not self._capture_in_event():
@@ -240,6 +243,6 @@ class OTELGenAISemconvMixin:
             severity_number=SeverityNumber.INFO,
             severity_text="INFO",
             body=None,
-            attributes=self._build_inference_details_attrs(kwargs, response_obj, provider),
+            attributes=drop_none(self._build_inference_details_attrs(kwargs, response_obj, provider)),
         )
         otel_logger.emit(log_record)
