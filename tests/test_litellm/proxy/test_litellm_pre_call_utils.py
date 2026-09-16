@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from botocore.credentials import Credentials
 from fastapi import Request
+from opentelemetry.trace import INVALID_SPAN, NonRecordingSpan, SpanContext
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -3534,6 +3535,91 @@ def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_trace
     )
     assert data["litellm_trace_id"] == "explicit-trace-id-value"
     assert data["litellm_session_id"] == "explicit-trace-id-value"
+
+
+def _otel_span_with_trace_id(trace_id: int) -> NonRecordingSpan:
+    return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=0x00F067AA0BA902B7, is_remote=False))
+
+
+def _request_mock_without_trace_headers() -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_defaults_trace_id_to_otel_server_span():
+    """With OTel on and a client that sends no trace headers, the request's
+    litellm_trace_id (and so the spend log session_id) must be the W3C trace-id
+    of the proxy's server span, so a trace in the OTel backend can be looked up
+    in the Logs UI and vice versa."""
+    otel_trace_id = 0x4BF92F3577B34DA6A3CE929D0E0E4736
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=_otel_span_with_trace_id(otel_trace_id))
+
+    data = await add_litellm_data_to_request(
+        data={"model": "gpt-5.6", "messages": [{"role": "user", "content": "hi"}]},
+        request=_request_mock_without_trace_headers(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+
+    assert data["litellm_trace_id"] == format(otel_trace_id, "032x")
+    assert data["metadata"]["trace_id"] == format(otel_trace_id, "032x")
+    assert "litellm_session_id" not in data
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_otel_span_does_not_override_caller_trace_id():
+    """A caller's own trace identity (x-litellm-trace-id header or body
+    metadata.trace_id) keeps priority over the OTel server span's trace-id."""
+    span = _otel_span_with_trace_id(0x4BF92F3577B34DA6A3CE929D0E0E4736)
+
+    header_request = _request_mock_without_trace_headers()
+    header_request.headers = {"Content-Type": "application/json", "x-litellm-trace-id": "caller-trace"}
+    from_header = await add_litellm_data_to_request(
+        data={"model": "gpt-5.6"},
+        request=header_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=span),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    assert from_header["litellm_trace_id"] == "caller-trace"
+    assert from_header["metadata"]["trace_id"] == "caller-trace"
+
+    from_body = await add_litellm_data_to_request(
+        data={"model": "gpt-5.6", "metadata": {"trace_id": "body-trace"}},
+        request=_request_mock_without_trace_headers(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=span),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    assert "litellm_trace_id" not in from_body
+    assert from_body["metadata"]["trace_id"] == "body-trace"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_otel_span", [None, "invalid_span"])
+async def test_add_litellm_data_to_request_no_trace_id_without_valid_otel_span(parent_otel_span):
+    """No OTel span (OTel off) or a span with an invalid context must leave
+    litellm_trace_id unset so downstream keeps generating its own id."""
+    span = INVALID_SPAN if parent_otel_span == "invalid_span" else None
+    data = await add_litellm_data_to_request(
+        data={"model": "gpt-5.6"},
+        request=_request_mock_without_trace_headers(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=span),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    assert "litellm_trace_id" not in data
+    assert "trace_id" not in data["metadata"]
 
 
 def test_add_litellm_metadata_from_request_headers_anthropic_metadata_beats_baggage():
