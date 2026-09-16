@@ -75,17 +75,28 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     )
 
 
-def _with_requester_ip_address(request_data: dict[str, object], requester_ip: str | None) -> dict[str, object]:
+def _get_user_agent(request: Request) -> str | None:
+    if "headers" not in request.scope:
+        return None
+    return request.headers.get("user-agent")
+
+
+def _with_client_context(
+    request_data: dict[str, object], requester_ip: str | None, user_agent: str | None
+) -> dict[str, object]:
     """Auth gate rejections are raised before `add_litellm_data_to_request` records the
-    caller IP, so their failure logs would otherwise carry no IP nor key/user identity."""
-    if not requester_ip:
-        return request_data
+    caller IP and User-Agent, so their failure logs would otherwise carry neither."""
     key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
     metadata: Final = request_data.get(key)
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
-    if base.get("requester_ip_address"):
+    stamped: Final = {
+        name: value
+        for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
+        if value and not base.get(name)
+    }
+    if not stamped:
         return request_data
-    return {**request_data, key: {**base, "requester_ip_address": requester_ip}}  # mutable-ok: logging needs dicts
+    return {**request_data, key: {**base, **stamped}}  # mutable-ok: logging needs dicts
 
 
 class UserAPIKeyAuthExceptionHandler:
@@ -149,6 +160,7 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
+            user_agent: Final = _get_user_agent(request)
 
             # Log authentication failures before identity seeding and callbacks, so the log
             # survives a raising callback pipeline. Classify and route malformed virtual-key
@@ -201,7 +213,7 @@ class UserAPIKeyAuthExceptionHandler:
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_requester_ip_address(request_data, requester_ip),
+                request_data=_with_client_context(request_data, requester_ip, user_agent),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
