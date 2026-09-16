@@ -116,7 +116,8 @@ async def run_team_metadata_validation(
             },
         )
     if not (
-        inspect.iscoroutinefunction(validator) or inspect.iscoroutinefunction(getattr(validator, "__call__", None))
+        inspect.iscoroutinefunction(validator)
+        or (callable(validator) and inspect.iscoroutinefunction(validator.__call__))
     ):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

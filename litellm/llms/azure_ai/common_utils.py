@@ -145,9 +145,8 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         return api_key or litellm.api_key or get_secret_str("AZURE_AI_API_KEY")
 
     @property
-    def api_version(self, api_version: str | None = None) -> str | None:
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
-        return api_version
+    def api_version(self) -> str | None:
+        return litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
     def get_token_counter(self) -> BaseTokenCounter | None:
         """

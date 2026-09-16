@@ -4144,9 +4144,9 @@ class Router:
                 except KeyError:
                     pass
 
-        for model in models:
+        for model_name in models:
             task = asyncio.create_task(
-                _async_completion_no_exceptions(model=model, messages=messages, stream=stream, **kwargs)
+                _async_completion_no_exceptions(model=model_name, messages=messages, stream=stream, **kwargs)
             )
             pending_tasks.append(task)
 
