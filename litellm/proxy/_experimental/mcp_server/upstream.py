@@ -29,7 +29,8 @@ def _usable_credential_value(auth_type: MCPAuthType, name: str, value: str) -> b
         if len(parts) != 2 or parts[0].lower() != "basic":
             return False
         try:
-            return bool(base64.b64decode(parts[1], validate=True).strip())
+            decoded: Final = base64.b64decode(parts[1], validate=True).strip()
+            return bool(decoded) and decoded.lower() != b"basic"
         except ValueError:
             return False
     return True

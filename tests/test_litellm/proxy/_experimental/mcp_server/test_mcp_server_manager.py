@@ -13638,10 +13638,21 @@ class TestProtectedCredentialPreparation:
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("header", ["Basic", "Basic @@@", "Other abc"])
+    @pytest.mark.parametrize("header", ["Basic", "Basic @@@", "Other abc", "Basic QmFzaWM="])
     async def test_basic_headers_without_usable_credentials_reject(self, header: str) -> None:
         server = MCPServer(server_id="bad-basic", name="bad-basic", url="https://upstream.example/mcp",
                            transport=MCPTransport.http, auth_type=MCPAuth.basic)
         with pytest.raises(HTTPException) as exc:
             await MCPServerManager()._create_mcp_client(server, extra_headers={"Authorization": header})
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["Basic", "Basic ", "basic"])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_basic_scheme_alone_is_not_a_credential(self, value: str, source: str) -> None:
+        server = MCPServer(server_id="basic-scheme", name="basic-scheme", url="https://upstream.example/mcp",
+                           transport=MCPTransport.http, auth_type=MCPAuth.basic,
+                           authentication_token=value if source == "configured" else None)
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
         assert exc.value.status_code == 500
