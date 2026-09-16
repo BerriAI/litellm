@@ -128,9 +128,11 @@ function TeamAdminEditableFieldsForm({
           </div>
         )}
       />
-      <Button type="submit" disabled={isPending || !form.formState.isDirty}>
-        {isPending ? "Saving..." : "Save"}
-      </Button>
+      <div className="flex justify-end">
+        <Button type="submit" disabled={isPending || !form.formState.isDirty}>
+          {isPending ? "Saving..." : "Save"}
+        </Button>
+      </div>
     </form>
   );
 }
