@@ -3,7 +3,7 @@ s3 Bucket Logging Integration
 
 async_log_success_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
 async_log_failure_event: Processes the event, stores it in memory for DEFAULT_S3_FLUSH_INTERVAL_SECONDS seconds or until DEFAULT_S3_BATCH_SIZE and then flushes to s3
-NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to upload each element individually
+NOTE 1: S3 does not provide a BATCH PUT API endpoint; by default each element is uploaded concurrently (bounded by s3_max_concurrent_uploads), or with s3_batch_file_upload the whole flush is written as one .jsonl file
 """
 
 import asyncio
@@ -17,7 +17,11 @@ import httpx
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
+from litellm.constants import (
+    DEFAULT_S3_BATCH_SIZE,
+    DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
+    DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
+)
 from litellm.integrations.s3 import (
     get_s3_object_download_filename,
     get_s3_object_key,
@@ -42,6 +46,8 @@ if TYPE_CHECKING:
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
+    preserve_events_added_during_flush = True
+
     def __init__(
         self,
         s3_bucket_name: str | None = None,
@@ -68,6 +74,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
+        s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
+        s3_batch_file_upload: bool = False,
         s3_callback_params_override: dict | None = None,
         **kwargs,
     ):
@@ -108,7 +116,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_use_virtual_hosted_style=s3_use_virtual_hosted_style,
                 s3_server_side_encryption=s3_server_side_encryption,
                 s3_sse_kms_key_id=s3_sse_kms_key_id,
+                s3_max_concurrent_uploads=s3_max_concurrent_uploads,
+                s3_batch_file_upload=s3_batch_file_upload,
             )
+            self._upload_semaphore = asyncio.Semaphore(self.s3_max_concurrent_uploads)
             verbose_logger.debug("s3 logger using endpoint url %s", s3_endpoint_url)
 
             # IMPORTANT
@@ -163,6 +174,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
+        s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
+        s3_batch_file_upload: bool = False,
         params_source: dict | None = None,
     ):
         """
@@ -216,6 +229,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             params.get("s3_server_side_encryption") or s3_server_side_encryption,
             params.get("s3_sse_kms_key_id") or s3_sse_kms_key_id,
         )
+
+        self.s3_max_concurrent_uploads = int(params.get("s3_max_concurrent_uploads") or s3_max_concurrent_uploads)
+
+        self.s3_batch_file_upload = bool(params.get("s3_batch_file_upload", False)) or s3_batch_file_upload
 
     def _build_object_url(self, s3_object_key: str) -> str:
         """
@@ -355,7 +372,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
             # Convert JSON to string
-            json_string: Final = safe_dumps(batch_logging_element.payload)
+            json_string: Final = (
+                batch_logging_element.body
+                if batch_logging_element.body is not None
+                else safe_dumps(batch_logging_element.payload)
+            )
 
             # Calculate SHA256 hash of the content
             content_hash: Final = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
@@ -365,7 +386,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Prepare the request
             headers: Final = {
-                "Content-Type": "application/json",
+                "Content-Type": batch_logging_element.content_type,
                 "Content-MD5": content_md5,
                 "x-amz-content-sha256": content_hash,
                 "Content-Language": "en",
@@ -423,7 +444,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         Raises: Does not raise an exception, will only verbose_logger.exception()
         """
         verbose_logger.debug("s3_v2 logger - sending batch of %s", len(self.log_queue))
-        if not self.log_queue:
+        batch: Final = tuple(self.log_queue)
+        if not batch:
             return
 
         #########################################################
@@ -431,8 +453,34 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #  the log queue can be bounded by DEFAULT_S3_BATCH_SIZE
         #  see custom_batch_logger.py which triggers the flush
         #########################################################
-        for payload in self.log_queue:
-            asyncio.create_task(self.async_upload_data_to_s3(payload))
+        if self.s3_batch_file_upload:
+            await self.async_upload_data_to_s3(self._build_batch_file_element(batch))
+            return
+        await asyncio.gather(*(self._upload_bounded(element) for element in batch))
+
+    async def _upload_bounded(self, element: s3BatchLoggingElement) -> None:
+        async with self._upload_semaphore:
+            await self.async_upload_data_to_s3(element)
+
+    def _build_batch_file_element(self, batch: tuple[s3BatchLoggingElement, ...]) -> s3BatchLoggingElement:
+        from datetime import timezone
+        from uuid import uuid4
+
+        now: Final = datetime.now(timezone.utc)
+        batch_name: Final = f"batch_{now.strftime('%H-%M-%S')}_{uuid4().hex}"
+        return s3BatchLoggingElement(
+            payload={},
+            body="\n".join(safe_dumps(element.payload) for element in batch),
+            content_type="application/x-ndjson",
+            s3_object_key=get_s3_object_key(
+                s3_path=cast(str | None, self.s3_path) or "",
+                prefix="",
+                start_time=now,
+                s3_file_name=batch_name,
+                extension=".jsonl",
+            ),
+            s3_object_download_filename=f"{batch_name}.jsonl",
+        )
 
     def create_s3_batch_logging_element(
         self,
@@ -507,7 +555,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
             # Convert JSON to string
-            json_string: Final = safe_dumps(batch_logging_element.payload)
+            json_string: Final = (
+                batch_logging_element.body
+                if batch_logging_element.body is not None
+                else safe_dumps(batch_logging_element.payload)
+            )
 
             # Calculate SHA256 hash of the content
             content_hash: Final = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
@@ -517,7 +569,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Prepare the request
             headers: Final = {
-                "Content-Type": "application/json",
+                "Content-Type": batch_logging_element.content_type,
                 "Content-MD5": content_md5,
                 "x-amz-content-sha256": content_hash,
                 "Content-Language": "en",
