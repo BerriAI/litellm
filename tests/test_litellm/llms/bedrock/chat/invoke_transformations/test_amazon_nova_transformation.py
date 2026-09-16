@@ -9,6 +9,8 @@ MODEL = "us.amazon.nova-pro-v1:0"
 EPHEMERAL = {"type": "ephemeral"}
 DEFAULT_CACHE_POINT = {"type": "default"}
 TOOLS = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+TOOL_CALL = {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 
 
 def _transform_request(messages, optional_params, litellm_params=None):
@@ -40,6 +42,32 @@ def test_cache_points_are_inlined_into_the_block_they_cache(local_model_cost_map
         [{"text": "hi there", "cachePoint": DEFAULT_CACHE_POINT}],
         [{"text": "again"}],
     ]
+
+
+def test_cache_point_behind_a_non_text_block_moves_back_to_the_last_text_block(local_model_cost_map):
+    """InvokeModel rejects ``cachePoint`` on image, toolUse, and toolResult blocks
+    (``extraneous key [cachePoint] is not permitted``), so the point a user put on an image or a
+    tool result lands on the closest text block before it, and a message with no text block at
+    all sends no point rather than a request AWS refuses.
+    """
+    request = _transform_request(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is in this picture?"},
+                    {"type": "image_url", "image_url": {"url": PNG_DATA_URL}, "cache_control": EPHEMERAL},
+                ],
+            },
+            {"role": "assistant", "content": None, "tool_calls": [TOOL_CALL]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny", "cache_control": EPHEMERAL},
+        ],
+        optional_params={"tools": TOOLS},
+    )
+    picture, image = request["messages"][0]["content"]
+    assert picture == {"text": "what is in this picture?", "cachePoint": DEFAULT_CACHE_POINT}
+    assert set(image) == {"image"}
+    assert [set(block) for block in request["messages"][2]["content"]] == [{"toolResult"}]
 
 
 def test_cache_point_with_nothing_before_it_is_dropped():

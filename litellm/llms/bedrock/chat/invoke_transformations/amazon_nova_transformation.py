@@ -67,9 +67,10 @@ def _inline_block_cache_points(
         cache_point: Final = block.get("cachePoint")
         if cache_point is None or len(block) != 1:
             return (*inlined, block)
-        if not inlined:
+        anchor: Final = next((index for index in reversed(range(len(inlined))) if "text" in inlined[index]), None)
+        if anchor is None:
             return inlined
-        return (*inlined[:-1], with_cache_point(inlined[-1], cache_point))
+        return (*inlined[:anchor], with_cache_point(inlined[anchor], cache_point), *inlined[anchor + 1 :])
 
     return list(reduce(attach, blocks, ()))
 
@@ -148,8 +149,9 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
 
     @staticmethod
     def _inline_cache_points(request: BedrockInvokeNovaRequest) -> BedrockInvokeNovaRequest:
-        """InvokeModel takes ``cachePoint`` as a key of the block it caches and rejects the
-        standalone ``{"cachePoint": ...}`` blocks Converse accepts.
+        """InvokeModel takes ``cachePoint`` as a key of the text block it caches: it rejects the
+        standalone ``{"cachePoint": ...}`` blocks Converse accepts and the key on image, toolUse,
+        and toolResult blocks, so a point behind one of those moves back to the last text block.
         """
         return {
             **request,
