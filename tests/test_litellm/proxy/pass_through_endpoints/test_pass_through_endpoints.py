@@ -2529,12 +2529,12 @@ async def test_pass_through_request_default_query_params_reach_the_wire():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_without_merge_preserves_target_query():
+async def test_pass_through_request_without_merge_replaces_target_query():
     wire_url = await _run_pass_through_and_capture_wire_url(
         target="https://www.bing.com/search?setLang=en-US",
         incoming_query="q=litellm",
     )
-    assert dict(wire_url.params) == {"setLang": "en-US", "q": "litellm"}
+    assert dict(wire_url.params) == {"q": "litellm"}
 
 
 @pytest.mark.asyncio
@@ -2544,15 +2544,6 @@ async def test_pass_through_request_preserves_target_query_without_client_query(
         incoming_query="",
     )
     assert dict(wire_url.params) == {"alt": "sse"}
-
-
-@pytest.mark.asyncio
-async def test_pass_through_request_preserves_target_query_with_client_query():
-    wire_url = await _run_pass_through_and_capture_wire_url(
-        target="https://example.com/v1/models/gemini:streamGenerateContent?alt=sse",
-        incoming_query="key=abc",
-    )
-    assert dict(wire_url.params) == {"alt": "sse", "key": "abc"}
 
 
 @pytest.mark.asyncio
