@@ -121,6 +121,32 @@ class _SecondScanBlockingGuardrail(_CountingPassingGuardrail):
         return inputs
 
 
+class _MarkerBlockingGuardrail(_CountingPassingGuardrail):
+    """Blocks as soon as the inspected input field (texts or tool_calls) carries the marker."""
+
+    def __init__(self, *args, marker: str, field: Literal["texts", "tool_calls"] = "texts", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.marker = marker
+        self.field = field
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        if self.marker in json.dumps(inputs.get(self.field, [])):
+            raise ModifyResponseException(
+                message=BLOCK_MESSAGE,
+                model="gpt-4o",
+                request_data=request_data,
+                guardrail_name=self.guardrail_name,
+            )
+        return inputs
+
+
 def _sse_event(event_type: str, data: dict) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
 
@@ -271,6 +297,76 @@ async def _run_windowed(
     return collected, yielded_count
 
 
+def _responses_message_stream_events(text_chunks: List[str]) -> List[dict]:
+    message = {"type": "message", "id": "msg_1", "status": "completed", "role": "assistant"}
+    content = [{"type": "output_text", "text": "".join(text_chunks), "annotations": []}]
+    return [
+        {"type": "response.output_item.added", "output_index": 0, "item": {**message, "content": []}},
+        *(
+            {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": text}
+            for text in text_chunks
+        ),
+        {"type": "response.output_item.done", "output_index": 0, "item": {**message, "content": content}},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_1", "model": "gpt-4o", "status": "completed", "output": [{**message, "content": content}]},
+        },
+    ]
+
+
+def _responses_truncated_function_call_events(text: str, argument_chunks: List[str]) -> List[dict]:
+    message = {"type": "message", "id": "msg_1", "status": "completed", "role": "assistant"}
+    content = [{"type": "output_text", "text": text, "annotations": []}]
+    function_call = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "run_shell"}
+    return [
+        {"type": "response.output_item.added", "output_index": 0, "item": {**message, "content": []}},
+        {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": text},
+        {"type": "response.output_item.added", "output_index": 1, "item": {**function_call, "arguments": ""}},
+        *(
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": arguments}
+            for arguments in argument_chunks
+        ),
+        {
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_1",
+                "model": "gpt-4o",
+                "status": "incomplete",
+                "output": [
+                    {**message, "content": content},
+                    {**function_call, "arguments": "".join(argument_chunks), "status": "incomplete"},
+                ],
+            },
+        },
+    ]
+
+
+async def _replay(events: List[dict]) -> AsyncGenerator[dict, None]:
+    for event in events:
+        yield event
+
+
+async def _run_windowed_responses(guardrail: CustomGuardrail, events: List[dict]) -> str:
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_sampling_rate = 2
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/responses")
+    request_data = {
+        "input": "hi",
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: List[Any] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_replay(events),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    return json.dumps([chunk if isinstance(chunk, dict) else str(chunk) for chunk in collected])
+
+
 def _chat_text(chunks: List[Any]) -> str:
     return "".join(
         choice.delta.content or ""
@@ -363,6 +459,35 @@ async def test_windowed_buffer_holds_tool_call_windows_until_end_of_stream_scan(
     assert _chat_text(collected) == "".join(content_chunks)
     assert _tool_argument_text(collected) == "".join(tool_argument_chunks)
     assert guardrail.tool_call_scan_indexes == [guardrail.scan_count]
+
+
+@pytest.mark.asyncio
+async def test_windowed_responses_output_item_done_round_keeps_text_window_withheld():
+    guardrail = _MarkerBlockingGuardrail(guardrail_name="windowed-responses", event_hook="post_call", marker=ORIGINAL_MARKER)
+    events = _responses_message_stream_events(["one ", f"{ORIGINAL_MARKER} "])
+
+    raw = await _run_windowed_responses(guardrail, events)
+
+    assert ORIGINAL_MARKER not in raw, f"unscanned window leaked: {raw!r}"
+    assert BLOCK_MESSAGE in raw
+    assert guardrail.scan_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_windowed_responses_incomplete_stream_scans_tool_call_before_release():
+    guardrail = _MarkerBlockingGuardrail(
+        guardrail_name="windowed-responses-tools",
+        event_hook="post_call",
+        marker=TOOL_ARGUMENTS_MARKER,
+        field="tool_calls",
+    )
+    events = _responses_truncated_function_call_events("hi ", ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}'])
+
+    raw = await _run_windowed_responses(guardrail, events)
+
+    assert '"hi "' in raw
+    assert TOOL_ARGUMENTS_MARKER not in raw, f"unscanned tool call leaked: {raw!r}"
+    assert BLOCK_MESSAGE in raw
 
 
 @pytest.mark.asyncio

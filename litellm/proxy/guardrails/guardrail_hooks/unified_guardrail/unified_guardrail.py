@@ -1082,7 +1082,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
                 if scan_key is not None:
                     tool_calls_in_flight = scan_key.tool_calls_in_flight
-                hold_window = buffer_until_moderated and tool_calls_in_flight
+                hold_window = buffer_until_moderated and (scan_key is None or tool_calls_in_flight)
                 if _is_redundant_scan(scan_key, last_scan_key):
                     verbose_proxy_logger.debug(
                         "Skipping streaming chunk %s for guardrail %s: nothing new to scan since the last round",
@@ -1159,7 +1159,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     last_scan_key = scan_key
                 if hold_window:
                     verbose_proxy_logger.debug(
-                        "Holding %s buffered chunks for guardrail %s: streamed tool calls await the end-of-stream scan",
+                        "Holding %s buffered chunks for guardrail %s: this round could not scan the whole window",
                         len(withheld_items),
                         guardrail_to_apply.guardrail_name,
                     )
