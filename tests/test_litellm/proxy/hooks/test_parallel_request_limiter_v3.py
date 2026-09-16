@@ -6311,7 +6311,7 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
         (
             {
                 "team_id": "t",
-                "metadata": {"model_rpm_limit": {"test-model": 100}},
+                "metadata": {"model_rpm_limit": {"other-model": 100}},
                 "team_metadata": {"model_rpm_limit": {"test-model": 1}},
             },
             {},
@@ -6529,3 +6529,113 @@ async def test_request_capacity_rejection_keeps_existing_redis_mirror():
                 pytest.fail("rejection released another request's mirrored slot")
         assert exc.value.status_code == 429
         assert await cache.async_get_cache(counter_key, local_only=True) == 1
+
+
+@pytest.mark.parametrize(
+    "key_limits",
+    [
+        {"metadata": {"model_rpm_limit": {"test-model": 3}}},
+        {"model_max_budget": {"test-model": {"rpm_limit": 3}}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_takes_precedence_over_team_model_rpm_limit(key_limits):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-override"),
+        team_id="t",
+        team_metadata={"model_rpm_limit": {"test-model": 1}},
+        **key_limits,
+    )
+
+    async def request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth, cache=cache, data={"model": "test-model"}, call_type="acompletion"
+        )
+
+    for _ in range(3):
+        await request()
+    with pytest.raises(HTTPException) as exc:
+        await request()
+    assert exc.value.status_code == 429
+    assert "model_per_key" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize(
+    "key_limits, override_key_gets_through",
+    [
+        ({"model_rpm_limit": {"test-model": 10}}, False),
+        ({"model_rpm_limit": {"test-model": 10}, "model_tpm_limit": {"test-model": 5000}}, True),
+    ],
+    ids=["rpm_only_override_still_shares_team_tpm", "rpm_and_tpm_override_leaves_team_tpm"],
+)
+@pytest.mark.asyncio
+async def test_key_model_rpm_override_keeps_team_model_tpm_limit(key_limits, override_key_gets_through):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    team_metadata = {"model_rpm_limit": {"test-model": 5}, "model_tpm_limit": {"test-model": 500}}
+    sibling_key = UserAPIKeyAuth(api_key=hash_token("sk-sibling"), team_id="t", team_metadata=team_metadata)
+    override_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-key-override"), team_id="t", metadata=key_limits, team_metadata=team_metadata
+    )
+
+    async def request(auth):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 300},
+            call_type="acompletion",
+        )
+
+    await request(sibling_key)
+    if override_key_gets_through:
+        await request(override_key)
+        return
+    with pytest.raises(HTTPException) as exc:
+        await request(override_key)
+    assert exc.value.status_code == 429
+    assert "model_per_team" in str(exc.value.detail)
+    assert exc.value.headers["rate_limit_type"] == "tokens"
+
+
+@pytest.mark.parametrize(
+    "key_metadata, charges_team_model_pool",
+    [
+        ({}, True),
+        ({"model_rpm_limit": {"test-model": 10}}, True),
+        ({"model_tpm_limit": {"test-model": 5000}}, False),
+        ({"model_tpm_limit": {"other-model": 5000}}, True),
+    ],
+    ids=["no_override", "rpm_only_override", "tpm_override", "tpm_override_on_other_model"],
+)
+def test_success_tpm_accounting_skips_team_model_pool_when_key_owns_model_tpm_limit(
+    key_metadata, charges_team_model_pool
+):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    response = ModelResponse(
+        id="team-pool-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="test-model",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-pool"), "user_api_key_team_id": "t"}},
+        "litellm_params": {
+            "metadata": {
+                "model_group": "test-model",
+                "user_api_key_metadata": key_metadata,
+                "user_api_key_team_metadata": {"model_tpm_limit": {"test-model": 500}},
+            }
+        },
+        "model": "test-model",
+    }
+
+    ops = handler._build_success_event_pipeline_operations(kwargs=kwargs, response_obj=response, rate_limit_type="output")
+
+    charged_keys = {op["key"] for op in ops}
+    assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-pool')}:test-model", "tokens") in charged_keys
+    team_pool_key = handler.create_rate_limit_keys("model_per_team", "t:test-model", "tokens")
+    assert (team_pool_key in charged_keys) is charges_team_model_pool

@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -942,6 +943,121 @@ async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total
         "spend": {"increment": response_cost},
         "total_spend": {"increment": response_cost},
     }
+
+
+@pytest.mark.asyncio
+async def test_org_spend_increments_organization_membership_row_for_the_calling_user():
+    """A request made with a user_id inside an org must increment that user's
+    LiteLLM_OrganizationMembership.spend, not only the org total, or the
+    Organizations > Members UI renders '-' for every member."""
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._update_org_db(
+        response_cost=0.75,
+        org_id="org-abc",
+        user_id="user-xyz",
+        prisma_client=MagicMock(),
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    mock_batcher: Final = MagicMock()
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    proxy_logging: Final = MagicMock()
+    proxy_logging.call_details = {}
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=transactions,
+    )
+
+    mock_batcher.litellm_organizationtable.update_many.assert_called_once_with(
+        where={"organization_id": "org-abc"},
+        data={"spend": {"increment": 0.75}},
+    )
+    mock_batcher.litellm_organizationmembership.update_many.assert_called_once_with(
+        where={"organization_id": "org-abc", "user_id": "user-xyz"},
+        data={"spend": {"increment": 0.75}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_org_spend_without_user_id_leaves_organization_membership_untouched():
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._update_org_db(
+        response_cost=0.75,
+        org_id="org-abc",
+        user_id=None,
+        prisma_client=MagicMock(),
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    mock_batcher: Final = MagicMock()
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    proxy_logging: Final = MagicMock()
+    proxy_logging.call_details = {}
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=transactions,
+    )
+
+    mock_batcher.litellm_organizationtable.update_many.assert_called_once()
+    mock_batcher.litellm_organizationmembership.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_org_spend_keeps_member_attribution_when_ids_contain_the_key_delimiter():
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._update_org_db(
+        response_cost=0.75,
+        org_id="division::west",
+        user_id="user::42",
+        prisma_client=MagicMock(),
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    mock_batcher: Final = MagicMock()
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    proxy_logging: Final = MagicMock()
+    proxy_logging.call_details = {}
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=transactions,
+    )
+
+    mock_batcher.litellm_organizationmembership.update_many.assert_called_once_with(
+        where={"organization_id": "division::west", "user_id": "user::42"},
+        data={"spend": {"increment": 0.75}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_queues_org_member_spend_for_the_request_user():
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._batch_database_updates(
+        response_cost=0.1,
+        user_id="u1",
+        hashed_token="t1",
+        team_id=None,
+        org_id="org1",
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.1},
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    assert transactions["org_list_transactions"] == {"org1": 0.1}
+    assert transactions["org_member_list_transactions"] == {"organization_id::org1::user_id::u1": 0.1}
 
 
 @pytest.mark.asyncio
@@ -2904,6 +3020,7 @@ async def test_update_daily_spend_retries_deadlock(monkeypatch):
         ("team_list_transactions", "team-1"),
         ("team_member_list_transactions", "team_id::team-1::user_id::user-1"),
         ("org_list_transactions", "org-1"),
+        ("org_member_list_transactions", "organization_id::org-1::user_id::user-1"),
         ("tag_list_transactions", "tag-1"),
         ("agent_list_transactions", "agent-1"),
     ],
