@@ -157,6 +157,8 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -647,6 +649,8 @@ def test_update_breakdown_metrics_includes_user_email():
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        total_response_time_ms=0,
+        timed_requests=0,
         total_tokens=2,
         api_requests=1,
         successful_requests=1,
@@ -722,6 +726,8 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.prompt_caching_savings_spend = 0.0
     mock_record_1.gateway_injected_caching_savings_spend = 0.0
     mock_record_1.autorouter_savings_spend = 0.0
+    mock_record_1.total_response_time_ms = 18_000
+    mock_record_1.timed_requests = 9
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
     mock_record_1.failed_requests = 1
@@ -746,6 +752,8 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.prompt_caching_savings_spend = 0.0
     mock_record_2.gateway_injected_caching_savings_spend = 0.0
     mock_record_2.autorouter_savings_spend = 0.0
+    mock_record_2.total_response_time_ms = 2_500
+    mock_record_2.timed_requests = 5
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
     mock_record_2.failed_requests = 0
@@ -778,6 +786,8 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     assert result.metadata.total_successful_requests == 14  # 9 + 5
     assert result.metadata.total_failed_requests == 1
     assert result.metadata.total_tokens == 1100  # (500+200) + (300+100)
+    assert result.metadata.total_response_time_ms == 20_500
+    assert result.metadata.total_timed_requests == 14
 
     # Verify breakdown still works
     assert len(result.results) == 1
@@ -786,6 +796,10 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     assert "staging" in daily.breakdown.entities
     assert daily.breakdown.entities["production"].metrics.spend == 25.0
     assert daily.breakdown.entities["staging"].metrics.spend == 5.0
+    assert daily.breakdown.models["gpt-4"].metrics.total_response_time_ms == 18_000
+    assert daily.breakdown.models["gpt-4"].metrics.timed_requests == 9
+    assert daily.breakdown.models["gpt-3.5-turbo"].metrics.total_response_time_ms == 2_500
+    assert daily.breakdown.models["gpt-3.5-turbo"].metrics.timed_requests == 5
 
 
 @pytest.mark.asyncio
@@ -810,6 +824,8 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -900,6 +916,8 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        total_response_time_ms=0,
+        timed_requests=0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
@@ -1333,6 +1351,8 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "prompt_caching_savings_spend": None,
             "gateway_injected_caching_savings_spend": None,
             "autorouter_savings_spend": None,
+            "total_response_time_ms": None,
+            "timed_requests": None,
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
@@ -1378,6 +1398,8 @@ def _no_spend_record():
         prompt_caching_savings_spend=None,
         gateway_injected_caching_savings_spend=None,
         autorouter_savings_spend=None,
+        total_response_time_ms=None,
+        timed_requests=None,
         api_requests=None,
         successful_requests=None,
         failed_requests=None,
@@ -1465,6 +1487,55 @@ class TestEverySavingsDriverSurvivesTheReadPath:
             )
 
 
+class TestResponseTimeSurvivesTheReadPath:
+    """The dashboard averages total_response_time_ms over timed_requests, so both halves
+    of the pair must be summed by the rollup query, accumulated across rows, carried by
+    a single-row conversion, and coalesced when a NULL aggregate comes back."""
+
+    _FIELDS = ("total_response_time_ms", "timed_requests")
+
+    def test_both_halves_are_summed_by_the_rollup_query(self):
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-09-01",
+            end_date="2026-09-30",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=None,
+        )
+        for field in self._FIELDS:
+            assert f"SUM({field})" in sql, f"{field} is never summed, so the average reads as zero"
+
+    def test_accumulating_rows_keeps_sum_and_count_paired(self):
+        first = _no_spend_record()
+        first.total_response_time_ms = 1500
+        first.timed_requests = 2
+        second = _no_spend_record()
+        second.total_response_time_ms = 500
+        second.timed_requests = 1
+        metrics = update_metrics(update_metrics(SpendMetrics(), first), second)
+        assert metrics.total_response_time_ms == 2000
+        assert metrics.timed_requests == 3
+
+    def test_single_row_conversion_carries_both_halves(self):
+        record = _no_spend_record()
+        record.total_response_time_ms = 1234
+        record.timed_requests = 4
+        metrics = _record_to_spend_metrics(record)
+        assert metrics.total_response_time_ms == 1234
+        assert metrics.timed_requests == 4
+
+    def test_null_aggregates_read_as_zero(self):
+        metrics = _record_to_spend_metrics(_no_spend_record())
+        assert metrics.total_response_time_ms == 0
+        assert metrics.timed_requests == 0
+        accumulated = update_metrics(SpendMetrics(), _no_spend_record())
+        assert accumulated.total_response_time_ms == 0
+        assert accumulated.timed_requests == 0
+
+
 @pytest.fixture
 def ptu_cost_attribution_enabled(monkeypatch):
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
@@ -1488,6 +1559,8 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        total_response_time_ms=0,
+        timed_requests=0,
         total_tokens=0,
         api_requests=0,
         successful_requests=0,
@@ -1554,6 +1627,8 @@ def _grouping_row(
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
+        total_response_time_ms=0,
+        timed_requests=0,
         api_requests=0,
         successful_requests=0,
         failed_requests=0,
@@ -1714,6 +1789,8 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
+        total_response_time_ms=0,
+        timed_requests=0,
         total_tokens=0,
         api_requests=0,
         successful_requests=0,
@@ -2118,6 +2195,8 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
         "failed_requests": 0,
         "prompt_tokens": 0,
         "completion_tokens": 0,
