@@ -401,6 +401,12 @@ class TestPgBouncerProcess:
         pooler.stop()
         assert _wait_until(lambda: not _listening(port))
 
+    @pytest.mark.skip(
+        reason="flaky under CI load: ready_timeout_seconds=0.3 is too tight for the initial spawn on shared runners "
+        "(see e.g. https://github.com/BerriAI/litellm/actions/runs/34546848959). PgBouncerProcess uses one ready "
+        "timeout for both the initial start and every restart, so the test can't loosen it just for the initial "
+        "spawn without changing what it exercises"
+    )
     def test_a_replacement_that_never_listens_is_replaced_again(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
         port: Final = _free_port()
         port_file: Final = tmp_path / "port"
