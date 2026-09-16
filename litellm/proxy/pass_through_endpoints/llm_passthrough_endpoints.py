@@ -45,6 +45,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token,
+    is_no_auth_dev_mode,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -2038,8 +2039,11 @@ def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -
 
 
 def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-    """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``."""
-    from litellm.proxy.proxy_server import master_key
+    """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``.
+
+    A proxy in no-auth dev mode without custom auth authenticated nothing, so none of the caller's values is one.
+    """
+    from litellm.proxy.proxy_server import general_settings, master_key, user_custom_auth
 
     normalized: Final = _normalize_credential_value(value)
     if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
@@ -2047,10 +2051,10 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     jwt_claims: Final = user_api_key_dict.jwt_claims
     if jwt_claims and _is_authenticated_caller_jwt(normalized, jwt_claims):
         return True
+    if is_no_auth_dev_mode(master_key, general_settings) and user_custom_auth is None:
+        return False
     authenticated_key: Final = user_api_key_dict.api_key
     if authenticated_key is None:
-        return False
-    if master_key is None and not normalized.startswith("sk-"):
         return False
     stored_representation: Final = UserAPIKeyAuth._safe_hash_litellm_api_key(normalized)  # pyright: ignore[reportPrivateUsage]  # the exact transform auth applied when it stored api_key
     return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())

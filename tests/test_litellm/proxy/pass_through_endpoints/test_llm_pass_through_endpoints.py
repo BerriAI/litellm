@@ -586,6 +586,7 @@ class TestVertexAIPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master-1234")
 
         endpoint = f"/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent"
 
@@ -4400,6 +4401,55 @@ class TestAnthropicPassthroughVirtualKeyLeak:
         )
         assert forwarded is None, "the master key must never reach Anthropic"
         assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("header", "value"),
+        [
+            pytest.param(b"x-api-key", b"sk-ant-api03-callers-own-key", id="x-api-key"),
+            pytest.param(b"authorization", b"Bearer sk-ant-api03-callers-own-key", id="authorization"),
+        ],
+    )
+    async def test_without_a_master_key_the_callers_own_anthropic_key_still_forwards(
+        self, monkeypatch, header: bytes, value: bytes
+    ):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", None)
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(header, value), (b"anthropic-version", b"2023-06-01"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key="sk-ant-api03-callers-own-key", user_role=LitellmUserRoles.INTERNAL_USER),
+            master_key=None,
+        )
+        assert raised is None, "with no master key the proxy authenticated nothing, so nothing of the caller's is a LiteLLM secret"
+        assert forwarded is not None
+        assert forwarded.get(header.decode()) == value.decode()
+
+    @pytest.mark.asyncio
+    async def test_without_a_master_key_a_custom_auth_credential_is_still_stripped(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", AsyncMock())
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-custom-auth-token"), (b"anthropic-version", b"2023-06-01")],
+            authenticated=UserAPIKeyAuth(api_key="sk-custom-auth-token", user_role=LitellmUserRoles.INTERNAL_USER),
+            master_key=None,
+        )
+        assert raised is not None and raised.status_code == 401
+        assert forwarded is None
+
+    @pytest.mark.asyncio
+    async def test_without_a_master_key_an_oauth2_token_is_still_stripped(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_oauth2_auth": True})
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", None)
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer oauth2-access-token"), (b"anthropic-version", b"2023-06-01")],
+            authenticated=UserAPIKeyAuth(api_key="oauth2-access-token", user_role=LitellmUserRoles.INTERNAL_USER),
+            master_key=None,
+        )
+        assert raised is not None and raised.status_code == 401
+        assert forwarded is None
 
     @pytest.mark.asyncio
     async def test_byo_anthropic_oauth_token_still_forwards_without_virtual_key(self, monkeypatch):
