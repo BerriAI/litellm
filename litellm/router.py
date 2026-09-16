@@ -446,6 +446,13 @@ def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
     return (targets,) if isinstance(targets, str) else tuple(targets)
 
 
+def _silent_experiment_kwargs_snapshot(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = kwargs.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return MappingProxyType({**kwargs})
+    return MappingProxyType({**kwargs, "metadata": dict(metadata)})
+
+
 def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
     """
     Realtime client-secret requests carry the model inside ``session`` as well, and the caller's copy of it still
@@ -2470,6 +2477,7 @@ class Router:
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
+            shadow_kwargs: Final = _silent_experiment_kwargs_snapshot(kwargs)
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
                 # Use threading.Thread (not ThreadPoolExecutor) - executor.submit()
@@ -2478,7 +2486,7 @@ class Router:
                 threading.Thread(
                     target=self._silent_experiment_completion,
                     args=(silent_target, messages),
-                    kwargs=kwargs,
+                    kwargs=shadow_kwargs,
                     daemon=True,
                 ).start()
 
@@ -2593,7 +2601,9 @@ class Router:
     async def _run_silent_experiment(
         self, silent_model: str, messages: Sequence[Mapping[str, str]], silent_kwargs: Mapping[str, object]
     ) -> None:
-        remaining_kwargs: Final = {key: value for key, value in silent_kwargs.items() if key != "stream"}
+        remaining_kwargs: Final = MappingProxyType(
+            {key: value for key, value in silent_kwargs.items() if key != "stream"}
+        )
         response: Final = await self.acompletion(
             model=silent_model,
             messages=cast(list[AllMessageValues], messages),
@@ -3581,6 +3591,7 @@ class Router:
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
+            shadow_kwargs: Final = _silent_experiment_kwargs_snapshot(kwargs)
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
                 # This is a silent experiment, so we don't want to block the primary request
@@ -3588,7 +3599,7 @@ class Router:
                     self._silent_experiment_acompletion(
                         silent_model=silent_target,
                         messages=messages,  # Use messages instead of *args
-                        **kwargs,
+                        **shadow_kwargs,
                     )
                 )
 
