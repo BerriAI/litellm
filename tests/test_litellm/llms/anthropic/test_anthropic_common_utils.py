@@ -1408,11 +1408,11 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert is_empty_unsigned_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
         assert is_empty_unsigned_thinking_block("not a dict") is False
 
-    def test_strip_empty_content_blocks_drops_empty_thinking_blocks(self):
+    def test_strip_empty_content_blocks_drops_empty_unsigned_thinking_blocks(self):
         """LIT-6357 ingestion half: an assistant tool-loop turn carrying an
-        empty (even signed) thinking block keeps its tool_use blocks and loses
-        the poison; whitespace-only counts as empty; a non-empty thinking block
-        and redacted_thinking are untouched."""
+        empty, unsigned thinking block keeps its tool_use blocks and loses the
+        poison; whitespace-only counts as empty; a non-empty thinking block and
+        redacted_thinking are untouched."""
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
         )
@@ -1422,7 +1422,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
             {"role": "user", "content": "weather?"},
             {
                 "role": "assistant",
-                "content": [{"type": "thinking", "thinking": "", "signature": "sig_abc"}, tu],
+                "content": [{"type": "thinking", "thinking": "", "signature": ""}, tu],
             },
             {
                 "role": "assistant",
@@ -1440,6 +1440,36 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert [b["type"] for b in out[2]["content"]] == ["thinking", "redacted_thinking"]
         assert out[2]["content"][0]["thinking"] == "real plan"
         assert len(msgs[1]["content"]) == 2
+
+    def test_strip_empty_content_blocks_keeps_signed_empty_thinking_blocks(self):
+        """A thinking block with empty text and a signature is the default
+        response shape of Claude Opus 4.8 / Fable 5 / Fable 5.1 (thinking.display
+        omitted): the signature IS the preserved reasoning, Anthropic accepts it
+        on input and binds it to its prefix. Dropping it silently discards the
+        model's reasoning on every replayed turn and leaves preserved-thinking
+        enforcement (thinking.block_binding) nothing to check. The message and
+        block order must survive untouched."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
+        signed = {"type": "thinking", "thinking": "", "signature": "EqQBCkYIBxgCKkD"}
+        msgs = [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": [signed, tu]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": "sunny"}]},
+            {
+                "role": "assistant",
+                "content": [signed, {"type": "text", "text": ""}, {"type": "text", "text": "Sunny."}],
+            },
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert len(out) == 4
+        assert out[1] is msgs[1]
+        assert [b["type"] for b in out[3]["content"]] == ["thinking", "text"]
+        assert out[3]["content"][0] is signed
+        assert out[3]["content"][1]["text"] == "Sunny."
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
