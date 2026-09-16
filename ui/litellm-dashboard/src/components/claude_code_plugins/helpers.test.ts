@@ -157,6 +157,15 @@ describe("getSourceLink", () => {
     expect(getSourceLink({ source: "github" })).toBeNull();
   });
 
+  it("keeps http and upper-case https urls registered through the api clickable", () => {
+    expect(getSourceLink({ source: "url", url: "http://git.internal.example/org/repo" })).toBe(
+      "http://git.internal.example/org/repo",
+    );
+    expect(getSourceLink({ source: "git-subdir", url: "HTTPS://gitlab.com/org/repo", path: "sub/dir" })).toBe(
+      "HTTPS://gitlab.com/org/repo",
+    );
+  });
+
   it("returns null for an ssh clone url, which is not browsable", () => {
     expect(getSourceLink({ source: "url", url: "git@ghe.example.com:org/repo.git" })).toBeNull();
     expect(getSourceLink({ source: "url", url: "ssh://git@ghe.example.com/org/repo.git" })).toBeNull();
