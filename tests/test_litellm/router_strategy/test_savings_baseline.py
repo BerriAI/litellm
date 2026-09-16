@@ -4,6 +4,7 @@ from litellm.router import Router
 from litellm.router_strategy.savings_baseline import (
     Baseline,
     canonical_model,
+    conversation_is_continuing,
     _models_in,
     _most_expensive,
     resolve_baseline,
@@ -20,6 +21,19 @@ def parent() -> Router:
             {"model_name": "pool", "litellm_params": {"model": "anthropic/claude-opus-5"}},
         ]
     )
+
+
+@pytest.mark.parametrize(
+    "messages, expected",
+    [
+        (None, True),
+        ([], True),
+        ([{"role": "user", "content": "hello"}], False),
+        ([{"role": "user"}, {"role": "assistant"}, {"role": "user"}], True),
+    ],
+)
+def test_conversation_shape_for_savings(messages, expected):
+    assert conversation_is_continuing(messages) is expected
 
 
 class TestCanonicalModel:
