@@ -1,6 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
