@@ -1,8 +1,6 @@
-import asyncio
 import json
 import os
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
@@ -37,11 +35,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     ToolCall,
     ToolCallFunction,
 )
-from litellm.types.utils import (
-    GenericGuardrailAPIInputs,
-    GuardrailStatus,
-    StandardLoggingGuardrailInformation,
-)
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
 _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
@@ -117,13 +111,6 @@ class SingulrGuardrail(CustomGuardrail):
 
     @staticmethod
     def _metadata_containers(request_data: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
-        """Candidate metadata dicts to check, in priority order.
-
-        Most call paths put metadata at the top level of ``request_data``
-        (``litellm_metadata`` or ``metadata``). ``post_mcp_call`` instead hands
-        us ``litellm_logging_obj.model_call_details``, which nests it under
-        ``litellm_params`` instead, so that's checked as a fallback.
-        """
         litellm_params: Final = request_data.get("litellm_params") or _EMPTY_MAPPING
         return tuple(
             container
@@ -153,7 +140,7 @@ class SingulrGuardrail(CustomGuardrail):
         return None
 
     @classmethod
-    def _build_metadata(cls, request_data: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    def _build_metadata(cls, request_data: Mapping[str, Any]) -> Mapping[str, str] | None:
         fields: Final = (
             "user_api_key_alias",
             "user_api_key_user_id",
@@ -279,13 +266,30 @@ class SingulrGuardrail(CustomGuardrail):
             )
         return inputs
 
+    @staticmethod
+    def _mcp_tool_name(request_data: Mapping[str, Any]) -> str | None:
+        return request_data.get("mcp_tool_name") or request_data.get("name")
+
+    @staticmethod
+    def _mcp_arguments(request_data: Mapping[str, Any]) -> object:
+        arguments: Final = request_data.get("mcp_arguments")
+        return arguments if arguments is not None else request_data.get("arguments")
+
+    @staticmethod
+    def _is_mcp_call(request_data: Mapping[str, Any], logging_obj: LiteLLMLoggingObj | None) -> bool:
+        call_type: Final = logging_obj.call_type if logging_obj is not None else request_data.get("call_type")
+        if call_type is not None:
+            return call_type == CallTypes.call_mcp_tool.value
+        model: Final = request_data.get("model")
+        return "mcp_tool_name" in request_data or (isinstance(model, str) and model.startswith(_MCP_MODEL_PREFIX))
+
     async def _apply_guardrail_on_mcp_request(self, request_data: Mapping[str, Any]) -> None:
         metadata: Final = self._build_metadata(request_data=request_data)
 
         singulr_mcp_obj = SingulrMcpGuardrailPayload(
             guardrail_scope="mcp_request",
-            tool_name=request_data.get("mcp_tool_name"),
-            tool_arguments=request_data.get("mcp_arguments"),
+            tool_name=self._mcp_tool_name(request_data),
+            tool_arguments=self._mcp_arguments(request_data),
             mcp_server_name=request_data.get("mcp_server_name"),
             metadata=metadata,
         )
@@ -398,134 +402,6 @@ class SingulrGuardrail(CustomGuardrail):
             )
         return inputs
 
-    def _logging_only_response_payload(
-        self,
-        kwargs: Mapping[str, Any],
-        result: Any,  # noqa: ANN401  # result can be any callback shape
-    ) -> Mapping[str, Any]:
-        metadata: Final = self._build_metadata(request_data=kwargs)
-        try:
-            return SingulrGuardrailPayload(
-                correlation_id=kwargs.get("litellm_call_id"),
-                model_name=kwargs.get("model"),
-                guardrail_scope="response",
-                response=result,
-                metadata=metadata,
-            ).model_dump(mode="json")
-        except Exception as exc:  # noqa: BLE001  # result can be any callback shape; fall back to a stringified report
-            verbose_proxy_logger.debug("Singulr: could not JSON-serialize response, falling back: %s", exc)
-            return {  # mutable-ok: short-lived JSON payload dict
-                "correlation_id": kwargs.get("litellm_call_id"),
-                "guardrail_scope": "response",
-                "response": str(result),
-                "metadata": metadata,
-            }
-
-    async def _report_logging_only(
-        self,
-        kwargs: Mapping[str, Any],
-        result: Any,  # noqa: ANN401  # result can be any callback shape
-    ) -> tuple[SingulrGuardrailResponse | None, ...]:
-        messages: Final = kwargs.get("messages") or ()
-        request_verdict: Final = (
-            await self._call_api(
-                SingulrGuardrailPayload(
-                    correlation_id=kwargs.get("litellm_call_id"),
-                    model_name=kwargs.get("model"),
-                    guardrail_scope="request",
-                    messages=messages,
-                    metadata=self._build_metadata(request_data=kwargs),
-                ).model_dump(mode="json")
-            )
-            if messages
-            else None
-        )
-        response_verdict: Final = (
-            await self._call_api(self._logging_only_response_payload(kwargs=kwargs, result=result)) if result else None
-        )
-        return (request_verdict, response_verdict)
-
-    async def _logging_only_guardrail_status(
-        self,
-        kwargs: Mapping[str, Any],
-        result: Any,  # noqa: ANN401  # result can be any callback shape
-    ) -> GuardrailStatus | None:
-        """``None`` means no verdict was reached, so nothing should be logged."""
-        try:
-            verdicts: Final = await self._report_logging_only(kwargs=kwargs, result=result)
-        except GuardrailRaisedException:
-            return "guardrail_intervened"
-        except Exception as exc:  # noqa: BLE001  # logging_only must never break the request
-            verbose_proxy_logger.debug("Singulr: logging_only hook swallowed exception: %s", exc)
-            return None
-        if any(verdict is not None and verdict.should_block for verdict in verdicts):
-            return "guardrail_intervened"
-        return "success"
-
-    @staticmethod
-    def _is_mcp_call(kwargs: Mapping[str, Any]) -> bool:
-        model: Final = kwargs.get("model")
-        return isinstance(model, str) and model.startswith(_MCP_MODEL_PREFIX)
-
-    async def async_logging_hook(
-        self,
-        kwargs: dict,  # mutable-ok: matches CustomLogger override; mutated via setdefault
-        result: Any,  # noqa: ANN401  # required by CustomLogger.async_logging_hook override signature
-        call_type: str,
-    ) -> tuple[dict, Any]:
-        if self._is_mcp_call(kwargs):
-            verbose_proxy_logger.debug("Singulr: skipping logging_only report for MCP call %s", kwargs.get("model"))
-            return kwargs, result
-
-        start_time: Final = datetime.now(timezone.utc)
-        guardrail_status: Final = await self._logging_only_guardrail_status(kwargs=kwargs, result=result)
-        if guardrail_status is None:
-            return kwargs, result
-
-        end_time: Final = datetime.now(timezone.utc)
-        slg: Final = StandardLoggingGuardrailInformation(
-            guardrail_name=self.guardrail_name or "singulr",
-            guardrail_mode=GuardrailEventHooks.logging_only,
-            guardrail_status=guardrail_status,
-            start_time=start_time.timestamp(),
-            end_time=end_time.timestamp(),
-            duration=(end_time - start_time).total_seconds(),
-            masked_entity_count=None,
-        )
-        standard_logging_object: Final = kwargs.setdefault(
-            "standard_logging_object",
-            {},  # mutable-ok: shared, mutated accumulator
-        )
-        existing = standard_logging_object.get("guardrail_information")
-        if isinstance(existing, list):
-            existing.append(slg)
-        else:
-            standard_logging_object["guardrail_information"] = [slg]  # mutable-ok: shared accumulator
-
-        return kwargs, result
-
-    def logging_hook(
-        self,
-        kwargs: dict,  # mutable-ok: required by CustomLogger.logging_hook override signature
-        result: Any,  # noqa: ANN401  # required by CustomLogger.logging_hook override signature
-        call_type: str,
-    ) -> tuple[dict, Any]:
-        try:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            if loop.is_running():
-                verbose_proxy_logger.debug(
-                    "Singulr: sync logging_hook called from a running loop; skipping logging_only report"
-                )
-                return kwargs, result
-            loop.run_until_complete(self.async_logging_hook(kwargs=kwargs, result=result, call_type=call_type))
-        except Exception as exc:  # noqa: BLE001  # logging_only must never break the request
-            verbose_proxy_logger.debug("Singulr: sync logging_hook swallowed exception: %s", exc)
-        return kwargs, result
-
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -544,15 +420,16 @@ class SingulrGuardrail(CustomGuardrail):
             len(structured_messages),
         )
 
+        is_mcp_call: Final = self._is_mcp_call(request_data, logging_obj)
         if input_type == "request":
-            if request_data.get("mcp_tool_name"):
+            if is_mcp_call:
                 await self._apply_guardrail_on_mcp_request(request_data=request_data)
                 return inputs
             return await self._apply_guardrail_on_request(
                 inputs=inputs, texts=texts, structured_messages=structured_messages, request_data=request_data
             )
         elif input_type == "response":
-            if request_data.get("call_type") == "call_mcp_tool":
+            if is_mcp_call:
                 return await self._apply_guardrail_on_mcp_response(
                     inputs=inputs, texts=texts, request_data=request_data
                 )
