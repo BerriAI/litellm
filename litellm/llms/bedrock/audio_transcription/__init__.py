@@ -7,7 +7,7 @@ from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Context, Route
 from litellm.rust_bridge.timeouts import timeout_to_seconds
-from litellm.rust_bridge.transcription import (
+from litellm.rust_bridge.transcription.native import (
     NATIVE_ATRANSCRIPTION,
     NATIVE_TRANSCRIPTION,
     RustAtranscription,

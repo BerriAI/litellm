@@ -14,13 +14,13 @@ from unittest.mock import MagicMock, patch
 import boto3
 import httpx
 import pytest
-
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
+
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.rust_bridge import chat_completions as bridge
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.chat_completions import native as bridge
 from litellm.types.utils import ModelResponse
 from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 

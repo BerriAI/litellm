@@ -2464,7 +2464,7 @@ class BaseLLMHTTPHandler:
         if has_agentic_hook:
             return None
 
-        from litellm.rust_bridge import messages as rust_messages_bridge
+        from litellm.rust_bridge.messages import native as rust_messages_bridge
 
         upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
         try:
@@ -6659,7 +6659,7 @@ class BaseLLMHTTPHandler:
             @asynccontextmanager
             async def _backend_connection():
                 if _rust_responses_websocket_enabled(custom_llm_provider):
-                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+                    from litellm.rust_bridge.responses import websocket as rust_responses_websocket
 
                     rust_backend: Final = await rust_responses_websocket.connect(
                         url=ws_url,

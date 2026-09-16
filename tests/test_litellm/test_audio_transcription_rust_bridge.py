@@ -9,7 +9,7 @@ import pytest
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
 from litellm.rust_bridge import bindings, configuration
-from litellm.rust_bridge.transcription import NATIVE_ATRANSCRIPTION, NATIVE_TRANSCRIPTION
+from litellm.rust_bridge.transcription.native import NATIVE_ATRANSCRIPTION, NATIVE_TRANSCRIPTION
 
 MODEL: Final = "bedrock/mistral.voxtral-mini-3b-2507"
 AUDIO_FILE: Final = ("audio.wav", b"audio", "audio/wav")
