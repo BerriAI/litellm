@@ -434,22 +434,28 @@ def test_enabled_environment_reuses_store_across_fresh_backends(
         configured_cache.cache_clear()
 
 
-def test_duplicate_headers_bypass_cache_and_count_live_calls(store: RedisResponseStore, provider: Provider) -> None:
+@pytest.mark.parametrize("known_mount", (True, False))
+def test_duplicate_headers_bypass_cache_and_count_live_calls(
+    store: RedisResponseStore, provider: Provider, known_mount: bool,
+) -> None:
     cache: Final = CacheEdge(store, SECRET)
     with edge(cache, provider) as url:
         parsed: Final = urlsplit(url)
         for _ in range(2):
             connection = HTTPConnection(str(parsed.hostname), parsed.port, timeout=5)
             try:
-                connection.putrequest("POST", parsed.path)
+                connection.putrequest("POST", parsed.path if known_mount else "/unknown/v1/chat/completions")
                 connection.putheader("content-length", str(len(BODY)))
                 connection.putheader("content-type", "application/json")
                 connection.putheader("x-duplicate", "first")
                 connection.putheader("x-duplicate", "second")
                 connection.endheaders(BODY)
-                assert connection.getresponse().read() == SUCCESS
+                response = connection.getresponse()
+                assert response.status == (200 if known_mount else 404)
+                payload = response.read()
+                assert payload == SUCCESS if known_mount else b"unknown provider mount" in payload
             finally:
                 connection.close()
-    assert len(provider.hits) == 2
+    assert len(provider.hits) == (2 if known_mount else 0)
     assert dict(cache.counters.counts)["duplicate_header_bypass"] == 2
-    assert dict(cache.counters.counts)["upstream_attempts"] == 2
+    assert dict(cache.counters.counts).get("upstream_attempts", 0) == (2 if known_mount else 0)
