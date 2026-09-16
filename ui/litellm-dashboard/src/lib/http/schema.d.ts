@@ -7859,7 +7859,10 @@ export interface paths {
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in
-         *     - info: dict - The key's row, minus the hashed token
+         *     - info: dict - The key's row, minus the hashed token. Deleted keys are served from the
+         *       LiteLLM_DeletedVerificationToken archive and carry deleted_at / deleted_by
+         *         - status: "active" | "expired" | "revoked" | "deleted" - Derived from blocked, expires and
+         *           whether the row came from the archive
          *         - key_alias: str | None - User-friendly key alias
          *         - spend: float - Amount spent by the key. When budget_duration is set this covers only the
          *           current budget window, not the key's lifetime
@@ -7917,7 +7920,9 @@ export interface paths {
          *
          *     Parameters:
          *         expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
-         *         status: Optional[str] - Filter by status. Currently supports "deleted" to query deleted keys.
+         *         status: Optional[str] - Filter by status: "active", "expired", "revoked" (blocked) or "deleted".
+         *         "deleted" reads the LiteLLM_DeletedVerificationToken archive; the other values partition the
+         *         live key table, so every live key matches exactly one of them.
          *
          *     Returns:
          *         {
@@ -29650,6 +29655,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Org Id */
             org_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /**
              * Permissions
              * @default {}
@@ -51393,7 +51400,7 @@ export interface operations {
                 sort_order?: string;
                 /** @description Expand related objects (e.g. 'user') */
                 expand?: string[] | null;
-                /** @description Filter by status (e.g. 'deleted') */
+                /** @description Filter by status: 'active' (not blocked, not expired), 'expired' (not blocked, past expiry), 'revoked' (blocked) or 'deleted' (archived keys). Omit to return live keys regardless of status. */
                 status?: string | null;
                 /** @description Filter keys by project ID */
                 project_id?: string | null;
