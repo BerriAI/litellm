@@ -52,6 +52,13 @@ import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import {
+  ModelBudgetUsage,
+  ModelMaxBudget,
+  ModelMaxBudgetField,
+  modelMaxBudgetToEntries,
+} from "../key_team_helpers/ModelMaxBudgetEditor";
+import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
+import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
@@ -268,6 +275,8 @@ export interface TeamData {
     max_budget: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
+    model_max_budget?: StoredModelMaxBudget | null;
+    model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
     models: string[];
     blocked: boolean;
     spend: number;
@@ -563,6 +572,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
+  const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
@@ -628,6 +638,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const startEditing = () => {
     form.reset(teamFormValues());
+    setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
@@ -1076,6 +1087,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const previousModelAliases = info.litellm_model_table?.model_aliases ?? {};
       if (Object.keys(teamModelAliases).length > 0 || Object.keys(previousModelAliases).length > 0) {
         updateData.model_aliases = teamModelAliases;
+      }
+
+      const modelBudgets = modelMaxBudgetUpdate(teamModelMaxBudget, info.model_max_budget);
+      if (modelBudgets !== undefined) {
+        updateData.model_max_budget = modelBudgets;
       }
 
       // Handle router_settings - read fresh values from DOM at save time.
@@ -1535,6 +1551,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     )}
                   </FormField>
+
+                  <ModelMaxBudgetField
+                    premiumUser={premiumUser}
+                    value={teamModelMaxBudget}
+                    onChange={setTeamModelMaxBudget}
+                    availableModels={availableRateLimitModels}
+                    usage={info.model_max_budget_usage}
+                    hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
+                  />
 
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
@@ -2051,6 +2076,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     : "No Limit"}
                 </div>
                 <div>Budget Reset: {info.budget_duration || "Never"}</div>
+                {modelMaxBudgetToEntries(info.model_max_budget as ModelMaxBudget | null | undefined).map(
+                  ({ model, budgetLimit, timePeriod }) => {
+                    const spent = model === null ? undefined : info.model_max_budget_usage?.[model]?.current_spend;
+                    return (
+                      <div key={model}>
+                        Per-Model Budget ({model}): ${budgetLimit ?? "?"} per {timePeriod}
+                        {spent !== undefined && `, spent $${spent}`}
+                      </div>
+                    );
+                  },
+                )}
                 {info.metadata?.soft_budget_alerting_emails &&
                   Array.isArray(info.metadata.soft_budget_alerting_emails) &&
                   info.metadata.soft_budget_alerting_emails.length > 0 && (
