@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Final, cast
 
 import pytest
-from hypothesis import find, settings
 from hypothesis.strategies import SearchStrategy
 
 from .....shared.parity.fixtures.cli import parse_recording_args
@@ -41,6 +40,7 @@ from .fixtures.vertex import (
     vertex_deepseek_provider_rejected_inputs,
     vertex_mistral_provider_rejected_inputs,
 )
+from .test_support import find_fixture
 
 
 class _UnusedOcrClient:
@@ -76,7 +76,6 @@ _MISTRAL_PARAMS: Final = frozenset(
 _MISTRAL_2512_PARAMS: Final = _MISTRAL_PARAMS - {"include_blocks"}
 _MISTRAL_2505_PARAMS: Final = _MISTRAL_2512_PARAMS - {"extract_header", "extract_footer", "table_format"}
 _AZURE_MISTRAL_PARAMS: Final = _MISTRAL_2505_PARAMS - {"document_annotation_prompt"}
-_FIND_SETTINGS: Final = settings(max_examples=2_000, deadline=None, derandomize=True, database=None)
 _INLINE_IMAGE_DATA_URI: Final = "data:image/png;base64,dGVzdA=="
 
 
@@ -94,7 +93,7 @@ def _find_input(
     strategy: SearchStrategy[OcrSdkInputBase],
     predicate: Callable[[OcrSdkInputBase], bool],
 ) -> OcrSdkInputBase:
-    return find(strategy, predicate, settings=_FIND_SETTINGS)
+    return find_fixture(strategy, predicate)
 
 
 def _document_transport(case_input: OcrSdkInputBase) -> tuple[str, str]:

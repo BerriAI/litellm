@@ -184,6 +184,7 @@ async def test_spend_logs_ui_wraps_params_in_at_time_zone_utc(monkeypatch):
         api_key=None,
         user_id=None,
         request_id=None,
+        search=None,
         start_date="2026-02-16 00:00:00",
         end_date="2026-02-16 23:59:59",
         page=1,
@@ -247,6 +248,7 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
         api_key=None,
         user_id=None,
         request_id=None,
+        search=None,
         start_date="2026-02-16 00:00:00",
         end_date="2026-02-16 23:59:59",
         page=1,
@@ -314,6 +316,7 @@ async def test_spend_logs_ui_caps_total_for_large_result_sets(monkeypatch):
         api_key=None,
         user_id=None,
         request_id=None,
+        search=None,
         start_date="2026-02-16 00:00:00",
         end_date="2026-02-16 23:59:59",
         page=1,
@@ -359,6 +362,7 @@ async def test_spend_logs_ui_empty_page_reports_zero_total(monkeypatch):
         api_key=None,
         user_id=None,
         request_id=None,
+        search=None,
         start_date="2026-02-16 00:00:00",
         end_date="2026-02-16 23:59:59",
         page=1,
@@ -406,6 +410,7 @@ async def test_spend_logs_ui_out_of_range_page_keeps_total(monkeypatch):
         api_key=None,
         user_id=None,
         request_id=None,
+        search=None,
         start_date="2026-02-16 00:00:00",
         end_date="2026-02-16 23:59:59",
         page=99,
@@ -523,8 +528,8 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
     session_rows = [
-        {"session_key": "req-1", "api_key": "k", "last_activity": "2026-02-16 10:00:00"},
-        {"session_key": "req-2", "api_key": "k", "last_activity": "2026-02-16 09:00:00"},
+        {"session_key": f"req-{index}", "api_key": "k", "last_activity": f"2026-02-16 10:{59 - index:02d}:00"}
+        for index in range(51)
     ]
     representative_rows = [
         {"request_id": "req-1", "api_key": "k", "metadata": "{}", "session_id": None},
@@ -533,7 +538,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
-            return [{"total_count": 12}]
+            return [{"total_count": 60}]
         if "DISTINCT ON" in sql_query:
             return representative_rows
         return session_rows
@@ -552,6 +557,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
         api_key=None,
         user_id=None,
         request_id=None,
+        search=None,
         start_date="2026-02-16 00:00:00",
         end_date="2026-02-16 23:59:59",
         page=1,
@@ -584,11 +590,11 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     assert "COUNT(*) OVER ()" not in rep_sql
 
     assert [row["request_id"] for row in response["data"]] == ["req-1", "req-2"]
-    assert response["total"] == 12
+    assert response["total"] == 60
     assert response["total_is_capped"] is False
-    assert response["total_pages"] == 1
-    assert response["has_more"] is False
-    assert response["next_session_cursor"] is None
+    assert response["total_pages"] == 2
+    assert response["has_more"] is True
+    assert response["next_session_cursor"] == "2026-02-16 10:10:00|k|req-49"
 
 
 @pytest.mark.asyncio
@@ -616,6 +622,7 @@ async def test_spend_logs_ui_group_by_session_offset_pages_for_other_sorts(monke
         api_key=None,
         user_id=None,
         request_id=None,
+        search=None,
         start_date="2026-02-16 00:00:00",
         end_date="2026-02-16 23:59:59",
         page=2,
@@ -664,6 +671,7 @@ async def test_spend_logs_ui_request_id_lookup_with_grouping_returns_exact_row(m
         api_key=None,
         user_id=None,
         request_id="req-deep-link",
+        search=None,
         start_date=None,
         end_date=None,
         page=1,

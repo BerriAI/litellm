@@ -6,6 +6,7 @@ import pytest
 
 
 import litellm
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.azure_ai.image_edit import (
     AzureFoundryMAIImageEditConfig,
     get_azure_ai_image_edit_config,
@@ -70,44 +71,48 @@ class TestAzureMAIImageEdit:
         assert "/mai/v1/images/edits" in url
         assert "api-version=preview" in url
 
-    def test_map_openai_params_keeps_size(self):
-        config = AzureFoundryMAIImageEditConfig()
-        optional_params = config.map_openai_params(
-            image_edit_optional_params={"size": "1792x1024", "n": 1},
+    def test_get_optional_params_image_edit_size_raises_400(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError, match="size") as exc_info:
+            ImageEditRequestUtils.get_optional_params_image_edit(
+                model="MAI-Image-2.5",
+                image_edit_provider_config=AzureFoundryMAIImageEditConfig(),
+                image_edit_optional_params={"size": "1024x1024", "n": 1},
+            )
+        assert exc_info.value.status_code == 400
+
+    def test_get_optional_params_image_edit_size_dropped_with_drop_params(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        optional_params = ImageEditRequestUtils.get_optional_params_image_edit(
             model="MAI-Image-2.5",
+            image_edit_provider_config=AzureFoundryMAIImageEditConfig(),
+            image_edit_optional_params={"size": "1024x1024", "n": 1},
             drop_params=True,
         )
-        assert optional_params["size"] == "1792x1024"
+        assert "size" not in optional_params
         assert optional_params["n"] == 1
-        assert "width" not in optional_params
-        assert "height" not in optional_params
 
-    def test_map_openai_params_defaults_size(self):
-        config = AzureFoundryMAIImageEditConfig()
-        optional_params = config.map_openai_params(
-            image_edit_optional_params={},
+    def test_get_optional_params_image_edit_without_size_forwards_nothing_extra(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        optional_params = ImageEditRequestUtils.get_optional_params_image_edit(
             model="MAI-Image-2.5",
-            drop_params=True,
+            image_edit_provider_config=AzureFoundryMAIImageEditConfig(),
+            image_edit_optional_params={},
         )
-        assert optional_params["size"] == "1024x1024"
+        assert optional_params == {}
 
-    def test_map_openai_params_unsupported_size_raises(self):
-        config = AzureFoundryMAIImageEditConfig()
-        with pytest.raises(ValueError, match="Unsupported size value: 'auto'"):
-            config.map_openai_params(
-                image_edit_optional_params={"size": "auto"},
-                model="MAI-Image-2.5",
-                drop_params=True,
+    def test_image_edit_size_surfaces_as_400(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.image_edit(
+                model="azure_ai/MAI-Image-2.5",
+                image=io.BytesIO(b"fake-image-bytes"),
+                prompt="Turn this into a studio product shot",
+                size="1024x1024",
+                api_key="test-key",
+                api_base="https://my-resource.services.ai.azure.com",
             )
-
-    def test_map_openai_params_invalid_size_format_raises(self):
-        config = AzureFoundryMAIImageEditConfig()
-        with pytest.raises(ValueError, match="Invalid size format: '1024xabc'"):
-            config.map_openai_params(
-                image_edit_optional_params={"size": "1024xabc"},
-                model="MAI-Image-2.5",
-                drop_params=True,
-            )
+        assert exc_info.value.status_code == 400
 
     def test_transform_image_edit_request_uses_image_field(self):
         config = AzureFoundryMAIImageEditConfig()
@@ -117,14 +122,14 @@ class TestAzureMAIImageEdit:
             model="MAI-Image-2.5",
             prompt="Turn this into a studio product shot",
             image=image_bytes,
-            image_edit_optional_request_params={"size": "1024x1024", "n": 1},
+            image_edit_optional_request_params={"n": 1},
             litellm_params={},
             headers={},
         )
 
         assert data["model"] == "MAI-Image-2.5"
         assert data["prompt"] == "Turn this into a studio product shot"
-        assert data["size"] == "1024x1024"
+        assert "size" not in data
         assert data["n"] == 1
         assert len(files) == 1
         assert files[0][0] == "image"

@@ -21,6 +21,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
+    is_encrypted_reasoning_block,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -67,6 +68,101 @@ _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
+_CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
+_CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
+_CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+
+
+_CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
+def is_claude_code_user_agent(user_agent: str) -> bool:
+    """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
+    fetches, such as gateway model discovery, as `claude-code/<version>`"""
+    return user_agent.startswith(_CLAUDE_CODE_USER_AGENT_PREFIXES)
+
+
+def _validated_claude_code_mapping(value: object) -> dict[object, object] | None:
+    try:
+        return _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _validated_claude_code_list(value: object) -> list[object] | None:
+    try:
+        return _CLAUDE_CODE_OBJECT_LIST_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _claude_code_billing_fields(text: str) -> tuple[tuple[str, str], ...] | None:
+    stripped: Final = text.strip()
+    if "\n" in stripped or "\r" in stripped or not stripped.startswith(_CLAUDE_CODE_BILLING_HEADER_PREFIX):
+        return None
+    fields: Final = tuple(
+        field
+        for raw_field in stripped.removeprefix(_CLAUDE_CODE_BILLING_HEADER_PREFIX).split(";")
+        if (field := raw_field.strip())
+    )
+    if not fields or any("=" not in field for field in fields):
+        return None
+    parsed_fields: Final = tuple(
+        (parts[0].strip(), parts[1].strip()) for field in fields for parts in (field.split("=", 1),)
+    )
+    if any(not key or not value for key, value in parsed_fields):
+        return None
+    return parsed_fields
+
+
+def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
+    if isinstance(system, str):
+        return (system,)
+    blocks: Final = _validated_claude_code_list(system)
+    if blocks is None:
+        return None
+    block_mappings: Final = tuple(_validated_claude_code_mapping(block) for block in blocks)
+    if any(block is None for block in block_mappings):
+        return None
+    text_values: Final = tuple(
+        block.get("text") for block in block_mappings if block is not None and block.get("type") == "text"
+    )
+    if len(text_values) != len(blocks) or any(not isinstance(text, str) for text in text_values):
+        return None
+    meaningful_text: Final = tuple(text for text in text_values if isinstance(text, str) and text.strip())
+    return meaningful_text or None
+
+
+def _is_claude_code_subagent_billing_system(system: object) -> bool:
+    billing_texts: Final = _claude_code_billing_texts(system)
+    if billing_texts is None:
+        return False
+    billing_fields: Final = tuple(
+        fields for text in billing_texts if (fields := _claude_code_billing_fields(text)) is not None
+    )
+    if len(billing_fields) != len(billing_texts):
+        return False
+    subagent_values: Final = tuple(
+        value for fields in billing_fields for key, value in fields if key == "cc_is_subagent"
+    )
+    return subagent_values == ("true",)
+
+
+def is_claude_code_one_shot_subagent_request(
+    messages: list[AllMessageValues],
+    system: object,
+    tools: object,
+    user_agent: str | None,
+) -> bool:
+    only_message: Final = _validated_claude_code_mapping(messages[0]) if len(messages) == 1 else None
+    return (
+        user_agent is not None
+        and is_claude_code_user_agent(user_agent)
+        and not tools
+        and only_message is not None
+        and only_message.get("role") == "user"
+        and _is_claude_code_subagent_billing_system(system)
+    )
 
 
 def _strip_bedrock_id_suffixes(model: str) -> str:
@@ -1111,6 +1207,32 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
     return out
 
 
+def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+    if not isinstance(message, Mapping):
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]  # mutable-ok: API message payload
+    if len(kept) == len(content):
+        return message
+    if not kept:
+        return None
+    return {**message, "content": kept}  # mutable-ok: API message payload
+
+
+def strip_encrypted_reasoning_blocks_from_anthropic_messages(
+    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    """
+    Drop thinking / redacted_thinking blocks that carry another provider's encrypted
+    reasoning (a turn the Responses API bridge served) before the request reaches
+    Anthropic, which cannot verify them. Anthropic's own signed blocks are kept.
+    """
+    stripped: Final = (_without_encrypted_reasoning_blocks(m) for m in messages)
+    return [m for m in stripped if m is not None]  # mutable-ok: API message payload
+
+
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data: dict[str, Any],
 ) -> None:
@@ -1411,6 +1533,25 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
+def _without_provider_specific_fields(block: object) -> object:
+    if not isinstance(block, dict) or "provider_specific_fields" not in block:
+        return block
+    return {k: v for k, v in block.items() if k != "provider_specific_fields"}  # mutable-ok: JSON wire format
+
+
+def _strip_provider_specific_fields_in_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = [_without_provider_specific_fields(b) for b in message["content"]]  # mutable-ok: JSON wire format
+    return {**message, "content": content}  # mutable-ok: JSON wire format
+
+
+def strip_provider_specific_fields_from_anthropic_messages(
+    messages: Sequence[object],
+) -> Sequence[object]:
+    return [_strip_provider_specific_fields_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+
+
 def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
     if not isinstance(cache_control, Mapping):
         return None
@@ -1520,11 +1661,16 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
 
 
 def _anthropic_model_entry(
-    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str]
+    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str], listed_ids: Mapping[str, str]
 ) -> Mapping[str, object]:
+    listed_id: Final = listed_ids.get(model["id"])
+    source: Final[Mapping[str, object]] = (
+        MappingProxyType({"source_model": model["id"]}) if listed_id is not None else MappingProxyType({})
+    )
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "type": "model",
-        "id": model["id"],
+        "id": listed_id or model["id"],
+        **source,
         "display_name": display_names.get(model["id"], model["id"]),
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
@@ -1535,6 +1681,7 @@ def _anthropic_model_entry(
 def create_anthropic_model_list_response(
     models: Sequence[ModelInfoResponse],
     display_names: Mapping[str, str] = MappingProxyType({}),
+    listed_ids: Mapping[str, str] = MappingProxyType({}),
 ) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
@@ -1544,17 +1691,19 @@ def create_anthropic_model_list_response(
     over from the OpenAI-shaped listing, named as the Messages API names them, and
     are always present because the vendor shape declares them nullable, not optional.
     display_names maps a listed model id to a configured human-readable name; ids
-    without an entry fall back to the id itself, matching the vendor behavior
+    without an entry fall back to the id itself, matching the vendor behavior.
+    listed_ids maps a model id to the id the caller should see it under (the Claude
+    Code view); ids without an entry are listed as they are
     """
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
     data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
-        _anthropic_model_entry(model, created_at, display_names) for model in models
+        _anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models
     ]
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "data": data,
         "has_more": False,
-        "first_id": models[0]["id"] if models else None,
-        "last_id": models[-1]["id"] if models else None,
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
     }

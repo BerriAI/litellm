@@ -9,12 +9,17 @@ have been aggregated across models.
 """
 
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
-from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit, generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _get_cost_per_unit,
+    calculate_prompt_caching_savings,
+    generic_cost_per_token,
+)
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
@@ -32,42 +37,13 @@ class SavingsSpend(NamedTuple):
     gateway_injected_caching: float = 0.0
 
 
-def _input_cache_read_and_write_cost(info: ModelInfo | None) -> tuple[float, float, float]:
-    """
-    Return ``(input_cost, cache_read_cost, cache_write_cost)`` per token.
-
-    ``info`` is whatever pricing the caller resolved -- deployment rates when the
-    request came through a router deployment, public rates otherwise -- so a
-    negotiated price is honoured here rather than silently replaced by the list rate.
-    ``None`` falls open to ``(0.0, 0.0, 0.0)`` so savings degrade to zero rather than
-    raising inside the spend writer.
-
-    Prices are read through ``_get_cost_per_unit``, the same accessor the cost
-    calculator uses, which coerces the string prices a ``config.yaml`` can produce
-    (``"3e-7"``) and resolves service-tier suffixes.
-
-    An absent cache price mirrors the input cost, which yields a zero discount on the
-    read leg and a zero premium on the write leg. Mirroring rather than taking
-    ``_get_cost_per_unit``'s 0.0 default is load-bearing on the write leg: a zero write
-    price would make the premium ``0 - input_cost``, turning a model that simply has no
-    write pricing into a spurious extra saving.
-
-    The two legs then differ on an explicit ``0.0``, and the asymmetry is deliberate. A
-    free cache *write* does not exist -- entries carrying a literal zero (``deepseek-chat``
-    does) mean "no separate price", so a falsy write price also mirrors input. A free
-    cache *read* is real: 15 models charge for input and serve reads for nothing, which
-    is the largest discount available, so the read leg keeps its literal zero.
-    """
-    if info is None:
-        return 0.0, 0.0, 0.0
-    input_cost: Final = _get_cost_per_unit(info, "input_cost_per_token") or 0.0
-    cache_read_cost: Final = _get_cost_per_unit(info, "cache_read_input_token_cost", default_value=None)
-    cache_write_cost: Final = _get_cost_per_unit(info, "cache_creation_input_token_cost", default_value=None)
-    return (
-        input_cost,
-        input_cost if cache_read_cost is None else cache_read_cost,
-        cache_write_cost if cache_write_cost else input_cost,
-    )
+def _coerce_billed_at(value: datetime | str | None) -> datetime | None:
+    if isinstance(value, datetime) or value is None:
+        return value
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 class _ModelIdentity(NamedTuple):
@@ -323,6 +299,8 @@ def compute_autorouter_savings(
     selected_info: ModelInfo | None = None,
     baseline_info: ModelInfo | None = None,
     cost_breakdown: Mapping[str, object] | None = None,
+    baseline_deployment_id: str | None = None,
+    selected_deployment_id: str | None = None,
 ) -> float:
     """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
 
@@ -358,11 +336,12 @@ def compute_autorouter_savings(
     selected: Final = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None:
         return 0.0
-    # Same model is only the same cost when it is also the same deployment. Two
-    # deployments of one model can carry different negotiated rates, and routing from
-    # the dear one to the cheap one is a real saving that short-circuiting on the model
-    # name alone reports as zero.
-    if baseline == selected:
+    same_target: Final = (
+        baseline_deployment_id == selected_deployment_id
+        if baseline_deployment_id and selected_deployment_id
+        else baseline == selected
+    )
+    if same_target:
         return 0.0
     basis: Final = _pricing_basis(cost_breakdown)
     effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
@@ -541,6 +520,8 @@ def autorouter_savings_for_request(
         selected_info=_effective_model_info(router_instance, model_id, model or ""),
         baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
         cost_breakdown=cost_breakdown,
+        baseline_deployment_id=baseline_id,
+        selected_deployment_id=model_id,
     )
     classifier_cost: Final = classifier_cost_from_decision(decision)
     return gross if classifier_cost is None else gross - classifier_cost
@@ -586,6 +567,7 @@ def compute_savings_spend(
     llm_router: "Callable[[], Router | None] | None" = None,
     cost_breakdown: Mapping[str, object] | None = None,
     recorded_autorouter_savings: object = None,
+    billed_at: datetime | str | None = None,
 ) -> SavingsSpend:
     """
     Dollar savings for one request, split by optimization driver.
@@ -595,24 +577,10 @@ def compute_savings_spend(
     premium paid to write those entries, both derived here from ``usage_object`` so no
     caller can hand in a count that disagrees with the usage record.
 
-    The net form follows from what the request would have cost with caching off. The
-    provider reports ``prompt_tokens`` as the inclusive total of three disjoint
-    partitions (uncached text, cache reads, cache writes), so an uncached counterfactual
-    bills every one of those tokens at the flat input rate::
-
-        would_have_cost = (text + reads + writes) * input
-        actually_cost   = text * input + reads * read_rate + writes * write_rate
-        savings         = reads * (input - read_rate) - writes * (write_rate - input)
-
-    So the write leg subtracts the write PREMIUM, not the whole write cost: those tokens
-    had to be sent either way, and the counterfactual already pays the input rate for
-    them. The premium stays signed, because a handful of models price writes below their
-    input rate and there the write is a genuine extra saving.
-
-    A request that only writes cache and gets no hits therefore reports negative savings,
-    which is accurate: it really did cost more than the uncached call would have. The
-    daily rollup increments arithmetically, so those rows offset positive ones in the
-    same bucket.
+    The uncached counterfactual pays the ordinary input rate for the same prompt size
+    and tier. Cache writes subtract only the premium over that rate, split by TTL.
+    Savings stay signed: a write-only request can lose money, and daily rollups net
+    those losses against read savings.
 
     Caching is reported twice. ``prompt_caching`` is every net dollar caching saved,
     whoever caused it, which is what a customer means by "what did caching save me".
@@ -638,12 +606,9 @@ def compute_savings_spend(
     calls this and only auto-routed ones need one, so looking it up eagerly at the call
     site would fetch and discard it on the rest.
 
-    ``cost_breakdown`` is what the cost calculator recorded for this request, and it
-    carries both what the request really cost and the tier and region it was priced on.
-    Only the auto-router driver reads it. Compression and prompt caching price a
-    hypothetical token delta off flat rate keys, so they are blind to tiered pricing in
-    the same way; that is pre-existing behaviour on two shipped drivers rather than
-    something introduced here, and moving those numbers is its own change.
+    ``cost_breakdown`` supplies the biller's tier and region to caching and auto-router
+    savings. Caching also uses the logged prompt size and TTL split. Compression retains
+    its flat input-rate estimate; changing that counterfactual is a separate concern.
 
     ``recorded_autorouter_savings`` is the figure the logging path stamped on the spend
     log's metadata, honoured over recomputation so the rollup, the turn table and the
@@ -658,13 +623,24 @@ def compute_savings_spend(
     pricing: Final = _effective_model_info(router_instance, model_id, model or "") or (
         _model_info(identity) if identity else None
     )
-    input_cost, cache_read_cost, cache_write_cost = _input_cache_read_and_write_cost(pricing)
+    input_cost: Final = (_get_cost_per_unit(pricing, "input_cost_per_token") or 0.0) if pricing else 0.0
     compression: Final = max(compression_saved_tokens, 0) * input_cost
-    cache_read_input_tokens: Final = extract_cache_read_tokens(usage_object)
-    cache_creation_input_tokens: Final = extract_cache_creation_tokens(usage_object)
-    read_discount: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
-    write_premium: Final = max(cache_creation_input_tokens, 0) * (cache_write_cost - input_cost)
-    prompt_caching: Final = read_discount - write_premium
+    usage: Final = _usage_from_spend_log(usage_object)
+    basis: Final = _pricing_basis(cost_breakdown)
+    billed_at_datetime: Final = _coerce_billed_at(billed_at)
+    prompt_caching: Final = (
+        calculate_prompt_caching_savings(
+            model_info=pricing,
+            usage=usage,
+            custom_llm_provider=identity.provider if identity else custom_llm_provider,
+            service_tier=basis.service_tier,
+            data_residency=basis.data_residency,
+            vertex_location=basis.vertex_location,
+            billed_at=billed_at_datetime,
+        )
+        if pricing is not None and usage is not None
+        else 0.0
+    )
     gateway_injected_caching: Final = prompt_caching if gateway_injected_cache else 0.0
 
     # The figure the logging path recorded wins, before the usage gate on purpose: a row

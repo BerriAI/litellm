@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Iterable
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+
+from typing_extensions import assert_never
+
+if TYPE_CHECKING:
+    from .strategy import CaseSpec, StrategyDefinition
 
 
 class Coverage(str, Enum):
     COMPLETE = "complete"
     PARTIAL = "partial"
-    PLANNED = "planned"
-    NOT_APPLICABLE = "not_applicable"
+
+
+class CaseDisposition(str, Enum):
+    RUNNABLE = "runnable"
+    NOT_IMPLEMENTED = "not_implemented"
+    SKIPPED = "skipped"
 
 
 class RunStatus(str, Enum):
@@ -23,33 +33,45 @@ class RunStatus(str, Enum):
     SKIPPED = "skipped"
     ERROR = "error"
     MISSING = "missing"
-    PLANNED = "planned"
-    NOT_APPLICABLE = "not_applicable"
+    NOT_IMPLEMENTED = "not_implemented"
 
 
-class ConfidenceLevel(str, Enum):
-    HIGH = "HIGH"
-    MEDIUM = "MEDIUM"
-    LOW = "LOW"
-
-
-SDK_FUNCTIONS = ("ocr", "messages", "responses", "count_tokens", "chat_completions", "transcription")
+SdkFunction: TypeAlias = Literal["ocr", "messages", "responses", "count_tokens", "chat_completions", "transcription"]
+Surface: TypeAlias = Literal["sdk", "gateway"]
+SURFACES: Final[tuple[Surface, ...]] = ("sdk", "gateway")
+SDK_FUNCTIONS: Final[tuple[SdkFunction, ...]] = (
+    "ocr",
+    "messages",
+    "responses",
+    "count_tokens",
+    "chat_completions",
+    "transcription",
+)
 
 
 @dataclass(frozen=True)
 class HarnessCase:
     strategy_id: str
     strategy_label: str
-    sdk_function: str
-    coverage: Coverage
-    selectors: tuple[str, ...]
-    note: str = ""
-    surface: str = "sdk"
-    unit_suite: str | None = None
+    sdk_function: SdkFunction
+    spec: CaseSpec
+    surface: Surface | None = None
 
     @property
     def key(self) -> str:
-        return f"{self.strategy_id}:{self.sdk_function}" if self.surface == "sdk" else f"{self.strategy_id}:gateway:{self.sdk_function}"
+        return (
+            f"{self.strategy_id}:{self.sdk_function}"
+            if self.surface in {None, "sdk"}
+            else f"{self.strategy_id}:gateway:{self.sdk_function}"
+        )
+
+    @property
+    def display_name(self) -> str:
+        return self.sdk_function if self.surface is None else f"{self.surface}/{self.sdk_function}"
+
+    @property
+    def coverage(self) -> Coverage | None:
+        return self.spec.coverage
 
 
 @dataclass(frozen=True)
@@ -60,6 +82,7 @@ class Strategy:
     description: str
     directory: Path
     cases: tuple[HarnessCase, ...]
+    definition: StrategyDefinition
 
 
 @dataclass
@@ -74,6 +97,7 @@ class CaseResult:
     errors: int = 0
     outcomes: dict[str, RunStatus] = field(default_factory=dict)
     durations: dict[str, float] = field(default_factory=dict)
+    artifacts: dict[str, tuple[ResultArtifact, ...]] = field(default_factory=dict)
 
     @property
     def total(self) -> int:
@@ -83,10 +107,18 @@ class CaseResult:
     def duration(self) -> float:
         return sum(self.durations.values())
 
-    def record(self, nodeid: str, status: RunStatus, duration: float = 0.0) -> None:
+    def record(
+        self,
+        nodeid: str,
+        status: RunStatus,
+        duration: float = 0.0,
+        artifacts: tuple[ResultArtifact, ...] = (),
+    ) -> None:
         """Record a terminal outcome, allowing teardown errors to replace a pass."""
         self.outcomes[nodeid] = status
-        self.durations[nodeid] = self.durations.get(nodeid, 0.0) + duration
+        self.add_duration(nodeid, duration)
+        if artifacts:
+            self.artifacts[nodeid] = artifacts
         self.completed = set(self.outcomes)
         values = tuple(self.outcomes.values())
         self.passed = values.count(RunStatus.PASSED)
@@ -95,16 +127,25 @@ class CaseResult:
         self.errors = values.count(RunStatus.ERROR)
         self.finalize()
 
+    def add_duration(self, nodeid: str, duration: float) -> None:
+        self.durations[nodeid] = self.durations.get(nodeid, 0.0) + duration
+
     def set_initial_status(self) -> None:
-        if self.case.coverage is Coverage.NOT_APPLICABLE:
-            self.status = RunStatus.NOT_APPLICABLE
-        elif not self.case.selectors and not self.case.unit_suite:
-            self.status = RunStatus.PLANNED
-        else:
-            self.status = RunStatus.QUEUED
+        disposition: Final = self.case.spec.disposition
+        match disposition:
+            case CaseDisposition.RUNNABLE:
+                self.status = RunStatus.QUEUED
+                return
+            case CaseDisposition.NOT_IMPLEMENTED:
+                self.status = RunStatus.NOT_IMPLEMENTED
+                return
+            case CaseDisposition.SKIPPED:
+                self.status = RunStatus.SKIPPED
+                return
+        assert_never(disposition)
 
     def finalize(self) -> None:
-        if self.status in {RunStatus.NOT_APPLICABLE, RunStatus.PLANNED}:
+        if self.status in {RunStatus.NOT_IMPLEMENTED, RunStatus.SKIPPED} and not self.collected:
             return
         if not self.collected:
             self.status = RunStatus.MISSING
@@ -118,11 +159,18 @@ class CaseResult:
             self.status = RunStatus.SKIPPED
 
 
+@dataclass(frozen=True, slots=True)
+class ResultArtifact:
+    kind: str
+    body: str
+
+
 @dataclass
 class HarnessRun:
     results: dict[str, CaseResult]
     current_nodeid: str | None = None
     failures: list[tuple[str, str]] = field(default_factory=list)
+    strategy_durations: dict[str, float] = field(default_factory=dict)
     started_at: float = field(default_factory=monotonic)
     finished_at: float | None = None
 
@@ -131,92 +179,20 @@ class HarnessRun:
         return (self.finished_at or monotonic()) - self.started_at
 
     @property
-    def unique_tests(self) -> int:
+    def unique_checks(self) -> int:
         return len(
             {nodeid for result in self.results.values() for nodeid in result.collected}
         )
 
     @property
-    def completed_tests(self) -> int:
+    def completed_checks(self) -> int:
         return len(
             {nodeid for result in self.results.values() for nodeid in result.completed}
         )
 
     @classmethod
-    def from_cases(cls, cases: Iterable[HarnessCase]) -> "HarnessRun":
+    def from_cases(cls, cases: Iterable[HarnessCase]) -> HarnessRun:
         results = {case.key: CaseResult(case=case) for case in cases}
         for result in results.values():
             result.set_initial_status()
         return cls(results=results)
-
-
-@dataclass(frozen=True)
-class SectionConfidence:
-    sdk_function: str
-    verified_strategies: int
-    required_strategies: int
-    level: ConfidenceLevel
-    details: tuple[str, ...]
-
-    @property
-    def percentage(self) -> int:
-        if not self.required_strategies:
-            return 0
-        return round(100 * self.verified_strategies / self.required_strategies)
-
-
-def section_confidence(
-    run: HarnessRun, strategies: Iterable[Strategy]
-) -> tuple[SectionConfidence, ...]:
-    strategy_list = tuple(strategies)
-    scores: list[SectionConfidence] = []
-    sections = tuple(dict.fromkeys((case.surface, case.sdk_function) for strategy in strategy_list for case in strategy.cases))
-    for surface, sdk_function in sections:
-        cases = tuple(
-            case
-            for strategy in strategy_list
-            for case in strategy.cases
-            if case.sdk_function == sdk_function and case.surface == surface
-            and case.coverage is not Coverage.NOT_APPLICABLE
-        )
-        verified = 0
-        details: list[str] = []
-        for case in cases:
-            result = run.results.get(case.key)
-            status = result.status if result is not None else RunStatus.NOT_RUN
-            if status is RunStatus.PASSED:
-                verified += 1
-            details.append(
-                f"{STATUS_LABELS[status]} {case.strategy_id} ({case.coverage.value})"
-            )
-        required = len(cases)
-        if required and verified == required:
-            level = ConfidenceLevel.HIGH
-        elif verified:
-            level = ConfidenceLevel.MEDIUM
-        else:
-            level = ConfidenceLevel.LOW
-        scores.append(
-            SectionConfidence(
-                sdk_function=sdk_function if surface == "sdk" else f"gateway/{sdk_function}",
-                verified_strategies=verified,
-                required_strategies=required,
-                level=level,
-                details=tuple(details),
-            )
-        )
-    return tuple(scores)
-
-
-STATUS_LABELS = {
-    RunStatus.NOT_RUN: "·",
-    RunStatus.QUEUED: "○",
-    RunStatus.RUNNING: "◉",
-    RunStatus.PASSED: "✓",
-    RunStatus.FAILED: "✗",
-    RunStatus.SKIPPED: "↷",
-    RunStatus.ERROR: "!",
-    RunStatus.MISSING: "?",
-    RunStatus.PLANNED: "—",
-    RunStatus.NOT_APPLICABLE: "n/a",
-}

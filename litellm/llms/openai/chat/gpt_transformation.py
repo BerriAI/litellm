@@ -19,10 +19,15 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
     flatten_top_level_schema_combinators,
     get_tool_call_names,
     hoist_images_from_tool_messages,
+    flatten_combinators_and_drop_non_python_regex_patterns,
+    get_tool_call_names,
+    hoist_images_from_tool_messages,
+    tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -445,7 +450,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
-    def _flattened_tools_update_for_openai(
+    def _sanitized_tools_update_for_openai(
         self,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
@@ -453,22 +458,20 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         OpenAI's chat completions validator rejects tool `parameters` carrying
         'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level for every
-        model family, unlike the Responses API, where GPT-5+ accepts them.
+        model family, unlike the Responses API, where GPT-5+ accepts them, and
+        a `pattern` Python's `re` cannot compile for every model family on both.
+        A custom api_base on the `openai` provider is usually a proxy in front of
+        the same validator, so regexes are dropped there too, while the lossier
+        combinator flattening stays limited to api.openai.com hosts.
         """
         tools: Final = optional_params.get("tools")
-        if not isinstance(tools, list):
-            return _NO_TOOLS_UPDATE
         provider: Final = litellm_params.get("custom_llm_provider")
-        raw_api_base: Final = litellm_params.get("api_base")
-        if not self._targets_openai_hosted_endpoint(
-            provider if isinstance(provider, str) else None,
-            raw_api_base if isinstance(raw_api_base, str) else None,
-        ):
+        if not isinstance(tools, list) or provider != "openai":
             return _NO_TOOLS_UPDATE
         flattened: Final = [  # mutable-ok: request tools are a JSON list
             _tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
         ]
-        return MappingProxyType({"tools": flattened})
+        return MappingProxyType({"tools": sanitized})
 
     def transform_request(
         self,
@@ -502,7 +505,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "model": model,
             "messages": messages,
             **optional_params,
-            **self._flattened_tools_update_for_openai(optional_params, litellm_params),
+            **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
 
     async def async_transform_request(
@@ -534,7 +537,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "model": model,
                 "messages": transformed_messages,
                 **optional_params,
-                **self._flattened_tools_update_for_openai(optional_params, litellm_params),
+                **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
             }
         else:
             ## allow for any object specific behaviour to be handled

@@ -11,6 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
+from urllib.parse import urlsplit
 
 import httpx
 import openai
@@ -41,6 +42,14 @@ def _get_client_init_params(cls: type) -> tuple[str, ...]:
 
 _OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(OpenAI)
 _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(AzureOpenAI)
+
+
+_OPENAI_API_HOST: Final[str] = "api.openai.com"
+
+
+def is_openai_backed_api_base(api_base: str) -> bool:
+    hostname: Final = urlsplit(api_base).hostname
+    return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
 class OpenAIError(BaseLLMException):

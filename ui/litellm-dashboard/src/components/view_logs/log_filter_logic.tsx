@@ -33,6 +33,7 @@ export const LOG_FILTER_IDS = {
   PUBLIC_MODEL_OR_SEARCH_TOOL: "model",
   REQUEST_ID: "request_id",
   USER_ID: "user_id",
+  SEARCH: "search",
 } as const;
 
 export const LOG_FILTER_LABELS: Record<string, string> = {
@@ -48,6 +49,7 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
   [LOG_FILTER_IDS.MODEL_ID]: "Model",
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
+  [LOG_FILTER_IDS.SEARCH]: "Search",
 };
 
 export interface LogsWindow {
@@ -175,6 +177,7 @@ export function useLogFilterLogic({
           api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
+          search: getFilterValue(columnFilters, LOG_FILTER_IDS.SEARCH),
           session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
           user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),

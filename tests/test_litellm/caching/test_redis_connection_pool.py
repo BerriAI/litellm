@@ -1,3 +1,4 @@
+from importlib import import_module
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -92,7 +93,7 @@ def _make_redis_cache():
     patches = [
         patch("litellm._redis.get_redis_client", return_value=mock_sync_client),
         patch("litellm._redis.get_redis_connection_pool", return_value=mock_async_pool),
-        patch("litellm.caching.redis_cache.RedisCache._setup_health_pings"),
+        patch.object(import_module("litellm.caching.redis_cache").RedisCache, "_setup_health_pings"),
     ]
     for p in patches:
         p.start()

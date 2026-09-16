@@ -1,16 +1,18 @@
 "use client";
 
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import type { KeyResponse } from "../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import type { LogEntry } from "./columns";
-import { LOGS_PAGE_SIZE_OPTIONS } from "./constants";
 import {
   DEFAULT_LOGS_SORTING,
   formatLogsWindow,
@@ -24,8 +26,11 @@ import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
 
-const PAGE_SIZE = LOGS_PAGE_SIZE_OPTIONS[0];
+const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
+const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId || log.litellm_call_id === logId;
+const findLogById = (logs: readonly LogEntry[], logId: string): LogEntry | null =>
+  logs.find((log) => log.request_id === logId) ?? logs.find((log) => log.litellm_call_id === logId) ?? null;
 
 interface RequestLogsPanelProps {
   accessToken: string;
@@ -75,12 +80,22 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
   }, [excludeInternalHealthChecks]);
 
+  const searchTerm = useMemo(() => {
+    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.SEARCH);
+    return typeof entry?.value === "string" ? entry.value : "";
+  }, [columnFilters]);
+  const [debouncedSearch] = useDebouncedValue(searchTerm, { wait: DEBOUNCE_WAIT_MS });
+  const queryColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const others = columnFilters.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+    return debouncedSearch === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value: debouncedSearch }];
+  }, [columnFilters, debouncedSearch]);
+
   const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic({
     accessToken,
     token,
     userRole,
     userID,
-    columnFilters,
+    columnFilters: queryColumnFilters,
     activeTab: isActive ? "request logs" : "inactive",
     isLiveTail,
     excludeInternalHealthChecks,
@@ -129,9 +144,9 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         page_size: 1,
         params: { request_id: urlLogId },
       });
-      return response.data.find((log) => log.request_id === urlLogId) ?? null;
+      return findLogById(response.data, urlLogId);
     },
-    enabled: urlLogId !== null && selectedLog?.request_id !== urlLogId,
+    enabled: urlLogId !== null && !(selectedLog !== null && matchesLogId(selectedLog, urlLogId)),
     staleTime: Infinity,
   };
 
@@ -139,8 +154,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const displayLog = useMemo<LogEntry | null>(() => {
     if (urlLogId === null) return null;
-    if (selectedLog?.request_id === urlLogId) return selectedLog;
-    return filteredLogs.data.find((log) => log.request_id === urlLogId) ?? urlLog ?? null;
+    if (selectedLog !== null && matchesLogId(selectedLog, urlLogId)) return selectedLog;
+    return findLogById(filteredLogs.data, urlLogId) ?? urlLog ?? null;
   }, [urlLogId, selectedLog, filteredLogs.data, urlLog]);
 
   const displaySessionId = useMemo<string | null>(() => {
@@ -154,16 +169,15 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const isDrawerOpen = displayLog !== null || displaySessionId !== null;
 
   const rows: LogEntry[] = filteredLogs.data;
-
-  const searchTerm = useMemo(() => {
-    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.REQUEST_ID);
-    return typeof entry?.value === "string" ? entry.value : "";
-  }, [columnFilters]);
+  const rowsThroughThisPage = pagination.pageIndex * pagination.pageSize + rows.length;
+  const isLastPage =
+    filteredLogs.has_more === false || (filteredLogs.has_more === undefined && rows.length < pagination.pageSize);
+  const rowCount = isLastPage ? rowsThroughThisPage : Math.max(filteredLogs.total, rowsThroughThisPage);
 
   const handleSearchChange = useCallback((value: string) => {
     setColumnFilters((previous) => {
-      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.REQUEST_ID);
-      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.REQUEST_ID, value }];
+      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value }];
     });
     setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
@@ -198,15 +212,14 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         setPagination({ ...requested, pageIndex: 0 });
         return;
       }
-      if (requested.pageIndex <= pagination.pageIndex) {
+      if (requested.pageIndex !== pagination.pageIndex + 1) {
         setPagination(requested);
         return;
       }
       const nextCursor = filteredLogs.next_session_cursor;
       if (!nextCursor || logsQuery.isPlaceholderData) return;
-      const nextPageIndex = pagination.pageIndex + 1;
-      setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
-      setPagination({ ...requested, pageIndex: nextPageIndex });
+      setSessionCursors((previous) => ({ ...previous, [requested.pageIndex]: nextCursor }));
+      setPagination(requested);
     },
     [usesSessionCursor, pagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
   );
@@ -283,7 +296,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
       <RequestLogsTable
         data={rows}
-        rowCount={filteredLogs.total}
+        rowCount={rowCount}
         isLoading={logsQuery.isLoading}
         isRefreshing={logsQuery.isFetching}
         pagination={pagination}
