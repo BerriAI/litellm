@@ -23,6 +23,7 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    context_1m_beta_values,
     context_1m_requested,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
@@ -693,8 +694,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
 
-        if context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params):
-            beta_values.add("context-1m-2025-08-07")
+        beta_values.update(
+            context_1m_beta_values(
+                context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params)
+            )
+        )
 
         # Check for context management
         context_management_param: Final = optional_params.get("context_management")

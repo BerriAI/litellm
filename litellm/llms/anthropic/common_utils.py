@@ -101,6 +101,13 @@ def context_1m_requested(
     )
 
 
+_CONTEXT_1M_BETA: Final = "context-1m-2025-08-07"
+
+
+def context_1m_beta_values(supported: bool) -> frozenset[str]:
+    return frozenset((_CONTEXT_1M_BETA,)) if supported else frozenset()
+
+
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -880,9 +887,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         use_bearer_for_custom_base: bool = False,
         context_1m_supported: bool = False,
     ) -> dict:
-        betas: Final = set()
-        if context_1m_supported:
-            betas.add("context-1m-2025-08-07")
+        betas: Final = set(context_1m_beta_values(context_1m_supported))
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching

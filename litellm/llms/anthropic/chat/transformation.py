@@ -1762,6 +1762,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
+    def _maybe_add_context_1m_beta(
+        self,
+        headers: dict,
+        *,
+        model: str,
+        optional_params: dict,
+        litellm_params: Mapping[str, object] | None,
+    ) -> None:
+        if context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params):
+            self._ensure_beta_header(headers, "context-1m-2025-08-07")
+
     def _ensure_beta_header(self, headers: dict, beta_value: str) -> None:
         """
         Ensure a beta header value is present in the anthropic-beta header.
@@ -1830,8 +1841,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if is_vertex_request:
             return headers
 
-        if context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params):
-            self._ensure_beta_header(headers, "context-1m-2025-08-07")
+        self._maybe_add_context_1m_beta(
+            headers, model=model, optional_params=optional_params, litellm_params=litellm_params
+        )
 
         _tools: Final = optional_params.get("tools", [])
         for tool in _tools:
