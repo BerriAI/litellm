@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 from litellm.llms.bedrock.vector_stores.transformation import BedrockVectorStoreConfig
@@ -155,9 +156,9 @@ def test_transform_search_request_overrides_filter_without_mutating_extra_body()
     )
 
 
-def _search_body(extra_body, litellm_params):
-    config = BedrockVectorStoreConfig()
-    mock_log = MagicMock()
+def _search_body(extra_body: dict[str, object] | None, litellm_params: dict[str, object]) -> dict[str, object]:
+    config: Final = BedrockVectorStoreConfig()
+    mock_log: Final = MagicMock()
     mock_log.model_call_details = {}
     _, body = config.transform_search_vector_store_request(
         vector_store_id="kb123",
