@@ -104,7 +104,6 @@ EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "openai": "https://api.openai.com",
         "anthropic": "https://api.anthropic.com",
-        "gemini": "https://generativelanguage.googleapis.com/v1beta",
         **{
             f"bedrock/{region}": f"https://bedrock-runtime.{region}.amazonaws.com"
             for region in BEDROCK_REGIONS

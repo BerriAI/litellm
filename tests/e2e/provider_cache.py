@@ -37,10 +37,6 @@ SIGNATURE_HEADERS: Final = frozenset(
     {"authorization", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256"}
 )
 BEDROCK_MOUNT_PREFIX: Final = "bedrock"
-GEMINI_MOUNT: Final = "gemini"
-GEMINI_MODELS_SEGMENT: Final = "/models"
-GEMINI_GENERATE_SUFFIX: Final = ":generateContent"
-GEMINI_STREAM_SUFFIX: Final = ":streamGenerateContent"
 BEDROCK_CONVERSE_SUFFIX: Final = "/converse"
 BEDROCK_INVOKE_SUFFIX: Final = "/invoke"
 BEDROCK_CONVERSE_STREAM_SUFFIX: Final = "/converse-stream"
@@ -162,21 +158,12 @@ def is_bedrock(mount: str) -> bool:
     return mount.partition("/")[0] == BEDROCK_MOUNT_PREFIX
 
 
-def is_gemini(mount: str) -> bool:
-    return mount == GEMINI_MOUNT
-
-
 def cacheable_endpoint(mount: str, method: str, url: str, body: bytes | None) -> bool:
     if method != "POST" or body is None or len(body) > MAX_REQUEST_BYTES:
         return False
     path: Final = urlsplit(url).path
     if is_bedrock(mount):
         return path.startswith("/model/") and path.endswith(BEDROCK_SUFFIXES)
-    if is_gemini(mount):
-        collection, _, resource = path.rpartition("/")
-        return collection.endswith(GEMINI_MODELS_SEGMENT) and resource.endswith(
-            (GEMINI_GENERATE_SUFFIX, GEMINI_STREAM_SUFFIX)
-        )
     return path in OPENAI_JSON_PATHS
 
 
@@ -203,8 +190,6 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
             for value in values
         ):
             return False
-        if is_gemini(mount):
-            return complete_gemini_stream(values)
         if urlsplit(url).path == "/v1/responses":
             return complete_responses_stream(values)
         if urlsplit(url).path == "/v1/chat/completions":
@@ -216,8 +201,6 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
         return False
     if not isinstance(value, dict) or value.get("error") is not None:
         return False
-    if is_gemini(mount):
-        return complete_gemini_candidates(value)
     path: Final = urlsplit(url).path
     if path == "/v1/messages":
         return value.get("type") == "message" and isinstance(value.get("content"), list) and isinstance(value.get("stop_reason"), str)
@@ -234,35 +217,6 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
         isinstance(choice, dict) and isinstance(choice.get("message"), dict) and isinstance(choice.get("finish_reason"), str)
         for choice in choices
     )
-
-
-def complete_gemini_candidates(value: Mapping[str, JsonValue]) -> bool:
-    """A finished Gemini turn names a ``finishReason`` on every candidate and
-    reports the usage litellm prices the call from. ``finishReason`` is read as a
-    string rather than compared to ``STOP`` because ``MAX_TOKENS`` and the safety
-    reasons end a turn just as finally, and a cache that rejected them would send
-    every one of them upstream forever."""
-    candidates: Final = value.get("candidates")
-    return (
-        isinstance(value.get("usageMetadata"), dict)
-        and isinstance(candidates, list)
-        and bool(candidates)
-        and all(
-            isinstance(candidate, dict) and isinstance(candidate.get("finishReason"), str)
-            for candidate in candidates
-        )
-    )
-
-
-def complete_gemini_stream(values: tuple[JsonValue, ...]) -> bool:
-    """Gemini repeats ``usageMetadata`` on every chunk but names a
-    ``finishReason`` only on the last one, so the terminator is the final event
-    rather than any event. A stream the connection cut short ends on a chunk that
-    carries usage and no reason, which is exactly what this rejects."""
-    if not values:
-        return False
-    last: Final = values[-1]
-    return isinstance(last, dict) and complete_gemini_candidates(last)
 
 
 def complete_bedrock_response(url: str, body: bytes) -> bool:
