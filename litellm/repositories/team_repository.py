@@ -15,10 +15,9 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
-from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.prisma_protocols import RawQueryTransaction, TableActions
 
 if TYPE_CHECKING:
-    from prisma import Prisma
     from prisma import models as prisma_models
 
 
@@ -39,6 +38,13 @@ def _team_arrays(team: LiteLLM_TeamTable) -> _TeamArrays:
     """View a team's untyped list columns as sequences of ids."""
     return team
 
+
+# hashtext collisions only cost two unrelated teams a little serialization, and the
+# lock is never taken by the access-group endpoints as a SELECT ... FOR UPDATE row lock,
+# so it cannot join their access-group-then-team lock order to form a cycle. team_endpoints,
+# the access-group mirror and the team member spend flush all reuse this exact statement to
+# serialize against each other, rather than defining a second, divergent lock on the same key.
+TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
 _JSON_ENCODED_TEAM_FIELDS: Final = (
@@ -78,7 +84,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
         return LiteLLM_TeamTable.model_validate(data)
 
-    async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> list[Member] | None:
+    async def get_members_with_roles_locked(self, tx: RawQueryTransaction, team_id: str) -> list[Member] | None:
         """Return the team's members_with_roles. The caller must already hold
         ``TEAM_ADVISORY_LOCK_SQL`` for this team_id on ``tx`` before calling this.
 
