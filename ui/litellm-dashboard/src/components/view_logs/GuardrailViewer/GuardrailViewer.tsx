@@ -454,7 +454,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
       <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">Request Lifecycle</h4>
       <div className="relative">
         {timeline.map((item, idx) => (
-          <div key={idx} className="flex items-start gap-3 relative">
+          <div key={idx} data-testid="lifecycle-row" className="flex items-start gap-3 relative">
             {/* Vertical line */}
             <div className="flex flex-col items-center">
               <div className="shrink-0">

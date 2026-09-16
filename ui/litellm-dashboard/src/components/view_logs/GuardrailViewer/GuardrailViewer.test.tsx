@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor, within } from "../../../../tests/test-utils";
 import {
   GuardrailInformation,
   makeBedrockResponse,
@@ -122,13 +122,19 @@ describe("GuardrailViewer", () => {
     const ran = makeGuardrailInformation(ranPostCall);
     renderWithProviders(<GuardrailViewer data={[untimed, ran]} />);
 
-    expect(screen.getByText("Request received").parentElement).toHaveTextContent("T+0ms");
-    expect(screen.getByText(/Post-call guardrail: ran-rail/).parentElement).toHaveTextContent("T+250ms");
-    expect(screen.getByText("Response returned").parentElement).toHaveTextContent("T+251ms");
+    const lifecycleRow = (label: string | RegExp): HTMLElement => {
+      const row = screen.getAllByTestId("lifecycle-row").find((r) => within(r).queryByText(label) !== null);
+      if (row === undefined) throw new Error(`no lifecycle row labelled ${label}`);
+      return row;
+    };
 
-    const untimedRow = screen.getByText(/Pre-call guardrail: conduct/).parentElement;
-    expect(untimedRow).toHaveTextContent("—");
-    expect(untimedRow).not.toHaveTextContent(/T\+/);
+    expect(within(lifecycleRow("Request received")).getByText("T+0ms")).toBeInTheDocument();
+    expect(within(lifecycleRow(/Post-call guardrail: ran-rail/)).getByText("T+250ms")).toBeInTheDocument();
+    expect(within(lifecycleRow("Response returned")).getByText("T+251ms")).toBeInTheDocument();
+
+    const untimedRow = within(lifecycleRow(/Pre-call guardrail: conduct/));
+    expect(untimedRow.getByText("—")).toBeInTheDocument();
+    expect(untimedRow.queryByText(/^T\+/)).not.toBeInTheDocument();
   });
 
   it("calculates and displays masked entity totals", async () => {
