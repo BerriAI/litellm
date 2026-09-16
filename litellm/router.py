@@ -1392,10 +1392,6 @@ class Router:
         at most one explicit group. Constructs per-group strategy selectors so
         groups with different `routing_strategy_args` track independent state.
 
-        Validation and selector construction run to completion before any
-        router state changes, so a rejected input raises with the previously
-        loaded groups still routing.
-
         Models not claimed by any explicit group are served by the implicit
         `"default"` group, whose selectors are the `self.<strategy>_logger`
         attributes set up in `routing_strategy_init`.

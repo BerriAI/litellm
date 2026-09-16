@@ -1,9 +1,3 @@
-"""
-Validation for `router_settings.routing_groups`, shared by the Router and the
-proxy's config-update endpoint so a config the UI saves cannot be one the
-runtime refuses to load.
-"""
-
 from collections.abc import Sequence
 from typing import Final
 
@@ -12,11 +6,6 @@ from litellm.types.router import RoutingGroup, RoutingStrategy
 
 
 def validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
-    """
-    Raises `ValueError` unless `routing_strategy` is a known strategy or None.
-
-    See: https://github.com/BerriAI/litellm/issues/11330
-    """
     if routing_strategy is None:
         return
 
@@ -36,12 +25,6 @@ def parse_routing_groups(
     groups_input: Sequence[RoutingGroup | dict] | None,
     known_model_names: frozenset[str] = frozenset(),
 ) -> tuple[RoutingGroup, ...]:
-    """
-    Parses and validates `routing_groups`, raising `ValueError` on the first
-    problem found. Every check runs before the caller mutates any state, so an
-    invalid update can never leave a router holding a half-applied set of
-    groups.
-    """
     if not groups_input:
         return ()
 
