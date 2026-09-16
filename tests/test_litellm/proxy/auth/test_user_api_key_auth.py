@@ -4374,6 +4374,74 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
     }
 
 
+class _RecordingTeamModelBudgetLimiter:
+    def __init__(self):
+        self.calls = []
+
+    async def is_team_within_model_budget(self, team_id, team_model_max_budget, key_model_max_budget, model):
+        self.calls.append((team_id, dict(team_model_max_budget), key_model_max_budget, model))
+        return True
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_enforces_team_model_max_budget_from_the_resolved_team():
+    """The team's model_max_budget is enforced at the single authz gate, off the
+    team object auth resolved (not the possibly stale token copy), and the key's
+    own model_max_budget is handed to the limiter so a matching key entry can
+    override the team cap."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    team_caps = {"gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"}}
+    key_caps = {"claude-sonnet-4-6": {"max_budget": 1.0, "budget_duration": "1d"}}
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        team_id="t1",
+        team_model_max_budget={"gpt-4o": {"max_budget": 999.0, "budget_duration": "30d"}},
+        model_max_budget=key_caps,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        key="team_id:t1",
+        value=LiteLLM_TeamTableCachedObj(team_id="t1", model_max_budget=team_caps),
+    )
+    limiter = _RecordingTeamModelBudgetLimiter()
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "model_max_budget_limiter": limiter,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),  # test-quality-ok: stubs the sibling check so only the team model-budget gate is under test
+            patch(  # test-quality-ok: stubs the budget reservation so only the team model-budget gate is under test
+                "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert limiter.calls == [("t1", team_caps, key_caps, "gpt-4o")]
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
     """Existing RPS guarantee: custom-auth deployments without
