@@ -1,6 +1,8 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
 from typing import Any, Final
 
+from typing_extensions import assert_never
+
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import CommonProxyErrors
@@ -96,14 +98,26 @@ _MCP_EVENT_HOOKS: Final = frozenset(
 )
 
 
-def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
+def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
     match mode:
         case str():
-            return mode in _MCP_EVENT_HOOKS
+            return (mode,)
         case list():
-            return bool(mode) and all(m in _MCP_EVENT_HOOKS for m in mode)
+            return tuple(mode)
         case Mode():
-            return False
+            return tuple(
+                hook
+                for value in (*mode.tags.values(), mode.default)
+                if value is not None
+                for hook in ((value,) if isinstance(value, str) else value)
+            )
+        case _:
+            assert_never(mode)
+
+
+def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
+    hooks: Final = _configured_event_hooks(mode)
+    return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:

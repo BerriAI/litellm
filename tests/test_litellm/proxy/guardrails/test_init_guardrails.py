@@ -202,45 +202,61 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "mode, filter_scope, expected_hooks",
+    "mode, filter_scope, expect_output_scanned",
     [
-        ("pre_mcp_call", None, {"pre_mcp_call"}),
-        (["pre_mcp_call", "post_mcp_call"], None, {"pre_mcp_call", "post_mcp_call"}),
-        ("pre_mcp_call", "both", {"pre_mcp_call", "post_call"}),
-        ("pre_call", None, {"pre_call", "post_call"}),
+        ("pre_mcp_call", None, False),
+        (["pre_mcp_call", "post_mcp_call"], None, False),
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": ["pre_mcp_call", "post_mcp_call"]}, None, False),
+        ({"tags": {"team:mcp": ["pre_mcp_call"]}, "default": "pre_call"}, None, True),
+        ({"tags": {}}, None, True),
+        ("pre_mcp_call", "both", True),
+        ("pre_mcp_call", "output", True),
+        ("pre_call", None, True),
     ],
 )
-def test_initialize_presidio_mcp_mode_does_not_add_post_call_scan(mode, filter_scope, expected_hooks):
-    """Regression: a `pre_mcp_call` Presidio guardrail used to also register a
-    `post_call` output scanner, so a blocked tool call that the model mentioned in
+async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(mode, filter_scope, expect_output_scanned):
+    """Regression: an MCP-only Presidio guardrail used to also scan the LLM
+    response on post_call, so a blocked MCP tool call that the model repeated in
     its answer turned the whole request into an HTTP 400 instead of a 200."""
-    import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
-    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.guardrails import GuardrailEventHooks
+    from litellm.types.utils import Choices, Message, ModelResponse
 
-    guardrail_name = f"test_presidio_mcp_scope_{id(mode)}_{filter_scope}"
+    llm_answer = "Call me at 415-555-2671"
     litellm_params = {
         "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
         "mode": mode,
         "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
         "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+        "mock_redacted_text": {"text": "Call me at <PHONE_NUMBER>", "items": []},
+        "default_on": True,
     }
     if filter_scope is not None:
         litellm_params["presidio_filter_scope"] = filter_scope
 
-    InMemoryGuardrailHandler().initialize_guardrail(
-        guardrail={"guardrail_name": guardrail_name, "litellm_params": litellm_params}
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
+        guardrail={"guardrail_name": "test_presidio_mcp_scope", "litellm_params": litellm_params}
     )
+    guardrail_id = result["guardrail_id"]
+    callbacks = [
+        guardrail_handler.guardrail_id_to_custom_guardrail[guardrail_id],
+        *guardrail_handler.guardrail_id_to_sibling_callbacks[guardrail_id],
+    ]
 
-    registered_hooks = {
-        hook
-        for callback in litellm.callbacks
-        if isinstance(callback, _OPTIONAL_PresidioPIIMasking) and callback.guardrail_name == guardrail_name
-        for hook in ([callback.event_hook] if isinstance(callback.event_hook, str) else callback.event_hook)
-    }
-    assert registered_hooks == expected_hooks
+    request_data = {"metadata": {}}
+    response = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=llm_answer), index=0, finish_reason="stop")]
+    )
+    for callback in callbacks:
+        if callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call):
+            await callback.async_post_call_success_hook(
+                data=request_data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+    assert (response.choices[0].message.content != llm_answer) is expect_output_scanned
 
 
 @pytest.mark.parametrize(
