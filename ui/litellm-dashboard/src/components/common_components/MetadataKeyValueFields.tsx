@@ -14,6 +14,7 @@ import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadata
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export interface MetadataPair {
@@ -87,6 +88,7 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
 }: MetadataKeyValueFieldsProps<TFieldValues>) => {
   const { fields, append, remove } = useFieldArray({ control, name });
   const seededRef = useRef(false);
+  const schemaLabelsByKey = new Map(schemaFields.map((field) => [field.key, field.label || field.key]));
 
   useEffect(() => {
     if (seededRef.current || schemaLoading || schemaFields.length === 0) return;
@@ -114,29 +116,50 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
 
   return (
     <>
-      {fields.map((field, index) => (
-        <div key={field.id} className="mb-2 flex items-start gap-2">
-          <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
-            {({ ref, value, ...rest }) => (
-              <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />
+      {fields.map((field, index) => {
+        const schemaLabel = schemaLabelsByKey.get((field as unknown as Partial<MetadataPair>).key ?? "");
+        return (
+          <div key={field.id} className="mb-2 flex items-start gap-2">
+            {schemaLabel === undefined ? (
+              <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
+                {({ ref, value, ...rest }) => (
+                  <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />
+                )}
+              </FormField>
+            ) : (
+              <Label
+                htmlFor={`${field.id}-value`}
+                data-testid="metadata-schema-label"
+                className="h-9 flex-1 items-center truncate px-3 font-medium"
+              >
+                {schemaLabel}
+              </Label>
             )}
-          </FormField>
-          <FormField control={control} name={`${name}.${index}.value` as FieldPath<TFieldValues>}>
-            {({ ref, value, ...rest }) => (
-              <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Value" />
+            <FormField control={control} name={`${name}.${index}.value` as FieldPath<TFieldValues>}>
+              {({ ref, value, id, ...rest }) => (
+                <Input
+                  {...rest}
+                  id={schemaLabel === undefined ? id : `${field.id}-value`}
+                  ref={ref}
+                  value={(value as string) ?? ""}
+                  placeholder="Value"
+                />
+              )}
+            </FormField>
+            {schemaLabel === undefined && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Remove key-value pair"
+                className="mt-1 text-destructive"
+                onClick={() => remove(index)}
+              >
+                <CircleMinus className="size-4" />
+              </Button>
             )}
-          </FormField>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Remove key-value pair"
-            className="mt-1 text-destructive"
-            onClick={() => remove(index)}
-          >
-            <CircleMinus className="size-4" />
-          </Button>
-        </div>
-      ))}
+          </div>
+        );
+      })}
       <Button
         variant="outline"
         className="w-full border-dashed"
