@@ -1,10 +1,5 @@
 [workspace]
-members = [
-    "crates/core",
-    "crates/token-counter",
-    "crates/python-interop",
-    "crates/python-bridge",
-]
+members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
