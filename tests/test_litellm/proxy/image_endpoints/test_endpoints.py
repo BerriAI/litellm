@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import io
 import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
@@ -119,12 +120,12 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert response.headers.get("x-callback-test") == "value"
 
 
-def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
+def _image_edit_client(monkeypatch, captured: Dict[str, object]) -> TestClient:
     class CaptureProcessing:
-        def __init__(self, data: Dict[str, Any]) -> None:
+        def __init__(self, data: Dict[str, object]) -> None:
             captured.update(data)
 
-        async def base_process_llm_request(self, **_: Any) -> Dict[str, Any]:
+        async def base_process_llm_request(self, **_: object) -> Dict[str, object]:
             return {"data": [{"b64_json": "aGk="}]}
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", CaptureProcessing)
@@ -382,3 +383,89 @@ async def test_failure_before_the_provider_call_bills_the_callers_litellm_call_i
 
     assert raised.value.headers["x-litellm-call-id"] == call_id
     assert [data["litellm_call_id"] for data in hook_request_data] == [call_id]
+
+
+def test_image_bracket_upload_stays_bytes_not_str(monkeypatch):
+    captured: Dict[str, object] = {}
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image[]": ("input.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, "image/png")},
+        data={"model": "openai/gpt-image-2", "prompt": "Make this image photorealistic"},
+    )
+
+    assert response.status_code == 200
+    assert "image[]" not in captured
+    assert "mask[]" not in captured
+    images = captured["image"]
+    assert isinstance(images, list) and len(images) == 1
+    first = images[0]
+    assert isinstance(first, io.BytesIO)
+    first.seek(0)
+    assert first.read() == b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    assert getattr(first, "name", None) == "input.png"
+
+
+def test_mask_bracket_upload_stays_bytes_not_str(monkeypatch):
+    captured: Dict[str, object] = {}
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={
+            "image": ("input.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, "image/png"),
+            "mask[]": ("mask.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, "image/png"),
+        },
+        data={"model": "openai/gpt-image-2", "prompt": "hi"},
+    )
+
+    assert response.status_code == 200
+    assert "image[]" not in captured
+    assert "mask[]" not in captured
+    masks = captured["mask"]
+    assert isinstance(masks, list) and len(masks) == 1
+    assert isinstance(masks[0], io.BytesIO)
+    masks[0].seek(0)
+    assert masks[0].read() == b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+
+def test_multiple_bracket_uploads_all_reach_provider(monkeypatch):
+    captured: Dict[str, object] = {}
+    png2 = b"\x89PNG\r\n\x1a\n" + b"\x01" * 100
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files=[
+            ("image[]", ("a.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, "image/png")),
+            ("image[]", ("b.png", png2, "image/png")),
+        ],
+        data={"model": "openai/gpt-image-2", "prompt": "hi"},
+    )
+
+    assert response.status_code == 200
+    assert "image[]" not in captured
+    images = captured["image"]
+    assert isinstance(images, list) and len(images) == 2
+    assert [getattr(b, "name", None) for b in images] == ["a.png", "b.png"]
+
+
+def test_string_image_upload_rejected(monkeypatch):
+    for field in ("image", "image[]"):
+        captured: Dict[str, object] = {}
+        response = _image_edit_client(monkeypatch, captured).post(
+            "/v1/images/edits",
+            json={"model": "openai/gpt-image-2", "prompt": "hi", field: "not-a-file"},
+        )
+        assert response.status_code == 422, field
+        assert "multipart file upload" in response.text
+
+
+def test_numeric_coercion_preserved_with_file_upload(monkeypatch):
+    captured: Dict[str, object] = {}
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image[]": ("input.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 100, "image/png")},
+        data={"model": "openai/gpt-image-2", "prompt": "hi", "n": "2"},
+    )
+
+    assert response.status_code == 200
+    assert captured["n"] == 2 and isinstance(captured["n"], int)
+    images = captured["image"]
+    assert isinstance(images, list)
+    assert isinstance(images[0], io.BytesIO)

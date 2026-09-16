@@ -311,3 +311,24 @@ def test_input_fidelity_passes_through_optional_param_filter():
     assert filtered["input_fidelity"] == "low"
     assert filtered["quality"] == "high"
     assert "unknown_param" not in filtered
+
+
+def test_transform_image_edit_request_preserves_bytesio_filename(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    buf = BytesIO(image_bytes)
+    buf.name = "input.png"
+    data, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2",
+        prompt="hi",
+        image=[buf],
+        image_edit_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "image" not in data
+    assert files[0][0] == "image[]"
+    assert files[0][1][0] == "input.png"
+    assert files[0][1][1] is buf
+    assert isinstance(files[0][1][1], BytesIO)
