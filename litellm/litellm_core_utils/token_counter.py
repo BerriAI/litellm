@@ -615,7 +615,8 @@ def _get_exact_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer
+    from litellm.rust_bridge.token_counter import text_counter
+    from litellm.utils import _select_tokenizer, huggingface_tokenizer_kind
 
     if model is not None or custom_tokenizer is not None:
         tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
@@ -625,7 +626,12 @@ def _get_exact_count_function(
             def count_tokens(text: str) -> int:
                 return len(tokenizer.encode_batch_fast([text])[0])
 
-            return count_tokens
+            if model is None or huggingface_tokenizer_kind(model) != "anthropic":
+                return count_tokens
+            if tokenizer is not _select_tokenizer(model)["tokenizer"]:
+                return count_tokens
+            rust_count: Final = text_counter("anthropic")
+            return count_tokens if rust_count is None else _with_python_fallback(rust_count, count_tokens)
         elif tokenizer_json["type"] == "openai_tokenizer":
             encoding: Final = openai_tokenizer_encoding(model)
 
@@ -641,6 +647,17 @@ def _get_exact_count_function(
             return len(default_encoding.encode(text, disallowed_special=()))
 
         return _get_tiktoken_count_function(encode_length)
+
+
+def _with_python_fallback(rust_count: TokenCounterFunction, python_count: TokenCounterFunction) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        try:
+            return rust_count(text)
+        except RuntimeError as error:
+            verbose_logger.debug("Rust token counter failed, counting in Python: %s", error)
+            return python_count(text)
+
+    return count_tokens
 
 
 def openai_tokenizer_encoding(model: str) -> tiktoken.Encoding:

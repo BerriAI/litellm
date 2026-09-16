@@ -16,10 +16,11 @@ use crate::errors::RustBridgeDeclined;
 use crate::execution::run_async;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
-/// the GIL released. Python owns which requests get here and what to do with
-/// the count. At most one encode per core runs at a time; the rest wait in the
-/// async task, where a cancelled Python awaiter drops them before any blocking
-/// work is scheduled.
+/// the GIL released, or of one string synchronously on the calling thread.
+/// Python owns which requests get here and what to do with the count. At most
+/// one request encode per core runs at a time; the rest wait in the async task,
+/// where a cancelled Python awaiter drops them before any blocking work is
+/// scheduled.
 #[pyclass(frozen)]
 struct TokenCounter {
     inner: Arc<CoreTokenCounter>,
@@ -41,6 +42,10 @@ impl TokenCounter {
     #[staticmethod]
     fn from_o200k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
         Self::load(py, || CoreTokenCounter::from_o200k_ranks(rank_file))
+    }
+
+    fn count_text(&self, py: Python<'_>, text: &str) -> PyResult<usize> {
+        release_gil(py, || self.inner.count_text(text)).map_err(token_count_error_to_pyerr)
     }
 
     fn acount_request<'py>(&self, py: Python<'py>, body: &[u8]) -> PyResult<Bound<'py, PyAny>> {

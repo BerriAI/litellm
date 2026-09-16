@@ -1576,3 +1576,177 @@ def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int,
 def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
     assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
     assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()
+
+
+ANTHROPIC_MODEL: Final = "claude-sonnet-4-5-20250929"
+RUST_TEXTS: Final = (
+    "Hello, how are you today?",
+    "I'VE got 1234567 things; it's \"fine\"...\r\n\r\n  caf\u00e9 \u0645\u0631\u062d\u0628\u0627 \U0001f600 <|endoftext|>",
+    "x " * 5_000,
+    "",
+)
+
+
+class _FakeTextCounter:
+    def __init__(self, count: int | Exception) -> None:
+        self.count = count
+        self.texts: list[str] = []
+
+    def count_text(self, text: str) -> int:
+        self.texts.append(text)
+        if isinstance(self.count, Exception):
+            raise self.count
+        return self.count
+
+
+class _FakeTextCounterFactory:
+    def __init__(self, count: int | Exception) -> None:
+        self.count = count
+        self.counters: list[_FakeTextCounter] = []
+
+    def __call__(self, tokenizer_json: str) -> _FakeTextCounter:
+        counter = _FakeTextCounter(self.count)
+        self.counters.append(counter)
+        return counter
+
+    def from_cl100k_ranks(self, rank_file: str) -> _FakeTextCounter:
+        return self(rank_file)
+
+    def from_o200k_ranks(self, rank_file: str) -> _FakeTextCounter:
+        return self(rank_file)
+
+
+@pytest.fixture
+def rust_bridge(monkeypatch: pytest.MonkeyPatch):
+    from litellm.rust_bridge import bindings, configuration
+    from litellm.rust_bridge import token_counter as bridge
+
+    bridge.TOKEN_COUNTER.reset()
+    bridge._counter.cache_clear()
+    configuration.reset_rust_configuration()
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: object())
+    yield bridge
+    bridge.TOKEN_COUNTER.reset()
+    bridge._counter.cache_clear()
+    configuration.reset_rust_configuration()
+
+
+def test_anthropic_text_is_counted_by_rust_when_the_bridge_is_enabled(rust_bridge) -> None:
+    factory: Final = _FakeTextCounterFactory(1_000)
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(factory)
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, text="hello") == 1_000
+    assert token_counter_new(model=ANTHROPIC_MODEL, text="hello again") == 1_000
+    assert len(factory.counters) == 1
+    assert factory.counters[0].texts == ["hello", "hello again"]
+
+
+def test_anthropic_messages_are_counted_by_rust_when_the_bridge_is_enabled(rust_bridge) -> None:
+    factory: Final = _FakeTextCounterFactory(1_000)
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(factory)
+
+    count: Final = token_counter_new(model=ANTHROPIC_MODEL, messages=[{"role": "user", "content": "hello"}])
+
+    assert count >= 2_000
+    assert "hello" in factory.counters[0].texts
+
+
+@pytest.mark.parametrize("model", ("gpt-4", "gpt-4o", "replicate/meta/llama-2-70b-chat"))
+def test_only_the_anthropic_tokenizer_is_routed_to_rust(rust_bridge, model: str) -> None:
+    factory: Final = _FakeTextCounterFactory(1_000)
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(factory)
+
+    assert token_counter_new(model=model, text="hello") < 1_000
+    assert factory.counters == []
+
+
+def test_custom_huggingface_tokenizer_stays_in_python_for_anthropic_models(rust_bridge) -> None:
+    from tokenizers import Tokenizer
+
+    from litellm.utils import claude_json_str
+
+    factory: Final = _FakeTextCounterFactory(1_000)
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(factory)
+    custom: Final = {"type": "huggingface_tokenizer", "tokenizer": Tokenizer.from_str(claude_json_str)}
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, custom_tokenizer=custom, text="hello") < 1_000
+    assert factory.counters == []
+
+
+def test_preselected_anthropic_tokenizer_is_counted_by_rust(rust_bridge) -> None:
+    """The proxy's token counting route selects the tokenizer itself and passes it in as `custom_tokenizer`."""
+    from litellm.utils import _select_tokenizer
+
+    factory: Final = _FakeTextCounterFactory(1_000)
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(factory)
+
+    count: Final = token_counter_new(
+        model=ANTHROPIC_MODEL, custom_tokenizer=_select_tokenizer(ANTHROPIC_MODEL), text="hello"
+    )
+
+    assert count == 1_000
+    assert [counter.texts for counter in factory.counters] == [["hello"]]
+
+
+def test_disabled_bridge_counts_anthropic_text_in_python(rust_bridge) -> None:
+    factory: Final = _FakeTextCounterFactory(1_000)
+    litellm.rust(False)
+    rust_bridge.TOKEN_COUNTER.override(factory)
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, text="hello") < 1_000
+    assert factory.counters == []
+
+
+def test_missing_native_module_counts_anthropic_text_in_python(rust_bridge, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge import bindings
+
+    litellm.rust(True)
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
+    litellm.rust(False)
+    python_count: Final = token_counter_new(model=ANTHROPIC_MODEL, text="hello")
+    litellm.rust(True)
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, text="hello") == python_count
+
+
+def test_rust_encode_failure_falls_back_to_python_per_string(rust_bridge) -> None:
+    litellm.rust(False)
+    python_count: Final = token_counter_new(model=ANTHROPIC_MODEL, text="hello")
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(_FakeTextCounterFactory(RuntimeError("encode failed")))
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, text="hello") == python_count
+
+
+def test_rust_tokenizer_load_failure_falls_back_to_python(rust_bridge) -> None:
+    def failing_factory(tokenizer_json: str) -> _FakeTextCounter:
+        raise ValueError("tokenizer json rejected")
+
+    litellm.rust(False)
+    python_count: Final = token_counter_new(model=ANTHROPIC_MODEL, text="hello")
+    litellm.rust(True)
+    rust_bridge.TOKEN_COUNTER.override(failing_factory)
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, text="hello") == python_count
+
+
+@pytest.mark.parametrize("text", RUST_TEXTS)
+def test_native_anthropic_text_count_matches_python(rust_bridge, monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    from litellm.rust_bridge import bindings
+
+    native: Final = pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    messages: Final = [{"role": "system", "content": "You are terse."}, {"role": "user", "name": "bob", "content": text}]
+
+    litellm.rust(False)
+    python_text: Final = token_counter_new(model=ANTHROPIC_MODEL, text=text)
+    python_messages: Final = token_counter_new(model=ANTHROPIC_MODEL, messages=messages)
+    litellm.rust(True)
+
+    assert token_counter_new(model=ANTHROPIC_MODEL, text=text) == python_text
+    assert token_counter_new(model=ANTHROPIC_MODEL, messages=messages) == python_messages
