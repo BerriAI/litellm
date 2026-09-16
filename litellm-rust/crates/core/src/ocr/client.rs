@@ -36,12 +36,6 @@ impl OcrClient {
         shared_client()
     }
 
-    #[tracing::instrument(
-        name = "ocr",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
     pub async fn perform(&self, request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
         use super::{
             NativeOutcome, OcrAdmission, OcrCall, OcrCallStep, OcrHookHost, OcrHost,
