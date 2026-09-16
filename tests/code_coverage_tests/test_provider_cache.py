@@ -38,6 +38,7 @@ class Provider(ThreadingHTTPServer):
     delay: float = 0
     stream: bool = False
     truncated: bool = False
+    cookie: str = ""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -62,6 +63,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(server.response)))
+        if server.cookie:
+            self.send_header("set-cookie", server.cookie)
         self.end_headers()
         self.wfile.write(server.response)
 
@@ -170,6 +173,14 @@ def test_failed_provider_responses_never_enter_cache(store: RedisResponseStore, 
         assert call(url).status_code == status
         assert call(url).body == response
     assert len(provider.hits) == 2
+
+
+def test_cookie_setting_success_is_reused_without_the_cookie(store: RedisResponseStore, provider: Provider) -> None:
+    provider.cookie = "__cf_bm=synthetic-bot-management; Path=/; HttpOnly; Secure"
+    with edge(CacheEdge(store, SECRET), provider) as url:
+        replies: Final = tuple(call(url) for _ in range(2))
+    assert len(provider.hits) == 1
+    assert all(reply.body == SUCCESS and "set-cookie" not in reply.headers for reply in replies)
 
 
 def test_expiry_does_not_slide(store: RedisResponseStore, provider: Provider) -> None:

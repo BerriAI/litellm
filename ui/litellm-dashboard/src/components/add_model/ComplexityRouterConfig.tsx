@@ -794,19 +794,15 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   },
                 ]
               : []),
-            ...(value.classifier_type !== "llm_v2"
-              ? [
-                  {
-                    key: "adaptive",
-                    label: <strong className="text-foreground font-semibold">Advanced: Adaptive Routing</strong>,
-                    children: (
-                      <Restricted by={restrictedBy(value, "adaptive")}>
-                        <AdaptiveRoutingConfig value={value} onChange={onChange} />
-                      </Restricted>
-                    ),
-                  },
-                ]
-              : []),
+            {
+              key: "adaptive",
+              label: <strong className="text-foreground font-semibold">Advanced: Adaptive Routing</strong>,
+              children: (
+                <Restricted by={restrictedBy(value, "adaptive")}>
+                  <AdaptiveRoutingConfig value={value} onChange={onChange} />
+                </Restricted>
+              ),
+            },
             {
               key: "affinity",
               label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
@@ -906,15 +902,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   },
                 ]
               : []),
-          ].map(({ key, label, children }) => (
-            <Collapsible key={key} className="border-b border-border last:border-b-0">
-              <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left">
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
-                {label}
-              </CollapsibleTrigger>
-              <CollapsibleContent className="px-4 pb-4">{children}</CollapsibleContent>
-            </Collapsible>
-          ))}
+          ]
+            .filter(({ key }) => !forecast || !["adaptive", "context-window", "escalation"].includes(key))
+            .map(({ key, label, children }) => (
+              <Collapsible key={key} className="border-b border-border last:border-b-0">
+                <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left">
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
+                  {label}
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-4">{children}</CollapsibleContent>
+              </Collapsible>
+            ))}
         </div>
       </RoutingOptions>
     </div>
