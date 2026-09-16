@@ -2237,6 +2237,46 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
 
 
 @pytest.mark.parametrize(
+    "model_group_alias",
+    [
+        {"team-embeddings": "my-embeddings"},
+        {"team-embeddings": {"model": "my-embeddings", "hidden": False}},
+    ],
+)
+def test_create_model_info_response_resolves_model_group_alias_to_target(model_group_alias):
+    """A `model_group_alias` row must report the metadata of the group it points at,
+    not the cost-map generalization or nothing that the alias name resolves to."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-embeddings",
+                    "litellm_params": {"model": "openai/text-embedding-3-small"},
+                }
+            ],
+            model_group_alias=model_group_alias,
+        )
+
+        alias_response = create_model_info_response(
+            model_id="team-embeddings", provider="openai", llm_router=router
+        )
+        target_response = create_model_info_response(
+            model_id="my-embeddings", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert alias_response["id"] == "team-embeddings"
+    for field in ("mode", "max_input_tokens", "max_output_tokens"):
+        assert alias_response.get(field) == target_response.get(field)
+    assert alias_response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_to_run",
     [
         ({"guardrails": ["key-scoped-guardrail"]}, None, True),
