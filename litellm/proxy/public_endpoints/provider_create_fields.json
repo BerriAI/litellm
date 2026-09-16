@@ -1500,6 +1500,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "GONDOLA",
+    "provider_display_name": "Gondola",
+    "litellm_provider": "gondola",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.gondola-ai.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "gondola/deepseek-v3.2"
+  },
+  {
     "provider": "Google_AI_Studio",
     "provider_display_name": "Google AI Studio",
     "litellm_provider": "gemini",
