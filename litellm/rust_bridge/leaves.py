@@ -795,9 +795,7 @@ def _langfuse(
     user: Final = kwargs.get("user")
     result: Final = handler.log_event_on_langfuse(
         kwargs=kwargs,
-        response_obj=cast(
-            ModelResponse, response
-        ),  # cast-ok: OCR responses sit outside the legacy union langfuse names
+        response_obj=cast(ModelResponse, response),  # cast-ok: OCR responses sit outside the legacy union
         start_time=start_time,
         end_time=end_time,
         user_id=user if isinstance(user, str) else None,
