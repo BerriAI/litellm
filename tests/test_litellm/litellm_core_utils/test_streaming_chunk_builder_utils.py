@@ -1622,11 +1622,11 @@ def test_calculate_usage_keeps_an_openai_sdk_usage_chunk() -> None:
         prompt_tokens_details=SDKPromptTokensDetails(cached_tokens=4992),
         completion_tokens_details=SDKCompletionTokensDetails(reasoning_tokens=103),
     )
-    chunks: Final = [
-        _openai_chunk(choices=[{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}]),
-        _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    chunks: Final = (
+        _openai_chunk(choices=({"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None},)),
+        _openai_chunk(choices=({"index": 0, "delta": {}, "finish_reason": "stop"},)),
         usage_chunk,
-    ]
+    )
 
     usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
         chunks=chunks,
@@ -1651,11 +1651,11 @@ def test_calculate_usage_keeps_a_litellm_usage_chunk() -> None:
         total_tokens=120,
         prompt_tokens_details=PromptTokensDetails(cached_tokens=64),
     )
-    chunks: Final = [
-        _openai_chunk(choices=[{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}]),
-        _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    chunks: Final = (
+        _openai_chunk(choices=({"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None},)),
+        _openai_chunk(choices=({"index": 0, "delta": {}, "finish_reason": "stop"},)),
         usage_chunk,
-    ]
+    )
 
     usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
         chunks=chunks,
