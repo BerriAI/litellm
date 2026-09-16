@@ -1071,7 +1071,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
