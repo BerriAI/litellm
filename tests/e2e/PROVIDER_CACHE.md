@@ -44,7 +44,9 @@ The trusted runner receives:
 
 Do not give cache credentials to candidate deployments. Counter artifacts contain no recorded payloads or credentials. Hits count shared-cache responses; upstream attempts count actual forwards from the edge. Every counter is emitted twice, once as a flat total and once under `mount:{mount}:`, so a hit rate can be read per provider rather than only in aggregate. Existing application-cache observations still count requests arriving at the edge, including shared-cache hits
 
-Tests that require real provider timing, limits or state use `@pytest.mark.provider_live`. The marker keeps newly registered models on live routes without weakening their assertions. The provider prompt-caching tests carry it because a replayed priming response reports cache creation rather than a cache read. Ordinary assertion failures still fail E2E. The shared cache does not modify provider response IDs or make the proxy aware of replay
+Tests that require real provider timing, limits or state use `@pytest.mark.provider_live`. The marker keeps newly registered models on live routes without weakening their assertions. The provider prompt-caching tests carry it because a replayed priming response reports cache creation rather than a cache read.
+
+One more class needs it, and it is the cost of normalizing the marker. A test that mints a fresh marker, sends it, and then asserts the provider's answer contains that exact value is asserting on the marker rather than using it as a salt. The key treats two such requests as the same identity, so a stale recording matches and answers with the marker from the run that recorded it. `TestOpenAIMessagesToolContinuation` is the one in the suite today: it sends a freshly minted receipt through a tool result and asserts the model echoes it back verbatim. If you add a test that asserts a provider echoed your own unique value, it belongs on the live path. Ordinary assertion failures still fail E2E. The shared cache does not modify provider response IDs or make the proxy aware of replay
 
 ## Recorded response semantics
 

@@ -85,7 +85,11 @@ def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) 
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "provider_live: requires actual provider timing, limits or state; bypass shared cache")
+    config.addinivalue_line(
+        "markers",
+        "provider_live: requires actual provider timing, limits, state, or a response that echoes this"
+        " run's own unique value; bypass shared cache",
+    )
     config.addinivalue_line(
         "markers",
         "e2e: live test that requires a running proxy and real provider keys",
