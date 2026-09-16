@@ -1032,6 +1032,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # message (True) vs emit a standalone block message (False, buffered).
         chunks_yielded = False
         last_scan_key: StreamingScanKey | None = None  # rebind-ok: replaced after every scan round
+        tool_calls_in_flight = False  # rebind-ok: tracks the latest scan key's unscanned tool calls
 
         async for item in response:
             chunk_counter += 1
@@ -1079,6 +1080,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             if chunk_counter % sampling_rate == 0:
                 endpoint_translation = mappings[CallTypes(call_type)]()
                 scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
+                if scan_key is not None:
+                    tool_calls_in_flight = scan_key.tool_calls_in_flight
+                hold_window = buffer_until_moderated and tool_calls_in_flight
                 if _is_redundant_scan(scan_key, last_scan_key):
                     verbose_proxy_logger.debug(
                         "Skipping streaming chunk %s for guardrail %s: nothing new to scan since the last round",
@@ -1086,6 +1090,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                         guardrail_to_apply.guardrail_name,
                     )
                     if buffer_until_moderated:
+                        if hold_window:
+                            continue
                         for withheld_item in withheld_items:
                             chunks_yielded = True
                             responses_yielded.append(withheld_item)
@@ -1151,6 +1157,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                     return
                 if scan_key is not None:
                     last_scan_key = scan_key
+                if hold_window:
+                    verbose_proxy_logger.debug(
+                        "Holding %s buffered chunks for guardrail %s: streamed tool calls await the end-of-stream scan",
+                        len(withheld_items),
+                        guardrail_to_apply.guardrail_name,
+                    )
+                    withheld_items[:] = original_items
+                    continue
                 for original_item in original_items:
                     chunks_yielded = True
                     responses_yielded.append(original_item)

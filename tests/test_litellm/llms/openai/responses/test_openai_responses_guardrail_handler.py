@@ -3211,3 +3211,24 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
     def test_output_item_done_round_is_never_deduped(self):
         done = {"type": "response.output_item.done", "sequence_number": 1, "item": {"type": "function_call"}}
         assert OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hi"), done]) is None
+
+    def test_streamed_tool_call_events_flag_tool_calls_in_flight_until_the_stream_ends(self):
+        handler = OpenAIResponsesHandler()
+        added = {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather"},
+        }
+        arguments_delta = {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 2,
+            "item_id": "fc_1",
+            "delta": '{"city":',
+        }
+        function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+        assert handler.get_streaming_scan_key([self._delta(0, "hi")]).tool_calls_in_flight is False
+        assert handler.get_streaming_scan_key([self._delta(0, "hi"), added]).tool_calls_in_flight is True
+        assert handler.get_streaming_scan_key([self._delta(0, "hi"), arguments_delta]).tool_calls_in_flight is True
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), added, self._completed(3, [function_call])])
+        assert ended_key.tool_calls_in_flight is False
+        assert len(ended_key.tool_calls) == 1

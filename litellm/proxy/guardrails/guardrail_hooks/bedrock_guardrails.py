@@ -330,7 +330,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self._set_streaming_params(BedrockGuardrailStreamingParams.from_extras(litellm_params.model_extra))
 
     def _streams_incrementally(self) -> bool:
-        return not self.streaming_buffer_until_moderated and not self.mask_response_content
+        if self.mask_response_content:
+            return False
+        if not self.streaming_buffer_until_moderated:
+            return True
+        return self.streaming_buffer_release_on_scan and not self.streaming_end_of_stream_only
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:

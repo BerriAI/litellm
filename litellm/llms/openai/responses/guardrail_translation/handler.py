@@ -1177,9 +1177,22 @@ class OpenAIResponsesHandler(BaseTranslation):
             return None
         if last_event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
             return self._completed_response_scan_key(stream_item_field(last_event, "response"))
+        stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
         return StreamingScanKey(
             texts=(self.get_streaming_string_so_far(responses_so_far),),
-            stream_ended=self._check_streaming_has_ended(responses_so_far),
+            stream_ended=stream_ended,
+            tool_calls_in_flight=not stream_ended and self._has_streamed_tool_call_events(responses_so_far),
+        )
+
+    @staticmethod
+    def _has_streamed_tool_call_events(responses_so_far: Sequence[object]) -> bool:
+        return any(
+            stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
+            or (
+                stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
+                and stream_item_field(stream_item_field(event, "item"), "type") in _TOOL_CALL_ITEM_TYPES
+            )
+            for event in responses_so_far
         )
 
     @staticmethod

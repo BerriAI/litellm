@@ -2482,7 +2482,10 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         open_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use])
         ended_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use, self._stop("tool_use")])
         assert open_key == StreamingScanKey(texts=("hi",))
+        assert open_key.tool_calls_in_flight is True
+        assert handler.get_streaming_scan_key([self._text_delta("hi")]).tool_calls_in_flight is False
         assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key.tool_calls_in_flight is False
         assert ended_key != open_key
 
 

@@ -792,10 +792,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
         stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+        tool_call_fingerprints: Final = self._streamed_tool_call_fingerprints(responses_so_far)
         return StreamingScanKey(
             texts=tuple(self._combine_streaming_texts(chunks).values()),
-            tool_calls=self._streamed_tool_call_fingerprints(responses_so_far) if stream_ended else (),
+            tool_calls=tool_call_fingerprints if stream_ended else (),
             stream_ended=stream_ended,
+            tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )
 
     @staticmethod
