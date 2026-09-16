@@ -55,6 +55,7 @@ from litellm.proxy.auth.auth_checks import (
     get_end_user_object,
     get_jwt_key_mapping_object,
     get_object_permission,
+    get_org_object,
     get_project_object,
     get_team_membership,
     get_team_object,
@@ -2443,6 +2444,27 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     )
 
 
+async def _resolve_org_alias(
+    org_id: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> str | None:
+    try:
+        org_object: Final = await get_org_object(
+            org_id=org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-safe: attribution must never break auth
+        verbose_proxy_logger.debug("org alias attribution: org lookup failed: %s", e)
+        return None
+    return org_object.organization_alias if org_object is not None else None
+
+
 def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseException) -> bool:
     """Whether the token's own team fields may stand in for a team that failed to
     resolve, without widening access.
@@ -2704,6 +2726,15 @@ async def _run_centralized_common_checks(
 
     if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
         user_api_key_auth_obj.org_id = team_object.organization_id
+
+    if user_api_key_auth_obj.org_id is not None and user_api_key_auth_obj.organization_alias is None:
+        user_api_key_auth_obj.organization_alias = await _resolve_org_alias(
+            org_id=user_api_key_auth_obj.org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and
