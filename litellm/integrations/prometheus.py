@@ -776,6 +776,12 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["error_type"],
             )
 
+            self.litellm_check_batch_cost_aged_out_total = self._counter_factory(
+                name="litellm_check_batch_cost_aged_out_total",
+                documentation="Total managed batch objects aged out of CheckBatchCost without their cost being reconciled, by reason",
+                labelnames=("reason",),
+            )
+
             self.litellm_check_batch_cost_last_run_timestamp = self._gauge_factory(
                 "litellm_check_batch_cost_last_run_timestamp",
                 "Unix timestamp of the last CheckBatchCost job run",
@@ -3328,6 +3334,14 @@ class PrometheusLogger(CustomLogger):
             ).inc()
         except Exception as e:
             verbose_logger.warning("Error recording check batch cost error metric: %s", e)
+
+    def record_check_batch_cost_aged_out(self, reason: str, count: int):
+        try:
+            self.litellm_check_batch_cost_aged_out_total.labels(
+                reason=reason,
+            ).inc(count)
+        except Exception as e:
+            verbose_logger.warning("Error recording check batch cost aged out metric: %s", e)
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:

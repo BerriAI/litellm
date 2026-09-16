@@ -218,7 +218,9 @@ class CheckBatchCost:
 
         return metadata
 
-    async def _cleanup_stale_managed_objects(self) -> None:
+    async def _cleanup_stale_managed_objects(
+        self, prom_logger: Optional["PrometheusLogger"]
+    ) -> None:
         """
         Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
         in non-terminal states as 'stale_expired'. These will never complete and
@@ -234,6 +236,7 @@ class CheckBatchCost:
             data={"status": "stale_expired"},
         )
         if result > 0:
+            self._record_aged_out(prom_logger, "non_terminal", result)
             verbose_proxy_logger.warning(
                 f"CheckBatchCost: marked {result} stale managed objects "
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
@@ -254,6 +257,7 @@ class CheckBatchCost:
             data={"batch_processed": True},
         )
         if retired > 0:
+            self._record_aged_out(prom_logger, "completed_unbilled", retired)
             verbose_proxy_logger.warning(
                 f"CheckBatchCost: gave up on {retired} completed managed objects older than "
                 f"{MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days that were never costed"
@@ -444,6 +448,13 @@ class CheckBatchCost:
     ) -> None:
         if prom_logger is not None:
             prom_logger.record_check_batch_cost_error(error_type)
+
+    @staticmethod
+    def _record_aged_out(
+        prom_logger: Optional["PrometheusLogger"], reason: str, count: int
+    ) -> None:
+        if prom_logger is not None:
+            prom_logger.record_check_batch_cost_aged_out(reason=reason, count=count)
 
     def _resolve_job_routing(
         self,
@@ -919,13 +930,6 @@ class CheckBatchCost:
 
         processed_models: List[Tuple[Optional[str], Optional[str]]] = []
 
-        try:
-            await self._cleanup_stale_managed_objects()
-        except Exception as cleanup_err:
-            verbose_proxy_logger.warning(
-                f"CheckBatchCost: stale cleanup failed (poll will continue): {cleanup_err}"
-            )
-
         # Look for all batches that have not yet been processed by CheckBatchCost.
         # self._has_batch_processed_column is cached after the first probe so that
         # older schemas don't pay a guaranteed-failing primary query + warning on
@@ -1059,6 +1063,16 @@ class CheckBatchCost:
                     )
                     continue
                 await self._finalize_unbilled_terminal_job(job, response)
+
+        # Runs after the poll loop, not before it: both sweeps write the very fields the
+        # poll query filters on, so sweeping first makes every aged row unreachable in the
+        # same cycle that would have costed it.
+        try:
+            await self._cleanup_stale_managed_objects(prom_logger)
+        except Exception as cleanup_err:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: stale cleanup failed (poll completed): {cleanup_err}"
+            )
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

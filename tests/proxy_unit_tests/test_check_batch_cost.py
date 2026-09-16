@@ -9,8 +9,9 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi import HTTPException
@@ -3375,3 +3376,217 @@ class TestMultiPodBatchCostClaim:
         assert self._claim_calls(prisma) == []
         assert journal == ["fetch", "bill", "finalize"]
         logging_obj.async_success_handler.assert_awaited_once()
+
+
+class _AgedManagedObjectRow:
+    """A managed batch row old enough for the staleness sweeps to reach."""
+
+    def __init__(self, job_id: str, unified_object_id: str, status: str, age_days: int = 30):
+        self.id = job_id
+        self.unified_object_id = unified_object_id
+        self.file_purpose = "batch"
+        self.status = status
+        self.batch_processed = False
+        self.created_by = "user-1"
+        self.created_at = datetime.now(timezone.utc) - timedelta(days=age_days)
+
+
+class _AgedManagedObjectTable:
+    """A LiteLLM_ManagedObjectTable double backed by real, mutable rows that carry a
+    created_at the staleness sweeps can match on.
+
+    An AsyncMock cannot settle the ordering question: its update_many does not change
+    what find_many returns, so sweep-then-query and query-then-sweep look identical.
+    Here the sweeps write the same rows the poll query reads, exactly as a shared
+    Postgres table would, so the two orderings give different observable results.
+    """
+
+    def __init__(self, rows: list):
+        self.rows = tuple(rows)
+        self.update_many = AsyncMock(side_effect=self._update_many)
+        self.update = AsyncMock(side_effect=self._update)
+        self.find_many = AsyncMock(side_effect=self._find_many)
+        self.find_first = AsyncMock(return_value=None)
+
+    @staticmethod
+    def _matches(row: "_AgedManagedObjectRow", where: dict) -> bool:
+        for key, value in where.items():
+            if key == "created_at":
+                if row.created_at >= value["lt"]:
+                    return False
+            elif key == "status":
+                if row.status in value.get("not_in", ()):
+                    return False
+                if "in" in value and row.status not in value["in"]:
+                    return False
+            elif getattr(row, key) != value:
+                return False
+        return True
+
+    def _selected(self, where: dict) -> tuple:
+        return tuple(row for row in self.rows if self._matches(row, where))
+
+    async def _update_many(self, *, where: dict, data: dict) -> int:
+        selected = self._selected(where)
+        for row in selected:
+            for key, value in data.items():
+                setattr(row, key, value)
+        return len(selected)
+
+    async def _update(self, *, where: dict, data: dict) -> None:
+        for row in self.rows:
+            if row.id == where["id"]:
+                for key, value in data.items():
+                    setattr(row, key, value)
+
+    async def _find_many(self, *, where: dict, take=None, order=None) -> list:
+        return list(self._selected(where))[:take]
+
+
+class TestAgedRowsArePolledBeforeTheyAreRetired:
+    """LIT-5277 regression: the staleness sweeps used to run at the top of
+    check_batch_cost(), before the poll query. Both of them write exactly the fields that
+    query filters on — status='stale_expired' and batch_processed=True — so every row past
+    the staleness cutoff was made ineligible for polling in the same cycle that would
+    otherwise have retrieved it, costed it and written its spend log. The rows were retired
+    unbilled without a single attempt, every cycle, forever.
+
+    The sweeps still run, so nothing starves; they just run last."""
+
+    @staticmethod
+    def _instance(prisma, llm_router):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook.return_value = None
+        return CheckBatchCost(
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma,
+            llm_router=llm_router,
+        )
+
+    @staticmethod
+    def _prisma(rows):
+        prisma = MagicMock()
+        prisma.db.litellm_managedobjecttable = _AgedManagedObjectTable(rows)
+        prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+        return prisma
+
+    @staticmethod
+    def _encode(model_id: str, batch_id: str) -> str:
+        import base64
+
+        unified_id = f"litellm_proxy;model_id:{model_id};llm_batch_id:{batch_id}"
+        return base64.urlsafe_b64encode(unified_id.encode()).decode().rstrip("=")
+
+    @staticmethod
+    def _batch(status: str):
+        """A provider retrieve response with no output_file_id, so the poller reaches the
+        row without entering the billing path that is already covered elsewhere."""
+        from litellm.types.utils import LiteLLMBatch
+
+        return LiteLLMBatch(
+            id="batch-aged",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-1",
+            object="batch",
+            status=status,
+        )
+
+    @pytest.mark.asyncio
+    async def test_aged_completed_row_is_polled_before_it_is_retired(self):
+        """An aged, completed, unbilled row reaches the provider retrieve that costs it,
+        instead of being written off without a single attempt."""
+        row = _AgedManagedObjectRow(
+            "job-aged-completed", self._encode("model-123", "batch-aged"), "completed"
+        )
+        prisma = self._prisma([row])
+        llm_router = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(return_value=self._batch("completed"))
+
+        await self._instance(prisma, llm_router).check_batch_cost()
+
+        llm_router.aretrieve_batch.assert_awaited_once()
+        assert llm_router.aretrieve_batch.await_args.kwargs["batch_id"] == "batch-aged"
+        assert row.batch_processed is True, "the sweep must still retire it at the end of the cycle"
+
+    @pytest.mark.asyncio
+    async def test_aged_non_terminal_row_is_polled_before_it_is_expired(self):
+        """The other sweep writes status='stale_expired', which the poll query also excludes,
+        so an aged in-flight row was equally unreachable."""
+        row = _AgedManagedObjectRow(
+            "job-aged-inflight", self._encode("model-123", "batch-aged"), "in_progress"
+        )
+        prisma = self._prisma([row])
+        llm_router = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(return_value=self._batch("in_progress"))
+
+        await self._instance(prisma, llm_router).check_batch_cost()
+
+        llm_router.aretrieve_batch.assert_awaited_once()
+        assert llm_router.aretrieve_batch.await_args.kwargs["batch_id"] == "batch-aged"
+        assert row.status == "stale_expired", "the sweep must still expire it at the end of the cycle"
+
+    @pytest.mark.asyncio
+    async def test_fresh_row_is_untouched_by_either_sweep(self):
+        """A row inside the cutoff is polled and left alone, so the reordering does not
+        retire anything it did not retire before."""
+        row = _AgedManagedObjectRow(
+            "job-fresh", self._encode("model-123", "batch-aged"), "in_progress", age_days=1
+        )
+        prisma = self._prisma([row])
+        llm_router = MagicMock()
+        llm_router.aretrieve_batch = AsyncMock(return_value=self._batch("in_progress"))
+
+        await self._instance(prisma, llm_router).check_batch_cost()
+
+        llm_router.aretrieve_batch.assert_awaited_once()
+        assert row.status == "in_progress"
+        assert row.batch_processed is False
+
+    @pytest.mark.asyncio
+    async def test_aged_out_rows_are_counted_by_reason(self):
+        """Both sweeps report their row counts to Prometheus, labelled by reason. Today the
+        counts land only in a verbose_proxy_logger warning, which is suppressed by default,
+        so the volume being written off unbilled is unobservable."""
+        rows = [
+            _AgedManagedObjectRow("job-a", self._encode("model-123", "batch-a"), "in_progress"),
+            _AgedManagedObjectRow("job-b", self._encode("model-123", "batch-b"), "completed"),
+            _AgedManagedObjectRow("job-c", self._encode("model-123", "batch-c"), "complete"),
+        ]
+        prom = MagicMock()
+
+        await self._instance(self._prisma(rows), MagicMock())._cleanup_stale_managed_objects(prom)
+
+        assert prom.record_check_batch_cost_aged_out.call_args_list == [
+            call(reason="non_terminal", count=1),
+            call(reason="completed_unbilled", count=2),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_nothing_aged_out_records_nothing(self):
+        """No counter movement on a cycle that writes off nothing, so an alert on this
+        metric is not permanently noisy."""
+        rows = [
+            _AgedManagedObjectRow(
+                "job-fresh", self._encode("model-123", "batch-fresh"), "in_progress", age_days=1
+            )
+        ]
+        prom = MagicMock()
+
+        await self._instance(self._prisma(rows), MagicMock())._cleanup_stale_managed_objects(prom)
+
+        prom.record_check_batch_cost_aged_out.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_tolerates_no_prometheus_logger(self):
+        """get_instance() returns None when Prometheus is not configured, which is the
+        common deployment."""
+        rows = [_AgedManagedObjectRow("job-a", self._encode("model-123", "batch-a"), "completed")]
+        prisma = self._prisma(rows)
+
+        await self._instance(prisma, MagicMock())._cleanup_stale_managed_objects(None)
+
+        assert rows[0].batch_processed is True
