@@ -2113,7 +2113,8 @@ class ProxyBaseLLMRequestProcessing:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
                         continue
-                    self.data = {**independent_snapshot(pristine), "model": fallback_model}
+                    self.data = independent_snapshot(pristine)
+                    self.data["model"] = fallback_model
                     try:
                         return await self.common_processing_pre_call_logic(
                             request=request,
