@@ -124,6 +124,7 @@ class _StreamedChoiceState:
     yielded_masked_text_len: int = 0
     committed_detections: tuple[ContentFilterDetection, ...] = ()
     latest_detections: tuple[ContentFilterDetection, ...] = ()
+    next_trim_len: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -2013,29 +2014,31 @@ class ContentFilterGuardrail(CustomGuardrail):
         context-sized tail, provided no exception phrase or unfinished conditional sentence
         would leave the buffer, the two halves mask to the same output as the whole (so no
         match or phrase straddles the cut), and the dropped prefix has already been yielded.
-        Otherwise keep the buffer and retry on the next chunk.
+        Otherwise keep the buffer and retry once it has grown by another context length.
 
         Detections found in the dropped prefix move to the state's committed detections.
         """
-        if len(state.buffered_text) <= 2 * plan.context_chars:
+        if len(state.buffered_text) <= max(2 * plan.context_chars, state.next_trim_len):
             return state
+        deferred: Final = replace(state, next_trim_len=len(state.buffered_text) + plan.context_chars)
         head: Final = state.buffered_text[: -plan.context_chars]
         tail: Final = state.buffered_text[-plan.context_chars :]
         if self._cut_breaks_wider_context(state.buffered_text, head, tail, plan):
-            return state
+            return deferred
         head_detections: Final[list[ContentFilterDetection]] = []  # mutable-ok: filled by _filter_single_text
         try:
             masked_head: Final = self._filter_single_text(head, detections=head_detections)
             masked_tail: Final = self._filter_single_text(tail)
         except Exception:
-            return state
+            return deferred
         if masked_head + masked_tail != masked_text or len(masked_head) > state.yielded_masked_text_len:
-            return state
+            return deferred
         return replace(
             state,
             buffered_text=tail,
             yielded_masked_text_len=state.yielded_masked_text_len - len(masked_head),
             committed_detections=state.committed_detections + tuple(head_detections),
+            next_trim_len=0,
         )
 
     @staticmethod
@@ -2123,8 +2126,11 @@ class ContentFilterGuardrail(CustomGuardrail):
                             len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
                         )
                         choice.delta.content = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
-                        next_state = _StreamedChoiceState(
-                            buffered_text, safe_to_yield_len, previous_state.committed_detections, latest_detections
+                        next_state = replace(
+                            previous_state,
+                            buffered_text=buffered_text,
+                            yielded_masked_text_len=safe_to_yield_len,
+                            latest_detections=latest_detections,
                         )
                         if is_final:
                             state_by_choice[choice_index] = next_state

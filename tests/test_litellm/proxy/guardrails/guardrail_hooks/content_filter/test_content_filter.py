@@ -982,6 +982,49 @@ class TestContentFilterGuardrail:
         )
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_retries_refused_cut_once_per_context_length(self):
+        """
+        A single URL that keeps growing crosses every proposed cut, so no cut is
+        ever safe. The trim check must then back off instead of adding two extra
+        scans on every chunk, and the whole URL must still come out masked.
+        """
+        scanned_lengths: list[int] = []
+
+        class RecordingGuardrail(ContentFilterGuardrail):
+            def _filter_single_text(
+                self,
+                text: str,
+                detections: list[ContentFilterDetection] | None = None,
+            ) -> str:
+                scanned_lengths.append(len(text))
+                return super()._filter_single_text(text, detections=detections)
+
+        guardrail = RecordingGuardrail(
+            guardrail_name="test-streaming-refused-cut-backoff",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="url",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        text = "See https://example.com/" + "a" * (8 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS) + " now."
+        chunks = [text[i : i + 16] for i in range(0, len(text), 16)]
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        streamed = await self._collect_streamed_text(guardrail, chunks, request_data)
+        streamed_scans = len(scanned_lengths)
+
+        full_scan = await guardrail.apply_guardrail(inputs={"texts": [text]}, request_data={}, input_type="response")
+        assert streamed == full_scan["texts"][0] == "See [URL_REDACTED] now."
+        extra_scans = streamed_scans - len(chunks)
+        assert extra_scans <= 2 * (len(text) // CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS), (
+            f"{extra_scans} scans beyond one per chunk for {len(chunks)} chunks; the refused cut must back off"
+        )
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_blocks_match_longer_than_holdback_across_chunks(
         self,
     ):
