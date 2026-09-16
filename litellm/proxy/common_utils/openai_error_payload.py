@@ -68,3 +68,10 @@ def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> Pr
     if litellm_call_id is not None:
         exc.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return exc
+
+
+def headers_with_litellm_call_id(headers: Mapping[str, str] | None, litellm_call_id: str) -> Mapping[str, str]:
+    """``headers`` plus ``x-litellm-call-id``, keeping the value they already carry under that name."""
+    if headers is None:
+        return MappingProxyType({LITELLM_CALL_ID_HEADER: litellm_call_id})
+    return MappingProxyType({LITELLM_CALL_ID_HEADER: litellm_call_id, **headers})
