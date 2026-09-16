@@ -146,16 +146,9 @@ class _AggregatedSpendData(TypedDict):
     totals: SpendMetrics
 
 
-class _GroupingSetsRow(SimpleNamespace):
+class _RollupMetricsRow(SimpleNamespace):
     date: str
     api_key: str | None
-    model: str | None
-    model_group: str | None
-    custom_llm_provider: str | None
-    mcp_namespaced_tool_name: str | None
-    endpoint: str | None
-    group_level: int
-    distinct_api_keys: int | None
     spend: float | None
     prompt_tokens: int | None
     completion_tokens: int | None
@@ -173,7 +166,17 @@ class _GroupingSetsRow(SimpleNamespace):
     timed_requests: int | None
 
 
-class _EntityRollupRow(_GroupingSetsRow):
+class _GroupingSetsRow(_RollupMetricsRow):
+    model: str | None
+    model_group: str | None
+    custom_llm_provider: str | None
+    mcp_namespaced_tool_name: str | None
+    endpoint: str | None
+    group_level: int
+    distinct_api_keys: int | None
+
+
+class _EntityRollupRow(_RollupMetricsRow):
     entity_id: str | None
     api_key_rolled: int
 
@@ -202,7 +205,7 @@ async def _query_raw_optional(
     return await prisma_client.db.query_raw(query[0], *query[1])
 
 
-def _reported_flat_cost(record: DailySpendRecord | _GroupingSetsRow) -> float:
+def _reported_flat_cost(record: DailySpendRecord | _RollupMetricsRow) -> float:
     """Flat cost a daily row reports, which is zero unless PTU cost attribution is enabled.
 
     Both read paths funnel through here: the paginated path reads the ``ptu_flat_cost``
@@ -1008,7 +1011,7 @@ _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
 
-def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
+def _record_to_spend_metrics(record: _RollupMetricsRow) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row.
 
     SUM() over zero rows is SQL NULL, so rollup rows (notably the grand-total
