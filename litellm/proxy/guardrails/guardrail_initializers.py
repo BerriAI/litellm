@@ -1,8 +1,6 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
 from typing import Any, Final
 
-from typing_extensions import assert_never
-
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import CommonProxyErrors
@@ -99,20 +97,16 @@ _MCP_EVENT_HOOKS: Final = frozenset(
 
 
 def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
-    match mode:
-        case str():
-            return (mode,)
-        case list():
-            return tuple(mode)
-        case Mode():
-            return tuple(
-                hook
-                for value in (*mode.tags.values(), mode.default)
-                if value is not None
-                for hook in ((value,) if isinstance(value, str) else value)
-            )
-        case _:
-            assert_never(mode)
+    if isinstance(mode, str):
+        return (mode,)
+    if isinstance(mode, list):
+        return tuple(mode)
+    return tuple(
+        hook
+        for value in (*mode.tags.values(), mode.default)
+        if value is not None
+        for hook in ((value,) if isinstance(value, str) else value)
+    )
 
 
 def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
