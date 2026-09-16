@@ -1221,6 +1221,52 @@ async def test_held_attempts_from_one_blocked_key_are_capped(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_blocked_source_shares_one_held_slot_pool_across_its_blocked_usernames(monkeypatch):
+    """Once the source is blocked, a pair block for a username must not hand that username its own five slots."""
+    import asyncio
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth import login_throttle as lt
+    from litellm.proxy.auth.login_throttle import MAX_HELD_ATTEMPTS_PER_KEY
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    release = asyncio.Event()
+
+    async def _park(_seconds: float) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(lt, "_sleep", _park)
+    throttle = _throttle(user_limit=1, source_limit=3, client_ip="203.0.113.45")
+    assert [await _fail(throttle) for _ in range(2)] == ["401", "401"], "the admin pair is now blocked"
+    assert [await _fail(throttle, username=f"spray-{i}@corp.com") for i in range(3)] == ["401"] * 3
+    source_slot = throttle._keys("admin").source_block
+    assert throttle._local_block_ttl(source_slot) > 0, "the source is now blocked as well"
+
+    usernames = ["admin", *(f"fresh-{i}@corp.com" for i in range(MAX_HELD_ATTEMPTS_PER_KEY - 1))]
+    held = [asyncio.create_task(_guess(throttle, username=name)) for name in usernames]
+    for _ in range(1000):
+        if lt._HELD_ATTEMPTS.get(source_slot) == MAX_HELD_ATTEMPTS_PER_KEY:
+            break
+        await asyncio.sleep(0)
+    assert lt._HELD_ATTEMPTS == {source_slot: MAX_HELD_ATTEMPTS_PER_KEY}
+
+    try:
+        for name in ("admin", "fresh-0@corp.com", "never-seen@corp.com"):
+            with pytest.raises(ProxyException) as over_cap:
+                await _guess(throttle, username=name)
+            assert over_cap.value.code == "429"
+            assert over_cap.value.headers.get("Retry-After") == "30"
+    finally:
+        release.set()
+        for task in held:
+            with pytest.raises(ProxyException):
+                await task
+
+    assert lt._HELD_ATTEMPTS == {}
+
+
+@pytest.mark.asyncio
 async def test_disabling_the_control_removes_the_hold_as_well(monkeypatch, login_delays):
     """The escape hatch has to turn off the whole control, not only the refusal."""
     import dataclasses
