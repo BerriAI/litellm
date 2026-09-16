@@ -35,7 +35,8 @@ pub(crate) trait PythonRoute: Send + Sync {
     fn state_mut(&mut self) -> &mut PythonCallState;
     fn classify(operation: &<Self::Call as NativeCall>::Operation) -> OperationClass;
     fn lifecycle_result() -> <Self::Call as NativeCall>::Result;
-    fn map_error(error: litellm_core::Error) -> PyErr;
+    fn map_error(error: <Self::Call as NativeCall>::Error) -> PyErr;
+    fn host_error(message: String) -> <Self::Call as NativeCall>::Error;
     fn invoke(
         &mut self,
         py: Python<'_>,
@@ -46,8 +47,10 @@ pub(crate) trait PythonRoute: Send + Sync {
 }
 
 type NativeStep<C> = NativeCallStep<<C as NativeCall>::Operation, <C as NativeCall>::Complete>;
-type NativeResult<C> = Result<NativeStep<C>, litellm_core::Error>;
+type NativeResult<C> = Result<NativeStep<C>, <C as NativeCall>::Error>;
 type HostResumeStep<R> = HostStep<NativeStep<<R as PythonRoute>::Call>, Py<PyAny>>;
+type NativeResume<C> =
+    Option<Result<<C as NativeCall>::Result, HostFailure<<C as NativeCall>::Error>>>;
 
 struct NativeCallState<C: NativeCall> {
     call: C,
@@ -102,7 +105,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
     fn resume_core(
         &mut self,
         py: Python<'_>,
-        result: Option<Result<<R::Call as NativeCall>::Result, HostFailure>>,
+        result: NativeResume<R::Call>,
     ) -> PyResult<HostResumeStep<R>> {
         let call = Arc::clone(self.call.as_ref().ok_or_else(missing_state)?);
         let future = async move {
@@ -154,8 +157,8 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         py: Python<'_>,
         error: PyErr,
         phase: Option<HostPhase>,
-    ) -> HostFailure {
-        let native = litellm_core::Error::InvalidRequest(error.to_string());
+    ) -> HostFailure<<R::Call as NativeCall>::Error> {
+        let native = R::host_error(error.to_string());
         let cancelled = !error.is_instance_of::<PyException>(py);
         let failure = if !cancelled {
             HostFailure::Error(native)
@@ -596,6 +599,34 @@ mod tests {
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
+    fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import sys
+import types
+
+sys.modules.setdefault('litellm', types.ModuleType('litellm'))
+sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
+"#
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        let source = std::ffi::CString::new(include_str!(
+            "../../../../../litellm/rust_bridge/lifecycle.py"
+        ))
+        .unwrap();
+        PyModule::from_code(
+            py,
+            &source,
+            pyo3::ffi::c_str!("lifecycle.py"),
+            pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
+        )
+        .unwrap()
+    }
+
     fn install_logging_worker(py: Python<'_>, worker: &Bound<'_, PyAny>) -> PyResult<()> {
         py.import("litellm.litellm_core_utils.logging_worker")?
             .setattr("GLOBAL_LOGGING_WORKER", worker)
@@ -667,6 +698,7 @@ mod tests {
     struct SyntheticCall(bool);
 
     impl NativeCall for SyntheticCall {
+        type Error = litellm_core::messages::Error;
         type Operation = ();
         type Result = ();
         type Complete = ();
@@ -674,7 +706,7 @@ mod tests {
         fn resume(
             &mut self,
             result: Option<Self::Result>,
-        ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+        ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
             Box::pin(async move {
                 match (self.0, result) {
                     (false, None) => {
@@ -682,7 +714,7 @@ mod tests {
                         Ok(NativeCallStep::Host(()))
                     }
                     (true, Some(())) => Ok(NativeCallStep::Complete(())),
-                    _ => Err(litellm_core::Error::InvalidRequest(
+                    _ => Err(litellm_core::messages::Error::InvalidRequest(
                         "invalid synthetic lifecycle state".into(),
                     )),
                 }
@@ -691,8 +723,8 @@ mod tests {
 
         fn interrupt(
             &mut self,
-            _: HostFailure,
-        ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+            _: HostFailure<Self::Error>,
+        ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
             Box::pin(async { Ok(NativeCallStep::Complete(())) })
         }
     }
@@ -716,8 +748,12 @@ mod tests {
 
         fn lifecycle_result() {}
 
-        fn map_error(error: litellm_core::Error) -> PyErr {
-            crate::errors::core_error_to_pyerr(error)
+        fn map_error(error: litellm_core::messages::Error) -> PyErr {
+            crate::errors::messages_error_to_pyerr(error)
+        }
+
+        fn host_error(message: String) -> litellm_core::messages::Error {
+            litellm_core::messages::Error::InvalidRequest(message)
         }
 
         fn invoke(&mut self, py: Python<'_>, _: ()) -> PyResult<()> {
@@ -765,17 +801,7 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         Python::initialize();
         Python::attach(|py| {
-            let source = std::ffi::CString::new(include_str!(
-                "../../../../../litellm/rust_bridge/lifecycle.py"
-            ))
-            .unwrap();
-            PyModule::from_code(
-                py,
-                &source,
-                pyo3::ffi::c_str!("lifecycle.py"),
-                pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
-            )
-            .unwrap();
+            install_lifecycle_module(py);
             let route = SyntheticRoute(
                 PythonCallState::new(
                     py,
@@ -811,17 +837,7 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             py.import("asyncio").unwrap();
-            let source = std::ffi::CString::new(include_str!(
-                "../../../../../litellm/rust_bridge/lifecycle.py"
-            ))
-            .unwrap();
-            let module = PyModule::from_code(
-                py,
-                &source,
-                pyo3::ffi::c_str!("lifecycle.py"),
-                pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
-            )
-            .unwrap();
+            let module = install_lifecycle_module(py);
             let locals = PyDict::new(py);
             locals
                 .set_item("drive", module.getattr("drive").unwrap())
