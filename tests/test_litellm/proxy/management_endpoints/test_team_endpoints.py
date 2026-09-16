@@ -13090,6 +13090,77 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
     assert created_user_id not in mock_audit.call_args.kwargs["existing_user_ids"]
 
 
+@pytest.mark.asyncio
+async def test_team_member_add_evicts_the_new_members_cached_user_row_on_every_worker(monkeypatch):
+    """Auth admits a team-bound credential off the teams list of the cached user row. The add wrote the
+    new team to the database row only, so a worker still holding the old row refused the member's
+    credential with 403 until the management-object TTL expired. The add now evicts the row here and
+    broadcasts the eviction to the other workers, the way /team/member_delete already does."""
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_id = "team-b"
+    user_id = "dev-1"
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=user_id, value=LiteLLM_UserTable(user_id=user_id, teams=["team-a"]), model_type=LiteLLM_UserTable
+    )
+    broadcast = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation", broadcast
+    )
+
+    updated_team = MagicMock()
+    updated_team.model_dump.return_value = {
+        "team_id": team_id,
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+    }
+
+    async def fake_add_team_members_to_team(**kwargs):
+        return updated_team, [LiteLLM_UserTable(user_id=user_id, teams=["team-a", team_id])], []
+
+    with (
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTable(team_id=team_id, members_with_roles=[]),
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._validate_team_member_add_permissions",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._validate_and_populate_member_user_info",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._resolve_existing_member_user_ids",
+            new_callable=AsyncMock,
+            return_value=frozenset({user_id}),
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+            side_effect=fake_add_team_members_to_team,
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._create_team_member_add_audit_logs",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await team_member_add(
+            data=TeamMemberAddRequest(team_id=team_id, member=Member(user_id=user_id, role="user")),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+        )
+
+    assert await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable) is None
+    broadcast.assert_awaited_once_with(cache_key=user_id)
+
+
 def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():
     """A large member list must not echo every id back in the error body."""
     from litellm.proxy.management_endpoints.team_endpoints import (

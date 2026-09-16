@@ -279,11 +279,10 @@ async def load_active_user_by_id(
     catches every DB failure and re-raises a bare ``ValueError`` (a deleted user and a real outage look
     identical, the original error surviving only as ``__context__``), so the outage check walks the cause
     chain, and a missing user falls through to ``no_active_key`` rather than an opaque gateway fault.
-    ``source="database"`` reads the row from the database, never the cache, and leaves the fresh row in the
-    cache for the requests the credential makes next: JWT auth caches the user it creates before it adds
-    that user to the JWT's team and adding a member never evicts the cached row, so a credential minted
-    off the cache would refuse the very first exchange as not a member. Every other caller keeps the cache
-    read, so introspection, which a resource server may call per request, stays off the database."""
+    ``source="database"`` reads the row from the database, never the cache, so the credential mint refuses
+    a user that a writer deactivated or deleted without evicting the cached row, and it leaves the fresh
+    row in the cache for the requests the credential makes next. Every other caller keeps the cache read,
+    so introspection, which a resource server may call per request, stays off the database."""
     from litellm.proxy._types import (
         ProxyException,  # noqa: PLC0415  # inline import avoids a module-load circular import
     )
