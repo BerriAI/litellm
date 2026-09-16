@@ -1,8 +1,6 @@
 """Tests for `BedrockConverseLLM.completion`.
 
-The catalog keeps Bedrock chat completions on the Python path, so the injected
-native callables are never consulted. AWS credential resolution is stubbed so
-nothing reaches STS.
+AWS credential resolution is stubbed so nothing reaches STS.
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from botocore.exceptions import ClientError
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge.chat_completions import native as bridge
 from litellm.types.utils import ModelResponse
 from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
@@ -33,31 +30,11 @@ RESOLVED_CREDENTIALS = Credentials(
 
 
 @pytest.fixture(autouse=True)
-def reset_bridge(monkeypatch):
+def reset_rust_configuration(monkeypatch):
     monkeypatch.setenv("LITELLM_RUST", "1")
     configuration.reset_rust_configuration()
-    bridge.set_rust_chat_completions(
-        chat_completions=None, achat_completions=None, decline=None
-    )
     yield
-    bridge.set_rust_chat_completions(
-        chat_completions=None, achat_completions=None, decline=None
-    )
     configuration.reset_rust_configuration()
-
-
-def _inject():
-    seen: dict[str, list[dict]] = {"gate": [], "call": []}
-
-    def gate(**kwargs):
-        seen["gate"].append(kwargs)
-
-    def native(**kwargs):
-        seen["call"].append(kwargs)
-        raise AssertionError("the native call must not run for a python-only route")
-
-    bridge.set_rust_chat_completions(decline=gate, chat_completions=native)
-    return seen
 
 
 def _completion_kwargs(**overrides):
@@ -199,17 +176,7 @@ def _sync_client_returning_converse_response():
     return client
 
 
-def test_the_python_only_route_never_consults_the_core():
-    seen = _inject()
-    response = _run(client=_sync_client_returning_converse_response())
-
-    assert response.choices[0].message.content == "hi"
-    assert seen["gate"] == []
-    assert seen["call"] == []
-
-
 def test_the_sync_python_path_logs_pre_call_once():
-    _inject()
     logging_obj = MagicMock()
     response = _run(
         logging_obj=logging_obj,
@@ -222,8 +189,8 @@ def test_the_sync_python_path_logs_pre_call_once():
 
 def test_bearer_token_auth_serves_when_boto3_resolves_no_sigv4_credentials(monkeypatch):
     """With only `AWS_BEARER_TOKEN_BEDROCK` configured boto3 resolves no
-    credentials at all. Preparing the Rust handoff must not dereference that
-    None: the bearer token signs the request on its own."""
+    credentials at all. The handler must not dereference that None: the bearer
+    token signs the request on its own."""
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
     client = _sync_client_returning_converse_response()
 
