@@ -8,13 +8,16 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  usePersistedColumnVisibility,
+  useUrlTableState,
+  type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
-import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { ColumnFiltersState } from "@tanstack/react-table";
 import { Download } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
@@ -30,55 +33,67 @@ interface TeamsTableProps {
   onDeleteTeam: (team: Team) => void;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const FILTER_COLUMNS = ["org_id", "alias", "team_id"] as const;
+type FilterColumn = (typeof FILTER_COLUMNS)[number];
 
-const toSortOrder = (sorting: SortingState): "asc" | "desc" | undefined => {
-  const active = sorting[0];
-  if (!active) return undefined;
-  return active.desc ? "desc" : "asc";
-};
-
-const FILTER_LABELS: Record<string, string> = {
+const FILTER_LABELS: Record<FilterColumn, string> = {
   org_id: "Organization",
   alias: "Team alias",
   team_id: "Team ID",
+};
+
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<FilterColumn> = {
+  sortFields: ["team_alias", "created_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 50,
+  maxPageSize: 100,
+  filterColumns: FILTER_COLUMNS,
+  urlKeys: { search: "team_search", filter_org_id: "filter_org" },
+};
+
+const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): string | undefined => {
+  const value = filters.find((filter) => filter.id === column)?.value;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 };
 
 export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDeleteTeam }: TeamsTableProps) {
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
 
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
-  const [tablePagination, setTablePagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const {
+    search: searchInput,
+    setSearch,
+    sorting,
+    onSortingChange,
+    pagination,
+    onPaginationChange,
+    columnFilters,
+    onColumnFiltersChange,
+  } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility(
+    "teams",
+    TEAM_TABLE_HIDDEN_COLUMNS,
+  );
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [searchInput, setSearchInput] = useState("");
   const [isExporting, setIsExporting] = useState(false);
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
   const { accessToken } = useAuthorized();
 
-  const getFilterValue = useCallback(
-    (columnId: string): string | undefined => {
-      const entry = columnFilters.find((filter) => filter.id === columnId);
-      return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
-    },
-    [columnFilters],
-  );
-
   const isAdminView = userRole === "Admin" || userRole === "Admin Viewer";
 
+  const [activeSort] = sorting;
   const teamListOptions = useMemo(
     () => ({
-      organizationID: getFilterValue("org_id"),
-      team_alias: getFilterValue("alias"),
-      teamID: getFilterValue("team_id"),
+      organizationID: appliedFilter(columnFilters, "org_id"),
+      team_alias: appliedFilter(columnFilters, "alias"),
+      teamID: appliedFilter(columnFilters, "team_id"),
       search: searchQuery.trim() || undefined,
       searchTeamIdMatch: "prefix" as const,
       userID: isAdminView ? undefined : userID ?? undefined,
-      sortBy: sorting[0]?.id,
-      sortOrder: toSortOrder(sorting),
+      sortBy: activeSort.id,
+      sortOrder: activeSort.desc ? "desc" : "asc",
     }),
-    [getFilterValue, searchQuery, isAdminView, userID, sorting],
+    [columnFilters, searchQuery, isAdminView, userID, activeSort],
   );
 
   const {
@@ -86,26 +101,12 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
     isPending,
     isPlaceholderData,
     isFetching,
+    isError,
     refetch,
-  } = useTeamsTable(tablePagination.pageIndex + 1, tablePagination.pageSize, teamListOptions);
+  } = useTeamsTable(pagination.pageIndex + 1, pagination.pageSize, teamListOptions);
 
   const teamList = useMemo<Team[]>(() => teamsResponse?.teams ?? [], [teamsResponse]);
   const rowCount = teamsResponse?.total ?? 0;
-
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchInput(value);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
-  const handleSortingChange = useCallback<OnChangeFn<SortingState>>((updaterOrValue) => {
-    setSorting(updaterOrValue);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
-  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
-    setColumnFilters(updaterOrValue);
-    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
 
   const handleExportCsv = useCallback(async () => {
     if (!accessToken || isExporting) return;
@@ -149,17 +150,19 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
       data={teamList}
       columns={columns}
       getRowId={(row) => row.team_id}
-      defaultColumnVisibility={TEAM_TABLE_HIDDEN_COLUMNS}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       sortingMode="server"
       sorting={sorting}
-      onSortingChange={handleSortingChange}
+      onSortingChange={onSortingChange}
       paginationMode="server"
-      pagination={tablePagination}
-      onPaginationChange={setTablePagination}
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       rowCount={rowCount}
+      isError={isError}
       filterMode="server"
       columnFilters={columnFilters}
-      onColumnFiltersChange={handleColumnFiltersChange}
+      onColumnFiltersChange={onColumnFiltersChange}
       enableColumnResizing
       columnResizeMode="onChange"
       isLoading={isPending || isPlaceholderData}
@@ -172,7 +175,7 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
           <DataTableToolbar
             table={table}
             searchValue={searchInput}
-            onSearchChange={handleSearchChange}
+            onSearchChange={setSearch}
             searchPlaceholder="Search teams by name or ID…"
             onRefresh={() => refetch?.()}
             isRefreshing={isFetching}

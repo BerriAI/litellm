@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Users } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 
 import { AvailableTeam, getAvailableTeamsTableColumns } from "./AvailableTeamsTableColumns";
 
@@ -14,7 +13,13 @@ interface AvailableTeamsTableProps {
   onJoinTeam: (teamId: string) => void;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "team_alias", desc: false }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["team_alias", "members"],
+  defaultSort: { id: "team_alias", desc: false },
+  defaultPageSize: 25,
+  filterColumns: [],
+  keyPrefix: "available_",
+};
 
 function EmptyState() {
   return (
@@ -39,7 +44,7 @@ function EmptyState() {
 }
 
 const AvailableTeamsTable: React.FC<AvailableTeamsTableProps> = ({ teams, isLoading, onJoinTeam }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(() => getAvailableTeamsTableColumns({ onJoinTeam }), [onJoinTeam]);
 
@@ -47,11 +52,13 @@ const AvailableTeamsTable: React.FC<AvailableTeamsTableProps> = ({ teams, isLoad
     <DataTable
       data={teams}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(team, index) => team.team_id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading available teams…"
       noDataMessage={<EmptyState />}

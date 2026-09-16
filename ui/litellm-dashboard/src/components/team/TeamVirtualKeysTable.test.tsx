@@ -1,13 +1,19 @@
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { beforeEach, describe, expect, it, vi, Mock, MockedFunction } from "vitest";
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/keys/useKeyInfo", () => ({
+  useKeyInfo: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -17,12 +23,27 @@ vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
 }));
 
 vi.mock("../templates/key_info_view", () => ({
-  default: vi.fn(({ onClose }: { onClose: () => void }) => (
-    <div>
-      <span>Key Info View</span>
-      <button onClick={onClose}>Close</button>
-    </div>
-  )),
+  default: vi.fn(
+    ({
+      keyId,
+      keyData,
+      onClose,
+      onKeyDataUpdate,
+    }: {
+      keyId: string;
+      keyData?: { key_alias?: string | null };
+      onClose: () => void;
+      onKeyDataUpdate?: (data: { token: string }) => void;
+    }) => (
+      <div>
+        <span>Key Info View</span>
+        <span data-testid="key-info-id">{keyId}</span>
+        <span data-testid="key-info-alias">{keyData?.key_alias ?? "no key data"}</span>
+        <button onClick={onClose}>Close</button>
+        <button onClick={() => onKeyDataUpdate?.({ token: "sk-rotated" })}>Rotate</button>
+      </div>
+    ),
+  ),
 }));
 
 // Resolve the debounced search synchronously so typed input lands in the useKeys query within the test tick.
@@ -31,6 +52,25 @@ vi.mock("@tanstack/react-pacer/debouncer", () => ({
 }));
 
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
+const mockUseKeyInfo = useKeyInfo as MockedFunction<typeof useKeyInfo>;
+
+const keyInfoResult = (data: KeyResponse | undefined, isError = false) =>
+  ({ data, isError }) as unknown as ReturnType<typeof useKeyInfo>;
+
+const keysResult = (keys: KeyResponse[], totalCount = keys.length, refetch = vi.fn()) =>
+  ({
+    data: { keys, total_count: totalCount, current_page: 1, total_pages: 1 },
+    isPending: false,
+    isFetching: false,
+    isError: false,
+    refetch,
+  }) as unknown as ReturnType<typeof useKeys>;
+
+const lastUrlUpdate = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => {
+  const event = onUrlUpdate.mock.calls.at(-1)?.[0];
+  if (!event) throw new Error("no URL update was emitted");
+  return event;
+};
 
 const KEY_HASH = "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52";
 
@@ -78,6 +118,7 @@ describe("TeamVirtualKeysTable", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined));
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
       isPending: false,
@@ -387,6 +428,175 @@ describe("TeamVirtualKeysTable", () => {
     });
   });
 
+  describe("URL state", () => {
+    it("reads the keys_ prefixed table state from the URL and ignores unprefixed params", async () => {
+      mockUseKeys.mockReturnValue(keysResult([createMockKey()], 100));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+        searchParams: {
+          keys_search: "prod",
+          keys_page: "3",
+          keys_page_size: "25",
+          keys_sort_by: "spend",
+          keys_sort_order: "asc",
+          keys_filter_user: "user-9",
+          keys_filter_key_id: KEY_HASH,
+          page: "4",
+          search: "list-search",
+          sort_by: "key_alias",
+          filter_user_id: "user-ignored",
+        },
+      });
+
+      const expectedQuery = { search: "prod", sortBy: "spend", sortOrder: "asc", userID: "user-9", keyHash: KEY_HASH };
+      await waitFor(() => expect(mockUseKeys).toHaveBeenLastCalledWith(3, 25, expect.objectContaining(expectedQuery)));
+      expect(screen.getByTestId("datatable-search")).toHaveValue("prod");
+    });
+
+    it("writes the search box to keys_search and leaves the list search alone", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseKeys.mockReturnValue(keysResult([createMockKey()]));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+        searchParams: { team_search: "outer" },
+        onUrlUpdate,
+      });
+
+      fireEvent.change(await screen.findByTestId("datatable-search"), { target: { value: "alice" } });
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("keys_search")).toBe("alice"));
+      const params = lastUrlUpdate(onUrlUpdate).searchParams;
+      expect(params.get("team_search")).toBe("outer");
+      expect(params.has("search")).toBe(false);
+    });
+
+    it("writes paging and sorting to keys_page and keys_sort_by", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseKeys.mockReturnValue(keysResult([createMockKey()], 100));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, { onUrlUpdate });
+
+      await user.click(await screen.findByTestId("pagination-next"));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("keys_page")).toBe("2"));
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.has("page")).toBe(false);
+
+      await user.click(screen.getByTestId("sort-header-key_alias"));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("keys_sort_by")).toBe("key_alias"));
+      const params = lastUrlUpdate(onUrlUpdate).searchParams;
+      expect(params.has("keys_page")).toBe(false);
+      expect(params.has("sort_by")).toBe(false);
+    });
+
+    it("writes applied drawer filters to the renamed keys_filter params", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseKeys.mockReturnValue(keysResult([createMockKey()]));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, { onUrlUpdate });
+
+      await user.click(await screen.findByTestId("datatable-filters-trigger"));
+      const drawerBody = await screen.findByTestId("filter-drawer-body");
+      fireEvent.change(within(drawerBody).getByPlaceholderText("Filter by user ID…"), {
+        target: { value: "user-42" },
+      });
+      fireEvent.change(within(drawerBody).getByPlaceholderText("Enter Key ID…"), { target: { value: KEY_HASH } });
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("keys_filter_user")).toBe("user-42"));
+      const params = lastUrlUpdate(onUrlUpdate).searchParams;
+      expect(params.get("keys_filter_key_id")).toBe(KEY_HASH);
+      expect(params.has("filter_user")).toBe(false);
+    });
+
+    it("pushes the clicked key into the key param", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseKeys.mockReturnValue(keysResult([createMockKey({ token: "sk-click-me", key_alias: "clickable_key" })]));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, { onUrlUpdate });
+
+      await user.click(await screen.findByRole("button", { name: /sk-click-me/ }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("key")).toBe("sk-click-me"));
+      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("push");
+      expect(screen.getByTestId("key-info-id")).toHaveTextContent("sk-click-me");
+    });
+
+    it("opens a key from the URL using the row already in the list", async () => {
+      mockUseKeys.mockReturnValue(keysResult([createMockKey({ token: "sk-listed", key_alias: "listed_key" })]));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, { searchParams: { key: "sk-listed" } });
+
+      expect(await screen.findByTestId("key-info-alias")).toHaveTextContent("listed_key");
+      expect(screen.getByTestId("key-info-id")).toHaveTextContent("sk-listed");
+      expect(mockUseKeyInfo).toHaveBeenLastCalledWith("sk-listed", { enabled: false });
+    });
+
+    it("fetches a key from the URL that is not on the current page", async () => {
+      mockUseKeys.mockReturnValue(keysResult([createMockKey({ token: "sk-listed" })]));
+      mockUseKeyInfo.mockReturnValue(keyInfoResult(createMockKey({ token: "sk-elsewhere", key_alias: "far_key" })));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, { searchParams: { key: "sk-elsewhere" } });
+
+      expect(await screen.findByTestId("key-info-alias")).toHaveTextContent("far_key");
+      expect(mockUseKeyInfo).toHaveBeenLastCalledWith("sk-elsewhere", { enabled: true });
+    });
+
+    it("shows a loading state while a deep-linked key is fetched and the detail view once the fetch fails", async () => {
+      mockUseKeys.mockReturnValue(keysResult([]));
+
+      const { rerender } = renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+        searchParams: { key: "sk-missing" },
+      });
+
+      expect(await screen.findByText("Loading key...")).toBeInTheDocument();
+      expect(screen.queryByText("Key Info View")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("datatable-search")).not.toBeInTheDocument();
+
+      mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined, true));
+      rerender(<TeamVirtualKeysTable {...defaultProps} />);
+
+      expect(await screen.findByTestId("key-info-id")).toHaveTextContent("sk-missing");
+      expect(screen.getByTestId("key-info-alias")).toHaveTextContent("no key data");
+    });
+
+    it("removes the key param and returns to the table on close", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseKeys.mockReturnValue(keysResult([createMockKey({ token: "sk-listed", key_alias: "listed_key" })]));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+        searchParams: { key: "sk-listed", team: "team-1" },
+        onUrlUpdate,
+      });
+
+      await user.click(await screen.findByRole("button", { name: "Close" }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("key")).toBe(false));
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("team")).toBe("team-1");
+      expect(await screen.findByText("listed_key")).toBeInTheDocument();
+    });
+
+    it("replaces the key param with the rotated token and refetches the list", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const refetch = vi.fn();
+      mockUseKeys.mockReturnValue(keysResult([createMockKey({ token: "sk-listed" })], 1, refetch));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+        searchParams: { key: "sk-listed" },
+        onUrlUpdate,
+      });
+
+      await user.click(await screen.findByRole("button", { name: "Rotate" }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("key")).toBe("sk-rotated"));
+      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
+      expect(refetch).toHaveBeenCalled();
+    });
+  });
+
   describe("entity links out of the key rows", () => {
     const renderRow = async (key: KeyResponse, organization: Organization | null = null) => {
       mockUseKeys.mockReturnValue({
@@ -410,7 +620,10 @@ describe("TeamVirtualKeysTable", () => {
 
     it("points the User Email and User ID cells at the owning user's detail page", async () => {
       const row = await renderRow(
-        createMockKey({ user_id: "user-1", user: { user_id: "user-1", user_email: "alice@example.com" } }),
+        createMockKey({
+          user_id: "user-1",
+          user: { user_id: "user-1", user_email: "alice@example.com", user_alias: null },
+        }),
       );
       expect(within(row).getByRole("link", { name: "alice@example.com" })).toHaveAttribute(
         "href",

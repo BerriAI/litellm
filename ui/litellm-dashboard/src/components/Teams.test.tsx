@@ -68,6 +68,7 @@ vi.mock("./networking", () => ({
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
   getDefaultTeamSettings: vi.fn().mockResolvedValue({ values: {} }),
+  availableTeamListCall: vi.fn().mockResolvedValue([]),
 }));
 
 // Teams invalidates teamsTableKeys on mutations; the selected team is passed up from the table.
@@ -190,11 +191,16 @@ const createQueryClient = () => {
 
 const renderWithQueryClient = (
   component: React.ReactElement,
-  options?: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction },
+  options?: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction; keepMountUpdates?: boolean },
 ) => {
   const queryClient = createQueryClient();
   return render(
-    <NuqsTestingAdapter searchParams={options?.searchParams} onUrlUpdate={options?.onUrlUpdate} hasMemory>
+    <NuqsTestingAdapter
+      searchParams={options?.searchParams}
+      onUrlUpdate={options?.onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={!options?.keepMountUpdates}
+    >
       <QueryClientProvider client={queryClient}>{component}</QueryClientProvider>
     </NuqsTestingAdapter>,
   );
@@ -538,6 +544,114 @@ describe("Teams - team detail deep link (?team=)", () => {
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
     expect(screen.getByRole("main")).toHaveClass("px-12", "py-6");
+  });
+});
+
+describe("Teams - URL state", () => {
+  const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => {
+    const event = onUrlUpdate.mock.calls.at(-1)?.[0];
+    if (!event) throw new Error("no URL update was emitted");
+    return event;
+  };
+
+  const renderTeams = (
+    userRole: string,
+    options?: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction; keepMountUpdates?: boolean },
+  ) => renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole={userRole} />, options);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    mockTeamsTableProps = null;
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("opens the list tab named by ?tab=", async () => {
+    renderTeams("Admin", { searchParams: "?tab=available-teams" });
+
+    expect(screen.getByRole("tab", { name: "Available Teams" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Your Teams" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByTestId("teams-table-stub")).not.toBeInTheDocument();
+    expect(await screen.findByText(/No available teams to join/i)).toBeInTheDocument();
+  });
+
+  it("opens Default Team Settings from ?tab= for an admin", () => {
+    renderTeams("Admin", { searchParams: "?tab=default-settings" });
+
+    expect(screen.getByRole("tab", { name: "Default Team Settings" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("writes the clicked tab to ?tab= and drops it for the first tab", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTeams("Admin", { onUrlUpdate });
+
+    await user.click(screen.getByRole("tab", { name: "Available Teams" }));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("tab")).toBe("available-teams"));
+    expect(screen.getByRole("tab", { name: "Available Teams" })).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("tab", { name: "Your Teams" }));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("tab")).toBe(false));
+    expect(screen.getByTestId("teams-table-stub")).toBeInTheDocument();
+  });
+
+  it("falls back to Your Teams and clears ?tab= when the role cannot see the linked tab", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTeams("Admin Viewer", { searchParams: "?tab=default-settings&other=1", onUrlUpdate, keepMountUpdates: true });
+
+    expect(screen.getByRole("tab", { name: "Your Teams" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(lastUrlUpdate(onUrlUpdate).searchParams.has("tab")).toBe(false);
+    expect(lastUrlUpdate(onUrlUpdate).searchParams.get("other")).toBe("1");
+  });
+
+  it("opens the team on its Settings tab in a single pushed URL update when Edit is chosen", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTeams("Admin", { onUrlUpdate });
+
+    await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
+    act(() => mockTeamsTableProps.onEditTeam({ ...baseTableTeam, team_id: "team-edit" }));
+
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+    const { searchParams, options } = lastUrlUpdate(onUrlUpdate);
+    expect(searchParams.get("team")).toBe("team-edit");
+    expect(searchParams.get("team_tab")).toBe("settings");
+    expect(options.history).toBe("push");
+    await waitFor(() =>
+      expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-edit" })),
+    );
+  });
+
+  it("drops a leftover team_tab when a team is opened from the list", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTeams("Admin", { searchParams: "?team_tab=settings", onUrlUpdate });
+
+    await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
+    act(() => mockTeamsTableProps.onSelectTeam({ ...baseTableTeam, team_id: "team-view" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("team")).toBe("team-view"));
+    expect(lastUrlUpdate(onUrlUpdate).searchParams.has("team_tab")).toBe(false);
+    expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("push");
+  });
+
+  it("removes team and team_tab together when the detail view closes", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTeams("Admin", { searchParams: "?team=team-from-url&team_tab=members&tab=available-teams", onUrlUpdate });
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    act(() => mockTeamInfoView.mock.calls.at(-1)?.[0].onClose());
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("team")).toBe(false));
+    const { searchParams, options } = lastUrlUpdate(onUrlUpdate);
+    expect(searchParams.has("team_tab")).toBe(false);
+    expect(searchParams.get("tab")).toBe("available-teams");
+    expect(options.history).toBe("push");
+    expect(await screen.findByRole("tab", { name: "Available Teams" })).toHaveAttribute("aria-selected", "true");
   });
 });
 

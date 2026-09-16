@@ -12,6 +12,8 @@ export const TEAM_INFO_TAB_KEYS = {
   SETTINGS: "settings",
 } as const;
 
+export type TeamInfoTabKey = (typeof TEAM_INFO_TAB_KEYS)[keyof typeof TEAM_INFO_TAB_KEYS];
+
 export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
   [TEAM_INFO_TAB_KEYS.OVERVIEW]: "Overview",
   [TEAM_INFO_TAB_KEYS.MY_USER]: "My User",
@@ -26,7 +28,7 @@ export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
  * - Overview, My User, Virtual Keys: always visible
  * - Members, Member Permissions, Settings: only when canEditTeam is true
  */
-export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] {
+export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly TeamInfoTabKey[] {
   const baseTabs = [TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.MY_USER, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS];
   if (canEditTeam) {
     return [
@@ -44,7 +46,7 @@ export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] 
  * - When editTeam is true and user can edit: open Settings tab
  * - Otherwise: open Overview tab
  */
-export function getTeamInfoDefaultTab(editTeam: boolean, canEditTeam: boolean): string {
+export function getTeamInfoDefaultTab(editTeam: boolean, canEditTeam: boolean): TeamInfoTabKey {
   if (editTeam && canEditTeam) {
     return TEAM_INFO_TAB_KEYS.SETTINGS;
   }
@@ -55,6 +57,5 @@ export function getTeamInfoDefaultTab(editTeam: boolean, canEditTeam: boolean): 
  * Checks if a specific tab should be visible based on permissions.
  */
 export function isTeamInfoTabVisible(tabKey: string, canEditTeam: boolean): boolean {
-  const visibleTabs = getTeamInfoVisibleTabs(canEditTeam);
-  return visibleTabs.includes(tabKey);
+  return getTeamInfoVisibleTabs(canEditTeam).some((visibleTab) => visibleTab === tabKey);
 }
