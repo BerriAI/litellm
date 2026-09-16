@@ -279,8 +279,7 @@ impl litellm_core::ocr::hooks::OcrHooks for BridgeOcrHooks {
     }
 }
 
-#[pyfunction]
-fn _ocr_lifecycle(
+fn run_ocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
@@ -310,6 +309,27 @@ fn _ocr_lifecycle(
     run_call(py, call, host)
 }
 
+#[pyfunction]
+fn ocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_ocr(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+fn aocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_ocr(py, request, args, kwargs, true)
+}
+
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(_ocr_lifecycle, module)?)
+    module.add_function(wrap_pyfunction!(ocr, module)?)?;
+    module.add_function(wrap_pyfunction!(aocr, module)?)
 }

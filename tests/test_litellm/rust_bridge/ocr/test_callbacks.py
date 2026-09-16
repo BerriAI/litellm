@@ -1,13 +1,9 @@
-"""
-Tests for the OCR `req_format` option in the SDK request path.
-"""
-
-from litellm.rust_bridge.ocr import native as rust_ocr_bridge
+from litellm.rust_bridge.ocr.callbacks import response as build_ocr_response
 
 
 def test_rust_ocr_response_retains_provider_native_response():
     provider_response = {"status": "succeeded", "analyzeResult": {"content": "native"}}
-    response = rust_ocr_bridge._response(
+    response = build_ocr_response(
         {
             "pages": [],
             "model": "prebuilt-layout",

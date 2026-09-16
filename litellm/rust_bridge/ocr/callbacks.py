@@ -1,22 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
-from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final, Protocol, cast  # noqa: TID251  # adapts the public exception mapper
+
+from pydantic import TypeAdapter
 
 import litellm
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.ocr.native import LiteLLMOcrRequest
+from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
+from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 
-
-class NativeOcrLifecycle(Protocol):
-    def __call__(
-        self,
-        request: LiteLLMOcrRequest,
-        args: Sequence[object],
-        kwargs: Mapping[str, object],
-        asynchronous: bool,
-    ) -> OCRResponse | Awaitable[OCRResponse]: ...
+_RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class ExceptionMapper(Protocol):
@@ -31,13 +25,14 @@ class ExceptionMapper(Protocol):
     ) -> Exception: ...
 
 
-def _binding(value: object) -> NativeOcrLifecycle | None:
-    if not callable(value):
-        return None
-    return cast("NativeOcrLifecycle", value)  # cast-ok: callable validated at the native binding boundary
-
-
-NATIVE_OCR_LIFECYCLE: Final = NativeBinding("_ocr_lifecycle", validate=_binding)
+def response(value: Mapping[str, object]) -> OCRResponse:
+    provider_native_response: Final = value.get(PROVIDER_NATIVE_RESPONSE_KEY)
+    normalized: Final = OCRResponse.model_validate(
+        MappingProxyType({key: item for key, item in value.items() if key != PROVIDER_NATIVE_RESPONSE_KEY})
+    )
+    if isinstance(provider_native_response, Mapping):
+        normalized.set_provider_native_response(_RESPONSE_ADAPTER.validate_python(provider_native_response))
+    return normalized
 
 
 def arguments(request: LiteLLMOcrRequest) -> Mapping[str, object]:
