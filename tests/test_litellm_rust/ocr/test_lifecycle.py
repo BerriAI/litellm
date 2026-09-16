@@ -726,7 +726,7 @@ async def test_reducto_lifecycle_retains_upload_parse_and_post_call_boundaries(
 
 
 @pytest.mark.asyncio
-async def test_document_intelligence_post_call_observes_submission_and_final_result(
+async def test_document_intelligence_post_call_observes_submission_before_polling(
     ocr_server: RecordingServer,
 ) -> None:
     ocr_server.expected_requests = 2
@@ -757,9 +757,8 @@ async def test_document_intelligence_post_call_observes_submission_and_final_res
     response: Final = await call_aocr(
         ocr_server, model="azure_ai/doc-intelligence/prebuilt-read", litellm_logging_obj=logger
     )
-    assert [methods for methods, _ in boundaries] == [("POST",), ("POST", "GET")]
+    assert [methods for methods, _ in boundaries] == [("POST",)]
     assert json.loads(boundaries[0][1])["status"] == "running"
-    assert json.loads(boundaries[1][1])["status"] == "succeeded"
     assert [request.method for request in ocr_server.requests] == ["POST", "GET"]
     assert ocr_server.requests[1].path == "/operations/1"
     assert response.pages == []

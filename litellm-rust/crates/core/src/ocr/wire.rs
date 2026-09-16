@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use super::OcrArguments;
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
-use crate::params::OpaqueParams;
 use litellm_auth::InputSource;
 use serde::{
     Deserialize,
@@ -54,7 +54,7 @@ pub struct OcrWireRequest {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     #[serde(default)]
-    pub optional_params: OpaqueParams,
+    pub optional_params: OcrArguments,
     #[serde(default)]
     pub input_sources: BTreeMap<String, InputSource>,
     pub timeout_seconds: Option<f64>,
@@ -70,9 +70,9 @@ pub fn consumed_optional_param_names(
 ) -> Result<Vec<&'static str>, crate::ocr::Error> {
     use super::provider_config::OcrConfigKind;
 
-    let (provider_model, config) =
+    let (model, config) =
         super::provider_config::resolve_provider_config(model, custom_llm_provider)?;
-    let provider_fields = config.get_supported_ocr_params(&provider_model);
+    let provider_fields = config.get_supported_ocr_params(&model);
     let auth_fields: &[&str] = match config {
         OcrConfigKind::AzureAi
         | OcrConfigKind::AzureDocumentIntelligence
@@ -108,6 +108,17 @@ pub fn consumed_optional_params(
             })
             .collect()
     })
+}
+
+pub fn project_argument(
+    name: &str,
+    consumed: &[OptionalParamSpec],
+    host_fields: &[String],
+) -> bool {
+    consumed.iter().any(|field| field.name == name)
+        || (!host_fields.iter().any(|field| field == name)
+            && !crate::params::is_control_param(name)
+            && !matches!(name, "model" | "document" | "timeout" | "input_sources"))
 }
 
 pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, crate::ocr::Error> {
@@ -254,6 +265,19 @@ pub fn decode_response<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core_selects_consumed_values_without_serializing_host_objects() {
+        let fields = consumed_optional_params("mistral/model", None).unwrap();
+        let host_fields = vec!["metadata".into(), "callbacks".into(), "id".into()];
+        assert!(project_argument("future_option", &fields, &host_fields));
+        assert!(project_argument("extra_body", &fields, &host_fields));
+        assert!(project_argument("id", &fields, &host_fields));
+        assert!(!project_argument("metadata", &fields, &host_fields));
+        assert!(!project_argument("callbacks", &fields, &host_fields));
+        assert!(!project_argument("api_key", &fields, &host_fields));
+        assert!(!project_argument("document", &fields, &host_fields));
+    }
 
     #[test]
     fn option_projection_is_provider_specific_and_excludes_opaque_fields() {

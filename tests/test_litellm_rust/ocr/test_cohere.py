@@ -69,6 +69,40 @@ async def test_public_cohere_blocks_and_usage_fallback(recording_server: Recordi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_explicit_body_preserves_provider_native_values(
+    recording_server: RecordingServer, model: str, asynchronous: bool
+) -> None:
+    recording_server.enqueue(ResponseSpec(body=PAYLOAD))
+    document: Final = {**IMAGE, "provider_options": {"future": [None, False, 0]}}
+    arguments: Final = {
+        "model": model,
+        "document": IMAGE,
+        "api_base": recording_server.base_url,
+        "api_key": "test-key",
+        "output_format": "markdown",
+        "future_option": {"original": True},
+        "extra_body": {
+            "output_format": "future-format",
+            "document": document,
+            "future_option": None,
+        },
+    }
+    if asynchronous:
+        await litellm.aocr(**arguments)
+    else:
+        litellm.ocr(**arguments)
+    assert not recording_server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
+    assert recording_server.requests[0].body == {
+        "model": model.split("/", 1)[1],
+        "document": document,
+        "output_format": "future-format",
+        "future_option": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize(
     "document",
     [

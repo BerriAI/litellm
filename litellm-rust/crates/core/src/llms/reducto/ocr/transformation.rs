@@ -5,11 +5,10 @@ use serde_json::{Map, Value, json};
 
 use crate::constants::{REDUCTO_API_BASE, REDUCTO_API_KEY_ENV, REDUCTO_ID_PREFIX};
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
+use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
-use crate::ocr::prepare::{
-    build_http_request, credential_env, guardrail_document, merge_extra_params,
-};
+use crate::ocr::prepare::{build_http_request, credential_env, guardrail_document};
 use crate::ocr::types::{
     LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo,
 };
@@ -90,15 +89,15 @@ impl BaseOcrConfig for ReductoParseV3Config {
 
     fn map_ocr_params(
         &self,
-        non_default_params: &OpaqueParams,
-        optional_params: &OpaqueParams,
+        non_default_params: &OcrArguments,
+        optional_params: &OcrArguments,
         model: &str,
-    ) -> Result<ReductoV3Params, crate::ocr::Error> {
-        map_ocr_params(
+    ) -> Result<OcrArguments, crate::ocr::Error> {
+        Ok(map_ocr_params(
             non_default_params,
             optional_params,
             self.get_supported_ocr_params(model),
-        )
+        ))
     }
 
     #[tracing::instrument(
@@ -137,11 +136,7 @@ impl ReductoParseV3Config {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(
-            &request.optional_params,
-            &OpaqueParams::default(),
-            &request.model,
-        )?;
+        let params = self.parse_options(&request.optional_params, &request.model)?;
         let headers = validate_environment(&request.connection, &credential_env)?;
         let url = get_complete_url(request.connection.api_base.as_deref())?;
         let (document, headers) = guardrail_document(request, &url, &headers).await?;
@@ -157,10 +152,9 @@ impl ReductoParseV3Config {
                 },
             )
             .await?;
-        let extra_params = request
+        let body = request
             .optional_params
-            .without(self.get_supported_ocr_params(&request.model));
-        let body = merge_extra_params(&body, extra_params)?;
+            .compose_body(&body, self.get_supported_ocr_params(&request.model))?;
         build_http_request(client, request, &url, &headers, &body)
     }
 }
@@ -179,15 +173,15 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
 
     fn map_ocr_params(
         &self,
-        non_default_params: &OpaqueParams,
-        optional_params: &OpaqueParams,
+        non_default_params: &OcrArguments,
+        optional_params: &OcrArguments,
         model: &str,
-    ) -> Result<ReductoLegacyParams, crate::ocr::Error> {
-        map_ocr_params(
+    ) -> Result<OcrArguments, crate::ocr::Error> {
+        Ok(map_ocr_params(
             non_default_params,
             optional_params,
             self.get_supported_ocr_params(model),
-        )
+        ))
     }
 
     #[tracing::instrument(
@@ -223,11 +217,7 @@ impl ReductoParseLegacyConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(
-            &request.optional_params,
-            &OpaqueParams::default(),
-            &request.model,
-        )?;
+        let params = self.parse_options(&request.optional_params, &request.model)?;
         let headers = validate_environment(&request.connection, &credential_env)?;
         let url = get_complete_url(request.connection.api_base.as_deref())?;
         let (document, headers) = guardrail_document(request, &url, &headers).await?;
@@ -243,20 +233,19 @@ impl ReductoParseLegacyConfig {
                 },
             )
             .await?;
-        let extra_params = request
+        let body = request
             .optional_params
-            .without(self.get_supported_ocr_params(&request.model));
-        let body = merge_extra_params(&body, extra_params)?;
+            .compose_body(&body, self.get_supported_ocr_params(&request.model))?;
         build_http_request(client, request, &url, &headers, &body)
     }
 }
 
-fn map_ocr_params<T: serde::de::DeserializeOwned>(
-    non_default_params: &OpaqueParams,
-    optional_params: &OpaqueParams,
+fn map_ocr_params(
+    non_default_params: &OcrArguments,
+    optional_params: &OcrArguments,
     supported_params: &[&str],
-) -> Result<T, crate::ocr::Error> {
-    let params = optional_params
+) -> OcrArguments {
+    optional_params
         .iter()
         .chain(
             non_default_params
@@ -264,8 +253,7 @@ fn map_ocr_params<T: serde::de::DeserializeOwned>(
                 .filter(|(name, _)| supported_params.contains(&name.as_str())),
         )
         .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
-    crate::ocr::wire::decode_request_value(Value::Object(params), "optional_params")
+        .collect()
 }
 
 fn present_nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
@@ -511,6 +499,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mapping_merges_supported_overrides_including_null_with_supplied_options() {
+        let supplied = serde_json::from_value(json!({
+            "formatting":{"old":true}, "enhance":true, "extension":false
+        }))
+        .unwrap();
+        let overrides = serde_json::from_value(json!({
+            "formatting":null, "enhance":null, "ignored":true
+        }))
+        .unwrap();
+        let v3 = ReductoParseV3Config
+            .map_ocr_params(&overrides, &supplied, "parse-v3")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(v3).unwrap(),
+            json!({
+                "formatting":null, "enhance":true, "extension":false
+            })
+        );
+        let legacy = ReductoParseLegacyConfig
+            .map_ocr_params(&overrides, &supplied, "parse-legacy")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap(),
+            json!({
+                "formatting":{"old":true}, "enhance":null, "extension":false
+            })
+        );
+    }
+
+    #[test]
     fn usage_uses_shared_validation_while_block_page_numbers_are_best_effort() {
         for usage in [
             json!({"num_pages":1.5}),
@@ -535,16 +553,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v3_mapping_preserves_explicit_null_and_supplied_options() {
+    async fn v3_options_preserve_explicit_null() {
         let overrides =
             serde_json::from_value(json!({"formatting":null,"settings":{},"unknown":true}))
                 .unwrap();
-        let supplied = serde_json::from_value(
-            json!({"formatting":{"old":true},"retrieval":{"mode":"page"},"extension":false}),
-        )
-        .unwrap();
         let params = ReductoParseV3Config
-            .map_ocr_params(&overrides, &supplied, "parse-v3")
+            .parse_options(&overrides, "parse-v3")
             .unwrap();
         let client = crate::ocr::test_support::ocr_client();
         let connection = OcrConnection::default();
@@ -568,15 +582,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(body).unwrap(),
             json!({
-                "input":"reducto://ready.pdf", "formatting":null, "settings":{}, "retrieval":{"mode":"page"}, "extension":false
+                "input":"reducto://ready.pdf", "formatting":null, "settings":{}
             })
         );
         let absent = ReductoParseV3Config
-            .map_ocr_params(
-                &OpaqueParams::default(),
-                &OpaqueParams::default(),
-                "parse-v3",
-            )
+            .parse_options(&OcrArguments::default(), "parse-v3")
             .unwrap();
         assert_eq!(serde_json::to_value(absent).unwrap(), json!({}));
     }
@@ -592,9 +602,8 @@ mod tests {
         ] {
             let overrides =
                 serde_json::from_value(json!({"enhance":value,"unknown":true})).unwrap();
-            let supplied = serde_json::from_value(json!({"enhance":{"old":true}})).unwrap();
             let params = ReductoParseLegacyConfig
-                .map_ocr_params(&overrides, &supplied, "parse-legacy")
+                .parse_options(&overrides, "parse-legacy")
                 .unwrap();
             assert_eq!(
                 serde_json::to_value(build_legacy_body(

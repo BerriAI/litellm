@@ -5,8 +5,6 @@ use super::OcrClient;
 use super::hooks::OcrDuringCallRequest;
 use super::types::{LiteLLMOcrRequest, OcrDocument};
 
-pub(crate) use crate::params::merge_extra_params;
-
 pub(crate) async fn transform_request_body<B>(
     client: &OcrClient,
     request: &LiteLLMOcrRequest,
@@ -19,10 +17,10 @@ pub(crate) async fn transform_request_body<B>(
 where
     B: Serialize + DeserializeOwned,
 {
-    let extras = request
-        .optional_params
-        .without(request.config.get_supported_ocr_params(&request.model));
-    let composed = merge_extra_params(&body, extras)?;
+    let composed = request.optional_params.compose_body(
+        &body,
+        request.config.get_supported_ocr_params(&request.model),
+    )?;
     let composed = OcrWireBody::<B>::decode(composed, "body")?;
     validate(&composed.body)?;
     let (body, headers) = if request.hooks.intercepts_requests() {
@@ -110,10 +108,10 @@ pub(crate) async fn guardrail_document(
 
 #[derive(Serialize)]
 struct OcrWireBody<B> {
-    #[serde(flatten)]
+    #[serde(skip)]
     body: B,
     #[serde(flatten)]
-    extra: crate::params::OpaqueParams,
+    fields: serde_json::Map<String, Value>,
 }
 
 impl<B: Serialize + DeserializeOwned> OcrWireBody<B> {
@@ -124,14 +122,7 @@ impl<B: Serialize + DeserializeOwned> OcrWireBody<B> {
                 path: prefix.into(),
             });
         };
-        let known = serde_json::to_value(&body).map_err(|_| super::Error::RequestField {
-            path: prefix.into(),
-        })?;
-        let extra = fields
-            .into_iter()
-            .filter(|(key, _)| known.get(key).is_none())
-            .collect();
-        Ok(Self { body, extra })
+        Ok(Self { body, fields })
     }
 }
 

@@ -1,4 +1,6 @@
+mod arguments;
 mod error;
+pub use arguments::OcrArguments;
 pub use error::Error;
 pub mod client;
 pub(crate) mod document;

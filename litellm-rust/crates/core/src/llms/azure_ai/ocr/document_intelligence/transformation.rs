@@ -6,6 +6,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use serde_with::serde_as;
 use tokio::time::Instant;
 
 use litellm_auth::{InputSource, Sourced};
@@ -18,6 +19,7 @@ use crate::constants::{
 use crate::llms::base_llm::ocr::transformation::{
     BaseOcrConfig, OcrRequestContext, OcrResponseContext,
 };
+use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::client::read_json_response;
 use crate::ocr::document::InlineDocument;
@@ -29,6 +31,7 @@ use crate::ocr::types::{
 };
 use crate::ocr::wire::DecodedOcrResponse;
 use crate::params::OpaqueParams;
+use crate::serde_compat::{FiniteF64, LaxI64};
 use crate::url_utils::ApiUrl;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,13 +130,15 @@ struct AzureDocumentIntelligenceAnalyzeResult {
     pub key_value_pairs: Option<Vec<Map<String, Value>>>,
 }
 
+#[serde_as]
 #[derive(Clone, Debug, Deserialize)]
 struct AzureDocumentIntelligencePage {
-    #[serde(rename = "pageNumber", default, deserialize_with = "optional_i64")]
+    #[serde(rename = "pageNumber")]
+    #[serde_as(deserialize_as = "Option<LaxI64>")]
     pub page_number: Option<i64>,
-    #[serde(default, deserialize_with = "optional_f64")]
+    #[serde_as(deserialize_as = "Option<FiniteF64>")]
     pub width: Option<f64>,
-    #[serde(default, deserialize_with = "optional_f64")]
+    #[serde_as(deserialize_as = "Option<FiniteF64>")]
     pub height: Option<f64>,
     pub unit: Option<String>,
     #[serde(default)]
@@ -143,39 +148,6 @@ struct AzureDocumentIntelligencePage {
 #[derive(Clone, Debug, Deserialize)]
 struct AzureDocumentIntelligenceLine {
     pub content: Option<String>,
-}
-
-fn optional_i64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
-    match Option::<Value>::deserialize(deserializer)? {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number
-            .as_i64()
-            .map(Some)
-            .ok_or_else(|| serde::de::Error::custom("expected an integer")),
-        Some(Value::String(value)) => value
-            .parse::<i64>()
-            .map(Some)
-            .map_err(|_| serde::de::Error::custom("expected an integer")),
-        Some(_) => Err(serde::de::Error::custom("expected an integer")),
-    }
-}
-
-fn optional_f64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f64>, D::Error> {
-    match Option::<Value>::deserialize(deserializer)? {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number
-            .as_f64()
-            .filter(|value| value.is_finite())
-            .map(Some)
-            .ok_or_else(|| serde::de::Error::custom("expected a finite number")),
-        Some(Value::String(value)) => value
-            .parse::<f64>()
-            .ok()
-            .filter(|value| value.is_finite())
-            .map(Some)
-            .ok_or_else(|| serde::de::Error::custom("expected a finite number")),
-        Some(_) => Err(serde::de::Error::custom("expected a number")),
-    }
 }
 
 fn decode_input_params(
@@ -330,7 +302,7 @@ fn transform_completed_response(
     let pages = result
         .pages
         .into_iter()
-        .map(normalize_page)
+        .map(transform_azure_page)
         .collect::<Result<Vec<_>, _>>()?;
     let pages_processed =
         i64::try_from(pages.len()).map_err(|_| crate::ocr::Error::NumericRange("pages"))?;
@@ -346,26 +318,16 @@ fn transform_completed_response(
     })
 }
 
-fn normalize_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, crate::ocr::Error> {
+fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, crate::ocr::Error> {
     let index = page
         .page_number
         .unwrap_or(1)
         .checked_sub(1)
         .ok_or(crate::ocr::Error::NumericRange("page.pageNumber"))?;
-    let scale = if page.unit.as_deref().unwrap_or("inch") == "inch" {
-        AZURE_DI_DEFAULT_DPI as f64
-    } else {
-        1.0
-    };
-    let width = pixel_dimension(
+    let dimensions = convert_dimensions(
         page.width.unwrap_or(AZURE_DI_DEFAULT_WIDTH),
-        scale,
-        "page.width",
-    )?;
-    let height = pixel_dimension(
         page.height.unwrap_or(AZURE_DI_DEFAULT_HEIGHT),
-        scale,
-        "page.height",
+        page.unit.as_deref().unwrap_or("inch"),
     )?;
     let markdown = page
         .lines
@@ -376,18 +338,31 @@ fn normalize_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, crate:
     Ok(OcrPage {
         index,
         markdown,
-        dimensions: Some(OcrPageDimensions {
-            width: Some(width),
-            height: Some(height),
-            dpi: Some(AZURE_DI_DEFAULT_DPI),
-        }),
+        dimensions: Some(dimensions),
         ..Default::default()
+    })
+}
+
+fn convert_dimensions(
+    width: f64,
+    height: f64,
+    unit: &str,
+) -> Result<OcrPageDimensions, crate::ocr::Error> {
+    let scale = if unit == "inch" {
+        AZURE_DI_DEFAULT_DPI as f64
+    } else {
+        1.0
+    };
+    Ok(OcrPageDimensions {
+        width: Some(pixel_dimension(width, scale, "page.width")?),
+        height: Some(pixel_dimension(height, scale, "page.height")?),
+        dpi: Some(AZURE_DI_DEFAULT_DPI),
     })
 }
 
 fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, crate::ocr::Error> {
     let value = value * scale;
-    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
+    if !value.is_finite() || value < i64::MIN as f64 || value >= -(i64::MIN as f64) {
         return Err(crate::ocr::Error::NumericRange(field));
     }
     Ok(value.trunc() as i64)
@@ -510,10 +485,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
 
     fn map_ocr_params(
         &self,
-        non_default_params: &OpaqueParams,
-        optional_params: &OpaqueParams,
+        non_default_params: &OcrArguments,
+        optional_params: &OcrArguments,
         _model: &str,
-    ) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
+    ) -> Result<OcrArguments, crate::ocr::Error> {
         let mapped = normalize_ocr_params(decode_input_params(
             non_default_params
                 .iter()
@@ -556,7 +531,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
                 )
             }))
             .collect();
-        crate::ocr::wire::decode_request_value(Value::Object(fields), "optional_params")
+        Ok(fields)
     }
 
     async fn async_transform_ocr_request(
@@ -617,11 +592,7 @@ impl AzureDocumentIntelligenceOCRConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(
-            &request.optional_params,
-            &OpaqueParams::default(),
-            &request.model,
-        )?;
+        let params = self.parse_options(&request.optional_params, &request.model)?;
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
             ..AzureAuthInputs::from_sourced_optional_params(
@@ -752,13 +723,31 @@ mod tests {
     }
 
     #[test]
-    fn mapping_preserves_supplied_options_when_overrides_are_empty() {
-        let supplied =
-            serde_json::from_value(json!({"pages":"4", "features":"languages", "extension":true}))
-                .unwrap();
+    fn empty_options_do_not_create_query_fields() {
         let overrides =
             serde_json::from_value(json!({"pages":[], "features":null, "req_format":"native"}))
                 .unwrap();
+        let mapped = AzureDocumentIntelligenceOCRConfig
+            .parse_options(&overrides, "model")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(mapped).unwrap(),
+            json!({
+                "req_format":"native"
+            })
+        );
+    }
+
+    #[test]
+    fn mapping_preserves_supplied_options_when_overrides_are_empty() {
+        let supplied = serde_json::from_value(json!({
+            "pages":"4", "features":"languages", "extension":true
+        }))
+        .unwrap();
+        let overrides = serde_json::from_value(json!({
+            "pages":[], "features":null, "req_format":"native", "ignored":true
+        }))
+        .unwrap();
         let mapped = AzureDocumentIntelligenceOCRConfig
             .map_ocr_params(&overrides, &supplied, "model")
             .unwrap();
@@ -768,6 +757,20 @@ mod tests {
                 "pages":"4", "features":"languages", "extension":true, "req_format":"native"
             })
         );
+    }
+
+    #[test]
+    fn response_numbers_follow_python_validation_before_dimension_conversion() {
+        let response = AzureDocumentIntelligenceOCRConfig.decode_and_normalize_response(
+            "model",
+            br#"{"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":2.0,"width":" 8.5 ","height":true}]}}"#,
+            OcrResponseFormat::Litellm,
+        ).unwrap();
+        assert_eq!(response.pages[0].index, 1);
+        let dimensions = response.pages[0].dimensions.as_ref().unwrap();
+        assert_eq!(dimensions.width, Some(816));
+        assert_eq!(dimensions.height, Some(96));
+        assert!(pixel_dimension(9_223_372_036_854_775_808.0, 1.0, "width").is_err());
     }
 
     #[rstest]

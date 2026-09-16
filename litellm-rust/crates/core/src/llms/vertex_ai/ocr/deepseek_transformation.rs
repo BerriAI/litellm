@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use litellm_auth_gcp::{self as vertex, VertexConfig};
+
 use super::transformation::VertexAIOCRConfig;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
@@ -12,7 +14,6 @@ use crate::ocr::types::{
 use crate::params::OpaqueParams;
 use crate::routing_utils::model::{ModelNamespace, ProviderModel, RoutedModel};
 use crate::url_utils::ApiUrl;
-use litellm_auth_gcp::{self as vertex, VertexConfig};
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_NAMESPACE: &str = "deepseek-ai";
@@ -153,11 +154,7 @@ impl VertexAIDeepSeekOCRConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(
-            &OpaqueParams::default(),
-            &request.optional_params,
-            &request.model,
-        )?;
+        let params = self.parse_options(&request.optional_params, &request.model)?;
         let config = VertexConfig::from_sourced_optional_params(
             &request.optional_params,
             &request.input_sources,
@@ -397,6 +394,21 @@ impl VertexAIDeepSeekOCRConfig {
 #[cfg(test)]
 mod tests {
     use super::{VertexAIDeepSeekOCRConfig, provider_model};
+
+    #[test]
+    fn inherited_parameter_mapping_only_returns_supplied_optional_params() {
+        use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+        use serde_json::json;
+
+        let non_default = serde_json::from_value(json!({"temperature":0.5})).unwrap();
+        let supplied = serde_json::from_value(json!({"max_tokens":100,"extension":null})).unwrap();
+        assert_eq!(
+            VertexAIDeepSeekOCRConfig
+                .map_ocr_params(&non_default, &supplied, "deepseek-ocr")
+                .unwrap(),
+            supplied
+        );
+    }
 
     #[test]
     fn config_owns_model_namespace_and_endpoint() {

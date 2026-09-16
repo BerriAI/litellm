@@ -247,6 +247,52 @@ async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
 
 struct RewriteDocument;
 
+struct RewriteHeaders;
+
+impl OcrHooks for RewriteHeaders {
+    fn intercepts_requests(&self) -> bool {
+        true
+    }
+
+    fn during_call(
+        &self,
+        request: OcrDuringCallRequest,
+    ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+        Box::pin(async move {
+            Ok(OcrDuringCallRequest {
+                headers: vec![("authorization".into(), "Bearer guarded".into())],
+                ..request
+            })
+        })
+    }
+}
+
+#[rstest]
+#[case("reducto/parse-v3")]
+#[case("reducto/parse-legacy")]
+#[tokio::test]
+async fn guardrail_headers_reach_upload_and_parse(#[case] model: &str) {
+    let (base, seen, server) = mock_server(vec![
+        MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
+        MockResponse::json(json!({"result":{"chunks":[]}})),
+    ])
+    .await;
+    let mut request = wire_request(model, &base, json!({}));
+    request.connection.extra_headers = vec![("authorization".into(), "Bearer original".into())];
+    request.hooks = Arc::new(RewriteHeaders);
+
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("POST /upload "));
+    assert!(requests[1].starts_with("POST /parse "));
+    for request in requests.iter() {
+        assert!(request.contains("authorization: Bearer guarded"));
+        assert!(!request.contains("Bearer original"));
+    }
+}
+
 impl OcrHooks for RewriteDocument {
     fn intercepts_requests(&self) -> bool {
         true
