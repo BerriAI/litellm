@@ -639,3 +639,18 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+    def test_deployment_url_raises_404_when_no_orchestration_deployment(self, mock_config):
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
+
+        mock_client = MagicMock()
+        mock_client.get.return_value.json.return_value = {"resources": []}
+        mock_config._http_client = mock_client
+
+        with pytest.raises(GenAIHubOrchestrationError) as exc_info:
+            _ = mock_config.deployment_url
+
+        assert exc_info.value.status_code == 404
+        assert "test-group" in exc_info.value.message
