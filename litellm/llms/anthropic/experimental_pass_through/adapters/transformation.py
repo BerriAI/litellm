@@ -247,6 +247,7 @@ class AnthropicAdapter:
         response: ModelResponse,
         tool_name_mapping: dict[str, str] | None = None,
         polyfill_result: PolyfillResult | None = None,
+        thinking_disabled: bool = False,
     ) -> AnthropicMessagesResponse | None:
         """
         Translate OpenAI response to Anthropic format.
@@ -257,11 +258,13 @@ class AnthropicAdapter:
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
             polyfill_result: PolyfillResult from context_management polyfill.
+            thinking_disabled: When True, suppress reasoning_content → thinking block.
         """
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response,
             tool_name_mapping=tool_name_mapping,
             polyfill_result=polyfill_result,
+            thinking_disabled=thinking_disabled,
         )
 
     def translate_completion_output_params_streaming(
@@ -271,6 +274,7 @@ class AnthropicAdapter:
         tool_name_mapping: dict[str, str] | None = None,
         polyfill_result: PolyfillResult | None = None,
         is_async: bool = True,
+        thinking_disabled: bool = False,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
     ) -> AsyncIterator[bytes] | Iterator[bytes] | None:
         """
@@ -298,6 +302,7 @@ class AnthropicAdapter:
             applied_edits=applied_edits,
             compaction_block=compaction_block,
             iterations_usage=iterations_usage,
+            thinking_disabled=thinking_disabled,
             litellm_logging_obj=litellm_logging_obj,
         )
         # Return the SSE-wrapped version for proper event formatting.
@@ -490,6 +495,7 @@ class LiteLLMAnthropicMessagesAdapter:
             has_cache_control_in_text = False
             tool_calls: list[ChatCompletionAssistantToolCall] = []
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
+            unsigned_thinking_texts: list[str] = []
             if m["role"] == "assistant":
                 if isinstance(m.get("content"), str):
                     assistant_message_str = str(m.get("content", ""))
@@ -533,16 +539,32 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, tool_call, model)
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
+                                # Only include thinking blocks that have a real
+                                # signature. Blocks synthesized from flat
+                                # reasoning_content have no signature — passing
+                                # them to Claude causes:
+                                # "signature.str: Input should be a valid string"
+                                # Strip them so multi-turn history stays clean.
                                 # Anthropic's schema has no cache_control on thinking or
                                 # redacted_thinking blocks, and anthropic_messages_pt replays
                                 # these verbatim at content[0], so carrying one here (or
                                 # inventing an empty one) is a guaranteed 400 on the way back.
-                                thinking_block = ChatCompletionThinkingBlock(
-                                    type="thinking",
-                                    thinking=content.get("thinking") or "",
-                                    signature=content.get("signature") or "",
-                                )
-                                thinking_blocks.append(thinking_block)
+                                if content.get("signature"):
+                                    thinking_block = ChatCompletionThinkingBlock(
+                                        type="thinking",
+                                        thinking=content.get("thinking") or "",
+                                        signature=content.get("signature") or "",
+                                    )
+                                    thinking_blocks.append(thinking_block)
+                                else:
+                                    # Unsigned text is NOT dropped: it is
+                                    # replayed as the flat reasoning_content field
+                                    # below (the provider-visible form), while
+                                    # staying out of thinking_blocks, so the
+                                    # signature-400 stays avoided.
+                                    unsigned_text = str(content.get("thinking") or "")
+                                    if unsigned_text:
+                                        unsigned_thinking_texts.append(unsigned_text)
                             elif content.get("type") == "redacted_thinking":
                                 redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
                                     type="redacted_thinking",
@@ -575,6 +597,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks
                 reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
+                if unsigned_thinking_texts:
+                    unsigned = "\n".join(unsigned_thinking_texts)
+                    reasoning_content = f"{reasoning_content}\n{unsigned}" if reasoning_content else unsigned
                 if reasoning_content:
                     assistant_message["reasoning_content"] = reasoning_content
                 new_messages.append(assistant_message)
@@ -1281,6 +1306,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         choices: list[Choices],
         tool_name_mapping: dict[str, str] | None = None,
+        thinking_disabled: bool = False,
     ) -> list[dict[str, Any]]:
         new_content: Final[list[dict[str, Any]]] = []
         for choice in choices:
@@ -1307,15 +1333,28 @@ class LiteLLMAnthropicMessagesAdapter:
                                 data=str(data_value) if data_value is not None else "",
                             ).model_dump()
                         )
-            # Handle reasoning_content when thinking_blocks is not present
-            elif hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content:
-                new_content.append(
-                    AnthropicResponseContentBlockThinking(
-                        type="thinking",
-                        thinking=str(choice.message.reasoning_content),
-                        signature=None,
-                    ).model_dump()
-                )
+            # Handle reasoning_content when thinking_blocks is not present.
+            # Skip if the original request had thinking disabled — a provider
+            # may still return reasoning_content, but emitting
+            # a thinking block when the client said thinking=disabled causes
+            # "Content block is not a thinking block" on the client side.
+            # Also skip empty or whitespace-only reasoning_content — Anthropic
+            # rejects thinking blocks with no content ("each thinking block
+            # must contain thinking") when they are replayed as history.
+            elif (
+                not thinking_disabled
+                and hasattr(choice.message, "reasoning_content")
+                and choice.message.reasoning_content
+            ):
+                reasoning = str(choice.message.reasoning_content).strip()
+                if reasoning:
+                    new_content.append(
+                        AnthropicResponseContentBlockThinking(
+                            type="thinking",
+                            thinking=reasoning,
+                            signature=None,
+                        ).model_dump()
+                    )
 
             # Handle text content
             if choice.message.content is not None:
@@ -1466,6 +1505,7 @@ class LiteLLMAnthropicMessagesAdapter:
         response: ModelResponse,
         tool_name_mapping: dict[str, str] | None = None,
         polyfill_result: PolyfillResult | None = None,
+        thinking_disabled: bool = False,
     ) -> AnthropicMessagesResponse:
         """
         Translate OpenAI response to Anthropic format.
@@ -1476,11 +1516,14 @@ class LiteLLMAnthropicMessagesAdapter:
                               Used to restore original names for tools that exceeded
                               OpenAI's 64-char limit.
             polyfill_result: PolyfillResult from context_management polyfill.
+            thinking_disabled: When True, suppress reasoning_content translation
+                              into Anthropic thinking blocks.
         """
         ## translate content block
         anthropic_content: Final = self._translate_openai_content_to_anthropic(
             choices=response.choices,
             tool_name_mapping=tool_name_mapping,
+            thinking_disabled=thinking_disabled,
         )
         refusal_text: Final = next(
             (text for choice in response.choices if (text := openai_chat_refusal_text(choice.message)) is not None),
@@ -1530,23 +1573,165 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return translated_obj
 
+    @staticmethod
+    def _classify_streaming_chunk(
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
+        thinking_disabled: bool = False,
+    ) -> Literal["thinking", "redacted_thinking", "tool_use", "text", "skip"]:
+        """
+        Single source of truth for what an OpenAI-format streaming chunk
+        represents in Anthropic terms. Both the block-type classifier
+        (_translate_streaming_openai_chunk_to_anthropic_content_block) and the
+        delta emitter (_translate_streaming_openai_chunk_to_anthropic) MUST
+        derive their decision from this function's result for the same chunk,
+        so they can never disagree on the open block's type (ADR-0022,
+        CTG-85 corrected fix).
+
+        Precedence when multiple signals are present in one chunk:
+        thinking > tool_use > text > skip.
+
+        "Substantial" reasoning uses .strip() — a whitespace-only
+        reasoning_content chunk is NOT substantial and returns "skip".
+        Text content, by contrast, uses a plain truthy check — whitespace IS
+        meaningful in visible answer text (e.g. a lone " " token between two
+        words in a streamed response), so a whitespace-only content chunk
+        still returns "text", not "skip". Applying .strip() to text would
+        silently drop those tokens. See the inline comments near
+        `has_substantial_text` below for the full rationale (and the test
+        `test_classify_whitespace_text_is_still_text_not_skip`).
+
+        Returns "skip" when the chunk carries nothing that should determine or
+        continue any content block (role-only chunk, whitespace-only reasoning
+        with no other signal, or a disabled-thinking chunk whose only content is
+        empty/whitespace reasoning).
+        """
+        for choice in choices:
+            has_tool_calls = (
+                choice.delta.tool_calls is not None
+                and len(choice.delta.tool_calls) > 0
+                and choice.delta.tool_calls[0].function is not None
+            )
+
+            # Reasoning signal: thinking_blocks (structured) OR reasoning_content
+            # (flat string from an OpenAI-compatible provider). Use getattr with a
+            # default throughout — Delta deletes reasoning_content/thinking_blocks
+            # entirely when unset, so a direct attribute access can raise
+            # AttributeError.
+            reasoning_text = ""
+            has_structured_thinking_block = False
+            structured_thinking_block_type: str | None = None
+            if isinstance(choice, StreamingChoices):
+                thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
+                if len(thinking_blocks) > 0:
+                    first_block = thinking_blocks[0]
+                    if first_block.get("type") in ("thinking", "redacted_thinking"):
+                        has_structured_thinking_block = True
+                        structured_thinking_block_type = first_block.get("type")
+                        reasoning_text = str(first_block.get("thinking") or "")
+                if not has_structured_thinking_block:
+                    reasoning_text = str(getattr(choice.delta, "reasoning_content", "") or "")
+
+            # A structured thinking_block is ALWAYS substantial, regardless of
+            # whether its thinking/signature text happens to be empty — it
+            # represents an explicit, structured signal from the provider (e.g.
+            # a redacted_thinking block, or a signature-only closing chunk for an
+            # already-open thinking block), which is categorically different
+            # from a flat, un-structured reasoning_content string that can
+            # legitimately be pure incidental whitespace. Flat reasoning_content,
+            # by contrast, is only substantial when it has non-whitespace
+            # content — this is the actual bug fix (a whitespace-only flat
+            # reasoning_content chunk must classify as 'skip', not 'thinking' or
+            # 'text').
+            #
+            # IMPORTANT: do not require a non-empty data/signature field here.
+            # A redacted_thinking block remains a structured provider signal
+            # even when its encrypted payload is empty.
+            has_substantial_reasoning = bool(reasoning_text.strip()) or has_structured_thinking_block
+
+            # IMPORTANT: text content substantiality uses a plain truthy check,
+            # NOT .strip() — unlike reasoning, whitespace IS meaningful in
+            # visible answer text (e.g. the space between two words arriving as
+            # separate streaming tokens, "foo", " ", "bar"). Only reasoning_content
+            # gets the .strip()-based "is this incidental formatting whitespace"
+            # treatment; applying the same rule to text would silently drop
+            # legitimate whitespace tokens from the visible answer.
+            text_content = str(choice.delta.content or "")
+            has_substantial_text = bool(text_content)
+
+            if (
+                not thinking_disabled
+                and has_substantial_reasoning
+                and structured_thinking_block_type == "redacted_thinking"
+            ):
+                return "redacted_thinking"
+            if not thinking_disabled and has_substantial_reasoning:
+                return "thinking"
+            if has_tool_calls:
+                return "tool_use"
+            if has_substantial_text:
+                return "text"
+            # Nothing substantial on this choice — try the next choice (multiple
+            # choices is rare but the existing functions loop over all of them).
+            if thinking_disabled and (reasoning_text.strip() or has_structured_thinking_block):
+                # Thinking disabled but the backend still sent reasoning — this
+                # chunk carries no client-visible content once suppressed.
+                continue
+        return "skip"
+
     def _translate_streaming_openai_chunk_to_anthropic_content_block(
-        self, choices: list[OpenAIStreamingChoice | StreamingChoices]
+        self,
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
+        thinking_disabled: bool = False,
     ) -> tuple[
-        Literal["text", "tool_use", "thinking"],
+        Literal["text", "tool_use", "thinking", "redacted_thinking"],
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
         from litellm.types.llms.anthropic import TextBlock
 
         for choice in choices:
-            if (
-                choice.delta.tool_calls is not None
-                and len(choice.delta.tool_calls) > 0
-                and choice.delta.tool_calls[0].function is not None
-            ):
-                raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
-                tool_name = choice.delta.tool_calls[0].function.name or ""
+            block_type = self._classify_streaming_chunk(choices=[choice], thinking_disabled=thinking_disabled)
+            if block_type == "skip":
+                continue
+
+            if block_type == "thinking":
+                if (
+                    isinstance(choice, StreamingChoices)
+                    and hasattr(choice.delta, "thinking_blocks")
+                    and choice.delta.thinking_blocks
+                    and len(choice.delta.thinking_blocks) > 0
+                    and choice.delta.thinking_blocks[0].get("type") in ("thinking", "redacted_thinking")
+                ):
+                    thinking_block = choice.delta.thinking_blocks[0]
+                    thinking = thinking_block.get("thinking") or ""
+                    signature = thinking_block.get("signature") or ""
+                    assert isinstance(thinking, str)
+                    assert isinstance(signature, str)
+                    return "thinking", ChatCompletionThinkingBlock(
+                        type="thinking", thinking=thinking, signature=signature
+                    )
+                return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
+
+            if block_type == "redacted_thinking":
+                thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
+                data = str(thinking_blocks[0].get("data") or "")
+                redacted_block = AnthropicResponseContentBlockRedactedThinking(
+                    type="redacted_thinking",
+                    data=data,
+                ).model_dump()
+                return "redacted_thinking", cast("ContentBlockContentBlockDict", redacted_block)
+
+            if block_type == "tool_use":
+                # Explicit narrowing (base pattern): the classifier only emits
+                # "tool_use" when the first tool call carries a function, so
+                # these asserts hold and keep the member accesses below
+                # optional-free without changing behaviour.
+                tool_calls = choice.delta.tool_calls
+                assert tool_calls is not None and len(tool_calls) > 0
+                first_tool_call = tool_calls[0]
+                assert first_tool_call.function is not None
+                raw_id = first_tool_call.id or str(uuid.uuid4())
+                tool_name = first_tool_call.function.name or ""
                 thought_sig: str | None = None
                 if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
                     parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
@@ -1558,75 +1743,25 @@ class LiteLLMAnthropicMessagesAdapter:
                     "input": {},
                 }
                 if thought_sig:
-                    tool_block["provider_specific_fields"] = {
-                        "signature": thought_sig,
-                    }
+                    tool_block["provider_specific_fields"] = {"signature": thought_sig}
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or openai_chat_refusal_text(
-                choice.delta
-            ) is not None:
+
+            if block_type == "text":
                 return "text", TextBlock(type="text", text="")
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
-                if len(thinking_blocks) > 0:
-                    thinking_block = thinking_blocks[0]
-                    if thinking_block["type"] == "thinking":
-                        thinking = thinking_block.get("thinking") or ""
-                        signature = thinking_block.get("signature") or ""
-
-                        assert isinstance(thinking, str)
-                        assert isinstance(signature, str)
-
-                        return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking, signature=signature
-                        )
-            # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
-            # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
-            # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
-            # branch above is skipped entirely; open a ``thinking`` block here so the
-            # matching ``thinking_delta`` stream is not emitted into a text block.
-            elif isinstance(choice, StreamingChoices) and getattr(choice.delta, "reasoning_content", None):
-                return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
 
         return "text", TextBlock(type="text", text="")
 
     def _translate_streaming_openai_chunk_to_anthropic(
-        self, choices: list[OpenAIStreamingChoice | StreamingChoices]
+        self,
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
+        thinking_disabled: bool = False,
     ) -> tuple[
         StreamingContentBlockDeltaType,
         ContentTextBlockDelta | ContentJsonBlockDelta | ContentThinkingBlockDelta | ContentThinkingSignatureBlockDelta,
     ]:
-        text: str = ""
-        reasoning_content: str = ""
-        reasoning_signature: str = ""
-        partial_json: str | None = None
-        for choice in choices:
-            if choice.delta.content is not None and len(choice.delta.content) > 0:
-                text += choice.delta.content
-            if choice.delta.tool_calls:
-                partial_json = ""
-                for tool in choice.delta.tool_calls:
-                    if tool.function is not None and tool.function.arguments is not None:
-                        partial_json = (partial_json or "") + tool.function.arguments
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
-                if len(thinking_blocks) > 0:
-                    for thinking_block in thinking_blocks:
-                        if thinking_block["type"] == "thinking":
-                            thinking = thinking_block.get("thinking") or ""
-                            signature = thinking_block.get("signature") or ""
-
-                            assert isinstance(thinking, str)
-                            assert isinstance(signature, str)
-
-                            reasoning_content += thinking
-                            reasoning_signature += signature
-            # Handle reasoning_content when thinking_blocks is not present
-            # This handles providers like OpenRouter that return reasoning_content
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
-                if choice.delta.reasoning_content is not None:
-                    reasoning_content += choice.delta.reasoning_content
-
+        text, reasoning_content, reasoning_signature, partial_json = self._accumulate_streaming_chunk_payloads(
+            choices, thinking_disabled=thinking_disabled
+        )
         if partial_json is not None:
             return "input_json_delta", ContentJsonBlockDelta(type="input_json_delta", partial_json=partial_json)
         elif reasoning_signature:
@@ -1641,11 +1776,61 @@ class LiteLLMAnthropicMessagesAdapter:
             )
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text + refusal_text)
 
+    def _accumulate_streaming_chunk_payloads(
+        self,
+        choices: Sequence["OpenAIStreamingChoice | StreamingChoices"],
+        thinking_disabled: bool = False,
+    ) -> tuple[str, str, str, str | None]:
+        """Fold a chunk's choices into (text, reasoning_content, reasoning_signature, partial_json).
+
+        ``partial_json`` is ``None`` when the chunk carries no tool calls — the
+        caller uses that to decide the delta type's precedence (tool JSON beats
+        thinking/thinking-signature text).
+        """
+        text: str = ""
+        reasoning_content: str = ""
+        reasoning_signature: str = ""
+        partial_json: str | None = None
+
+        for choice in choices:
+            block_type = self._classify_streaming_chunk(choices=[choice], thinking_disabled=thinking_disabled)
+            if block_type == "skip":
+                continue
+
+            if block_type == "thinking":
+                thinking_blocks = getattr(choice.delta, "thinking_blocks", None)
+                if isinstance(choice, StreamingChoices) and thinking_blocks:
+                    for thinking_block in thinking_blocks:
+                        if thinking_block.get("type") in ("thinking", "redacted_thinking"):
+                            reasoning_content += str(thinking_block.get("thinking") or "")
+                            reasoning_signature += str(thinking_block.get("signature") or "")
+                elif getattr(choice.delta, "reasoning_content", None):
+                    reasoning_content += str(choice.delta.reasoning_content)
+
+            elif block_type == "redacted_thinking":
+                # Redacted thinking is carried wholly in content_block_start;
+                # Anthropic defines no redacted-thinking delta type.
+                continue
+
+            elif block_type == "tool_use":
+                if choice.delta.tool_calls:
+                    partial_json = partial_json or ""
+                    for tool in choice.delta.tool_calls:
+                        if tool.function is not None and tool.function.arguments is not None:
+                            partial_json += tool.function.arguments
+
+            elif block_type == "text":
+                if choice.delta.content is not None and len(choice.delta.content) > 0:
+                    text += choice.delta.content
+
+        return text, reasoning_content, reasoning_signature, partial_json
+
     def translate_streaming_openai_response_to_anthropic(
         self,
         response: ModelResponse,
         current_content_block_index: int,
         applied_edits: list[AppliedEdit] | None = None,
+        thinking_disabled: bool = False,
     ) -> ContentBlockDelta | MessageBlockDelta:
         ## base case - final chunk w/ finish reason
         if response.choices[0].finish_reason is not None:
@@ -1673,7 +1858,10 @@ class LiteLLMAnthropicMessagesAdapter:
         (
             type_of_content,
             content_block_delta,
-        ) = self._translate_streaming_openai_chunk_to_anthropic(choices=response.choices)
+        ) = self._translate_streaming_openai_chunk_to_anthropic(
+            choices=response.choices,
+            thinking_disabled=thinking_disabled,
+        )
         return ContentBlockDelta(
             type="content_block_delta",
             index=current_content_block_index,

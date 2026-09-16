@@ -319,6 +319,20 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
+    def _is_thinking_disabled(thinking: Mapping | None) -> bool:
+        """Return True (suppressed) unless the client explicitly opted in.
+
+        Only ``{"type": "enabled"|"adaptive"}`` enables the reasoning
+        translation. Absent, disabled, or malformed objects (missing
+        ``type``) fail closed: the request side
+        (``translate_anthropic_thinking_to_reasoning_effort``) already
+        defaults a missing ``type`` to ``disabled``, and a malformed
+        object must not surface provider ``reasoning_content`` through
+        a thinking block (review finding).
+        """
+        return not (isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive"))
+
+    @staticmethod
     def _route_openai_thinking_to_responses_api_if_needed(
         completion_kwargs: _CompletionKwargs,
         *,
@@ -615,6 +629,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
 
+        thinking_disabled = LiteLLMMessagesToCompletionTransformationHandler._is_thinking_disabled(thinking)
+
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
@@ -622,6 +638,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
+                thinking_disabled=thinking_disabled,
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
             )
             if transformed_stream is not None:
@@ -632,6 +649,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
+                thinking_disabled=thinking_disabled,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -750,6 +768,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         completion_response: Final = litellm.completion(**completion_kwargs)
 
+        thinking_disabled = LiteLLMMessagesToCompletionTransformationHandler._is_thinking_disabled(thinking)
+
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
@@ -757,6 +777,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
+                thinking_disabled=thinking_disabled,
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
             )
             if transformed_stream is not None:
@@ -767,6 +788,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
+                thinking_disabled=thinking_disabled,
             )
             if anthropic_response is not None:
                 return anthropic_response
