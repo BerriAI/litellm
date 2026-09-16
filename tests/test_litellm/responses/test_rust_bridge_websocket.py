@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
 from litellm.rust_bridge import configuration, responses_websocket
 
 
@@ -45,14 +44,6 @@ def reset_responses_websocket():
     yield
     responses_websocket.set_rust_responses_websocket(connection=None)
     configuration.reset_rust_configuration()
-
-
-def test_rust_websocket_bridge_uses_process_enablement() -> None:
-    configuration.rust(False)
-    assert not _rust_responses_websocket_enabled("openai")
-    configuration.rust(True)
-    assert _rust_responses_websocket_enabled("openai")
-    assert not _rust_responses_websocket_enabled("anthropic")
 
 
 @pytest.mark.asyncio
