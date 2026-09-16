@@ -1418,6 +1418,66 @@ class TestRouterComplexityDeploymentMethods:
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
     @staticmethod
+    def _forecast_row(model_name: str, model_id: str, classifier_type: str) -> dict[str, object]:
+        settings: Final = (
+            {"capability_classifier_config": {
+                "efficient_tier": "SIMPLE", "capable_tier": "REASONING", "base_threshold": 0.7,
+            }} if classifier_type == "capability" else {
+                "adaptive": False,
+                "llm_v2_config": {
+                    "efficient_profile": "Small solver", "capable_profile": "Large solver",
+                    "harness": "One attempt", "max_quality_gap": 0.05,
+                },
+            }
+        )
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": classifier_type,
+                    "classifier_llm_config": {"model": "gpt-4o-mini"},
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "gpt-4o"},
+                    **settings,
+                },
+            },
+            "model_info": {"id": model_id},
+        }
+
+    @pytest.mark.parametrize("classifier_type,sibling", [("capability", "llm_v2"), ("llm_v2", "capability")])
+    def test_forecast_cap_keeps_edits_and_refuses_extra_routers_and_type_switches(self, classifier_type: str, sibling: str) -> None:
+        router: Final = Router(
+            model_list=[
+                self._POOL,
+                self._forecast_row("held", "held-id", classifier_type),
+                self._forecast_row("sibling", "sibling-id", sibling),
+                self._router_row("other", "other-id", "heuristic_v2"),
+                self._custom_tier_row("custom", "custom-id"),
+            ],
+            auto_router_capability_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+        assert sorted(router.complexity_routers) == ["custom", "held", "other", "sibling"]
+        assert router.upsert_deployment(Deployment(**self._forecast_row("edited", "held-id", classifier_type))) is not None
+        assert router.upsert_deployment(Deployment(**self._forecast_row("second", "new-id", classifier_type))) is None
+        assert router.upsert_deployment(Deployment(**self._forecast_row("switched", "other-id", classifier_type))) is None
+        assert sorted(router.complexity_routers) == ["custom", "edited", "other", "sibling"]
+        assert router.upsert_deployment(Deployment(**self._router_row("released", "held-id", "heuristic"))) is not None
+        assert router.upsert_deployment(Deployment(**self._forecast_row("switched", "other-id", classifier_type))) is not None
+        assert sorted(router.complexity_routers) == ["custom", "released", "sibling", "switched"]
+
+    @pytest.mark.parametrize("classifier_type", ["capability", "llm_v2"])
+    @pytest.mark.parametrize("limit", [1, None])
+    def test_forecast_registration_applies_the_resolved_license_limit(self, classifier_type: str, limit: int | None) -> None:
+        rows: Final = [self._POOL, self._forecast_row("a", "id-a", classifier_type), self._forecast_row("b", "id-b", classifier_type)]
+        if limit is not None:
+            with pytest.raises(ValueError, match="At most 1 auto-router"):
+                Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+            return
+        router: Final = Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+        assert sorted(router.complexity_routers) == ["a", "b"]
+
+    @staticmethod
     def _router_row(model_name: str, model_id: str, classifier_type: str) -> dict[str, object]:
         return {
             "model_name": model_name,

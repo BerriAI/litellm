@@ -36,7 +36,11 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
 )
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_cache_key
+from litellm.proxy.auth.auth_checks import (
+    _delete_cache_key_object,
+    _project_cache_key,
+    jwt_key_mapping_cache_key,
+)
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -5132,10 +5136,11 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
 
 
 class _JWTMappingRow:
-    def __init__(self, token, jwt_claim_name, jwt_claim_value):
+    def __init__(self, token, jwt_claim_name, jwt_claim_value, jwt_issuer=None):
         self.token = token
         self.jwt_claim_name = jwt_claim_name
         self.jwt_claim_value = jwt_claim_value
+        self.jwt_issuer = jwt_issuer
 
 
 class _CascadingJWTMappingTable:
@@ -5226,7 +5231,7 @@ async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypat
         ),
     )
 
-    assert recording_evict.cache_keys == ("jwt_key_mapping:email:user@example.com",)
+    assert recording_evict.cache_keys == (jwt_key_mapping_cache_key("email", "user@example.com", None),)
 
 
 @pytest.mark.asyncio
@@ -13131,11 +13136,11 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
         _execute_virtual_key_regeneration,
     )
 
-    stale_cache_key = "jwt_key_mapping:sub:user1"
+    stale_cache_key = jwt_key_mapping_cache_key("sub", "user1", None)
     existing_key = _make_regenerate_existing_key()
     mock_prisma_client = _make_regenerate_mock_prisma()
     mock_prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(
-        return_value=[MagicMock(jwt_claim_name="sub", jwt_claim_value="user1")]
+        return_value=[MagicMock(jwt_claim_name="sub", jwt_claim_value="user1", jwt_issuer=None)]
     )
     mock_prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
         return_value=MagicMock(token="new-hashed-token")
