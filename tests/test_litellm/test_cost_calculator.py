@@ -1,3 +1,4 @@
+import time
 from typing import Final
 
 import pytest
@@ -7,6 +8,7 @@ import litellm
 from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
+    ResponsesWebSocketTokenUsageProcessor,
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
@@ -15,9 +17,11 @@ from litellm.cost_calculator import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.types.llms.base import CachedTokensDetails
-from litellm.types.llms.openai import OpenAIRealtimeStreamList
+from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
+    CallTypes,
+    LiteLLMRealtimeStreamLoggingObject,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -3692,6 +3696,31 @@ def test_completion_cost_bills_interactions_video_output_at_video_rate():
     assert cost == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("video_count", [2, 3])
+def test_completion_cost_multiplies_video_cost_by_generated_video_count(video_count: int) -> None:
+    """Regression for LIT-6896: a Veo request for N samples generates N videos and must be billed N times."""
+    from litellm.types.videos.main import VideoObject
+
+    def _video(usage: dict[str, object]) -> VideoObject:
+        return VideoObject(id="v", object="video", status="processing", model="veo-3.1-fast-generate-001", usage=usage)
+
+    single_cost = completion_cost(
+        completion_response=_video({"duration_seconds": 4.0, "video_resolution": "720p"}),
+        model="veo-3.1-fast-generate-001",
+        custom_llm_provider="vertex_ai",
+        call_type="create_video",
+    )
+    multi_cost = completion_cost(
+        completion_response=_video({"duration_seconds": 4.0, "video_resolution": "720p", "video_count": video_count}),
+        model="veo-3.1-fast-generate-001",
+        custom_llm_provider="vertex_ai",
+        call_type="create_video",
+    )
+
+    assert single_cost > 0
+    assert multi_cost == pytest.approx(single_cost * video_count)
+
+
 @pytest.mark.parametrize(
     "batch_rate,expected_prompt,expected_completion",
     [
@@ -4718,3 +4747,74 @@ def test_completion_cost_ocr_ignores_deployment_pricing_without_custom_pricing_f
         litellm_logging_obj=logging_obj,
     )
     assert cost == 0.0
+
+
+def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
+    """Issue #41299: a session mixing default and priority turns must price each turn at
+    its own returned service_tier, not the summed usage at a single tier."""
+    events = [
+        {"type": "response.created", "response": {}},
+        {
+            "type": "response.completed",
+            "response": {
+                "service_tier": "default",
+                "usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140},
+            },
+        },
+        {"type": "rate_limits.updated", "rate_limits": {}},
+        {
+            "type": "response.completed",
+            "response": {
+                "service_tier": "priority",
+                "usage": {"input_tokens": 60, "output_tokens": 10, "total_tokens": 70},
+            },
+        },
+        {"type": "response.failed", "response": {"usage": None}},
+    ]
+
+    partition = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(events)
+    assert tuple(partition.keys()) == ("default", "priority")
+    assert len(partition["default"]) == 1
+    assert len(partition["priority"]) == 1
+
+    logging_obj = Logging(
+        model="gpt-5.4",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="responses-ws-tier-test",
+        function_id="responses-ws-tier-test",
+    )
+    normalized = logging_obj.normalize_logging_result(result=events)
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.service_tier is None
+
+    def _http_cost(input_tokens: int, output_tokens: int, service_tier: str) -> float:
+        return completion_cost(
+            completion_response=ResponsesAPIResponse(
+                id=f"resp-{service_tier}",
+                created_at=1700000000,
+                output=[],
+                service_tier=service_tier,
+                usage=ResponseAPIUsage(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                ),
+            ),
+            model="gpt-5.4",
+            call_type=CallTypes.aresponses.value,
+            custom_llm_provider="openai",
+        )
+
+    ws_cost = completion_cost(
+        completion_response=normalized,
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+    )
+
+    assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
+    assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
+    assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
