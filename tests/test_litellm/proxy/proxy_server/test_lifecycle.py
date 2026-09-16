@@ -28,6 +28,7 @@ from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -1042,8 +1043,8 @@ async def test_spend_report_locks_are_never_released():
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.release_lock.assert_not_awaited()
 
 
-def _init_daily_global_spend_reconcile_job() -> tuple[MagicMock, MagicMock, MagicMock]:
-    scheduler = MagicMock()
+def _init_daily_global_spend_reconcile_job() -> tuple[AsyncIOScheduler, MagicMock, MagicMock]:
+    scheduler = AsyncIOScheduler()
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.alerting_handler = AsyncMock()
     prisma_client = MagicMock()
@@ -1058,28 +1059,31 @@ def _init_daily_global_spend_reconcile_job() -> tuple[MagicMock, MagicMock, Magi
 def test_daily_global_spend_reconcile_job_is_scheduled_nightly_with_an_immediate_catch_up_run():
     """Startup schedules the LiteLLM_DailyGlobalSpend backfill a couple of minutes out, so a
     fresh deploy switches usage reads to the global table without waiting for the nightly
-    run, and replaces any previous registration of the same job id."""
+    run, and after that it fires once a day at 00:30 UTC, when the previous UTC day is closed."""
     from datetime import datetime, timedelta, timezone
 
     from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
 
     scheduler, _, _ = _init_daily_global_spend_reconcile_job()
+    job = scheduler.get_job(DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID)
+    assert job is not None
 
-    (call,) = scheduler.add_job.call_args_list
-    assert call.kwargs["id"] == DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
-    assert call.kwargs["replace_existing"] is True
-    assert call.args[1:] == ("cron",)
-    assert (call.kwargs["hour"], call.kwargs["minute"], call.kwargs["timezone"]) == (0, 30, "UTC")
-    assert timedelta(0) < call.kwargs["next_run_time"] - datetime.now(timezone.utc) <= timedelta(minutes=2)
+    assert timedelta(0) < job.next_run_time - datetime.now(timezone.utc) <= timedelta(minutes=2)
+    after_catch_up = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+    assert job.trigger.get_next_fire_time(None, after_catch_up) == datetime(2026, 9, 17, 0, 30, tzinfo=timezone.utc)
+    just_after_a_run = datetime(2026, 9, 17, 0, 30, 1, tzinfo=timezone.utc)
+    assert job.trigger.get_next_fire_time(None, just_after_a_run) == datetime(2026, 9, 18, 0, 30, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
 async def test_daily_global_spend_reconcile_job_runs_under_the_pod_lock_and_alerts_through_the_proxy(monkeypatch):
+    from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
+
     scheduler, proxy_logging_obj, prisma_client = _init_daily_global_spend_reconcile_job()
     run = AsyncMock()
     monkeypatch.setattr(ps, "run_scheduled_daily_global_spend_reconcile", run)
 
-    await scheduler.add_job.call_args.args[0]()
+    await scheduler.get_job(DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID).func()
 
     run.assert_awaited_once()
     assert run.await_args.args == (prisma_client,)

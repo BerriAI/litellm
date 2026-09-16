@@ -1647,30 +1647,6 @@ async def test_global_rollup_marker_read_failure_falls_back_to_the_per_key_table
     await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
 
 
-def test_aggregated_sql_splits_the_key_free_arm_at_the_marker_and_keeps_the_key_arm_per_key():
-    sql, params = _build_aggregated_sql_query(**_unfiltered_user_query(), global_rollup_through="2026-06-01")
-    marker_param: Final = f"${len(params)}"
-
-    assert params[-1] == "2026-06-01"
-    assert (
-        f'FROM "LiteLLM_DailyGlobalSpend"\n            WHERE date >= $1 AND date <= $2 AND date <= {marker_param}'
-        in sql
-    )
-    assert (
-        f'FROM "LiteLLM_DailyUserSpend"\n            WHERE date >= $1 AND date <= $2 AND date > {marker_param}' in sql
-    )
-    key_arm: Final = sql.split("UNION ALL\n        (WITH top_api_keys")[1]
-    assert "LiteLLM_DailyGlobalSpend" not in key_arm
-    assert marker_param not in key_arm
-
-
-def test_aggregated_sql_without_a_marker_reads_the_per_key_table_only():
-    sql, params = _build_aggregated_sql_query(**_unfiltered_user_query())
-
-    assert "LiteLLM_DailyGlobalSpend" not in sql
-    assert params[-1] == PTU_SENTINEL_API_KEY
-
-
 _GLOBAL_SPEND_MIGRATION: Final = (
     pathlib.Path(__file__).resolve().parents[4]
     / "litellm-proxy-extras"
@@ -1687,7 +1663,10 @@ async def test_get_daily_activity_aggregated_serves_closed_days_from_the_global_
 ):
     """Day 1 is rolled up and day 2 is still open (never rolled up), so a marker of day 1 must
     give the same response as reading everything per-key: day 1 from the global table, day 2
-    live, one grand total across both. The per-key arm stays on the user table throughout."""
+    live, one grand total across both. Per-key rows that land after the rollup then tell the
+    two sources apart: a late day 1 row is invisible to totals until the next reconcile while a
+    late day 2 row shows up at once, and both keys rank in the key breakdown, which stays
+    per-key throughout."""
     n_keys: Final = USAGE_TOP_API_KEYS_LIMIT + 3
     rows: Final = [
         (
@@ -1720,38 +1699,55 @@ async def test_get_daily_activity_aggregated_serves_closed_days_from_the_global_
         )
     _aggregated_postgresql.commit()
 
-    async def read(marker: str | None, sql_seen: list[str]):
+    async def read(marker: str | None):
         await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
         prisma = _prisma_with_marker(marker)
-        run_query = _psycopg_query_raw(_aggregated_postgresql, [])
-
-        async def query_raw(sql: str, *params: str):
-            sql_seen.append(sql)
-            return await run_query(sql, *params)
-
-        prisma.db.query_raw = query_raw
+        prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, [])
         return await get_daily_activity_aggregated(
             prisma_client=prisma,
             entity_metadata_field=None,
             **_unfiltered_user_query(),
         )
 
-    per_key_sql: Final[list[str]] = []  # mutable-ok: out-param for the query_raw shim
-    global_sql: Final[list[str]] = []  # mutable-ok: out-param for the query_raw shim
-    from_per_key = await read(None, per_key_sql)
-    from_global = await read("2026-06-01", global_sql)
-    await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
+    from_per_key = await read(None)
+    from_global = await read("2026-06-01")
 
-    assert per_key_sql[0].count('FROM "LiteLLM_DailyGlobalSpend"') == 0
-    assert global_sql[0].count('FROM "LiteLLM_DailyGlobalSpend"') == 1
-    assert global_sql[0].count('FROM "LiteLLM_DailyUserSpend"') == 3
     assert from_global.model_dump() == from_per_key.model_dump()
-    assert from_global.metadata.total_spend == pytest.approx(2 * sum(float(i + 1) for i in range(n_keys)))
+    seeded_spend: Final = 2 * sum(float(i + 1) for i in range(n_keys))
+    assert from_global.metadata.total_spend == pytest.approx(seeded_spend)
     assert from_global.metadata.total_response_time_ms == 2 * n_keys * 10 * 25
     assert from_global.metadata.total_timed_requests == 2 * n_keys
     assert {day.date.isoformat() for day in from_global.results} == {"2026-06-01", "2026-06-02"}
     assert len(from_global.results[0].breakdown.api_keys) == USAGE_TOP_API_KEYS_LIMIT
     assert set(from_global.results[0].breakdown.model_groups) == {"gpt-5", "claude"}
+
+    with _aggregated_postgresql.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO "LiteLLM_DailyUserSpend"
+                (id, user_id, date, api_key, model, model_group, custom_llm_provider,
+                 endpoint, prompt_tokens, spend, api_requests, successful_requests)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                ("late-1", "user-late", "2026-06-01", "key-late-1", "gpt-5", "", "openai", None, 10, 1000.0, 1, 1),
+                ("late-2", "user-late", "2026-06-02", "key-late-2", "gpt-5", "", "openai", None, 10, 500.0, 1, 1),
+            ],
+        )
+    _aggregated_postgresql.commit()
+
+    late_per_key = await read(None)
+    late_global = await read("2026-06-01")
+    await evict_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
+
+    assert late_per_key.metadata.total_spend == pytest.approx(seeded_spend + 1000.0 + 500.0)
+    assert late_global.metadata.total_spend == pytest.approx(seeded_spend + 500.0)
+    by_day: Final = {day.date.isoformat(): day for day in late_global.results}
+    assert by_day["2026-06-01"].metrics.spend == pytest.approx(seeded_spend / 2)
+    assert by_day["2026-06-02"].metrics.spend == pytest.approx(seeded_spend / 2 + 500.0)
+    assert by_day["2026-06-01"].breakdown.api_keys["key-late-1"].metrics.spend == pytest.approx(1000.0)
+    assert by_day["2026-06-02"].breakdown.api_keys["key-late-2"].metrics.spend == pytest.approx(500.0)
+    assert late_global.metadata.total_api_keys == n_keys + 2
 
 
 @pytest.mark.asyncio
@@ -1810,7 +1806,20 @@ async def test_get_daily_activity_aggregated_model_group_rollups_fall_back_to_mo
     """Rows stored with an empty or NULL model_group must land in the model_groups
     breakdown under their model name instead of vanishing from the usage UI."""
     rows: Final = [
-        ("row-0", "user-0", "2026-06-01", "key-0", "gpt-5", "gpt-5-eu", "openai", "/v1/chat/completions", 10, 7.0, 1, 1),
+        (
+            "row-0",
+            "user-0",
+            "2026-06-01",
+            "key-0",
+            "gpt-5",
+            "gpt-5-eu",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            7.0,
+            1,
+            1,
+        ),
         ("row-1", "user-1", "2026-06-01", "key-1", "gpt-5", "", "openai", "/v1/chat/completions", 10, 3.0, 1, 1),
         ("row-2", "user-2", "2026-06-01", "key-2", "claude-x", None, "anthropic", "/v1/messages", 10, 2.0, 1, 1),
     ]
