@@ -983,6 +983,73 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should preserve a budget draft when the same key refreshes before saving", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      keyData: MOCK_KEY_DATA,
+      onCancel: vi.fn(),
+      onSubmit,
+      accessToken: "test-token",
+      userID: "test-user",
+      userRole: "admin",
+    };
+    const view = renderWithProviders(<KeyEditView {...props} />);
+
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "12.5" },
+    });
+    view.rerender(
+      <KeyEditView
+        {...props}
+        keyData={{
+          ...MOCK_KEY_DATA,
+          max_budget: 99,
+          rpm_limit: 75,
+          models: ["gpt-4"],
+          metadata: { note: "new" },
+          object_permission: { ...MOCK_KEY_DATA.object_permission, vector_stores: ["store-new"] },
+        }}
+      />,
+    );
+    await chooseSelectOption(userEvent, screen.getByLabelText("Reset Budget"), "monthly");
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    const expected = {
+      max_budget: "12.5",
+      budget_duration: "30d",
+      rpm_limit: 75,
+      models: ["gpt-4"],
+      metadata: JSON.stringify({ note: "new" }, null, 2),
+      vector_stores: ["store-new"],
+    };
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expected)));
+  });
+
+  it("should start a fresh budget draft when switching to another key", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      keyData: MOCK_KEY_DATA,
+      onCancel: vi.fn(),
+      onSubmit,
+      accessToken: "test-token",
+      userID: "test-user",
+      userRole: "admin",
+    };
+    const view = renderWithProviders(<KeyEditView {...props} />);
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "12.5" },
+    });
+    view.rerender(
+      <KeyEditView
+        {...props}
+        keyData={{ ...MOCK_KEY_DATA, token: "different-key", token_id: "different-key", max_budget: 25 }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: 25 })));
+  });
+
   it("should persist a canonical budget_duration value, not a word-form the backend cannot parse", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     renderWithProviders(
@@ -1521,7 +1588,7 @@ describe("KeyEditView", () => {
       });
     });
 
-    it("should save an explicit project detach while keeping parents locked until the saved key changes", async () => {
+    it("should save an explicit project detach while keeping parents locked until reopening the editor", async () => {
       vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: true } });
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       const onCancel = vi.fn();
@@ -1551,15 +1618,21 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(onCancel).toHaveBeenCalledOnce();
       expect(onSubmit).not.toHaveBeenCalled();
+      // KeyInfoView unmounts the editor on cancel and after a successful save.
+      view.rerender(<></>);
       view.rerender(renderEditor({ ...key }));
       await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
+      view.rerender(renderEditor({ ...key, spend: 1 }));
+      expect(screen.getByRole("button", { name: "Keep project" })).toBeVisible();
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
       await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach)));
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
+      view.rerender(<></>);
       view.rerender(renderEditor({ ...key, project_id: null }));
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeEnabled();
       expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
+      view.rerender(<></>);
       view.rerender(renderEditor(key, "Internal User"));
       expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
       view.rerender(renderEditor(key, "Org Admin"));

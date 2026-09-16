@@ -82,7 +82,11 @@ interface KeyEditViewProps {
   premiumUser?: boolean;
 }
 
-export function KeyEditView({
+export function KeyEditView(props: KeyEditViewProps) {
+  return <KeyEditSession key={props.keyData.token} {...props} />;
+}
+
+function KeyEditSession({
   keyData,
   onCancel,
   onSubmit,
@@ -98,7 +102,9 @@ export function KeyEditView({
   const canEditEstimates = userRole != null && isProxyAdminRole(userRole);
   const estimateTooltip = estimateTooltips(canEditEstimates);
   const form = useZodForm<KeyEditFormValues, KeyEditFormValues>(keyEditFormSchema, {
-    defaultValues: toKeyEditFormValues(keyData),
+    // Refresh untouched fields without erasing the user's in-progress edits.
+    values: toKeyEditFormValues(keyData),
+    resetOptions: { keepDirtyValues: true },
   });
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
@@ -178,21 +184,17 @@ export function KeyEditView({
 
   // Sync disabled callbacks with form when component mounts
   useEffect(() => {
-    form.setValue("disabled_callbacks", disabledCallbacks);
+    form.setValue("disabled_callbacks", disabledCallbacks, { shouldDirty: true });
   }, [form, disabledCallbacks]);
-
-  useEffect(() => {
-    form.reset(toKeyEditFormValues(keyData));
-  }, [keyData, form]);
 
   // Sync auto-rotation state with form values
   useEffect(() => {
-    form.setValue("auto_rotate", autoRotationEnabled);
+    form.setValue("auto_rotate", autoRotationEnabled, { shouldDirty: true });
   }, [autoRotationEnabled, form]);
 
   useEffect(() => {
     if (rotationInterval) {
-      form.setValue("rotation_interval", rotationInterval);
+      form.setValue("rotation_interval", rotationInterval, { shouldDirty: true });
     }
   }, [rotationInterval, form]);
 
@@ -312,7 +314,7 @@ export function KeyEditView({
   const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
     setSelectedOrganizationId(orgId);
-    form.setValue("team_id", null);
+    form.setValue("team_id", null, { shouldDirty: true });
   };
 
   const handleTeamChange = (setField: (value: string | null) => void, teamId: string | null) => {
@@ -320,16 +322,16 @@ export function KeyEditView({
     const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
     if (selectedTeam?.organization_id) {
       setSelectedOrganizationId(selectedTeam.organization_id);
-      form.setValue("organization_id", selectedTeam.organization_id);
+      form.setValue("organization_id", selectedTeam.organization_id, { shouldDirty: true });
     } else if (!teamId) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", null);
+      form.setValue("organization_id", null, { shouldDirty: true });
     }
   };
 
   const handleDisabledCallbacksChange = (internalValues: string[]) => {
     setDisabledCallbacks(mapInternalToDisplayNames(internalValues));
-    form.setValue("disabled_callbacks", internalValues);
+    form.setValue("disabled_callbacks", internalValues, { shouldDirty: true });
   };
 
   const modelOptions = [
@@ -394,14 +396,14 @@ export function KeyEditView({
               onChange={(value) => {
                 switch (value) {
                   case "default":
-                    form.setValue("allowed_routes", "");
+                    form.setValue("allowed_routes", "", { shouldDirty: true });
                     break;
                   case "llm_api":
-                    form.setValue("allowed_routes", "llm_api_routes");
+                    form.setValue("allowed_routes", "llm_api_routes", { shouldDirty: true });
                     break;
                   case "management":
-                    form.setValue("allowed_routes", "management_routes");
-                    form.setValue("models", []);
+                    form.setValue("allowed_routes", "management_routes", { shouldDirty: true });
+                    form.setValue("models", [], { shouldDirty: true });
                     break;
                 }
               }}
@@ -734,7 +736,7 @@ export function KeyEditView({
               selectedAccessGroups={mcpSelection?.accessGroups || []}
               selectedToolsets={mcpSelection?.toolsets || []}
               toolPermissions={(mcpToolPermissions as Record<string, string[]> | undefined) || {}}
-              onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+              onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms, { shouldDirty: true })}
             />
           </div>
 
@@ -796,7 +798,9 @@ export function KeyEditView({
               canDetach={canDetachProject}
               pending={detachProject}
               disabled={isKeySaving}
-              onToggle={() => form.setValue("project_id", detachProject ? keyData.project_id : null)}
+              onToggle={() =>
+                form.setValue("project_id", detachProject ? keyData.project_id : null, { shouldDirty: true })
+              }
             />
           )}
 
