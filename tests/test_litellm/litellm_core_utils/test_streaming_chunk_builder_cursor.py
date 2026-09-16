@@ -257,14 +257,6 @@ class TestAnthropicCursorBug:
 
     @pytest.mark.parametrize("placeholder", [1, 3, 8])
     def test_interrupted_reasoning_only_stream_estimates_from_reasoning(self, placeholder: int):
-        """
-        message_start placeholders are not always 1 (live Anthropic streams
-        have been observed sending 1 and 8 for the same prompt), and a thinking
-        model cut off before message_delta has streamed only reasoning_content.
-        The recovered usage, including the completion_tokens_details the cost
-        calculator bills from, must come from that reasoning rather than from
-        the placeholder.
-        """
         message_start = _make_chunk(
             usage=Usage(
                 prompt_tokens=100,
@@ -292,13 +284,9 @@ class TestAnthropicCursorBug:
         )
         assert response.usage.total_tokens == response.usage.prompt_tokens + reasoning_tokens
         details = response.usage.completion_tokens_details
-        assert (details.text_tokens or 0) + details.reasoning_tokens == response.usage.completion_tokens
+        assert details.text_tokens + details.reasoning_tokens == response.usage.completion_tokens
 
     def test_fallback_counts_reasoning_and_text_together(self):
-        """
-        With no usable provider count, the estimate covers everything the
-        provider generated: reasoning_content plus visible text, not text alone.
-        """
         reasoning = "First I should check whether the input is sorted. " * 10
         text = "The list is already sorted, so no work is needed."
         chunks = [_make_chunk(reasoning_content=reasoning), _make_chunk(content=text)]
@@ -306,16 +294,12 @@ class TestAnthropicCursorBug:
         response = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "Sort it."}])
 
         text_only = litellm.token_counter(model="claude-sonnet-4-6", text=text, count_response_tokens=True)
-        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
-        assert reasoning_tokens > 0
-        assert response.usage.completion_tokens == text_only + reasoning_tokens
+        details = response.usage.completion_tokens_details
+        assert details.reasoning_tokens > 0
+        assert response.usage.completion_tokens == text_only + details.reasoning_tokens
+        assert details.text_tokens == text_only
 
     def test_lone_usage_event_with_finish_reason_is_trusted(self):
-        """
-        Guardrails rebuild responses from the chunks yielded to the client,
-        which excludes the un-yielded message_start. A finished stream then has
-        exactly one usage event (message_delta) and it must be kept as-is.
-        """
         chunks = [
             _make_chunk(content="Yes, "),
             _make_chunk(content="that works."),

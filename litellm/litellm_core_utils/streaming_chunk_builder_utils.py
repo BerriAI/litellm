@@ -1100,7 +1100,8 @@ class ChunkProcessor:
         if reasoning_tokens is not None:
             if returned_usage.completion_tokens_details is None:
                 returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
-                    reasoning_tokens=reasoning_tokens
+                    reasoning_tokens=reasoning_tokens,
+                    text_tokens=max(0, returned_usage.completion_tokens - reasoning_tokens),
                 )
             elif (
                 returned_usage.completion_tokens_details is not None
