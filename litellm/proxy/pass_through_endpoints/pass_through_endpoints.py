@@ -72,7 +72,9 @@ from litellm.proxy.auth.auth_utils import request_dispatched_to_pass_through_end
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    log_llm_api_exception,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -80,6 +82,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
 )
@@ -197,6 +200,7 @@ async def chat_completion_pass_through_endpoint(
     )
 
     data = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
         body: Final = await request.body()
         body_str: Final = body.decode()
@@ -224,6 +228,7 @@ async def chat_completion_pass_through_endpoint(
             version=version,
             proxy_config=proxy_config,
         )
+        data["litellm_call_id"] = litellm_call_id
 
         # override with user settings, these are params passed via cli
         if user_temperature:
@@ -290,9 +295,7 @@ async def chat_completion_pass_through_endpoint(
         response_cost: Final = hidden_params.get("response_cost", None) or ""
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         verbose_proxy_logger.debug("final response: %s", response)
 
@@ -313,12 +316,13 @@ async def chat_completion_pass_through_endpoint(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.completion(): Exception occured - %s", e)
+        log_llm_api_exception(e, litellm_call_id)
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=openai_error_type(e, error_status_code(e, 500)),
             param=openai_error_param(e),
+            headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
 

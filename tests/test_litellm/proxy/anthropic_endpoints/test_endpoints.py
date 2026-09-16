@@ -3,12 +3,14 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 """
 
 import json
+import logging
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 
@@ -283,6 +285,85 @@ class TestFailureHookRequestData:
         hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
         assert hook_request_data is captured["processor_data"]
         assert hook_request_data["litellm_logging_obj"] == "logging-obj-sentinel"
+
+
+class TestErrorLogCarriesCallId:
+    """LIT-7836: the /v1/messages and /v1/messages/count_tokens error lines must carry
+    the request's litellm_call_id, rendered in the message and as a structured field."""
+
+    @pytest.fixture(autouse=True)
+    def propagating_proxy_logger(self):
+        verbose_proxy_logger.propagate = True
+        try:
+            yield
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    @staticmethod
+    def _error_record(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
+        return next(r for r in caplog.records if "Exception occured" in r.getMessage())
+
+    @pytest.mark.asyncio
+    async def test_messages_failure_log_carries_call_id(self, caplog: pytest.LogCaptureFixture):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        call_id = "messages-call-7836"
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_call_id": call_id}
+            raise RuntimeError("provider timeout")
+
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert response.status_code == 500
+        record = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_failure_log_carries_callers_call_id(self, caplog: pytest.LogCaptureFixture):
+        from fastapi import HTTPException
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        call_id = "count-tokens-call-7836"
+        request = MagicMock()
+        request.headers = {"x-litellm-call-id": call_id}
+
+        with (
+            patch.object(  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                ep,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+            pytest.raises(HTTPException) as raised,
+        ):
+            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert raised.value.status_code == 500
+        record = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
 
 
 class TestEventLoggingBatchEndpoint:

@@ -52,3 +52,9 @@ def openai_error_param(exc: object) -> str | None:
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
     return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+
+
+def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers
+    if litellm_call_id is None:
+        return None
+    return {"x-litellm-call-id": litellm_call_id}  # mutable-ok: ProxyException mutates its headers dict

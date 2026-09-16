@@ -31,6 +31,7 @@ cannot drift without a test failure.
 
 import base64
 import json
+import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -1086,6 +1087,28 @@ async def test_create__exception_calls_failure_hook(harness, openai_env_creds):
 
     harness.logging.post_call_failure_hook.assert_called_once()
     assert harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
+
+
+async def test_create__exception_carries_the_litellm_call_id(harness, openai_env_creds, caplog):
+    call_id = "lit7836-batch-call-id"
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "litellm_call_id": call_id,
+        },
+    )
+    harness.litellm_acreate.side_effect = ValueError("provider boom")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
 
 
 # =========================================================================== #

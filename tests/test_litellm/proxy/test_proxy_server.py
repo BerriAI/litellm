@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import importlib
 import json
+import logging
 import os
 import re
 import socket
@@ -12925,6 +12926,48 @@ async def test_moderations_response_carries_litellm_call_id_header():
     assert result is moderation_response
     assert fastapi_response.headers["x-litellm-call-id"] == call_id
     assert fastapi_response.headers["x-litellm-model-id"] == "mod-deployment-1"
+
+
+@pytest.mark.asyncio
+async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplog):
+    """LIT-7836: the /v1/moderations error line must carry the litellm_call_id the
+    client sent, rendered in the message and as a structured log record field."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy._types import ProxyException
+
+    call_id = "moderations-call-7836"
+
+    async def passthrough_add_litellm_data(data, **kwargs):
+        return data
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fake_logging = MagicMock()
+    fake_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    verbose_proxy_logger.propagate = True
+    try:
+        with (
+            patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
+            patch.object(proxy_server_module, "route_request", new=AsyncMock(side_effect=Exception("bad key"))),  # test-quality-ok: fakes the provider failure so the real route's error log is observable
+            patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+            pytest.raises(ProxyException) as raised,
+        ):
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+            )
+    finally:
+        verbose_proxy_logger.propagate = False
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
 
 
 @pytest.mark.asyncio
