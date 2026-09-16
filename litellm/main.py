@@ -3543,6 +3543,64 @@ def _complete_vercel_ai_gateway(
     return response
 
 
+def _complete_merge_ai_gateway(
+    ctx: _CompletionDispatchContext,
+) -> _CompletionDispatchResult:
+    acompletion: Final = ctx.acompletion
+    api_base = ctx.api_base
+    api_key = ctx.api_key
+    client: Final = _dispatch_client_http(ctx)
+    headers: Final = ctx.headers
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    api_base = (
+        api_base
+        or litellm.api_base
+        or get_secret_str("MERGE_AI_GATEWAY_API_BASE")
+        or "https://api-gateway.merge.dev/v1/openai"
+    )
+
+    api_key = api_key or get_secret_str("MERGE_AI_GATEWAY_API_KEY") or get_secret_str("MERGE_API_KEY")
+
+    ## Load Config
+    config: Final = litellm.MergeAIGatewayConfig.get_config()
+    for k, v in _provider_config_items(config):
+        if k not in optional_params:
+            optional_params[k] = v
+
+    ## COMPLETION CALL
+    response: Final = base_llm_http_handler.completion(
+        model=model,
+        stream=stream,
+        messages=messages,
+        acompletion=acompletion,
+        api_base=api_base,
+        model_response=model_response,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        shared_session=shared_session,
+        custom_llm_provider="merge_ai_gateway",
+        timeout=timeout,
+        headers=headers,
+        encoding=_get_encoding(),
+        api_key=api_key,
+        logging_obj=logging,
+        client=client,
+    )
+    ## LOGGING
+    logging.post_call(input=messages, api_key=openai.api_key, original_response=response)
+
+    return response
+
+
 def _complete_vertex_ai_beta(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5812,6 +5870,8 @@ def completion(
             response = _complete_openrouter(_dispatch_ctx)
         elif custom_llm_provider == "vercel_ai_gateway":
             response = _complete_vercel_ai_gateway(_dispatch_ctx)
+        elif custom_llm_provider == "merge_ai_gateway":
+            response = _complete_merge_ai_gateway(_dispatch_ctx)
         elif custom_llm_provider == "palm":
             raise ValueError(
                 "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"

@@ -11,7 +11,6 @@ so the correct model ID is sent to the OpenRouter API.
 See: https://github.com/BerriAI/litellm/issues/16353
 """
 
-
 import pytest
 
 
@@ -97,3 +96,48 @@ class TestOpenRouterNativeModelRouting:
         )
         assert provider == "openrouter"
         assert result_model == "anthropic/claude-3.5-sonnet"
+
+
+class TestOpenRouterLiveModelDiscovery:
+    """get_valid_models(check_provider_endpoint=True) must hit the live catalog."""
+
+    def test_get_valid_models_uses_openrouter_catalog(self, respx_mock):
+        import httpx
+
+        route = respx_mock.get("https://openrouter.ai/api/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "anthropic/claude-sonnet-4"},
+                        {"id": "openai/gpt-5"},
+                    ]
+                },
+            )
+        )
+
+        models = litellm.get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="openrouter",
+            api_key="sk-or-test",
+        )
+
+        assert models == ["openrouter/anthropic/claude-sonnet-4", "openrouter/openai/gpt-5"]
+        assert route.calls[0].request.headers["authorization"] == "Bearer sk-or-test"
+
+    def test_get_models_defaults_api_base_and_omits_auth_without_key(self, respx_mock, monkeypatch):
+        import httpx
+
+        from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "openrouter_key", None)
+        route = respx_mock.get("https://openrouter.ai/api/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "m1"}]})
+        )
+
+        models = OpenrouterConfig().get_models()
+
+        assert models == ["openrouter/m1"]
+        assert "authorization" not in route.calls[0].request.headers

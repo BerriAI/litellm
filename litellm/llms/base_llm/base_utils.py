@@ -5,6 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic
@@ -12,7 +13,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
-from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+from litellm.types.utils import Message, ModelInfoBase, ProviderSpecificModelInfo, TokenCountResponse
 
 
 class BaseTokenCounter(ABC):
@@ -64,6 +65,16 @@ class BaseLLMModelInfo(ABC):
         Returns a list of models supported by this provider.
         """
         return []
+
+    def get_models_with_info(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> Mapping[str, ModelInfoBase] | None:
+        """
+        Returns the provider's catalog keyed by bare model id, with pricing and
+        context-window fields in ModelInfoBase names, or None when the provider
+        does not serve catalog metadata.
+        """
+        return None
 
     @staticmethod
     @abstractmethod

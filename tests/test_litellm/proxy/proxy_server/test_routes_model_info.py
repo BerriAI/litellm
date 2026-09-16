@@ -128,7 +128,6 @@ def test_v1_model_info_no_model_list_error(client, auth_as, null_router, path):
     assert "LLM Model List not loaded" in response.text
 
 
-
 def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
     """``GET /v1/model/info`` enriches each deployment through ``_get_proxy_model_info``; a registry
     entry declaring parallel function calling must land in ``model_info`` instead of null."""
@@ -161,9 +160,7 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     router.get_model_list = MagicMock(return_value=[deployment])
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
-    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(
-        [deployment]
-    )
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
     allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
@@ -399,14 +396,10 @@ def test_v2_model_info_exclude_auto_routers_shrinks_total_count(client, auth_as,
     assert len(payload["data"]) == payload["total_count"]
 
 
-def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(
-    client, auth_as, mixed_auto_router_router
-):
+def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(client, auth_as, mixed_auto_router_router):
     """Page size applies to the filtered list, so no page silently comes back short."""
     with auth_as():
-        response = client.get(
-            "/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1}
-        )
+        response = client.get("/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1})
     payload = response.json()
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
@@ -461,7 +454,11 @@ async def test_model_info_v2_query_sentinel_does_not_filter(monkeypatch, mixed_a
 
 @pytest.fixture
 def access_group_router(monkeypatch):
-    """Router with one sales-team deployment, one wildcard sales-team deployment and one ungrouped one."""
+    """Router with one sales-team deployment, one wildcard sales-team deployment and one ungrouped one.
+
+    The wildcard expands to a fixed two-model list so the route's filtering and
+    pagination are asserted over a deterministic row set.
+    """
     model_list = [
         {
             "model_name": "gpt-4o-mini",
@@ -470,7 +467,7 @@ def access_group_router(monkeypatch):
         },
         {
             "model_name": "openai/*",
-            "litellm_params": {"model": "openai/*"},
+            "litellm_params": {"model": "openai/*", "api_key": "sk-openai-test"},
             "model_info": {"id": "sales-wildcard", "db_model": False, "access_groups": ["sales-team", "eng"]},
         },
         {
@@ -480,6 +477,14 @@ def access_group_router(monkeypatch):
         },
     ]
     from unittest.mock import AsyncMock
+
+    from litellm.proxy.auth import model_checks
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["openai/gpt-4o-mini", "openai/gpt-4o"],
+    )
 
     router = MagicMock()
     router.model_list = model_list
@@ -501,12 +506,18 @@ def access_group_router(monkeypatch):
     yield router
 
 
-def test_v2_model_info_without_new_filters_returns_everything(client, auth_as, access_group_router):
+def test_v2_model_info_expands_wildcard_deployments(client, auth_as, access_group_router):
+    """A wildcard deployment lists one row per known provider model, matching /v1/models."""
     with auth_as():
         response = client.get("/v2/model/info")
     payload = response.json()
-    assert payload["total_count"] == 3
-    assert len(payload["data"]) == 3
+    assert _model_names(payload) == [
+        "gpt-4o-mini",
+        "openai/gpt-4o-mini",
+        "openai/gpt-4o",
+        "claude-opus",
+    ]
+    assert payload["total_count"] == 4
 
 
 def test_v2_model_info_access_group_filters_rows_and_total(client, auth_as, access_group_router):
@@ -514,8 +525,8 @@ def test_v2_model_info_access_group_filters_rows_and_total(client, auth_as, acce
     with auth_as():
         response = client.get("/v2/model/info", params={"access_group": "sales-team"})
     payload = response.json()
-    assert _model_names(payload) == ["gpt-4o-mini", "openai/*"]
-    assert payload["total_count"] == 2
+    assert _model_names(payload) == ["gpt-4o-mini", "openai/gpt-4o-mini", "openai/gpt-4o"]
+    assert payload["total_count"] == 3
 
 
 def test_v2_model_info_unknown_access_group_is_empty(client, auth_as, access_group_router):
@@ -526,7 +537,8 @@ def test_v2_model_info_unknown_access_group_is_empty(client, auth_as, access_gro
     assert payload["total_count"] == 0
 
 
-def test_v2_model_info_wildcard_only_filters_rows_and_total(client, auth_as, access_group_router):
+def test_v2_model_info_wildcard_only_returns_unexpanded_rows(client, auth_as, access_group_router):
+    """wildcard_only exists to surface the `*` deployment itself, so expansion must not run."""
     with auth_as():
         response = client.get("/v2/model/info", params={"wildcard_only": "true"})
     payload = response.json()
@@ -538,6 +550,66 @@ def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth
     with auth_as():
         response = client.get("/v2/model/info", params={"access_group": "sales-team", "page": 2, "size": 1})
     payload = response.json()
-    assert _model_names(payload) == ["openai/*"]
-    assert payload["total_count"] == 2
-    assert payload["total_pages"] == 2
+    assert _model_names(payload) == ["openai/gpt-4o-mini"]
+    assert payload["total_count"] == 3
+    assert payload["total_pages"] == 3
+
+
+def test_v2_model_info_enriches_expanded_rows_from_the_cost_map(client, auth_as, monkeypatch):
+    """End-to-end for the dashboard: a wildcard-expanded row carries the costs the
+    catalog registered into litellm.model_cost, which is what the Costs column reads."""
+    import litellm
+    from litellm.proxy.auth import model_checks
+
+    registered_key = "merge/anthropic/claude-opus-4-6"
+    model_list = [
+        {
+            "model_name": "merge/*",
+            "litellm_params": {"model": "merge_ai_gateway/*", "api_key": "sk-merge-test"},
+            "model_info": {"id": "merge-wildcard", "db_model": False},
+        }
+    ]
+    router = MagicMock()
+    router.model_list = model_list
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["merge_ai_gateway/anthropic/claude-opus-4-6"],
+    )
+    from litellm.litellm_core_utils import gateway_catalog_cache
+
+    monkeypatch.setattr(
+        gateway_catalog_cache,
+        "get_catalog",
+        lambda provider, api_key, api_base: {
+            "anthropic/claude-opus-4-6": {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "max_input_tokens": 200000,
+                "mode": "chat",
+                "litellm_provider": "merge_ai_gateway",
+            }
+        },
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    try:
+        with auth_as():
+            response = client.get("/v2/model/info")
+
+        payload = response.json()
+        assert _model_names(payload) == [registered_key]
+        row = payload["data"][0]
+        assert row["model_info"]["input_cost_per_token"] == pytest.approx(5e-6)
+        assert row["model_info"]["output_cost_per_token"] == pytest.approx(25e-6)
+        assert row["model_info"]["max_input_tokens"] == 200000
+    finally:
+        litellm.model_cost.pop(registered_key, None)

@@ -1137,6 +1137,7 @@ def _build_models_by_provider() -> dict:
         "baseten": baseten_models,
         "openrouter": openrouter_models,
         "vercel_ai_gateway": vercel_ai_gateway_models,
+        "merge_ai_gateway": frozenset(),
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
         | vertex_text_models
@@ -1560,6 +1561,9 @@ if TYPE_CHECKING:
     from .llms.maritalk import MaritalkConfig as MaritalkConfig
     from .llms.openrouter.chat.transformation import (
         OpenrouterConfig as OpenrouterConfig,
+    )
+    from .llms.merge_ai_gateway.chat.transformation import (
+        MergeAIGatewayConfig as MergeAIGatewayConfig,
     )
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig

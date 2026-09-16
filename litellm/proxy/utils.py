@@ -40,7 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.model_listing import ModelInfoResponse
+from litellm.types.proxy.model_listing import EMPTY_RESOLVED_COSTS, ModelInfoResponse, ResolvedCosts
 from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
@@ -8074,6 +8074,46 @@ def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | N
     )
 
 
+def _resolved_costs(input_cost: float | None, output_cost: float | None) -> ResolvedCosts:
+    """The per-token prices a listing resolved, omitting any it did not.
+
+    A price that could not be resolved must stay off the object: reporting zero
+    would tell a caller the model is free.
+    """
+    if input_cost is not None and output_cost is not None:
+        both: Final[ResolvedCosts] = {
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        }
+        return both
+    if input_cost is not None:
+        only_input: Final[ResolvedCosts] = {"input_cost_per_token": input_cost}
+        return only_input
+    if output_cost is not None:
+        only_output: Final[ResolvedCosts] = {"output_cost_per_token": output_cost}
+        return only_output
+    return EMPTY_RESOLVED_COSTS
+
+
+def _first_cost(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> float | None:
+    """The first per-token cost any deployment behind the listed name declares.
+
+    Interchangeable deployments of a model group normally share a price, so there is a
+    single value to report. When a group mixes models, the cheapest deployments are
+    listed first by the router, so the first number is the one a caller is most likely
+    to pay; unlike a context window it is not a ceiling to be maximized.
+    """
+    return next(
+        (
+            cost
+            for candidates in candidate_sets
+            for cost in (info.get(field) for info in candidates)
+            if isinstance(cost, float)
+        ),
+        None,
+    )
+
+
 def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> int | None:
     """The widest limit any deployment behind the listed name declares for ``field``.
 
@@ -8113,13 +8153,6 @@ def create_model_info_response(
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    base: Final[ModelInfoResponse] = {
-        "id": model_id,
-        "object": "model",
-        "created": DEFAULT_MODEL_CREATED_AT_TIME,
-        "owned_by": provider,
-    }
-
     listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
@@ -8137,6 +8170,18 @@ def create_model_info_response(
         )
         for deployment_model in deployment_models
     )
+
+    input_cost_per_token: Final = _first_cost(candidate_sets, "input_cost_per_token")
+    output_cost_per_token: Final = _first_cost(candidate_sets, "output_cost_per_token")
+    resolved_costs: Final = _resolved_costs(input_cost_per_token, output_cost_per_token)
+
+    base: Final[ModelInfoResponse] = {
+        "id": model_id,
+        "object": "model",
+        "created": DEFAULT_MODEL_CREATED_AT_TIME,
+        "owned_by": provider,
+        **resolved_costs,
+    }
 
     max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
     max_output_tokens: int | None = _group_token_limit(candidate_sets, "max_output_tokens")
