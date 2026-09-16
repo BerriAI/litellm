@@ -130,6 +130,55 @@ def test_is_database_service_unavailable_error_infra_failures(error):
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is True
 
 
+def test_is_connection_pool_exhausted_error_matches_prisma_p2037():
+    """Postgres ``max_connections`` exhaustion surfaces as Prisma P2037, a
+    ``DataError``. The classifier must catch the code, not the data-layer type,
+    otherwise auth treats a valid key as invalid while the pool is full."""
+    p2037 = DataError(
+        data={
+            "user_facing_error": {
+                "error_code": "P2037",
+                "message": "Too many database connections opened: FATAL: sorry, too many clients already",
+                "meta": {"database_error": "FATAL: sorry, too many clients already"},
+            }
+        }
+    )
+    assert PrismaDBExceptionHandler.is_connection_pool_exhausted_error(p2037) is True
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(p2037) is True
+    assert PrismaDBExceptionHandler.is_database_infrastructure_error(p2037) is False
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(p2037) is False
+    assert PrismaDBExceptionHandler.is_database_transport_error(p2037) is False
+
+
+def test_is_connection_pool_exhausted_error_matches_message_without_code():
+    """Some prisma payloads omit ``error_code``; the Postgres fatal still has
+    to classify as pool exhaustion rather than a rejected row."""
+    p2037_by_message = DataError(
+        data={
+            "user_facing_error": {
+                "message": "FATAL: sorry, too many clients already",
+                "meta": {"database_error": "FATAL: sorry, too many clients already"},
+            }
+        }
+    )
+    assert PrismaDBExceptionHandler.is_connection_pool_exhausted_error(p2037_by_message) is True
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(p2037_by_message) is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DataError(data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "t"}}}),
+        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "t"}}}),
+        PrismaError("can't reach database server"),
+        httpx.ConnectError("connection refused"),
+        RuntimeError("too many clients already"),
+    ],
+)
+def test_is_connection_pool_exhausted_error_excludes_other_failures(error):
+    assert PrismaDBExceptionHandler.is_connection_pool_exhausted_error(error) is False
+
+
 def test_is_database_service_unavailable_error_prisma_p1001_masquerades_as_dataerror():
     """Real-world regression: prisma-client-py raises the P1001 "can't reach
     database server" connectivity failure as a DataError (a data-layer type).
@@ -705,6 +754,7 @@ MOCKED_PRISMA_PREDICATES: Final = (
     PrismaDBExceptionHandler.is_database_infrastructure_error,
     PrismaDBExceptionHandler.is_database_transport_error,
     PrismaDBExceptionHandler.is_deadlock_error,
+    PrismaDBExceptionHandler.is_connection_pool_exhausted_error,
     PrismaDBExceptionHandler.is_read_only_transaction_error,
     PrismaDBExceptionHandler.is_prisma_engine_internal_error,
     PrismaDBExceptionHandler.is_database_service_unavailable_error,

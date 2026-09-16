@@ -185,6 +185,18 @@ async def test_handle_authentication_error_transport_error_raised_over_a_permane
         pytest.param(httpx.ConnectError("All connection attempts failed"), id="ConnectError"),
         pytest.param(EngineConnectionError(), id="EngineConnectionError"),
         pytest.param(PrismaError("can't reach database server"), id="P1001_text"),
+        pytest.param(
+            DataError(
+                data={
+                    "user_facing_error": {
+                        "error_code": "P2037",
+                        "message": "Too many database connections opened: FATAL: sorry, too many clients already",
+                        "meta": {"database_error": "FATAL: sorry, too many clients already"},
+                    }
+                }
+            ),
+            id="P2037_pool_exhausted",
+        ),
     ],
 )
 async def test_handle_authentication_error_transient_outage_503_keeps_retry_wording(db_error):
@@ -263,6 +275,15 @@ async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
         OSError("network is unreachable"),
         HTTPClientClosedError(),
         PrismaError("can't reach database server"),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "error_code": "P2037",
+                    "message": "Too many database connections opened: FATAL: sorry, too many clients already",
+                    "meta": {"database_error": "FATAL: sorry, too many clients already"},
+                }
+            }
+        ),
         RawQueryError(
             data={
                 "user_facing_error": {

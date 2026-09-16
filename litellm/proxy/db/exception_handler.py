@@ -222,6 +222,27 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def is_connection_pool_exhausted_error(e: Exception) -> bool:
+        """True iff ``e`` is Prisma P2037: Postgres refused a new session because
+        ``max_connections`` is already taken.
+
+        The database is up, so this is not a reconnectable transport failure —
+        a fresh session would be refused for the same reason until existing
+        connections are released. Auth still has to surface 503 rather than
+        401: the key was never confirmed invalid, only uncheckable under
+        connection pressure. Matched by the stable Prisma code first; the
+        message fallback covers payloads that omit ``error_code``.
+        """
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if getattr(e, "code", None) == "P2037":
+            return True
+        error_message = str(e).lower()
+        return "too many database connections opened" in error_message or "too many clients already" in error_message
+
+    @staticmethod
     def is_read_only_transaction_error(e: Exception) -> bool:
         """True iff ``e`` is Postgres SQLSTATE 25006 surfaced through prisma: the
         pooled session answers reads but rejects writes, so the connection is
@@ -280,6 +301,12 @@ class PrismaDBExceptionHandler:
         keyword-matches the connection message and catches that masquerade,
         while genuine data errors (no connection keyword) correctly stay 401.
 
+        Prisma P2037 (too many database connections) is also a ``DataError``,
+        so the data-layer exclusion would otherwise turn connection exhaustion
+        into 401. It is matched here, not in ``is_database_transport_error``:
+        the database is reachable, reconnecting cannot mint a free slot, but
+        the key was never confirmed invalid.
+
         The Postgres "cached plan must not change result type" error is matched
         here, not in ``is_database_transport_error``: it is a transient stale-DB-
         state condition (not an invalid key), but the connection is healthy so it
@@ -292,6 +319,8 @@ class PrismaDBExceptionHandler:
         """
         import asyncio
 
+        if PrismaDBExceptionHandler.is_connection_pool_exhausted_error(e):
+            return True
         if PrismaDBExceptionHandler.is_database_infrastructure_error(e):
             return True
         if PrismaDBExceptionHandler.is_database_transport_error(e):
