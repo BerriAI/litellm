@@ -506,7 +506,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if isinstance(m.get("content"), str):
                     assistant_message_str = str(m.get("content", ""))
                 elif isinstance(m.get("content"), list):
-                    for content in cast(list, m.get("content", [])):
+                    for content in cast(list, m.get("content", [])):  # cast-ok: untrusted client payload
                         if isinstance(content, str):
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
