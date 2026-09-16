@@ -34,8 +34,10 @@ def _python_aresponses() -> PythonAresponses:
     )
 
 
-_RESPONSES: Final = signature(_python_responses())
-_ARESPONSES: Final = signature(_python_aresponses())
+_PYTHON_RESPONSES: Final = _python_responses()
+_RESPONSES: Final = signature(_PYTHON_RESPONSES)
+_PYTHON_ARESPONSES: Final = _python_aresponses()
+_ARESPONSES: Final = signature(_PYTHON_ARESPONSES)
 
 
 def _public_request(
@@ -78,7 +80,7 @@ def responses(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Responses call shape
 ) -> ResponsesResult | Coroutine[object, object, ResponsesResult]:
-    python: Final = _python_responses()
+    python: Final = _PYTHON_RESPONSES
     return _DISPATCH.run(
         args,
         kwargs,
@@ -89,7 +91,7 @@ def responses(
 
 
 async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwargs-ok: preserve the public call shape
-    python: Final = _python_aresponses()
+    python: Final = _PYTHON_ARESPONSES
     return await _ADISPATCH.arun(
         args,
         kwargs,
@@ -108,7 +110,7 @@ def _context(request: LiteLLMResponsesRequest) -> Context:
     )
 
 
-responses.__doc__ = _python_responses().__doc__
-responses.__wrapped__ = _python_responses()  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
-aresponses.__doc__ = _python_aresponses().__doc__
-aresponses.__wrapped__ = _python_aresponses()  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
+responses.__doc__ = _PYTHON_RESPONSES.__doc__
+responses.__wrapped__ = _PYTHON_RESPONSES  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
+aresponses.__doc__ = _PYTHON_ARESPONSES.__doc__
+aresponses.__wrapped__ = _PYTHON_ARESPONSES  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature

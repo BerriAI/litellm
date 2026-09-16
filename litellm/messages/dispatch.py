@@ -40,8 +40,10 @@ def _python_amessages() -> PythonAmessages:
     )
 
 
-_MESSAGES: Final = signature(_python_messages())
-_AMESSAGES: Final = signature(_python_amessages())
+_PYTHON_MESSAGES: Final = _python_messages()
+_MESSAGES: Final = signature(_PYTHON_MESSAGES)
+_PYTHON_AMESSAGES: Final = _python_amessages()
+_AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
 
 
 def _public_request(
@@ -85,7 +87,7 @@ def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
-    python: Final = _python_messages()
+    python: Final = _PYTHON_MESSAGES
     return _DISPATCH.run(
         args,
         kwargs,
@@ -96,7 +98,7 @@ def anthropic_messages_handler(
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
-    python: Final = _python_amessages()
+    python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
         kwargs,
@@ -115,7 +117,7 @@ def _context(request: LiteLLMMessagesRequest) -> Context:
     )
 
 
-anthropic_messages_handler.__doc__ = _python_messages().__doc__
-anthropic_messages_handler.__wrapped__ = _python_messages()  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
-anthropic_messages.__doc__ = _python_amessages().__doc__
-anthropic_messages.__wrapped__ = _python_amessages()  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
+anthropic_messages_handler.__doc__ = _PYTHON_MESSAGES.__doc__
+anthropic_messages_handler.__wrapped__ = _PYTHON_MESSAGES  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature
+anthropic_messages.__doc__ = _PYTHON_AMESSAGES.__doc__
+anthropic_messages.__wrapped__ = _PYTHON_AMESSAGES  # pyright: ignore[reportFunctionMemberAccess]  # inspect.signature follows __wrapped__ to the legacy signature

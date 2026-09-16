@@ -42,6 +42,13 @@ def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, ob
         raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
 
 
+_PYTHON_OCR: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
+    Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], main.ocr
+)
+_PYTHON_AOCR: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
+    Callable[..., Awaitable[OCRResponse]], main.aocr
+)
+
 _DISPATCH: Final = PublicDispatch(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("ocr", args, kwargs),
@@ -60,26 +67,20 @@ def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-    python_ocr: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
-        Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], main.ocr
-    )
     return _DISPATCH.run(
         args,
         kwargs,
-        python=python_ocr,
+        python=_PYTHON_OCR,
         binding=NATIVE_OCR,
         native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
-    fallback: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
-        Callable[..., Awaitable[OCRResponse]], main.aocr
-    )
     return await _ADISPATCH.arun(
         args,
         kwargs,
-        python=fallback,
+        python=_PYTHON_AOCR,
         binding=NATIVE_AOCR,
         native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
