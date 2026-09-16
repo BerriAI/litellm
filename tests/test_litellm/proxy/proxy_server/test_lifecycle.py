@@ -1042,6 +1042,54 @@ async def test_spend_report_locks_are_never_released():
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.release_lock.assert_not_awaited()
 
 
+def _init_daily_global_spend_reconcile_job() -> tuple[MagicMock, MagicMock, MagicMock]:
+    scheduler = MagicMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.alerting_handler = AsyncMock()
+    prisma_client = MagicMock()
+    ProxyStartupEvent._initialize_daily_global_spend_reconcile_job(
+        scheduler=scheduler,
+        proxy_logging_obj=proxy_logging_obj,
+        prisma_client=prisma_client,
+    )
+    return scheduler, proxy_logging_obj, prisma_client
+
+
+def test_daily_global_spend_reconcile_job_is_scheduled_nightly_with_an_immediate_catch_up_run():
+    """Startup schedules the LiteLLM_DailyGlobalSpend backfill a couple of minutes out, so a
+    fresh deploy switches usage reads to the global table without waiting for the nightly
+    run, and replaces any previous registration of the same job id."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
+
+    scheduler, _, _ = _init_daily_global_spend_reconcile_job()
+
+    (call,) = scheduler.add_job.call_args_list
+    assert call.kwargs["id"] == DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
+    assert call.kwargs["replace_existing"] is True
+    assert call.args[1:] == ("cron",)
+    assert (call.kwargs["hour"], call.kwargs["minute"], call.kwargs["timezone"]) == (0, 30, "UTC")
+    assert timedelta(0) < call.kwargs["next_run_time"] - datetime.now(timezone.utc) <= timedelta(minutes=2)
+
+
+@pytest.mark.asyncio
+async def test_daily_global_spend_reconcile_job_runs_under_the_pod_lock_and_alerts_through_the_proxy(monkeypatch):
+    scheduler, proxy_logging_obj, prisma_client = _init_daily_global_spend_reconcile_job()
+    run = AsyncMock()
+    monkeypatch.setattr(ps, "run_scheduled_daily_global_spend_reconcile", run)
+
+    await scheduler.add_job.call_args.args[0]()
+
+    run.assert_awaited_once()
+    assert run.await_args.args == (prisma_client,)
+    assert run.await_args.kwargs["pod_lock_manager"] is proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+    await run.await_args.kwargs["alert"]("day 2026-09-01 failed")
+    proxy_logging_obj.alerting_handler.assert_awaited_once()
+    assert proxy_logging_obj.alerting_handler.await_args.kwargs["message"] == "day 2026-09-01 failed"
+    assert proxy_logging_obj.alerting_handler.await_args.kwargs["level"] == "High"
+
+
 @pytest.mark.asyncio
 async def test_prometheus_fallback_stats_job_skipped_when_another_pod_holds_the_lock(monkeypatch):
     """The boot-time send goes through the same gate, so a losing pod sends nothing at all:

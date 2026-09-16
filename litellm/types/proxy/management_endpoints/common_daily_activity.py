@@ -100,6 +100,11 @@ class DailySpendMetadata(BaseModel):
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
+    api_key_limit: int | None = Field(
+        default=None,
+        description="When set, api_keys and every api_key_breakdown list at most this many keys, "
+        "ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+    )
 
 
 class SpendAnalyticsPaginatedResponse(BaseModel):
