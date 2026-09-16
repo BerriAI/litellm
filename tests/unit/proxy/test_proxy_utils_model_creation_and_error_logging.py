@@ -1556,8 +1556,8 @@ class TestSendEmailStartTls:
 class _RecordingMCPGuardrail(CustomGuardrail):
     """Unified guardrail that masks every text it is handed."""
 
-    def __init__(self, event_hook, masked_text="<MASKED>", raises=None):
-        super().__init__(guardrail_name="mcp-output-guardrail", event_hook=event_hook, default_on=True)
+    def __init__(self, event_hook, masked_text="<MASKED>", raises=None, default_on=True):
+        super().__init__(guardrail_name="mcp-output-guardrail", event_hook=event_hook, default_on=default_on)
         self.masked_text = masked_text
         self.raises = raises
         self.call_count = 0
@@ -1591,26 +1591,32 @@ class _NativeMCPGuardrail(CustomGuardrail):
 
 
 @pytest.fixture
-def restore_callbacks():
-    """Restore the process-wide callback state post_mcp_call_hook reads.
+def install_callbacks():
+    """Install callbacks on the process-wide list post_mcp_call_hook reads, and restore it afterwards.
 
     ProxyLogging caches callback capabilities keyed on id()s of litellm.callbacks,
-    so a restored-but-different list can collide with a stale entry after GC and
-    leak a has_guardrail verdict into unrelated tests in the same worker.
+    so a replaced list can collide with a stale entry after GC and leak a
+    has_guardrail verdict into unrelated tests in the same worker. The cache is
+    cleared on both install and restore for that reason.
     """
     original = list(litellm.callbacks)
-    yield
+
+    def install(*callbacks):
+        litellm.callbacks = list(callbacks)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    yield install
     litellm.callbacks = original
     ProxyLogging._callback_capabilities_cache.clear()
 
 
 @pytest.mark.asyncio
-async def test_post_mcp_call_hook_masks_tool_result(restore_callbacks):
+async def test_post_mcp_call_hook_masks_tool_result(install_callbacks):
     """A post_mcp_call guardrail must see the tool result text and mask it in the returned result."""
     from mcp.types import CallToolResult, TextContent
 
     guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
-    litellm.callbacks = [guardrail]
+    install_callbacks(guardrail)
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
 
@@ -1626,12 +1632,12 @@ async def test_post_mcp_call_hook_masks_tool_result(restore_callbacks):
 
 
 @pytest.mark.asyncio
-async def test_post_mcp_call_hook_skips_guardrail_configured_for_other_hooks(restore_callbacks):
+async def test_post_mcp_call_hook_skips_guardrail_configured_for_other_hooks(install_callbacks):
     """A guardrail not configured for post_mcp_call must not scan MCP tool results."""
     from mcp.types import CallToolResult, TextContent
 
     guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_call)
-    litellm.callbacks = [guardrail]
+    install_callbacks(guardrail)
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
 
@@ -1646,13 +1652,13 @@ async def test_post_mcp_call_hook_skips_guardrail_configured_for_other_hooks(res
 
 
 @pytest.mark.asyncio
-async def test_post_mcp_call_hook_skips_guardrail_without_apply_guardrail(restore_callbacks):
+async def test_post_mcp_call_hook_skips_guardrail_without_apply_guardrail(install_callbacks):
     """Guardrails that implement async_post_mcp_tool_call_hook are dispatched by the
     logging object, so this hook must not run them a second time."""
     from mcp.types import CallToolResult, TextContent
 
     guardrail = _NativeMCPGuardrail()
-    litellm.callbacks = [guardrail]
+    install_callbacks(guardrail)
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
 
@@ -1667,7 +1673,7 @@ async def test_post_mcp_call_hook_skips_guardrail_without_apply_guardrail(restor
 
 
 @pytest.mark.asyncio
-async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
+async def test_post_mcp_call_hook_propagates_guardrail_block(install_callbacks):
     """A guardrail rejecting the tool result must raise out of the hook."""
     from mcp.types import CallToolResult, TextContent
 
@@ -1677,7 +1683,7 @@ async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
         event_hook=GuardrailEventHooks.post_mcp_call,
         raises=BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="mcp-output-guardrail"),
     )
-    litellm.callbacks = [guardrail]
+    install_callbacks(guardrail)
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
 
@@ -1687,6 +1693,133 @@ async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
             request_data={"mcp_tool_name": "echo"},
             user_api_key_dict=None,
         )
+
+
+def _mcp_logging_payload(metadata, metadata_key="metadata"):
+    """The request payload every MCP call site hands ``post_mcp_call_hook``.
+
+    ``Logging.model_call_details`` nests the request metadata under
+    ``litellm_params``; see ``litellm.utils.function_setup``. The bucket is
+    named ``litellm_metadata`` on the routes that reserve ``metadata`` for the
+    provider, which is how MCP tools invoked from /responses arrive here.
+    """
+    return {
+        "model": "MCP: echo",
+        "call_type": "call_mcp_tool",
+        "litellm_params": {"api_base": "", metadata_key: metadata},
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_guardrail_requested_through_request_metadata(install_callbacks):
+    """A guardrail attached by key, team or policy (not default_on) must mask MCP tool output.
+
+    The MCP paths pass the logging payload, where the resolved guardrail list
+    sits under litellm_params.metadata, so gating on the top level alone left
+    masking working only for default_on guardrails.
+    """
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+    install_callbacks(guardrail)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload({"guardrails": [guardrail.guardrail_name]}),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert [item.text for item in returned.content] == ["<MASKED>"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_skips_guardrail_absent_from_request_metadata(install_callbacks):
+    """A non-default_on guardrail the request never asked for must leave tool output alone."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+    install_callbacks(guardrail)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload({"guardrails": ["some-other-guardrail"]}),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 0
+    assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_guardrail_requested_through_litellm_metadata(install_callbacks):
+    """The same lift must work for routes whose request metadata bucket is litellm_metadata."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call, default_on=False)
+    install_callbacks(guardrail)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload(
+            {"guardrails": [guardrail.guardrail_name]}, metadata_key="litellm_metadata"
+        ),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert [item.text for item in returned.content] == ["<MASKED>"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_honors_opt_out_in_request_metadata(install_callbacks):
+    """A key that opted out of a global guardrail must not have MCP tool output scanned by it."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    install_callbacks(guardrail)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload(
+            {"user_api_key_metadata": {"opted_out_global_guardrails": [guardrail.guardrail_name]}}
+        ),
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 0
+    assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_default_on_guardrail_when_payload_has_no_metadata_bucket(install_callbacks):
+    """A logging payload carrying no metadata bucket must leave the Default On path working.
+
+    There is nothing to lift here, and that no-op must not change the verdict.
+    """
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    install_callbacks(guardrail)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"model": "MCP: echo", "litellm_params": {"api_base": ""}},
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert [item.text for item in returned.content] == ["<MASKED>"]
 
 
 @pytest.mark.asyncio
@@ -1796,7 +1929,7 @@ async def test_update_data_key_branch_stamps_settings_updated_at():
 
 
 @pytest.mark.asyncio
-async def test_post_mcp_call_hook_skips_opted_out_guardrail(restore_callbacks):
+async def test_post_mcp_call_hook_skips_opted_out_guardrail(install_callbacks):
     """A guardrail that keeps its native lifecycle hooks must not have MCP tool results
     scanned through the unified path, even though it implements apply_guardrail."""
     from mcp.types import CallToolResult, TextContent
@@ -1811,7 +1944,7 @@ async def test_post_mcp_call_hook_skips_opted_out_guardrail(restore_callbacks):
             return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
 
     guardrail = _OptedOutMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
-    litellm.callbacks = [guardrail]
+    install_callbacks(guardrail)
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
 
