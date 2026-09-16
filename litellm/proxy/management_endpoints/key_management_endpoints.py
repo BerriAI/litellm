@@ -6241,7 +6241,6 @@ class _KeyStatusSource(BaseModel):
 
 
 def _derive_key_status(row: Mapping[str, object], now: datetime) -> KeyStatus:
-    """Status of a live key row; mirrors the partition `_build_status_where_clause` applies at query time."""
     source: Final = _KeyStatusSource.model_validate(row)
     if source.blocked is True:
         return "revoked"
@@ -6651,16 +6650,11 @@ def _not_blocked_where_clause() -> dict[str, object]:
 
 
 def _build_status_where_clause(status_filter: str | None, now: datetime) -> dict[str, object] | None:
-    """Live-table clause for a status filter; None when the status needs no clause (deleted rows live elsewhere)."""
-    match status_filter:
-        case "revoked":
-            return {"blocked": True}
-        case "expired":
-            return {"AND": [_not_blocked_where_clause(), _build_expires_where_clause("expired", now)]}
-        case "active":
-            return {"AND": [_not_blocked_where_clause(), _build_expires_where_clause("active", now)]}
-        case _:
-            return None
+    if status_filter == "revoked":
+        return {"blocked": True}
+    if status_filter in ("expired", "active"):
+        return {"AND": [_not_blocked_where_clause(), _build_expires_where_clause(status_filter, now)]}
+    return None
 
 
 def _build_key_search_where(search: str) -> KeySearchWhere:
