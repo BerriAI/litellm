@@ -569,7 +569,7 @@ def test_realtime_logging_object_does_not_validate_unknown_event_types():
 
 def test_realtime_transcription_duration_cost(monkeypatch):
     """
-    gpt-realtime-whisper transcription sessions are billed by input audio duration
+    gpt-realtime-whisper transcription sessions are billed by input audio duration.
     The .completed events carry usage {type: duration, seconds: N};
     cost must equal total_seconds * input_cost_per_second.
     """

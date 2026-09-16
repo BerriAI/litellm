@@ -9,25 +9,26 @@ from unittest.mock import Mock
 
 import pytest
 
-from litellm.constants import (
-    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
-    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
-)
-
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
+
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
 )
+from litellm.constants import (
+    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
+
 
 
 @pytest.mark.asyncio
@@ -2931,6 +2932,7 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     forced ``thinking.type='adaptive'`` even with ``supports_adaptive_thinking``
     explicitly set to ``false`` on the entry."""
     import litellm
+
     from litellm.types.router import GenericLiteLLMParams
 
     model = "global.anthropic.claude-opus-4-8"
