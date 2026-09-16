@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -319,6 +319,41 @@ def test_sync_shadow_gets_kwargs_snapshot_taken_before_primary_mutates_them(reco
     shadow_metadata = shadow_successes[0]["litellm_params"]["metadata"]
     assert shadow_metadata["model_group"] == "shadow-b"
     assert "primary-only" not in shadow_metadata.get("tags", [])
+
+
+def test_sync_shadow_workers_do_not_share_metadata_with_each_other(recording_logger):
+    workers: list[tuple[Mapping[str, object], Callable[[], None]]] = []
+
+    class _DeferredThread:
+        def __init__(self, target, args, kwargs, daemon) -> None:
+            workers.append((kwargs, lambda: target(*args, **kwargs)))
+
+        def start(self) -> None:
+            return None
+
+    router = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    with patch(  # test-quality-ok: Router has no thread factory to inject; deferring start is the only deterministic way to expose the race
+        "litellm.router.threading", SimpleNamespace(Thread=_DeferredThread)
+    ):
+        router.completion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="pong",
+            metadata={"foo": "bar"},
+        )
+    assert len(workers) == 2
+    (first_kwargs, run_first), (_, run_second) = workers
+    first_kwargs["metadata"].pop("foo")
+    run_second()
+    run_first()
+    _wait_for_shadow_successes_sync(recording_logger, expected=2)
+
+    metadata_by_group = {
+        call["litellm_params"]["metadata"]["model_group"]: call["litellm_params"]["metadata"]
+        for call in recording_logger.shadow_successes()
+    }
+    assert metadata_by_group["shadow-b"]["foo"] == "bar"
+    assert "foo" not in metadata_by_group["shadow-a"]
 
 
 @pytest.mark.asyncio
