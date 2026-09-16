@@ -8202,7 +8202,6 @@ class Router:
         response: object,
         request_kwargs: dict[str, object],
     ) -> None:
-        """Count the request before the headers are read; the success callback adds only what is still missing"""
         if response is None:
             return
         try:
