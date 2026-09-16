@@ -421,7 +421,6 @@ class TestRotateVirtualKeyInSecretManager:
     async def test_rotated_hook_without_request_body_syncs_secret_manager(
         self, monkeypatch: pytest.MonkeyPatch, key_alias: str | None
     ):
-        """POST /key/{key}/regenerate with no body (data=None) must still write the new key to the secret manager."""
         import litellm
         from litellm.proxy._types import GenerateKeyResponse, LiteLLM_VerificationToken
         from litellm.secret_managers.base_secret_manager import BaseSecretManager
