@@ -68,8 +68,8 @@ def _resolve_model_info(model: str) -> ModelInfo:
 
 
 def _with_cache_read_fallback(model_info: ModelInfo) -> ModelInfo:
-    """Most fireworks_ai price-map entries publish no cache-read rate though the provider bills
-    cached reads at the input rate; the shared map is never mutated, so a copy carries the fallback."""
+    """Entries without a cache-read rate keep the previous calculator's input-rate fallback for cached
+    reads (LIT-7845 tracks the documented discount); the shared map is never mutated, so a copy carries it."""
     input_rate: Final = model_info.get("input_cost_per_token")
     if model_info.get("cache_read_input_token_cost") is not None or input_rate is None:
         return model_info
