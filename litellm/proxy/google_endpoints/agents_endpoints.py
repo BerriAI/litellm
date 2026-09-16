@@ -62,10 +62,10 @@ def _enforce_caller_supplied_provider_key(
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=(
-            "Gemini managed-agent endpoints require a caller-supplied "
-            "Gemini api_key (via 'litellm_params_template'). Falling back to "
-            "the proxy's GOOGLE_API_KEY / GEMINI_API_KEY env vars is only "
-            "permitted for proxy admins."
+            "Managed-agent endpoints require a caller-supplied provider "
+            "api_key (via 'litellm_params_template'). Falling back to the "
+            "proxy's provider env vars (GOOGLE_API_KEY / GEMINI_API_KEY, "
+            "ANTHROPIC_API_KEY) is only permitted for proxy admins."
         ),
     )
 
@@ -235,8 +235,9 @@ async def list_gemini_agents(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final[dict] = {"custom_llm_provider": "gemini"}
+    data: Final[dict[str, object]] = {}
     _merge_query_params_into_data(data, request)
+    data.setdefault("custom_llm_provider", "gemini")
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -293,8 +294,9 @@ async def get_gemini_agent(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
+    data: Final = {"name": name}
     _merge_query_params_into_data(data, request)
+    data.setdefault("custom_llm_provider", "gemini")
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -351,8 +353,9 @@ async def delete_gemini_agent(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
+    data: Final = {"name": name}
     _merge_query_params_into_data(data, request)
+    data.setdefault("custom_llm_provider", "gemini")
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -409,8 +412,9 @@ async def list_gemini_agent_versions(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
+    data: Final = {"name": name}
     _merge_query_params_into_data(data, request)
+    data.setdefault("custom_llm_provider", "gemini")
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)

@@ -1,0 +1,301 @@
+"""Anthropic Managed Agents: the provider-side agent resource (beta managed-agents-2026-04-01).
+
+  POST /v1/agents                      create
+  GET  /v1/agents                      list
+  GET  /v1/agents/{agent_id}           get (optional ?version=)
+  GET  /v1/agents/{agent_id}/versions  list versions
+
+Anthropic assigns the agent id, so the ``name`` handle of the agents SDK is the agent id
+for every call after create. Agent ``metadata`` is not forwarded: on the proxy that key
+carries LiteLLM's own request metadata. Agents are archived (POST /v1/agents/{agent_id}/archive),
+never deleted, and the agents SDK only issues HTTP DELETE, so delete is refused.
+"""
+
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final
+
+import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+import litellm
+from litellm.constants import ANTHROPIC_MANAGED_AGENTS_BETA_VERSION
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
+from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
+from litellm.types.agents import (
+    AgentCreateResponse,
+    AgentDeleteResult,
+    AgentListResponse,
+    AgentVersionsResponse,
+)
+from litellm.types.utils import LlmProviders
+
+_ANTHROPIC_VERSION: Final = "2023-06-01"
+_DEFAULT_API_BASE: Final = "https://api.anthropic.com"
+
+
+class _CreateAgentRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    model: str | Mapping[str, object] | None = None
+    system: str | None = None
+    description: str | None = None
+    tools: Sequence[object] | None = None
+    mcp_servers: Sequence[object] | None = None
+    skills: Sequence[object] | None = None
+    multiagent: Mapping[str, object] | None = None
+
+
+class _PageQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    limit: int | None = None
+    page: str | None = None
+    include_archived: bool | None = None
+
+
+class _GetQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: int | None = None
+
+
+class _Page(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    data: tuple[Mapping[str, object], ...] = ()
+    next_page: str | None = None
+
+
+class _BetaHeader(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    value: str | tuple[str, ...]
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _requested_betas(requested: object) -> frozenset[str]:
+    try:
+        listed: Final = _BetaHeader.model_validate(MappingProxyType({"value": requested})).value
+    except ValidationError:
+        return frozenset()
+    values: Final = listed.split(",") if isinstance(listed, str) else listed
+    return frozenset(beta.strip() for beta in values if beta.strip())
+
+
+def _with_managed_agents_beta(requested: object) -> str:
+    return ",".join(sorted(_requested_betas(requested) | frozenset((ANTHROPIC_MANAGED_AGENTS_BETA_VERSION,))))
+
+
+def _invalid_request(message: str) -> litellm.BadRequestError:
+    return litellm.BadRequestError(message=message, model="", llm_provider=LlmProviders.ANTHROPIC.value)
+
+
+class AnthropicAgentsConfig(BaseAgentsAPIConfig):
+    def _base_url(self, api_base: str | None) -> str:
+        return AnthropicModelInfo.get_api_base(api_base) or _DEFAULT_API_BASE
+
+    def _agent_url(self, name: str, api_base: str | None) -> str:
+        return f"{self._base_url(api_base)}/v1/agents/{encode_url_path_segment(name, field_name='agent id')}"
+
+    def _raise_for_status(self, raw_response: httpx.Response) -> None:
+        if 200 <= raw_response.status_code < 300:
+            return
+        raise AnthropicError(
+            status_code=raw_response.status_code,
+            message=raw_response.text,
+            headers=raw_response.headers,
+        )
+
+    def _page(self, raw_response: httpx.Response) -> _Page:
+        self._raise_for_status(raw_response)
+        try:
+            return _Page.model_validate_json(raw_response.content)
+        except ValidationError as e:
+            raise AnthropicError(
+                status_code=raw_response.status_code,
+                message=f"response does not match the Anthropic agents page schema: {e}",
+                headers=raw_response.headers,
+            )
+
+    def _agent(self, raw_response: httpx.Response) -> AgentCreateResponse:
+        self._raise_for_status(raw_response)
+        try:
+            return AgentCreateResponse.model_validate_json(raw_response.content)
+        except ValidationError as e:
+            raise AnthropicError(
+                status_code=raw_response.status_code,
+                message=f"response does not match the Anthropic agent schema: {e}",
+                headers=raw_response.headers,
+            )
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: Mapping[str, str] | httpx.Headers,
+    ) -> Exception:
+        return AnthropicError(status_code=status_code, message=error_message, headers=httpx.Headers(headers))
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> str:
+        return f"{self._base_url(api_base)}/v1/agents"
+
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        litellm_params: Mapping[str, object],
+    ) -> dict[str, str]:  # mutable-ok: BaseAgentsAPIConfig.validate_environment signature
+        explicit_api_key: Final = _optional_str(litellm_params.get("api_key"))
+        api_base: Final = _optional_str(litellm_params.get("api_base"))
+        if api_base and not explicit_api_key:
+            raise ValueError(
+                "When overriding api_base for Anthropic agents, you must also supply an explicit api_key. "
+                "Falling back to ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN with a custom api_base is refused "
+                "to prevent leaking the shared provider key to arbitrary hosts."
+            )
+        auth_header: Final = AnthropicModelInfo.get_auth_header(explicit_api_key, api_base)
+        if auth_header is None:
+            raise ValueError(
+                "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, or pass api_key."
+            )
+        return {  # mutable-ok: the http handler passes this straight to httpx as headers
+            **headers,
+            **auth_header,
+            "anthropic-version": _ANTHROPIC_VERSION,
+            "anthropic-beta": _with_managed_agents_beta(headers.get("anthropic-beta")),
+            "content-type": "application/json",
+        }
+
+    def transform_create_request(
+        self,
+        name: str,
+        litellm_params: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: BaseAgentsAPIConfig.transform_create_request signature
+        if litellm_params.get("base_environment") is not None:
+            raise _invalid_request(
+                "Anthropic environments are a separate resource and are not part of the agent: create one with "
+                "POST /v1/environments and pass its id as `environment` when starting a session."
+            )
+        try:
+            request: Final = _CreateAgentRequest.model_validate(
+                MappingProxyType(
+                    {
+                        "name": name,
+                        "model": litellm_params.get("base_agent"),
+                        "system": litellm_params.get("instructions"),
+                        "description": litellm_params.get("description"),
+                        "tools": litellm_params.get("tools"),
+                        "mcp_servers": litellm_params.get("mcp_servers"),
+                        "skills": litellm_params.get("skills"),
+                        "multiagent": litellm_params.get("multiagent"),
+                    }
+                )
+            )
+        except ValidationError as e:
+            raise _invalid_request(f"invalid Anthropic agent definition: {e}")
+        return request.model_dump(mode="json", exclude_none=True)
+
+    def transform_create_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> AgentCreateResponse:
+        return self._agent(raw_response)
+
+    def transform_list_request(
+        self,
+        api_base: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseAgentsAPIConfig.transform_list_request signature
+        return self.get_complete_url(api_base, litellm_params), _page_query(litellm_params)
+
+    def transform_list_response(
+        self,
+        raw_response: httpx.Response,
+    ) -> AgentListResponse:
+        page: Final = self._page(raw_response)
+        return AgentListResponse.model_validate(
+            MappingProxyType({"agents": page.data, "next_page_token": page.next_page})
+        )
+
+    def transform_get_request(
+        self,
+        name: str,
+        api_base: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseAgentsAPIConfig.transform_get_request signature
+        try:
+            query: Final = _GetQuery.model_validate(MappingProxyType({"version": litellm_params.get("version")}))
+        except ValidationError as e:
+            raise _invalid_request(f"invalid agent version: {e}")
+        return self._agent_url(name, api_base), query.model_dump(mode="json", exclude_none=True)
+
+    def transform_get_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> AgentCreateResponse:
+        return self._agent(raw_response)
+
+    def transform_delete_request(
+        self,
+        name: str,
+        api_base: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> str:
+        raise _invalid_request(
+            "Anthropic managed agents cannot be deleted, only archived: "
+            f"POST {self._agent_url(name, api_base)}/archive."
+        )
+
+    def transform_delete_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> AgentDeleteResult:
+        return AgentDeleteResult(name=name, deleted=False)
+
+    def transform_list_versions_request(
+        self,
+        name: str,
+        api_base: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseAgentsAPIConfig.transform_list_versions_request signature
+        return f"{self._agent_url(name, api_base)}/versions", _page_query(litellm_params)
+
+    def transform_list_versions_response(
+        self,
+        raw_response: httpx.Response,
+        name: str,
+    ) -> AgentVersionsResponse:
+        page: Final = self._page(raw_response)
+        return AgentVersionsResponse.model_validate(
+            MappingProxyType({"agent_versions": page.data, "next_page_token": page.next_page})
+        )
+
+
+def _page_query(
+    litellm_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the http handler passes this straight to httpx as query params
+    try:
+        query: Final = _PageQuery.model_validate(
+            MappingProxyType(
+                {
+                    "limit": litellm_params.get("page_size"),
+                    "page": litellm_params.get("page_token"),
+                    "include_archived": litellm_params.get("include_archived"),
+                }
+            )
+        )
+    except ValidationError as e:
+        raise _invalid_request(f"invalid agents page query: {e}")
+    return query.model_dump(mode="json", exclude_none=True)

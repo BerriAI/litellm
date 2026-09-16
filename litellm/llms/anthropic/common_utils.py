@@ -823,7 +823,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return list(set(betas))
 
     @staticmethod
-    def _make_api_key_auth_header(api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False) -> dict:
+    def _make_api_key_auth_header(
+        api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False
+    ) -> dict[str, str]:  # mutable-ok: callers merge it into their httpx header dict
         if use_bearer_for_custom_base and (
             api_base and "api.anthropic.com" not in api_base and not api_key.startswith("sk-ant-")
         ):
@@ -1020,7 +1022,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: str | None = None,
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
-    ) -> dict | None:
+    ) -> dict[str, str] | None:  # mutable-ok: callers merge it into their httpx header dict
         """Resolve Anthropic credentials and return the appropriate auth header dict.
 
         Checks ANTHROPIC_API_KEY first (-> x-api-key or Bearer depending on

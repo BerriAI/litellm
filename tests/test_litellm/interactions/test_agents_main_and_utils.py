@@ -33,6 +33,7 @@ from litellm.interactions.agents.main import (
 )
 from litellm.interactions.agents.utils import get_provider_agents_api_config
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
+from litellm.llms.anthropic.agents.transformation import AnthropicAgentsConfig
 from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
 
 
@@ -50,10 +51,13 @@ class TestGetProviderAgentsApiConfig:
         assert isinstance(cfg, GeminiAgentsConfig)
         assert isinstance(cfg, BaseAgentsAPIConfig)
 
-    @pytest.mark.parametrize(
-        "provider", ["openai", "anthropic", "bedrock", "vertex_ai", "unknown"]
-    )
-    def test_returns_none_for_non_gemini(self, provider):
+    def test_returns_anthropic_config_for_anthropic(self):
+        cfg = get_provider_agents_api_config("anthropic")
+        assert isinstance(cfg, AnthropicAgentsConfig)
+        assert isinstance(cfg, BaseAgentsAPIConfig)
+
+    @pytest.mark.parametrize("provider", ["openai", "bedrock", "vertex_ai", "unknown"])
+    def test_returns_none_for_providers_without_a_native_agents_api(self, provider):
         assert get_provider_agents_api_config(provider) is None
 
     def test_returns_none_for_none(self):
