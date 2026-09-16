@@ -47,7 +47,6 @@ export interface UseResourceListOptions<TRow> {
   defaultSorting: SortingState;
   defaultPageSize: number;
   enabled: boolean;
-  /** Must be referentially stable. */
   urlState: ResourceListUrlState;
 }
 
