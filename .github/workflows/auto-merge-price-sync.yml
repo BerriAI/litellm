@@ -1,0 +1,63 @@
+name: auto-merge-price-sync
+
+on:
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created, edited]
+  check_suite:
+    types: [completed]
+  status: {}
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "Evaluate only this PR number (empty = scan all open sync-bot PRs)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: read
+
+concurrency:
+  group: auto-merge-price-sync
+  cancel-in-progress: false
+
+jobs:
+  auto-merge-price-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROVIDER_INFO_SYNC_APP_ID: ${{ secrets.PROVIDER_INFO_SYNC_APP_ID }}
+      PROVIDER_INFO_SYNC_APP_PRIVATE_KEY: ${{ secrets.PROVIDER_INFO_SYNC_APP_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Mint app token
+        id: app-token
+        if: ${{ env.PROVIDER_INFO_SYNC_APP_ID != '' && env.PROVIDER_INFO_SYNC_APP_PRIVATE_KEY != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.PROVIDER_INFO_SYNC_APP_ID }}
+          private-key: ${{ secrets.PROVIDER_INFO_SYNC_APP_PRIVATE_KEY }}
+
+      - name: Auto-merge eligible sync PRs
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || (github.event.issue.pull_request && github.event.issue.number) || github.event.inputs.pr-number || '' }}
+          BASE_BRANCH: main
+          PR_AUTHOR_ALLOWLIST: "berriai-litellm-provider-info-sync[bot]"
+          SELF_CHECK_NAME: auto-merge-price-sync
+        run: python3 .github/scripts/auto_merge_price_sync.py
