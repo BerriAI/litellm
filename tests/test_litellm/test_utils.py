@@ -55,6 +55,7 @@ from litellm.utils import (
     _check_provider_match,
     _get_potential_model_names,
     _is_streaming_request,
+    _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
@@ -4478,6 +4479,32 @@ async def test_wrapper_async_runs_success_deployment_hook_on_converted_chat_stre
     assert isinstance(seen, ModelResponse)
     assert seen.choices[0].message.content == "converted stream body"
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "rewritten by deployment hook"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("completion_stream", "call_type"),
+    [
+        (iter([ModelResponse(model="gpt-5.6")]), "acompletion"),
+        (MockResponseIterator(model_response=ModelResponse(model="gpt-5.6")), "not_a_call_type"),
+    ],
+    ids=["real_provider_stream", "unmapped_call_type"],
+)
+async def test_converted_chat_stream_hook_skips_unhandled_wrappers(
+    monkeypatch: pytest.MonkeyPatch, completion_stream: object, call_type: str
+) -> None:
+    hook: Final = _RewritingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=completion_stream, model="gpt-5.6", logging_obj=MagicMock(), custom_llm_provider="openai"
+    )
+
+    await _run_success_deployment_hook_on_converted_chat_stream(
+        result=wrapper, request_data={"model": "gpt-5.6"}, call_type=call_type
+    )
+
+    assert hook.seen_responses == []
+    assert wrapper.completion_stream is completion_stream
 
 
 @pytest.mark.asyncio
