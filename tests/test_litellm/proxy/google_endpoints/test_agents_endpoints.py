@@ -141,6 +141,19 @@ def test_list_agents_reaches_anthropic_when_the_template_names_it(client: TestCl
     assert upstream.calls.last.request.url.params["limit"] == "1"
 
 
+@respx.mock
+def test_get_agent_takes_the_template_from_the_header(client: TestClient):
+    upstream = respx.get(ANTHROPIC_AGENT).mock(return_value=Response(200, json=_anthropic_agent()))
+
+    response = client.get(
+        "/v1beta/agents/agent_123",
+        headers={"x-litellm-params-template": json.dumps({"custom_llm_provider": "anthropic", "api_key": "sk-ant"})},
+    )
+
+    assert response.status_code == 200
+    assert upstream.calls.last.request.headers["x-api-key"] == "sk-ant"
+
+
 def test_delete_agent_is_refused_for_anthropic_with_the_archive_hint(client: TestClient):
     with pytest.raises(ProxyException) as excinfo:
         client.delete(

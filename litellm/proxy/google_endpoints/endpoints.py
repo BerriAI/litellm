@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -9,7 +8,8 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.google_endpoints.caller_credentials import (
-    enforce_caller_supplied_provider_key,
+    DEFAULT_PROVIDER,
+    enforce_caller_key_for_overrides,
     query_template,
 )
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
@@ -23,23 +23,18 @@ def _lifecycle_data(
     request: Request, interaction_id: str, user_api_key_dict: UserAPIKeyAuth
 ) -> dict[str, object]:  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
     """
-    GET, DELETE and cancel keep Gemini as the default. Another provider is selected with
-    the JSON-encoded ``litellm_params_template`` query parameter, which is also how a
-    non-admin caller supplies the provider key: without one the shared environment
-    credential would let any proxy key read, interrupt or delete any session it can name.
+    GET, DELETE and cancel keep Gemini as the default. Another provider, key or
+    ``api_base`` is selected with ``litellm_params_template`` (header or JSON query
+    parameter); a non-admin caller supplies the provider key alongside any such
+    override, otherwise the proxy's shared credential would follow the override.
     """
     data: Final[dict[str, object]] = {  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
-        "custom_llm_provider": "gemini",
+        "custom_llm_provider": DEFAULT_PROVIDER,
         **query_template(request),
         "interaction_id": interaction_id,
     }
-    _enforce_key_for_non_default_provider(data, user_api_key_dict)
+    enforce_caller_key_for_overrides(data, user_api_key_dict)
     return data
-
-
-def _enforce_key_for_non_default_provider(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
-    if data.get("custom_llm_provider") != "gemini":
-        enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
 
 @router.post(
@@ -301,7 +296,7 @@ async def create_interaction(
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
-    _enforce_key_for_non_default_provider(data, user_api_key_dict)
+    enforce_caller_key_for_overrides(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:

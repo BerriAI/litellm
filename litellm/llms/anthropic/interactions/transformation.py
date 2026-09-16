@@ -283,14 +283,16 @@ def _list_cost_usd(usage: _SessionUsage | None) -> float | None:
     return int(usage.list_cost.amount) / 100
 
 
+_SESSION_STATUS: Final = MappingProxyType(
+    {"running": "in_progress", "rescheduling": "in_progress", "terminated": "failed", "idle": "completed"}
+)
+_STOP_REASON_STATUS: Final = MappingProxyType(
+    {"requires_action": "requires_action", "budget_reached": "budget_exceeded", "retries_exhausted": "failed"}
+)
+
+
 def _session_only_status(session: _Session) -> str:
-    match session.status:
-        case "running" | "rescheduling":
-            return "in_progress"
-        case "terminated":
-            return "failed"
-        case "idle":
-            return "completed"
+    return _SESSION_STATUS[session.status]
 
 
 def _newest(events: Sequence[_Event], event_type: str) -> int | None:
@@ -332,15 +334,7 @@ def _status(session: _Session, events: Sequence[_Event]) -> str:
     if dead is not None and dead < idle:
         return "failed"
     stop_reason: Final = events[idle].stop_reason
-    match stop_reason.type if stop_reason else "end_turn":
-        case "requires_action":
-            return "requires_action"
-        case "budget_reached":
-            return "budget_exceeded"
-        case "retries_exhausted":
-            return "failed"
-        case _:
-            return "completed"
+    return _STOP_REASON_STATUS.get(stop_reason.type if stop_reason else "end_turn", "completed")
 
 
 def _settled_usage(session: _Session, events: Sequence[_Event]) -> _SessionUsage | None:
@@ -404,7 +398,8 @@ def _step(event: _Event, bash_call_ids: frozenset[str]) -> _Step | None:
                 ),
             )
         case _:
-            return None
+            pass
+    return None
 
 
 def _steps(events: Sequence[_Event]) -> tuple[Mapping[str, object], ...]:

@@ -242,6 +242,56 @@ def test_non_admin_reads_a_session_with_their_own_key(user_client):
     assert session.calls.last.request.headers["x-api-key"] == "sk-ant-caller"
 
 
+def test_non_admin_cannot_point_the_default_provider_at_another_api_base_with_the_proxy_key(user_client):
+    import respx
+
+    with respx.mock:
+        evil = respx.route(host="attacker.example")
+        response = user_client.get(
+            f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={_template(api_base='https://attacker.example')}"
+        )
+
+    assert response.status_code == 401
+    assert not evil.called
+
+
+def test_non_admin_cannot_create_with_another_api_base_and_the_proxy_key(user_client):
+    import respx
+
+    with respx.mock:
+        evil = respx.route(host="attacker.example")
+        response = user_client.post(
+            "/v1beta/interactions",
+            json={"agent": "agent_1", "input": "hi", "api_base": "https://attacker.example"},
+        )
+
+    assert response.status_code == 401
+    assert not evil.called
+
+
+def test_template_header_selects_the_provider_and_carries_the_key(user_client):
+    import json
+
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        session = respx.get(ANTHROPIC_SESSION).mock(return_value=Response(200, json=_anthropic_session()))
+        respx.get(f"{ANTHROPIC_SESSION}/events").mock(return_value=Response(200, json=_idle_events()))
+        response = user_client.get(
+            f"/v1beta/interactions/{SESSION_ID}",
+            headers={
+                "x-litellm-params-template": json.dumps(
+                    {"custom_llm_provider": "anthropic", "api_key": "sk-ant-header"}
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    assert session.calls.last.request.headers["x-api-key"] == "sk-ant-header"
+    assert "sk-ant-header" not in str(session.calls.last.request.url)
+
+
 def test_non_admin_keeps_the_gemini_default_without_a_key(user_client):
     import respx
     from httpx import Response
