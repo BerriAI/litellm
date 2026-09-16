@@ -52,6 +52,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.auth.model_access_denied import (
+    ModelAccessDeniedHTTPException,
+    model_access_denied_client_message,
+)
 from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_model_aliases
@@ -1337,9 +1341,13 @@ class JWTAuthManager:
             return True
 
         if model not in role_based_models:
-            raise HTTPException(
+            internal_message: Final = (
+                f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}"
+            )
+            raise ModelAccessDeniedHTTPException(
+                internal_message=internal_message,
                 status_code=403,
-                detail=f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
+                detail=model_access_denied_client_message(model=model),
             )
 
         return True
@@ -1368,9 +1376,11 @@ class JWTAuthManager:
             return
 
         if requested_model not in allowed_models:
-            raise HTTPException(
+            internal_message: Final = f"model={requested_model} not allowed. Allowed_models={allowed_models}"
+            raise ModelAccessDeniedHTTPException(
+                internal_message=internal_message,
                 status_code=403,
-                detail={"error": f"model={requested_model} not allowed. Allowed_models={allowed_models}"},
+                detail={"error": model_access_denied_client_message(model=requested_model)},
             )
         return
 
