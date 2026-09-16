@@ -1911,6 +1911,8 @@ def test_gemini_response_done_bills_audio_output_tokens_at_audio_rate(monkeypatc
         + 51 * model_info["output_cost_per_audio_token"]
         + 37 * model_info["output_cost_per_token"]
     )
+
+
 @pytest.fixture(autouse=False)
 def patch_gemini_transcribe_live_cost_map_entry(monkeypatch):
     """Inject the gemini-3.5-transcribe-live registry entry locally.
