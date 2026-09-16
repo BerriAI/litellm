@@ -63,27 +63,12 @@ class Rule:
 
 Rules: TypeAlias = tuple[Rule, ...]
 
-_COMPLETED: Final = frozenset({Delivery.COMPLETED})
-
 RULES: Final[Rules] = (
     Rule(Route.OCR, Rollout.RUST_OPT_OUT),
     Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
     Rule(Route.TRANSCRIPTION, Rollout.PYTHON_ONLY),
-    Rule(
-        Route.CHAT_COMPLETIONS,
-        Rollout.RUST_OPT_IN,
-        providers=frozenset({"anthropic", "bedrock"}),
-        deliveries=_COMPLETED,
-    ),
     Rule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
-    Rule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic", "azure_ai"})),
     Rule(Route.MESSAGES, Rollout.PYTHON_ONLY),
-    Rule(
-        Route.RESPONSES,
-        Rollout.RUST_OPT_IN,
-        providers=frozenset({"openai"}),
-        deliveries=frozenset({Delivery.WEBSOCKET}),
-    ),
     Rule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     Rule(Route.EMBEDDING, Rollout.PYTHON_ONLY),
     Rule(Route.RERANK, Rollout.PYTHON_ONLY),
