@@ -164,12 +164,9 @@ def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
 
 
 # The per-team advisory lock the team endpoints hold while changing a roster (TEAM_ADVISORY_LOCK_SQL),
-# taken in sorted order so the roster check below cannot interleave with their writes. A row lock would
-# deadlock with the access-group endpoints, which lock a team row after an access-group lock.
-_TEAM_ADVISORY_LOCKS_SQL: Final = """
-SELECT pg_advisory_xact_lock(hashtext(teams.team_id))
-FROM (SELECT DISTINCT team_id FROM unnest($1::text[]) AS team_id ORDER BY team_id) AS teams
-"""
+# so the roster check below cannot interleave with their writes. A row lock would deadlock with the
+# access-group endpoints, which lock a team row after an access-group lock.
+_TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
 
 # One statement adds every member's cost to their membership row. A missing row is created only
 # while the user is still on the team's roster, so a spend flush landing after a removal never
@@ -195,7 +192,8 @@ async def _write_team_member_spend(transaction: _SpendTransaction, spend_by_memb
     # keeping lock order consistent across pods to prevent deadlocks
     keys: Final = tuple(sorted(spend_by_member_key))
     team_ids: Final = [key.split("::")[1] for key in keys]
-    _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCKS_SQL, team_ids)
+    for team_id in dict.fromkeys(team_ids):
+        _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
     _ = await transaction.execute_raw(
         _TEAM_MEMBER_SPEND_SQL,
         [key.split("::")[3] for key in keys],
