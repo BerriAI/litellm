@@ -4,6 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
+import { useUserInfo } from "@/app/(dashboard)/hooks/users/useUserInfo";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +41,20 @@ vi.mock("@/components/activity_metrics", () => ({
 }));
 
 vi.mock("@/components/view_user_spend", () => ({
-  default: () => <div>View User Spend</div>,
+  default: ({ userMaxBudget, budgetDuration, budgetLoading }: any) => (
+    <div
+      data-testid="view-user-spend"
+      data-max-budget={userMaxBudget === null || userMaxBudget === undefined ? "null" : String(userMaxBudget)}
+      data-budget-duration={budgetDuration ?? "null"}
+      data-budget-loading={budgetLoading ? "true" : "false"}
+    >
+      View User Spend
+    </div>
+  ),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUserInfo", () => ({
+  useUserInfo: vi.fn(),
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
@@ -166,6 +180,7 @@ describe("UsagePage", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
   const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
+  const mockUseUserInfo = vi.mocked(useUserInfo);
 
   const mockSpendData = {
     results: [
@@ -410,6 +425,11 @@ describe("UsagePage", () => {
       data: { agents: [] },
       isLoading: false,
       error: null,
+    } as any);
+    mockUseUserInfo.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
     } as any);
   });
 
@@ -1350,19 +1370,57 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("tab navigation in global view", () => {
-    it("should render all expected tabs", async () => {
+  describe("selected-user budget wiring", () => {
+    const userSelectCombobox = (): HTMLElement => {
+      let node: HTMLElement | null = screen.getByText("Filter by user");
+      while (node && !node.querySelector('[role="combobox"]')) {
+        node = node.parentElement;
+      }
+      return node!.querySelector('[role="combobox"]') as HTMLElement;
+    };
+
+    it("feeds the tile the selected user's budget and duration, not the admin's", async () => {
+      mockUseCurrentUser.mockReturnValue({
+        data: { user_id: "user-123", max_budget: 3000 },
+        isLoading: false,
+        error: null,
+      } as any);
+      mockUseUserInfo.mockReturnValue({
+        data: { user_id: "user-001", max_budget: 600, budget_duration: "30d" },
+        isLoading: false,
+        isError: false,
+      } as any);
+
       renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
+
+      await userEvent.setup().click(userSelectCombobox());
+      await userEvent.setup().click(screen.getByText("Alice (user-001)"));
 
       await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+        expect(screen.getByTestId("view-user-spend")).toHaveAttribute("data-max-budget", "600");
       });
+      expect(screen.getByTestId("view-user-spend")).toHaveAttribute("data-budget-duration", "30d");
+      expect(mockUseUserInfo).toHaveBeenCalledWith("user-001");
+    });
 
-      expect(screen.getByText("Cost")).toBeInTheDocument();
-      expect(screen.getByText("Model Activity")).toBeInTheDocument();
-      expect(screen.getByText("Key Activity")).toBeInTheDocument();
-      expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
-      expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
+    it("marks the tile loading (not unlimited) while the selected user's info is unresolved", async () => {
+      mockUseCurrentUser.mockReturnValue({
+        data: { user_id: "user-123", max_budget: 3000 },
+        isLoading: false,
+        error: null,
+      } as any);
+      mockUseUserInfo.mockReturnValue({ data: undefined, isLoading: true, isError: false } as any);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
+
+      await userEvent.setup().click(userSelectCombobox());
+      await userEvent.setup().click(screen.getByText("Alice (user-001)"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("view-user-spend")).toHaveAttribute("data-budget-loading", "true");
+      });
     });
   });
 });

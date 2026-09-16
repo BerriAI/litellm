@@ -10,15 +10,15 @@ interface ViewUserSpendProps {
   userSpend: number | null;
   userMaxBudget: number | null;
   selectedTeam: any | null;
-  // Optional reset period paired with userMaxBudget (e.g. "24h", "30d"), rendered
-  // as a human-readable window next to the cap. Omitted/null → no period shown.
   budgetDuration?: string | null;
+  budgetLoading?: boolean;
 }
 const ViewUserSpend: React.FC<ViewUserSpendProps> = ({
   userSpend,
   userMaxBudget,
   selectedTeam,
   budgetDuration = null,
+  budgetLoading = false,
 }) => {
   const { accessToken, userRole, userId: userID } = useAuthorized();
   let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
@@ -116,12 +116,18 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({
     modelsToDisplay = userModels;
   }
 
-  const displayMaxBudget = maxBudget !== null ? `$${formatNumberWithCommas(Number(maxBudget), 4)} limit` : "No limit";
+  let displayMaxBudget: string;
+  if (budgetLoading) {
+    displayMaxBudget = "—";
+  } else if (maxBudget !== null) {
+    displayMaxBudget = `$${formatNumberWithCommas(Number(maxBudget), 4)} limit`;
+  } else {
+    displayMaxBudget = "No limit";
+  }
 
-  // Show the reset window (e.g. "over monthly") only for a finite cap that has a
-  // paired duration; an unlimited budget or a cap with no duration shows nothing.
   const durationLabel = maxBudget !== null && budgetDuration ? getBudgetDurationLabel(budgetDuration) : null;
-  const budgetPeriodSuffix = durationLabel && durationLabel !== "Not set" ? ` over ${durationLabel}` : "";
+  const budgetPeriodSuffix =
+    !budgetLoading && durationLabel && durationLabel !== "Not set" ? ` over ${durationLabel}` : "";
 
   const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 

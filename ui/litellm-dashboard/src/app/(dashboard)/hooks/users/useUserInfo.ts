@@ -5,14 +5,7 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 
 const userKeys = createQueryKeys("users");
 
-/**
- * Fetch a SPECIFIC user's info from /v2/user/info?user_id=<userId>.
- *
- * Companion to useCurrentUser (which self-looks-up the caller): pass the user
- * you actually want to display. Disabled when userId is null so the caller can
- * fall back to a global/unfiltered view without firing a request. Admins may
- * query any user; the backend authorizes the lookup.
- */
+/** Fetch a specific user's info from `/v2/user/info?user_id=`; disabled when userId is null. */
 export const useUserInfo = (userId: string | null): UseQueryResult<UserInfoV2Response> => {
   const { accessToken } = useAuthorized();
   return useQuery<UserInfoV2Response>({
