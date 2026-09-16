@@ -1569,7 +1569,9 @@ def _maybe_add_key_team_limit_warnings(
     warnings = _collect_key_team_limit_warnings(data=data, team_table=team_table)
     if not warnings:
         return payload
-    return MappingProxyType({**payload, "warnings": list(warnings)})  # mutable-ok: GenerateKeyResponse/tests expect list warnings
+    return MappingProxyType(
+        {**payload, "warnings": list(warnings)}
+    )  # mutable-ok: GenerateKeyResponse/tests expect list warnings
 
 
 async def _check_team_key_limits(
@@ -2619,12 +2621,13 @@ async def _process_single_key_update(
     # Enforce upperbound key params on update (don't fill defaults)
     _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
 
-    # Get team object and check team limits if team_id is provided
+    # Get team object and check team limits if team_id is provided on the request.
+    # Existing-key team is soft-resolved below for warnings only — a missing team
+    # must not block an otherwise valid update (custom key policy runs later).
     team_obj: LiteLLM_TeamTableCachedObj | None = None
-    _team_id_to_check: Final = update_key_request.team_id or getattr(existing_key_row, "team_id", None)
-    if _team_id_to_check is not None:
+    if update_key_request.team_id is not None:
         team_obj = await get_team_object(
-            team_id=_team_id_to_check,
+            team_id=update_key_request.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
@@ -2636,6 +2639,18 @@ async def _process_single_key_update(
                 data=update_key_request,
                 prisma_client=prisma_client,
             )
+    elif getattr(existing_key_row, "team_id", None) is not None and prisma_client is not None:
+        try:
+            team_obj = await get_team_object(
+                team_id=existing_key_row.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+        except HTTPException as e:
+            if e.status_code != status.HTTP_404_NOT_FOUND:
+                raise
+            team_obj = None
 
     # Validate team change if team is being changed
     if is_different_team(data=update_key_request, existing_key_row=existing_key_row):
@@ -3274,7 +3289,9 @@ async def update_key_fn(
 
         updated_key_info: Final[Mapping[str, object]] = MappingProxyType({"key": key, **response["data"]})
         if team_limit_warnings:
-            return MappingProxyType({**updated_key_info, "warnings": list(team_limit_warnings)})  # mutable-ok: key/update response tests expect list warnings
+            return MappingProxyType(
+                {**updated_key_info, "warnings": list(team_limit_warnings)}
+            )  # mutable-ok: key/update response tests expect list warnings
         return updated_key_info
         # update based on remaining passed in values
     except Exception as e:
