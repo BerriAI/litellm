@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { modelAvailableCall } from "./networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Define the props type
@@ -9,8 +10,16 @@ interface ViewUserSpendProps {
   userSpend: number | null;
   userMaxBudget: number | null;
   selectedTeam: any | null;
+  // Optional reset period paired with userMaxBudget (e.g. "24h", "30d"), rendered
+  // as a human-readable window next to the cap. Omitted/null → no period shown.
+  budgetDuration?: string | null;
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget, selectedTeam }) => {
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({
+  userSpend,
+  userMaxBudget,
+  selectedTeam,
+  budgetDuration = null,
+}) => {
   const { accessToken, userRole, userId: userID } = useAuthorized();
   let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
   const [maxBudget, setMaxBudget] = useState(
@@ -109,6 +118,11 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
 
   const displayMaxBudget = maxBudget !== null ? `$${formatNumberWithCommas(Number(maxBudget), 4)} limit` : "No limit";
 
+  // Show the reset window (e.g. "over monthly") only for a finite cap that has a
+  // paired duration; an unlimited budget or a cap with no duration shows nothing.
+  const durationLabel = maxBudget !== null && budgetDuration ? getBudgetDurationLabel(budgetDuration) : null;
+  const budgetPeriodSuffix = durationLabel && durationLabel !== "Not set" ? ` over ${durationLabel}` : "";
+
   const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 
   return (
@@ -120,7 +134,12 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
         </div>
         <div>
           <p className="text-sm text-muted-foreground">Max Budget</p>
-          <p className="text-2xl font-semibold text-foreground">{displayMaxBudget}</p>
+          <p className="text-2xl font-semibold text-foreground">
+            {displayMaxBudget}
+            {budgetPeriodSuffix && (
+              <span className="text-sm font-normal text-muted-foreground">{budgetPeriodSuffix}</span>
+            )}
+          </p>
         </div>
       </div>
       {/* <div className="ml-auto">
