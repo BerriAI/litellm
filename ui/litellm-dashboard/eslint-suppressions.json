@@ -1269,9 +1269,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 4
     }
   },
   "src/components/AIHub/UsefulLinksManagement.tsx": {
