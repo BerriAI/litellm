@@ -11,7 +11,7 @@ released unchanged after moderation passes.
 """
 
 import json
-from typing import Any, List, Literal, Optional
+from typing import Any, AsyncGenerator, List, Literal, Optional
 
 import pytest
 
@@ -23,7 +23,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
 
 BLOCK_MESSAGE = "Blocked by policy: this response was withheld."
 ORIGINAL_MARKER = "ORIGINAL-SECRET-ANSWER"
@@ -57,6 +57,41 @@ class _PassingGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+class _CountingPassingGuardrail(_PassingGuardrail):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scan_count = 0
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        return inputs
+
+
+class _SecondScanBlockingGuardrail(_CountingPassingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        if self.scan_count == 2:
+            raise ModifyResponseException(
+                message=BLOCK_MESSAGE,
+                model="gpt-4",
+                request_data=request_data,
+                guardrail_name=self.guardrail_name,
+            )
         return inputs
 
 
@@ -115,6 +150,67 @@ def _decode(chunks: List[Any]) -> str:
     return "".join(c.decode() if isinstance(c, bytes) else str(c) for c in chunks)
 
 
+def _chat_chunk(content: str = "", finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-windowed",
+        created=1724900000,
+        model="gpt-4",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=content),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+async def _windowed_chat_stream(
+    yielded_count: List[int], collected: List[Any], content_chunks: List[str]
+) -> AsyncGenerator[ModelResponseStream, None]:
+    for content in content_chunks:
+        yielded_count.append(len(collected))
+        yield _chat_chunk(content)
+    yielded_count.append(len(collected))
+    yield _chat_chunk(finish_reason="stop")
+
+
+async def _run_windowed(
+    guardrail: CustomGuardrail,
+    content_chunks: List[str],
+    end_of_stream_only: bool = False,
+) -> tuple[List[Any], List[int]]:
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_end_of_stream_only = end_of_stream_only
+    guardrail.streaming_sampling_rate = 2
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: List[Any] = []
+    yielded_count: List[int] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_windowed_chat_stream(yielded_count, collected, content_chunks),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    return collected, yielded_count
+
+
+def _chat_text(chunks: List[Any]) -> str:
+    return "".join(
+        choice.delta.content or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+    )
+
+
 async def _run(guardrail: CustomGuardrail) -> str:
     # Rubrik's real config: end-of-stream-only moderation. Without buffering
     # this releases every chunk before moderation runs (content leaks on
@@ -157,6 +253,45 @@ async def test_buffered_clean_releases_all_content():
         raw.rstrip().endswith('event: message_stop\ndata: {"type": "message_stop"}'.rstrip()) or "message_stop" in raw
     )
     assert BLOCK_MESSAGE not in raw
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_releases_after_each_passing_scan():
+    guardrail = _CountingPassingGuardrail(guardrail_name="windowed-pass", event_hook="post_call")
+    content_chunks = ["one ", "two ", "three ", "four ", "five ", "six "]
+
+    collected, yielded_count = await _run_windowed(guardrail, content_chunks)
+
+    assert yielded_count[2] >= 2
+    assert yielded_count == [0, 0, 2, 2, 4, 4, 6]
+    assert _chat_text(collected) == "".join(content_chunks)
+    assert guardrail.scan_count > 1
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_drops_blocked_window():
+    guardrail = _SecondScanBlockingGuardrail(guardrail_name="windowed-block", event_hook="post_call")
+    content_chunks = ["one ", "two ", "MARKER ", "four ", "five ", "six "]
+
+    collected, _ = await _run_windowed(guardrail, content_chunks)
+    raw = _decode(collected)
+
+    assert _chat_text(collected) == "one two "
+    assert "MARKER" not in raw
+    assert BLOCK_MESSAGE in raw
+    assert '"error"' not in raw
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_with_explicit_end_of_stream_only_stays_fully_buffered():
+    guardrail = _CountingPassingGuardrail(guardrail_name="windowed-eos", event_hook="post_call")
+    content_chunks = ["one ", "two ", "three ", "four ", "five ", "six "]
+
+    collected, yielded_count = await _run_windowed(guardrail, content_chunks, end_of_stream_only=True)
+
+    assert yielded_count == [0, 0, 0, 0, 0, 0, 0]
+    assert _chat_text(collected) == "".join(content_chunks)
+    assert guardrail.scan_count == 1
 
 
 @pytest.mark.asyncio
