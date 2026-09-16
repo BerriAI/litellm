@@ -8,6 +8,7 @@ import pytest_asyncio
 import respx
 
 from litellm import Choices, ModelResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage, NomaGuardrail
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
@@ -23,9 +24,11 @@ async def guardrail() -> AsyncIterator[NomaGuardrail]:
         default_on=True,
         anonymize_input=True,
     )
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
     async with httpx.AsyncClient() as client:
-        await instance.async_handler.client.aclose()
-        instance.async_handler.client = client
+        handler.client = client
+        instance.async_handler = handler
         yield instance
 
 
