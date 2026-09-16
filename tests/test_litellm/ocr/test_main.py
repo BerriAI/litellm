@@ -257,3 +257,70 @@ def test_direct_ocr_call_bills_request_level_per_page_pricing() -> None:
     )
 
     assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.05 * 3)
+
+
+def _prepare(model: str, document: object, **kwargs: object) -> object:
+    return _prepare_ocr_request(
+        model=model,
+        document=document,  # pyright: ignore[reportArgumentType]  # exercises the runtime guard for untyped callers
+        api_key="test-key",
+        api_base=None,
+        timeout=None,
+        custom_llm_provider=None,
+        extra_headers=None,
+        kwargs={"litellm_logging_obj": Mock(), **kwargs},
+    )
+
+
+@pytest.mark.parametrize(
+    ("document", "match"),
+    (
+        ("https://example.com/file.pdf", "document must be a dict"),
+        ({"type": "video_url", "video_url": "https://example.com/clip.mp4"}, "Invalid document type: video_url"),
+    ),
+)
+def test_prepare_ocr_request_rejects_malformed_documents(document: object, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _prepare("mistral/mistral-ocr-latest", document)
+
+
+def test_prepare_ocr_request_rejects_provider_without_ocr_support() -> None:
+    with pytest.raises(ValueError, match="OCR is not supported for provider: openai"):
+        _prepare("openai/gpt-4o", dict(PRICING_DOCUMENT))
+
+
+@pytest.mark.parametrize(
+    ("request_format", "match"),
+    (("markdown", "Invalid `req_format`"), ("native", "`req_format='native'` is not supported")),
+)
+def test_prepare_ocr_request_rejects_unsupported_request_format(request_format: str, match: str) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=match):
+        _prepare("mistral/mistral-ocr-latest", dict(PRICING_DOCUMENT), req_format=request_format)
+
+
+@pytest.mark.asyncio
+async def test_python_none_provider_response_raises_public_error(
+    provider: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.ocr import main
+
+    monkeypatch.setattr(main.base_llm_http_handler, "ocr", Mock(return_value=None))
+
+    with pytest.raises(litellm.APIConnectionError, match="unexpected None response") as error:
+        await litellm.aocr(model="mistral/mistral-ocr-latest", document=dict(PRICING_DOCUMENT), api_key="test-key")
+    assert error.value.llm_provider == "mistral"
+    assert provider.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    (("mistral-ocr-latest", "mistral"), ("azure_ai/doc-intelligence/prebuilt-layout", "azure_ai")),
+)
+def test_preparation_errors_map_to_public_exception_for_inferred_provider(
+    provider: Mock, model: str, expected_provider: str
+) -> None:
+    with pytest.raises(litellm.APIConnectionError) as error:
+        litellm.ocr(model=model, document="not-a-document")  # pyright: ignore[reportArgumentType]  # exercises the runtime guard
+    assert error.value.llm_provider == expected_provider
+    assert "document must be a dict" in str(error.value)
+    assert provider.call_count == 0

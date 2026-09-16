@@ -283,3 +283,26 @@ async def test_arun_required_route_rejects_unavailable_bridge() -> None:
             python=python,
             rules=rules(Rollout.RUST_REQUIRED),
         )
+
+
+@pytest.mark.asyncio
+async def test_arun_upstream_error_maps_to_api_error_without_fallback() -> None:
+    calls: Final = recorder(RustUpstreamError(503, "upstream unavailable"))
+
+    async def native(fn: NativeFn) -> str:
+        return fn()
+
+    async def python() -> str:
+        return calls.python()
+
+    with pytest.raises(APIError, match="upstream unavailable") as caught:
+        await runtime.arun(
+            CONTEXT,
+            binding=binding(calls.rust),
+            native=native,
+            python=python,
+            rules=rules(Rollout.RUST_OPT_OUT),
+        )
+
+    assert caught.value.status_code == 503
+    assert calls.calls == (RUST,)
