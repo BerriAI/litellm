@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         UpstreamTokenGrant,
     )
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.handle_jwt import JWTIdentity
 
 
 def _litellm_key_from_request(request: Request) -> str | None:
@@ -304,26 +305,37 @@ async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResol
             assert_never(identity.subject_type)
 
 
-async def _extract_user_id_from_request(request: Request, server_id: str | None = None) -> str | None:
-    """Resolve identity for binding, or authorize the credential-write action for a target server."""
+async def _extract_user_id_from_request(request: Request) -> str | None:
+    """Resolve the caller for identity binding without granting credential-write permission."""
+    from litellm.proxy.auth.handle_jwt import JWTIdentity  # noqa: PLC0415  # proxy import cycle
+
+    resolved: Final = await _resolve_request_auth(request)
+    if isinstance(resolved, JWTIdentity):
+        return resolved.user_id
+    return _active_key_user_id(resolved) if resolved is not None else None
+
+
+async def authorize_oauth_credential_request(request: Request, server_id: str) -> str | None:
     from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+
+    resolved: Final = await _resolve_request_auth(request, f"/v1/mcp/server/{server_id}/oauth-user-credential")
+    if not isinstance(resolved, UserAPIKeyAuth) or not _active_key_user_id(resolved):
+        return None
+    if not await can_store_oauth_credential(request, resolved, server_id):
+        return None
+    return resolved.user_id
+
+
+async def _resolve_request_auth(
+    request: Request, write_route: str | None = None
+) -> "UserAPIKeyAuth | JWTIdentity | None":
     from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
 
     token: Final = _litellm_key_from_request(request)
-    # The OAuth relay is public; the optional server-side write is the same protected action
-    # as the direct credential endpoint. Authorize that action without rewriting the Request.
-    write_route: Final = f"/v1/mcp/server/{server_id}/oauth-user-credential" if server_id is not None else None
-    resolved: Final = (
-        await _resolve_jwt_auth(request, token, write_route)
-        if token is not None and JWTHandler.is_jwt(token)
-        else await _resolve_active_litellm_key(request)
-    )
-    auth: Final = resolved.key if isinstance(resolved, _ResolvedKey) else resolved
-    if not isinstance(auth, UserAPIKeyAuth) or not _active_key_user_id(auth):
-        return None
-    if server_id is not None and not await can_store_oauth_credential(request, auth, server_id):
-        return None
-    return auth.user_id
+    if token is not None and JWTHandler.is_jwt(token):
+        return await _resolve_jwt_auth(request, token, write_route)
+    resolved: Final = await _resolve_active_litellm_key(request)
+    return resolved.key if isinstance(resolved, _ResolvedKey) else None
 
 
 async def can_store_oauth_credential(request: Request, auth: "UserAPIKeyAuth", server_id: str) -> bool:
@@ -358,7 +370,7 @@ async def _resolve_jwt_auth(
     request: Request,
     token: str,
     write_route: str | None,
-) -> "UserAPIKeyAuth | None":
+) -> "UserAPIKeyAuth | JWTIdentity | None":
     from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
@@ -393,25 +405,35 @@ async def _resolve_jwt_auth(
                 return None if await _key_owner_scim_deactivated(mapped) or not _active_key_user_id(mapped) else mapped
             if mapped is not None:
                 return None
-        identity: Final = await JWTAuthManager.auth_builder(
+        if write_route is None:
+            identity: Final = await JWTAuthManager.resolve_identity(
+                api_key=token,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if identity.user_object is not None and isinstance(_active_user_record(identity.user_object), str):
+                return None
+            return identity
+        authorized: Final = await JWTAuthManager.authorize_jwt(
             api_key=token,
             jwt_handler=jwt_handler,
             request_data={},
             general_settings=general_settings,
-            route=write_route or request.url.path,
+            route=write_route,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
             proxy_logging_obj=proxy_logging_obj,
             request_headers=dict(request.headers),
             request_method=request.method,
-            identity_only=write_route is None,
-            allow_provisioning=False,
         )
-        resolved_user: Final = identity["user_object"]
+        resolved_user: Final = authorized["user_object"]
         if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
             return None
-        return JWTAuthManager.user_api_key_auth_from_result(identity)
+        return JWTAuthManager.user_api_key_auth_from_result(authorized)
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
         return None

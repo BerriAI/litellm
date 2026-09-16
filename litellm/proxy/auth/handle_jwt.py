@@ -9,13 +9,13 @@ JWT token must have 'litellm_proxy_admin' in scope.
 from __future__ import annotations
 
 import asyncio
-import copy
 import fnmatch
 import hashlib
 import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
@@ -128,6 +128,19 @@ class _UserInfoResponse(Protocol):
     """The OIDC UserInfo endpoint's HTTP response, read for the identity document it carries."""
 
     def json(self) -> dict[str, object]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class JWTIdentity:
+    user_id: str | None
+    user_object: LiteLLM_UserTable | None
+    agent_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _JWTProvisioning:
+    user_id_upsert: bool
+    team_id_upsert: bool
 
 
 class AgentLookup(Protocol):
@@ -1473,6 +1486,7 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
+        team_id_upsert: bool | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """Find and validate specific team ID from team_id_jwt_field or team_alias_jwt_field"""
         individual_team_id = jwt_handler.get_team_id(token=jwt_valid_token, default_value=None)
@@ -1500,7 +1514,9 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
-                    team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+                    team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert
+                    if team_id_upsert is None
+                    else team_id_upsert,
                 )
                 return individual_team_id, team_object
             except HTTPException as e:
@@ -2017,6 +2033,7 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
+        team_id_upsert: bool | None = None,
     ) -> None:
         """Attach team context from x-litellm-team-id to an admin result.
 
@@ -2034,7 +2051,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert if team_id_upsert is None else team_id_upsert,
             )
         except Exception as e:
             # Fall back to pre-PR admin behavior: honor the admin's
@@ -2268,64 +2285,119 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: dict | None = None,
         request_method: str | None = None,
-        identity_only: bool = False,
-        allow_provisioning: bool = True,
     ) -> JWTAuthBuilderResult:
-        """Build JWT authentication and authorization context.
+        return await JWTAuthManager.authorize_jwt(
+            api_key=api_key,
+            jwt_handler=jwt_handler,
+            request_data=request_data,
+            general_settings=general_settings,
+            route=route,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            request_headers=request_headers,
+            request_method=request_method,
+            provisioning=_JWTProvisioning(
+                user_id_upsert=jwt_handler.litellm_jwtauth.user_id_upsert,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+            ),
+        )
 
-        identity_only resolves the caller for OAuth identity binding and grants no permission.
-        Credential writes use full authorization with allow_provisioning=False: resolve the
-        existing policy context without creating users/teams or synchronizing membership.
-        A private handler configuration keeps that restriction out of concurrent normal requests.
-        """
-        handler: Final = jwt_handler if allow_provisioning else copy.copy(jwt_handler)
-        if not allow_provisioning:
-            handler.update_environment(
-                prisma_client=jwt_handler.prisma_client,
-                user_api_key_cache=jwt_handler.user_api_key_cache,
-                litellm_jwtauth=jwt_handler.litellm_jwtauth.model_copy(
-                    update={"user_id_upsert": False, "team_id_upsert": False, "sync_user_role_and_teams": False}
-                ),
-                leeway=jwt_handler.leeway,
+    @staticmethod
+    async def authenticate_jwt(api_key: str, jwt_handler: JWTHandler) -> dict[str, object]:
+        claims: Final = (
+            await jwt_handler.get_oidc_userinfo(token=api_key)
+            if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(token=api_key)
+            else await jwt_handler.auth_jwt(token=api_key)
+        )
+        validate: Final = jwt_handler.litellm_jwtauth.custom_validate
+        if validate is not None and not validate(claims):
+            raise HTTPException(status_code=403, detail="Invalid JWT token")
+        return claims
+
+    @staticmethod
+    async def resolve_identity(
+        api_key: str,
+        jwt_handler: JWTHandler,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> JWTIdentity:
+        claims: Final = await JWTAuthManager.authenticate_jwt(api_key, jwt_handler)
+        return await JWTAuthManager._resolve_claim_identity(
+            claims, jwt_handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
+        )
+
+    @staticmethod
+    async def _resolve_claim_identity(
+        claims: dict[str, object],
+        jwt_handler: JWTHandler,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> JWTIdentity:
+        claim_user_id, user_email, valid_user_email = await JWTAuthManager.get_user_info(jwt_handler, claims)
+        user_id: Final = (
+            jwt_handler.get_object_id(token=claims, default_value=None) or claim_user_id
+            if jwt_handler.get_rbac_role(token=claims) == LitellmUserRoles.INTERNAL_USER
+            else claim_user_id
+        )
+        agent_id: Final = JWTAuthManager.resolve_agent_id(jwt_handler, claims, jwt_handler.agent_lookup)
+        is_admin: Final = jwt_handler.is_admin(scopes=jwt_handler.get_scopes(token=claims))
+        try:
+            user, _, _, _, canonical_id = await JWTAuthManager.get_objects(
+                user_id=user_id,
+                user_email=user_email,
+                org_id=None,
+                end_user_id=None,
+                team_id=None,
+                valid_user_email=valid_user_email,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route="",
+                user_id_upsert=False,
             )
+        except UserNotFoundError:
+            if not is_admin:
+                raise
+            return JWTIdentity(user_id=user_id, user_object=None, agent_id=agent_id)
+        return JWTIdentity(user_id=user_id if is_admin else canonical_id, user_object=user, agent_id=agent_id)
 
-        # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
-        # JWT auth if the token itself is a well-formed JWT (3-part structure).
-        if handler.litellm_jwtauth.oidc_userinfo_enabled and not handler.is_jwt(token=api_key):
-            verbose_proxy_logger.debug("OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint.")
-            # Use the access token to fetch user info from OIDC UserInfo endpoint
-            jwt_valid_token: dict = await handler.get_oidc_userinfo(token=api_key)
-        else:
-            # Default behavior: decode and validate the JWT token
-            jwt_valid_token = await handler.auth_jwt(token=api_key)
-
-        # Check custom validate
-        if handler.litellm_jwtauth.custom_validate:
-            if not handler.litellm_jwtauth.custom_validate(jwt_valid_token):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Invalid JWT token",
-                )
+    @staticmethod
+    async def authorize_jwt(
+        api_key: str,
+        jwt_handler: JWTHandler,
+        request_data: dict[str, object],
+        general_settings: dict[str, object],
+        route: str,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+        request_headers: dict[str, str] | None = None,
+        request_method: str | None = None,
+        provisioning: _JWTProvisioning | None = None,
+    ) -> JWTAuthBuilderResult:
+        """Resolve and authorize JWT context; only normal admission supplies provisioning."""
+        handler: Final = jwt_handler
+        jwt_valid_token: Final = await JWTAuthManager.authenticate_jwt(api_key, handler)
+        team_id_upsert: Final = provisioning.team_id_upsert if provisioning is not None else False
+        model: Final = request_data.get("model")
+        requested_model: Final = model if isinstance(model, str) else None
 
         # Check RBAC
         rbac_role: Final = handler.get_rbac_role(token=jwt_valid_token)
-        if not identity_only:
-            await JWTAuthManager.check_rbac_role(
-                handler,
-                jwt_valid_token,
-                general_settings,
-                request_data,
-                route,
-                rbac_role,
-            )
+        await JWTAuthManager.check_rbac_role(handler, jwt_valid_token, general_settings, request_data, route, rbac_role)
 
         # Check Scope Based Access
         scopes: Final = handler.get_scopes(token=jwt_valid_token)
-        if (
-            not identity_only
-            and handler.litellm_jwtauth.enforce_scope_based_access
-            and handler.litellm_jwtauth.scope_mappings
-        ):
+        if handler.litellm_jwtauth.enforce_scope_based_access and handler.litellm_jwtauth.scope_mappings:
             JWTAuthManager.check_scope_based_access(
                 scope_mappings=handler.litellm_jwtauth.scope_mappings,
                 scopes=scopes,
@@ -2357,69 +2429,6 @@ class JWTAuthManager:
             agent_registry=handler.agent_lookup,
         )
 
-        if identity_only or (not allow_provisioning and handler.is_admin(scopes=scopes)):
-            try:
-                identity_user, _, _, _, identity_user_id = await JWTAuthManager.get_objects(
-                    user_id=user_id,
-                    user_email=user_email,
-                    org_id=None,
-                    end_user_id=None,
-                    team_id=None,
-                    valid_user_email=valid_user_email,
-                    jwt_handler=handler,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    route=route,
-                    user_id_upsert=False,
-                )
-            except UserNotFoundError:
-                if not handler.is_admin(scopes=scopes):
-                    raise
-                identity_user, identity_user_id = None, user_id
-            if not identity_only:
-                admin: Final = await JWTAuthManager.check_admin_access(
-                    handler,
-                    scopes,
-                    route,
-                    user_id,
-                    org_id,
-                    api_key,
-                    jwt_valid_token,
-                    user_email=user_email,
-                    agent_id=agent_id,
-                )
-                if admin is not None:
-                    await JWTAuthManager._attach_team_from_header_for_admin(
-                        admin_result=admin,
-                        route=route,
-                        request_headers=request_headers,
-                        jwt_handler=handler,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
-                    return {**admin, "user_object": identity_user}
-            return JWTAuthBuilderResult(
-                is_proxy_admin=False,
-                # Admin admission uses the claim ID; other callers use the canonical DB ID.
-                user_id=user_id if handler.is_admin(scopes=scopes) else identity_user_id,
-                user_email=identity_user.user_email if identity_user is not None else user_email,
-                user_object=identity_user,
-                team_id=None,
-                team_object=None,
-                org_id=None,
-                org_object=None,
-                end_user_id=None,
-                end_user_object=None,
-                team_membership=None,
-                token=api_key,
-                jwt_claims=jwt_valid_token,
-                agent_id=agent_id,
-            )
-
         # Check admin access
         admin_result: Final = await JWTAuthManager.check_admin_access(
             handler,
@@ -2442,7 +2451,13 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=team_id_upsert,
             )
+            if provisioning is None:
+                identity: Final = await JWTAuthManager._resolve_claim_identity(
+                    jwt_valid_token, handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
+                )
+                return {**admin_result, "user_object": identity.user_object}
             return admin_result
 
         # Get team with model access
@@ -2485,7 +2500,7 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
-                    team_id_upsert=(handler.litellm_jwtauth.team_id_upsert and not db_team_fallback),
+                    team_id_upsert=(team_id_upsert and not db_team_fallback),
                 )
             except HTTPException:
                 if not db_team_fallback:
@@ -2503,13 +2518,14 @@ class JWTAuthManager:
                 user_api_key_cache,
                 parent_otel_span,
                 proxy_logging_obj,
+                team_id_upsert=team_id_upsert,
             )
 
         if not team_object and not team_id:
             ## CHECK USER GROUP ACCESS
             team_id, team_object = await JWTAuthManager.find_team_with_model_access(
                 team_ids=all_team_ids,
-                requested_model=request_data.get("model"),
+                requested_model=requested_model,
                 route=route,
                 request_method=request_method,
                 jwt_handler=handler,
@@ -2536,7 +2552,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=handler.litellm_jwtauth.team_id_upsert,
+                team_id_upsert=team_id_upsert,
             )
 
         if team_id and not JWTAuthManager._team_has_passthrough_route_access(
@@ -2570,18 +2586,20 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
             route=route,
             org_alias=org_alias,
+            user_id_upsert=provisioning.user_id_upsert if provisioning is not None else False,
         )
 
         # Derive org_id from org_object if resolved by alias
         resolved_org_id: Final = org_object.organization_id if org_object else org_id
 
-        await JWTAuthManager.sync_user_role_and_teams(
-            jwt_handler=handler,
-            jwt_valid_token=jwt_valid_token,
-            user_object=user_object,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-        )
+        if provisioning is not None:
+            await JWTAuthManager.sync_user_role_and_teams(
+                jwt_handler=handler,
+                jwt_valid_token=jwt_valid_token,
+                user_object=user_object,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         # If JWT did not resolve team_id, attempt a team fallback.
         if team_id is None and db_team_fallback:
@@ -2592,11 +2610,11 @@ class JWTAuthManager:
             ) = await JWTAuthManager._resolve_db_team_fallback(
                 user_object=user_object,
                 user_id=user_id,
-                requested_model=request_data.get("model"),
+                requested_model=requested_model,
                 route=route,
                 jwt_handler=handler,
                 enforce_team_based_model_access=handler.litellm_jwtauth.enforce_team_based_model_access,
-                team_id_upsert=handler.litellm_jwtauth.team_id_upsert,
+                team_id_upsert=team_id_upsert,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
@@ -2624,7 +2642,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=handler.litellm_jwtauth.team_id_upsert,
+                team_id_upsert=team_id_upsert,
             )
         elif db_team_fallback and team_id == header_team_id:
             JWTAuthManager._validate_header_team_in_db_membership(
@@ -2644,7 +2662,7 @@ class JWTAuthManager:
                 )
 
         ## MAP USER TO TEAMS
-        if allow_provisioning:
+        if provisioning is not None:
             await JWTAuthManager.map_user_to_teams(
                 user_object=user_object,
                 team_object=team_object,
@@ -2654,7 +2672,7 @@ class JWTAuthManager:
         JWTAuthManager.validate_object_id(
             user_id=user_id,
             team_id=team_id,
-            enforce_rbac=general_settings.get("enforce_rbac", False),
+            enforce_rbac=bool(general_settings.get("enforce_rbac", False)),
             is_proxy_admin=False,
         )
 

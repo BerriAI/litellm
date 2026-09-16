@@ -6980,6 +6980,11 @@ async def _exchange_persistence_attempted_for_auth_type(auth_type) -> bool:
             new_callable=AsyncMock,
             return_value="admin-user",
         ),
+        patch(  # test-quality-ok: this control tests persistence by auth mode; write-policy behavior is covered separately
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.authorize_oauth_credential_request",
+            new_callable=AsyncMock,
+            return_value="admin-user",
+        ),
         patch(
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints._store_per_user_token_server_side",
             new_callable=AsyncMock,
@@ -11168,7 +11173,7 @@ async def test_identity_bound_authorization_carries_nonce_and_caller_through_cal
                        "path": "/authorize", "query_string": b"", "headers": []})
     with (
         patch(  # test-quality-ok: isolate authenticated request resolution from the real encrypted OAuth round trip
-              "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+              "litellm.proxy._experimental.mcp_server.discoverable_endpoints.authorize_oauth_credential_request",
               new=AsyncMock(return_value="alice")),
         patch(  # test-quality-ok: isolate user access lookup while testing nonce and caller preservation
               "litellm.proxy._experimental.mcp_server.discoverable_endpoints._user_can_reach_mcp_server",
@@ -11569,17 +11574,24 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
         "missing_database",
     ],
 )
+@pytest.mark.parametrize("credential_write", [False, True])
 async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
     rejection: str,
+    credential_write: bool,
 ) -> None:
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+        _extract_user_id_from_request, authorize_oauth_credential_request,
+    )
 
+    allowed_servers: Final = AsyncMock(return_value=["server-a"])
+    monkeypatch.setattr(mcp_server_manager.global_mcp_server_manager, "get_allowed_mcp_servers", allowed_servers)
     handler, signing_key = jwt_oauth_identity
     key: Final = (
         rsa.generate_private_key(public_exponent=65537, key_size=2048) if rejection == "signature" else signing_key
@@ -11603,7 +11615,13 @@ async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
         )
     if rejection == "custom_validate":
         handler.litellm_jwtauth.custom_validate = lambda claims: False
-    assert await _extract_user_id_from_request(_token_request({"Authorization": f"Bearer {bearer}"})) is None
+    request: Final = _token_request({"Authorization": f"Bearer {bearer}"})
+    result: Final = (
+        await authorize_oauth_credential_request(request, "server-a")
+        if credential_write else await _extract_user_id_from_request(request)
+    )
+    assert result is None
+    allowed_servers.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -11850,7 +11868,7 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
     import asyncio
 
     from litellm.proxy._experimental.mcp_server import mcp_server_manager
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import authorize_oauth_credential_request
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
@@ -11881,10 +11899,10 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"}, path="/server-a/token")
     if state == "cancelled":
         with pytest.raises(asyncio.CancelledError):
-            await _extract_user_id_from_request(request, "server-a")
+            await authorize_oauth_credential_request(request, "server-a")
         manager.get_allowed_mcp_servers.assert_awaited_once()
         return
-    assert await _extract_user_id_from_request(request, "server-a") == ("jwt-owner" if state == "allowed" else None)
+    assert await authorize_oauth_credential_request(request, "server-a") == ("jwt-owner" if state == "allowed" else None)
     if state in ("allowed", "server_denied", "lookup_error"):
         manager.get_allowed_mcp_servers.assert_awaited_once()
         writer: Final = manager.get_allowed_mcp_servers.call_args.args[0]
@@ -11907,7 +11925,7 @@ async def test_oauth_writer_preserves_claimed_team_instead_of_expanding_user_ros
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import mcp_server_manager
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import authorize_oauth_credential_request
     from litellm.proxy._types import LiteLLM_TeamTable, Member
 
     handler, signing_key = jwt_oauth_identity
@@ -11925,7 +11943,7 @@ async def test_oauth_writer_preserves_claimed_team_instead_of_expanding_user_ros
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     bearer: Final = _oauth_identity_jwt(signing_key, claims={"team": "a"})
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"}, path=f"/{server_id}/token")
-    assert await _extract_user_id_from_request(request, server_id) == (
+    assert await authorize_oauth_credential_request(request, server_id) == (
         "jwt-owner" if server_id == "team-a-server" else None
     )
     manager.get_allowed_mcp_servers.assert_awaited_once()

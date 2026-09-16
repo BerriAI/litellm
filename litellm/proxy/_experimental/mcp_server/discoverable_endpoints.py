@@ -33,6 +33,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     _prepare_bridge_mint,
     _prepare_bridge_refresh,
     _reload_active_user_by_id,
+    authorize_oauth_credential_request,
     can_store_oauth_credential,
 )
 from litellm.proxy._experimental.mcp_server.faults import (
@@ -851,7 +852,7 @@ async def _resolve_oauth_authorization_user(
     )
 
     request_user_id: Final = (
-        await _extract_user_id_from_request(request, mcp_server.server_id) if enforce_binding else None
+        await authorize_oauth_credential_request(request, mcp_server.server_id) if enforce_binding else None
     )
     if enforce_binding and request_user_id is None and _litellm_key_from_request(request):
         return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
@@ -1233,7 +1234,7 @@ async def exchange_token_with_server(
                         request, await MCPRequestHandler.reload_admitted_user(user_id), resolved_server.server_id
                     )
                     if bridge_identity is not None
-                    else await _extract_user_id_from_request(request, resolved_server.server_id) == user_id
+                    else await authorize_oauth_credential_request(request, resolved_server.server_id) == user_id
                 )
                 if can_store:
                     await _store_per_user_token_server_side(
