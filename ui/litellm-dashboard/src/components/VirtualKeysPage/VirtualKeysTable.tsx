@@ -118,7 +118,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyListOptions = {
     teamID: appliedFilters.team_id || undefined,
     organizationID: appliedFilters.org_id || undefined,
-    selectedKeyAlias: searchQuery.trim() || undefined,
+    search: searchQuery.trim() || undefined,
     userID: appliedFilters.user_id || undefined,
     keyHash: appliedFilters.key_hash || undefined,
     sortBy,
@@ -128,7 +128,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   const {
     data: keys,
-    isPending: isLoading,
+    isPending,
+    isPlaceholderData,
     isFetching,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, keyListOptions);
@@ -256,7 +257,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }
 
   return (
-    <div className="flex h-full flex-col gap-6 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col gap-6">
       <PageHeader
         icon={<KeyRound />}
         title="Virtual Keys"
@@ -280,10 +281,10 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         onColumnFiltersChange={handleColumnFiltersChange}
         enableColumnResizing
         columnResizeMode="onChange"
-        isLoading={isLoading}
+        isLoading={isPending || isPlaceholderData}
         loadingMessage="Loading keys..."
         noDataMessage="No keys found"
-        maxBodyHeight="calc(75vh - 210px)"
+        fillHeight
         size="compact"
         toolbar={(table) => (
           <>
@@ -291,7 +292,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               searchValue={searchInput}
               onSearchChange={handleSearchChange}
-              searchPlaceholder="Search by key alias…"
+              searchPlaceholder="Search by key alias or ID…"
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
               onOpenFilters={() => setFiltersOpen(true)}
@@ -311,7 +312,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                     <SearchSelect
                       options={teamOptions}
                       value={(get("team_id") as string) || undefined}
-                      onValueChange={(value) => set("team_id", value)}
+                      onValueChange={(value) => set("team_id", value ?? undefined)}
                       placeholder="Select a team…"
                       emptyText="No teams found"
                     />
@@ -320,7 +321,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                     <SearchSelect
                       options={orgOptions}
                       value={(get("org_id") as string) || undefined}
-                      onValueChange={(value) => set("org_id", value)}
+                      onValueChange={(value) => set("org_id", value ?? undefined)}
                       placeholder="Select an organization…"
                       emptyText="No organizations found"
                     />

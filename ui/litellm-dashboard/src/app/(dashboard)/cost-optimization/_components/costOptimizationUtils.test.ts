@@ -7,6 +7,7 @@ import {
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   buildDailyToolSeries,
+  classificationRatePer1kTurns,
   computeCacheLeakage,
   formatRangeLabel,
   isAnthropicModel,
@@ -398,6 +399,23 @@ describe("usd", () => {
     expect(usd(-0.05)).toBe("-$0.0500");
     expect(usd(-0.0004)).toBe("-$0.0004");
     expect(usd(-12.4)).toBe("-$12.40");
+  });
+});
+
+describe("classificationRatePer1kTurns", () => {
+  it("normalizes total classification cost to one thousand turns", () => {
+    expect(classificationRatePer1kTurns(342.18, 140815)).toBe("($2.43 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0004, 100)).toBe("($0.0040 / 1K turns)");
+  });
+
+  it("shows a floor instead of rounding a real cost down to zero", () => {
+    expect(classificationRatePer1kTurns(0.00001, 1000)).toBe("(<$0.0001 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0001, 1000)).toBe("($0.0001 / 1K turns)");
+  });
+
+  it("reports zero when there are no turns or no classification cost", () => {
+    expect(classificationRatePer1kTurns(0, 0)).toBe("($0.00 / 1K turns)");
+    expect(classificationRatePer1kTurns(0, 100)).toBe("($0.00 / 1K turns)");
   });
 });
 

@@ -8,7 +8,7 @@ from typing import Final, cast
 from dotenv import load_dotenv
 
 import litellm
-from litellm.rust_bridge.ocr import use_litellm_rust
+from litellm.rust_bridge.ocr import rust, set_rust_ocr
 from ......shared.parity.fixtures.cli import parse_recording_args
 from ......shared.parity.fixtures.media import structured_image_data_uri
 from ......shared.parity.fixtures.pipeline import record_fixtures
@@ -19,7 +19,7 @@ from .azure import (
 )
 from .base import OcrSdkInputBase
 from .common import OcrFixtureClient, OcrRecordingTarget, OcrSdkCall
-from .config import DEFAULT_FIXTURE_DIRECTORY, FIXTURE_DIR_ENV
+from .config import DEFAULT_FIXTURE_DIRECTORY, FIXTURE_DIR_ENV, recording_environment
 from .mistral import mistral_recording_targets
 from .models import OcrParityCase
 from .reducto import reducto_recording_targets
@@ -60,13 +60,15 @@ def main() -> int:
     args: Final = parse_recording_args()
     client: Final = LiteLLMOcrFixtureClient(cast(OcrSdkCall, litellm.ocr))
     inline_image_data_uri: Final = structured_image_data_uri()
-    targets: Final = require_targets(discover_targets(os.environ, client, inline_image_data_uri))
+    environ: Final = recording_environment(os.environ)
+    targets: Final = require_targets(discover_targets(environ, client, inline_image_data_uri))
     root: Final = fixture_directory(
         args.fixture_dir,
         os.environ.get(FIXTURE_DIR_ENV),
         DEFAULT_FIXTURE_DIRECTORY,
     )
-    use_litellm_rust(False, ocr=None, aocr=None)
+    rust(False)
+    set_rust_ocr(ocr=None, aocr=None)
     summary: Final = record_fixtures(targets, root, args.examples, args.concurrency, OcrParityCase)
     return summary.exit_code
 

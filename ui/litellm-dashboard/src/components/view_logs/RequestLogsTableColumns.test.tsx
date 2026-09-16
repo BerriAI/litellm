@@ -75,6 +75,41 @@ describe("Cost column", () => {
   });
 });
 
+describe("Tokens column", () => {
+  const sessionRow: Partial<LogEntry> = {
+    request_id: "req-session-tokens",
+    total_tokens: 10,
+    prompt_tokens: 7,
+    completion_tokens: 3,
+    session_id: "sess-1",
+    session_total_count: 3,
+  };
+
+  it("shows the summed session token usage, not the representative call's tokens, for a multi-round session", () => {
+    const aggregatedRow: Partial<LogEntry> = {
+      ...sessionRow,
+      session_total_tokens: 60,
+      session_total_prompt_tokens: 42,
+      session_total_completion_tokens: 18,
+    };
+    renderRows([logEntry(aggregatedRow)]);
+
+    const tokensCell = screen.getByRole("cell", { name: /\(42\+18\)/ });
+    expect(tokensCell).toHaveTextContent("60");
+    expect(tokensCell).toHaveTextContent("session total");
+    expect(screen.queryByText("10")).not.toBeInTheDocument();
+    expect(screen.queryByText("(7+3)")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the call's own tokens with no session label when the backend sent no session token sums", () => {
+    renderRows([logEntry(sessionRow)]);
+
+    const tokensCell = screen.getByRole("cell", { name: /\(7\+3\)/ });
+    expect(tokensCell).toHaveTextContent("10");
+    expect(tokensCell).not.toHaveTextContent("session total");
+  });
+});
+
 describe("Type column", () => {
   it("shows the conversation badge and composition even when an MCP call represents the conversation", async () => {
     const user = userEvent.setup();
@@ -98,6 +133,72 @@ describe("Type column", () => {
     renderRows([logEntry({ request_id: "req-mcp-solo", call_type: "call_mcp_tool", session_total_count: 1 })]);
 
     expect(screen.getByText("MCP")).toBeInTheDocument();
+  });
+
+  it("marks a batch cost row with the Batch badge instead of LLM", () => {
+    renderRows([logEntry({ request_id: "batch_1_batch_cost", call_type: "aretrieve_batch" })]);
+
+    expect(screen.getByText("Batch")).toBeInTheDocument();
+    expect(screen.queryByText("LLM")).not.toBeInTheDocument();
+  });
+
+  it("keeps the Batch label on the grouped create-plus-cost session instead of a row count", () => {
+    const groupedCostRow: Partial<LogEntry> = {
+      request_id: "batch_1_batch_cost",
+      call_type: "aretrieve_batch",
+      session_id: "batch_1",
+      session_total_count: 2,
+    };
+    renderRows([logEntry(groupedCostRow)]);
+
+    expect(screen.getByText("Batch")).toBeInTheDocument();
+    expect(screen.queryByText("2")).not.toBeInTheDocument();
+  });
+});
+
+describe("batch rows", () => {
+  const batchRow = (overrides: Partial<LogEntry>): LogEntry =>
+    logEntry({
+      request_id: "batch_abc123_batch_cost",
+      call_type: "aretrieve_batch",
+      ...overrides,
+    });
+
+  it("rolls partial failures into the status badge instead of reporting blanket Success", async () => {
+    const user = userEvent.setup();
+    renderRows([batchRow({ metadata: { batch_successful_requests: 2, batch_failed_requests: 1 } })]);
+
+    expect(screen.queryByText("Success")).not.toBeInTheDocument();
+    await user.hover(screen.getByText("2/3 succeeded"));
+    expect(await screen.findByText("1 of 3 batch requests failed")).toBeInTheDocument();
+  });
+
+  it("keeps the Success badge when every batch request succeeded", () => {
+    renderRows([batchRow({ metadata: { batch_successful_requests: 3, batch_failed_requests: 0 } })]);
+
+    expect(screen.getByText("Success")).toBeInTheDocument();
+  });
+
+  it("keeps the Failure badge when the batch row itself failed, whatever the counts say", () => {
+    renderRows([batchRow({ metadata: { status: "failure", batch_successful_requests: 2, batch_failed_requests: 1 } })]);
+
+    expect(screen.getByText("Failure")).toBeInTheDocument();
+    expect(screen.queryByText("2/3 succeeded")).not.toBeInTheDocument();
+  });
+
+  it("shows the provider batch id, not the synthetic _batch_cost request id", () => {
+    renderRows([batchRow({ metadata: { batch_successful_requests: 1, batch_failed_requests: 0 } })]);
+
+    expect(screen.getByText("batch_abc123")).toBeInTheDocument();
+    expect(screen.queryByText("batch_abc123_batch_cost")).not.toBeInTheDocument();
+    expect(screen.getByText("batch cost")).toBeInTheDocument();
+  });
+
+  it("leaves ordinary request ids untouched", () => {
+    renderRows([logEntry({ request_id: "chatcmpl-42" })]);
+
+    expect(screen.getByText("chatcmpl-42")).toBeInTheDocument();
+    expect(screen.queryByText("batch cost")).not.toBeInTheDocument();
   });
 });
 

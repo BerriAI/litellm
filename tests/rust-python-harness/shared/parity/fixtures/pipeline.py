@@ -8,11 +8,11 @@ from types import MappingProxyType
 from typing import Final, Generic, Literal, Protocol, TypeVar
 
 from hypothesis.strategies import SearchStrategy
-from pydantic import BaseModel
 
 from .inputs import generate_case_inputs
 from .recording import UpstreamEndpoint, record_upstream_interactions
 from .store import (
+    CaseT,
     FixtureInput,
     canonical_json,
     fixture_cache_key,
@@ -25,7 +25,6 @@ from .store import (
 LOGGER: Final = logging.getLogger(__name__)
 InputT = TypeVar("InputT", bound=FixtureInput)
 InputT_contra = TypeVar("InputT_contra", bound=FixtureInput, contravariant=True)
-CaseT = TypeVar("CaseT", bound=BaseModel)
 
 
 class RecordingInvocation(Protocol[InputT_contra]):
@@ -132,6 +131,9 @@ def _record_job(job: RecordingJob[InputT], case_type: type[CaseT]) -> RecordedFi
         job.case_input,
         job.invocation.execute,
     )
+    status: Final = interactions[-1].response.status_code
+    if status in {408, 429} or status >= 500:
+        raise RuntimeError(f"Upstream returned transient HTTP {status}; rerun recording to retry")
     case: Final = case_type.model_validate(
         {
             "litellm_input": job.case_input,
