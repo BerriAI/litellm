@@ -218,6 +218,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+from litellm.router_utils.routing_groups import parse_routing_groups, validate_routing_strategy
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1244,20 +1245,9 @@ class Router:
             return strategy.value
         return strategy
 
-    def _validate_routing_strategy(self, routing_strategy: RoutingStrategy | str | None) -> None:
-        # See: https://github.com/BerriAI/litellm/issues/11330
-        valid_strategy_strings: Final = ["simple-shuffle", "lar1"] + [s.value for s in RoutingStrategy]
-        if routing_strategy is None:
-            return
-        is_valid_string: Final = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
-        is_valid_enum: Final = isinstance(routing_strategy, RoutingStrategy)
-        if not is_valid_string and not is_valid_enum:
-            raise ValueError(
-                f"Invalid routing_strategy: '{routing_strategy}'. "
-                f"Valid options: {valid_strategy_strings}. "
-                f"Check 'router_settings.routing_strategy' in your config.yaml "
-                f"or the 'routing_strategy' parameter if using the Router SDK directly."
-            )
+    @staticmethod
+    def _validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
+        validate_routing_strategy(routing_strategy)
 
     def _build_strategy_selector(
         self,
@@ -1274,11 +1264,6 @@ class Router:
         match self._normalize_strategy(strategy):
             case RoutingStrategy.LEAST_BUSY.value:
                 selector = LeastBusyLoggingHandler(router_cache=self.cache)
-                if register_callbacks:
-                    if isinstance(litellm.input_callback, list):
-                        litellm.logging_callback_manager.add_litellm_input_callback(selector)
-                    else:
-                        litellm.input_callback = [selector]
             case RoutingStrategy.USAGE_BASED_ROUTING.value:
                 selector = LowestTPMLoggingHandler(
                     router_cache=self.cache,
@@ -1302,10 +1287,20 @@ class Router:
             case _:
                 pass
 
-        if selector is not None and register_callbacks and isinstance(litellm.callbacks, list):
-            litellm.logging_callback_manager.add_litellm_callback(selector)
+        if selector is not None and register_callbacks:
+            self._register_router_selector(selector)
 
         return selector
+
+    @staticmethod
+    def _register_router_selector(selector: RouterStrategySelector) -> None:
+        if isinstance(selector, LeastBusyLoggingHandler):
+            if isinstance(litellm.input_callback, list):
+                litellm.logging_callback_manager.add_litellm_input_callback(selector)
+            else:
+                litellm.input_callback = [selector]
+        if isinstance(litellm.callbacks, list):
+            litellm.logging_callback_manager.add_litellm_callback(selector)
 
     def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """
@@ -1397,75 +1392,69 @@ class Router:
         at most one explicit group. Constructs per-group strategy selectors so
         groups with different `routing_strategy_args` track independent state.
 
+        Validation and selector construction run to completion before any
+        router state changes, so a rejected input raises with the previously
+        loaded groups still routing.
+
         Models not claimed by any explicit group are served by the implicit
         `"default"` group, whose selectors are the `self.<strategy>_logger`
         attributes set up in `routing_strategy_init`.
         """
-        group_selectors: Final[Mapping[str, Mapping[str, RouterStrategySelector]]] = getattr(
-            self, "_group_selectors", {}
-        )
-        self._unregister_router_selectors([sel for selectors in group_selectors.values() for sel in selectors.values()])
-
-        self._routing_groups: dict[str, RoutingGroup] = {}
-        self._model_to_group: dict[str, str] = {}
-        self._group_selectors: dict[str, dict[str, RouterStrategySelector]] = {}
-        self._invalidate_model_group_info_cache()
-        self._invalidate_access_groups_cache()
-
         if not groups_input:
+            self._replace_routing_groups(())
             return
 
-        known_model_names: Final = {m.get("model_name") for m in (self.model_list or []) if m.get("model_name")}
+        known_model_names: Final = frozenset(m["model_name"] for m in (self.model_list or ()) if m.get("model_name"))
+        groups: Final = parse_routing_groups(groups_input, known_model_names=known_model_names)
 
-        seen_group_names: Final[set] = set()
-        for raw in groups_input:
-            group = raw if isinstance(raw, RoutingGroup) else RoutingGroup(**raw)
-
-            if not group.group_name:
-                raise ValueError("routing_groups: group_name must be non-empty.")
-            if group.group_name == "default":
-                raise ValueError("routing_groups: 'default' is reserved for the implicit fallback group.")
-            if group.group_name in known_model_names or group.group_name in (self.model_group_alias or {}):
+        alias_names: Final = frozenset(self.model_group_alias or ())
+        for group in groups:
+            if group.group_name in known_model_names or group.group_name in alias_names:
                 verbose_router_logger.warning(
                     "routing_groups: group_name '%s' is shadowed by an existing model_name or model_group_alias; "
                     "the group's strategy still applies to its members, but the name is not callable until renamed.",
                     group.group_name,
                 )
-            if group.group_name in seen_group_names:
-                raise ValueError(
-                    f"routing_groups: group names must be unique, duplicate group_name '{group.group_name}'."
-                )
-            seen_group_names.add(group.group_name)
 
-            self._validate_routing_strategy(group.routing_strategy)
-
-            for model_name in group.models:
-                if model_name in self._model_to_group:
-                    raise ValueError(
-                        f"routing_groups: model_name '{model_name}' appears in "
-                        f"both '{self._model_to_group[model_name]}' and "
-                        f"'{group.group_name}'. Each model may belong to at most one group."
-                    )
-                if known_model_names and model_name not in known_model_names:
-                    verbose_router_logger.warning(
-                        "routing_groups: model_name '%s' (group '%s') is not in model_list; "
-                        "the group entry will only take effect once a deployment with that "
-                        "model_name is added.",
-                        model_name,
-                        group.group_name,
-                    )
-                self._model_to_group[model_name] = group.group_name
-
-            self._routing_groups[group.group_name] = group
-
-            strategy_value = self._normalize_strategy(group.routing_strategy) or ""
-            group_selector = self._build_strategy_selector(
-                strategy=group.routing_strategy,
-                routing_strategy_args=group.routing_strategy_args or {},
+        built: Final = tuple(
+            (
+                group,
+                self._build_strategy_selector(
+                    strategy=group.routing_strategy,
+                    routing_strategy_args=group.routing_strategy_args or {},
+                    register_callbacks=False,
+                ),
             )
-            self._group_selectors[group.group_name] = (
-                {strategy_value: group_selector} if group_selector is not None else {}
+            for group in groups
+        )
+        self._replace_routing_groups(built)
+
+    def _replace_routing_groups(
+        self,
+        built: tuple[tuple[RoutingGroup, RouterStrategySelector | None], ...],
+    ) -> None:
+        previous_selectors: Final[Mapping[str, Mapping[str, RouterStrategySelector]]] = getattr(
+            self, "_group_selectors", {}
+        )
+        self._unregister_router_selectors(
+            tuple(sel for selectors in previous_selectors.values() for sel in selectors.values())
+        )
+        for _, selector in built:
+            if selector is not None:
+                self._register_router_selector(selector)
+
+        self._routing_groups: dict[str, RoutingGroup] = {group.group_name: group for group, _ in built}
+        self._model_to_group: dict[str, str] = {
+            model_name: group.group_name for group, _ in built for model_name in group.models
+        }
+        self._group_selectors: dict[str, dict[str, RouterStrategySelector]] = {
+            group.group_name: (
+                {} if selector is None else {self._normalize_strategy(group.routing_strategy) or "": selector}
             )
+            for group, selector in built
+        }
+        self._invalidate_model_group_info_cache()
+        self._invalidate_access_groups_cache()
 
     def get_routing_group(self, model_name: str) -> RoutingGroup | None:
         """
@@ -12032,7 +12021,6 @@ class Router:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
                 elif var == "routing_groups":
-                    self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
                 elif var == "optional_pre_call_checks":
                     self.set_optional_pre_call_checks(kwargs[var])
@@ -12073,7 +12061,9 @@ class Router:
             self._apply_updated_routing_strategy_args()
 
         if rebuild_routing_groups:
-            self._init_routing_groups(self._routing_groups_input)
+            routing_groups_input: Final = kwargs.get("routing_groups", self._routing_groups_input)
+            self._init_routing_groups(routing_groups_input)
+            self._routing_groups_input = routing_groups_input
         verbose_router_logger.debug("Updated Router settings: %s", self.get_settings())
 
     def _get_client(self, deployment, kwargs, client_type=None):

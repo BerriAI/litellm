@@ -13,6 +13,7 @@ from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router
@@ -804,6 +805,118 @@ def test_strategy_reinit_unregisters_override_selectors():
     assert router._override_selectors == {}
     assert not any(cb is override_selector for cb in litellm.callbacks)
     assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
+
+
+def _single_latency_group():
+    return [{"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"}]
+
+
+def _assert_still_routes_with_original_group(router, selector):
+    assert list(router._routing_groups) == ["g1"]
+    assert router._model_to_group == {"filtered-model": "g1"}
+    assert router._group_selectors["g1"]["latency-based-routing"] is selector
+    assert router._get_routing_context("filtered-model", None) == ("latency-based-routing", selector)
+    assert sum(1 for cb in litellm.callbacks if cb is selector) == 1
+
+
+def test_failed_routing_groups_update_keeps_previous_groups(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(routing_groups=_single_latency_group())
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValueError, match="appears in"):
+        router.update_settings(
+            routing_groups=[
+                *_single_latency_group(),
+                {"group_name": "g2", "models": ["filtered-model"], "routing_strategy": "least-busy"},
+            ],
+        )
+
+    _assert_still_routes_with_original_group(router, selector)
+    assert sum(1 for cb in litellm.callbacks if type(cb) is not type(selector)) == 0
+    assert litellm.input_callback == []
+
+
+def test_failed_routing_groups_update_does_not_poison_later_strategy_changes(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(routing_groups=_single_latency_group())
+
+    with pytest.raises(ValueError, match="appears in"):
+        router.update_settings(
+            routing_groups=[
+                *_single_latency_group(),
+                {"group_name": "g2", "models": ["filtered-model"], "routing_strategy": "least-busy"},
+            ],
+        )
+
+    router.update_settings(routing_strategy="least-busy")
+
+    assert list(router._routing_groups) == ["g1"]
+    assert [g["group_name"] for g in router.get_settings()["routing_groups"]] == ["g1"]
+
+
+def test_overlap_error_names_every_conflicting_model():
+    with pytest.raises(ValueError, match="appears in") as exc_info:
+        _build_router(
+            routing_groups=[
+                {
+                    "group_name": "g1",
+                    "models": ["filtered-model", "other-model"],
+                    "routing_strategy": "latency-based-routing",
+                },
+                {
+                    "group_name": "g2",
+                    "models": ["filtered-model", "other-model"],
+                    "routing_strategy": "least-busy",
+                },
+            ],
+        )
+    message = str(exc_info.value)
+    assert "'filtered-model' appears in 'g1' and 'g2'" in message
+    assert "'other-model' appears in 'g1' and 'g2'" in message
+
+
+def test_invalid_group_strategy_keeps_previous_groups(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(routing_groups=_single_latency_group())
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValueError, match="Invalid routing_strategy"):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g2", "models": ["other-model"], "routing_strategy": "not-a-real-strategy"},
+            ],
+        )
+
+    _assert_still_routes_with_original_group(router, selector)
+
+
+def test_unbuildable_group_selector_keeps_previous_groups(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(routing_groups=_single_latency_group())
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValidationError, match="ttl"):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g0", "models": ["other-model"], "routing_strategy": "least-busy"},
+                *_single_latency_group(),
+                {
+                    "group_name": "g2",
+                    "models": ["other-model-2"],
+                    "routing_strategy": "latency-based-routing",
+                    "routing_strategy_args": {"ttl": "not-a-number"},
+                },
+            ],
+        )
+
+    _assert_still_routes_with_original_group(router, selector)
+    assert litellm.callbacks == [selector]
+    assert litellm.input_callback == []
 
 
 def test_override_selectors_are_not_registered_process_wide(monkeypatch):
