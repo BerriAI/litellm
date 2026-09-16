@@ -353,6 +353,7 @@
         "supports_pdf_input": true
     },
     "amazon.nova-lite-v1:0": {
+        "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 6e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
@@ -537,6 +538,7 @@
         "supports_audio_input": true
     },
     "amazon.nova-micro-v1:0": {
+        "cache_read_input_token_cost": 8.75e-09,
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -550,6 +552,7 @@
         "supports_tool_choice": true
     },
     "amazon.nova-pro-v1:0": {
+        "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 8e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
@@ -2884,6 +2887,7 @@
         "supports_function_calling": true
     },
     "apac.amazon.nova-lite-v1:0": {
+        "cache_read_input_token_cost": 1.575e-08,
         "input_cost_per_token": 6.3e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
@@ -2899,6 +2903,7 @@
         "supports_tool_choice": true
     },
     "apac.amazon.nova-micro-v1:0": {
+        "cache_read_input_token_cost": 9.25e-09,
         "input_cost_per_token": 3.7e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -2912,6 +2917,7 @@
         "supports_tool_choice": true
     },
     "apac.amazon.nova-pro-v1:0": {
+        "cache_read_input_token_cost": 2.1e-07,
         "input_cost_per_token": 8.4e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
@@ -12449,6 +12455,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/amazon.nova-pro-v1:0": {
+        "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 9.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 300000,
@@ -12629,6 +12636,7 @@
         "supports_audio_input": true
     },
     "bedrock/us-gov-west-1/amazon.nova-lite-v1:0": {
+        "cache_read_input_token_cost": 1.8e-08,
         "input_cost_per_token": 7.2e-08,
         "litellm_provider": "bedrock",
         "max_input_tokens": 300000,
@@ -12644,6 +12652,7 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/amazon.nova-micro-v1:0": {
+        "cache_read_input_token_cost": 1.05e-08,
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -12657,6 +12666,7 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/amazon.nova-pro-v1:0": {
+        "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 9.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 300000,
@@ -21197,6 +21207,7 @@
         "supports_embedding_image_input": true
     },
     "eu.amazon.nova-lite-v1:0": {
+        "cache_read_input_token_cost": 1.95e-08,
         "input_cost_per_token": 7.8e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
@@ -21212,6 +21223,7 @@
         "supports_tool_choice": true
     },
     "eu.amazon.nova-micro-v1:0": {
+        "cache_read_input_token_cost": 1.15e-08,
         "input_cost_per_token": 4.6e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -21225,6 +21237,7 @@
         "supports_tool_choice": true
     },
     "eu.amazon.nova-pro-v1:0": {
+        "cache_read_input_token_cost": 2.625e-07,
         "input_cost_per_token": 1.05e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
@@ -44645,6 +44658,7 @@
         "source": "https://aws.amazon.com/polly/pricing/"
     },
     "us.amazon.nova-lite-v1:0": {
+        "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 6e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
@@ -44660,6 +44674,7 @@
         "supports_tool_choice": true
     },
     "us.amazon.nova-micro-v1:0": {
+        "cache_read_input_token_cost": 8.75e-09,
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -44688,6 +44703,7 @@
         "supports_vision": true
     },
     "us.amazon.nova-pro-v1:0": {
+        "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 8e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 300000,
