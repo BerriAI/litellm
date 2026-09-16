@@ -257,6 +257,45 @@ def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
     assert sent["model"] == TUNED_MODEL_RESOURCE
 
 
+def test_create_batch_sync_ignores_resource_shaped_api_base():
+    """A deployment api_base like `.../endpoints/<id>:rawPredict` targets online inference, not
+    the Vertex API root; grafting batch urls onto it yields guaranteed 404s, so batch operations
+    must fall back to the default Vertex host (LIT-7386)."""
+    h = _make_handler()
+    client = MagicMock()
+    client.post.return_value = _http_response()
+    raw_predict_api_base = (
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
+        f"/locations/{LOCATION}/endpoints/{ENDPOINT_ID}:rawPredict"
+    )
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response()) as safe_get,
+    ):
+        out = h.create_batch(
+            _is_async=False,
+            create_batch_data=ENDPOINT_CREATE_DATA,
+            api_base=raw_predict_api_base,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location=LOCATION,
+            timeout=600.0,
+            max_retries=None,
+        )
+
+    assert isinstance(out, LiteLLMBatch)
+    resolution_url = safe_get.call_args.args[1]
+    assert ":rawPredict" not in resolution_url
+    assert resolution_url == (
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
+        f"/locations/{LOCATION}/endpoints/{ENDPOINT_ID}"
+    )
+    assert h._check_custom_proxy.call_args.kwargs["api_base"] is None
+    sent = json.loads(client.post.call_args.kwargs["data"])
+    assert sent["model"] == TUNED_MODEL_RESOURCE
+
+
 @pytest.mark.parametrize(
     "api_base, expected",
     [
