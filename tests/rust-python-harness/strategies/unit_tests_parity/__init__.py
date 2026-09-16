@@ -15,24 +15,25 @@ from ...shared.reporting.strategy import (
     SuiteCaseSpec,
 )
 from ...shared.unit_runners.suite_runner import run_suites
-from ..unit_tests_mapping.mappings import UNIT_TEST_CONTRACTS
 from .reporting import render_unit_parity_results
 from .runner import UnitParityExclusion, UnitParitySuite, run_suite
 
-
 UNIT_PARITY_SUITES: Final[Mapping[SdkFunction, UnitParitySuite]] = MappingProxyType(
     {
-        sdk_function: UnitParitySuite(
-            python_selectors=contract.unit_parity.python_selectors,
-            exclusions=tuple(
-                UnitParityExclusion(
-                    nodeid=exclusion.nodeid,
-                    reason=exclusion.reason,
-                )
-                for exclusion in contract.unit_parity.exclusions
+        "ocr": UnitParitySuite(
+            python_selectors=(
+                "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
+                "tests/test_litellm/llms/mistral/ocr",
+                "tests/test_litellm/llms/ocr",
+                "tests/test_litellm/ocr",
             ),
-        )
-        for sdk_function, contract in UNIT_TEST_CONTRACTS.items()
+            exclusions=(
+                UnitParityExclusion(
+                    nodeid="tests/test_litellm/ocr/test_rust_bridge.py::test_rust_toggles_flag",
+                    reason="This test asserts the process-level backend flag selected by the parity runner.",
+                ),
+            ),
+        ),
     }
 )
 

@@ -1,1 +1,1 @@
-Runs the focused native Cargo test suite for each mapped API.
+Runs the focused native Cargo test suite for each registered API.

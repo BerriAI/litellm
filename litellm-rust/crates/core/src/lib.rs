@@ -8,8 +8,6 @@ pub mod http_utils;
 pub(crate) mod llms;
 mod media;
 pub mod messages;
-#[cfg(any(feature = "observability", test))]
-pub mod observability;
 pub mod ocr;
 pub mod params;
 pub mod providers;

@@ -296,8 +296,6 @@ async def exercise_async_concurrency(native: object, api_base: str) -> None:
 
 def exercise_routes(native_path: Path, api_base: str) -> object:
     native: Final = load_native(native_path)
-    if hasattr(native, "_trace"):
-        raise AssertionError("release wheel exposed trace-parity diagnostics")
     exercise_sync(native, api_base)
     asyncio.run(exercise_async(native, api_base))
     asyncio.run(exercise_async_concurrency(native, api_base))

@@ -64,7 +64,6 @@ impl BaseOcrConfig for MistralOCRConfig {
         self.get_complete_url(request.connection.api_base.as_deref())
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_request(
         &self,
         model: &str,

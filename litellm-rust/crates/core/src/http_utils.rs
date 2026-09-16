@@ -45,14 +45,12 @@ pub(crate) fn with_headers(
         })
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn http_request(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, reqwest::Error> {
     request.send().await
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn execute_http_request(
     client: &reqwest::Client,
     request: reqwest::Request,

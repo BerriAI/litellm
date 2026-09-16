@@ -127,12 +127,6 @@ impl BaseOcrConfig for ReductoParseV3Config {
             .into())
     }
 
-    #[tracing::instrument(
-        name = "async_transform_ocr_request",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
     async fn async_transform_ocr_request(
         &self,
         _model: &str,
@@ -222,12 +216,6 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
             .into())
     }
 
-    #[tracing::instrument(
-        name = "async_transform_ocr_request",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
     async fn async_transform_ocr_request(
         &self,
         _model: &str,

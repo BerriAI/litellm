@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Final
 
 import pytest
@@ -10,15 +9,8 @@ import pytest
 models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
 strategy_module = importlib.import_module("tests.rust-python-harness.shared.reporting.strategy")
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
-mapping_validator = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator")
-mappings = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mappings")
-ocr_mapping = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.cases.ocr")
 cli = importlib.import_module("tests.rust-python-harness.cli")
-native_build = importlib.import_module("tests.rust-python-harness.shared.native_build")
 
-audit_mapping = mapping_validator.audit_mapping
-UNIT_TEST_CONTRACTS = mappings.UNIT_TEST_CONTRACTS
-OCR_CONTRACT = ocr_mapping.OCR_CONTRACT
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CaseResult = models.CaseResult
 Coverage = models.Coverage
@@ -45,11 +37,6 @@ def _case(module: str = "tests.example") -> HarnessCase:
     "module",
     [
         "tests.rust-python-harness.strategies.e2e_parity.sdk.ocr.test_sdk_parity",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.case",
-        "tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
     ],
 )
 def test_implemented_namespace_case_modules_remain_importable(module: str) -> None:
@@ -117,70 +104,10 @@ def test_should_format_developer_facing_run_context() -> None:
     assert _format_duration(1.25) == "1.2s"
 
 
-def test_should_leave_functions_without_mapping_contracts_unimplemented() -> None:
-    assert "messages" not in UNIT_TEST_CONTRACTS
-
-
-def test_should_report_a_bridge_that_cannot_be_imported() -> None:
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(native_build, "get_native_bridge", lambda: None)
-        message: Final = native_build.trace_bridge_error()
-
-    assert message is not None
-    assert "not importable" in message
-
-
-def test_should_report_a_bridge_built_without_the_trace_feature() -> None:
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=None))
-        message: Final = native_build.trace_bridge_error()
-
-    assert message is not None
-    assert native_build.BRIDGE_FEATURE in message
-
-
-def test_should_accept_a_bridge_built_with_the_trace_feature() -> None:
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=object()))
-
-        assert native_build.trace_bridge_error() is None
-
-
-def test_should_not_rebuild_the_bridge_while_reporting_its_state() -> None:
-    def forbidden_rebuild(repo_root: object) -> tuple[bool, str]:
-        raise AssertionError("trace_bridge_error must not rebuild the native bridge")
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(native_build, "_rebuild", forbidden_rebuild)
-        patch.setattr(native_build, "get_native_bridge", lambda: None)
-
-        assert native_build.trace_bridge_error() is not None
-
-
-def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
-    bridge_error: Final = native_build.trace_bridge_error()
-    if bridge_error is not None:
-        pytest.skip(bridge_error)
-
-    report = audit_mapping(OCR_CONTRACT, repo_root=REPO_ROOT)
-
-    assert report.is_valid, (
-        f"Missing Python tests: {list(report.missing_python_tests)}\n"
-        f"Missing Rust tests: {list(report.missing_rust_tests)}\n"
-        f"Duplicate Python mappings: {list(report.duplicate_python_mappings)}\n"
-        f"Invalid mapping exclusions: {list(report.invalid_mapping_exclusions)}\n"
-        f"Invalid parity exclusions: {list(report.invalid_unit_parity_exclusions)}"
-    )
-    assert report.mapped_count == len(OCR_CONTRACT.mapping.mappings)
-    assert report.total_count == (
-        report.mapped_count + len(report.excluded_python_tests) + len(report.unmapped_python_tests)
-    )
-
-
 def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code: Final = cli.main(["run", "unit_tests_mapping", "--function", "messages"])
+    exit_code: Final = cli.main(["run", "unit_tests_parity", "--function", "messages"])
 
     captured: Final = capsys.readouterr()
     assert exit_code == 0
     assert "- messages: not_implemented" in captured.out
-    assert "unit_tests_mapping:messages: not_implemented" not in captured.out
+    assert "unit_tests_parity:messages: not_implemented" not in captured.out

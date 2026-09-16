@@ -117,7 +117,6 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         })
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
@@ -138,7 +137,6 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             })
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_request(
         &self,
         model: &str,
@@ -153,7 +151,6 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         })
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_response(
         &self,
         _model: &str,

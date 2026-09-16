@@ -65,7 +65,6 @@ pub(super) fn resolve_request(
     })
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,

@@ -59,7 +59,6 @@ pub(super) fn prepare_provider_request(
     })
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
     config: &dyn AnthropicMessagesProviderConfig,
     extra_headers: Option<Map<String, Value>>,

@@ -6,7 +6,6 @@ use super::common_utils::truncate_error_body;
 use super::prepare::prepare_provider_request;
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest<'_>,
 ) -> Result<AnthropicMessagesResponse, super::Error> {
