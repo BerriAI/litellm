@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 
@@ -6953,3 +6954,199 @@ def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it(
     )
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}
+
+
+def _video_clip_b64() -> str:
+    """A minimal fake mp4 payload - the Converse path only inspects the mime type."""
+    return base64.b64encode(b"\x00\x00\x00\x18ftypmp42" + b"\xab" * 32).decode()
+
+
+def test_bedrock_converse_user_video_url_becomes_video_block():
+    """
+    An OpenAI `video_url` part used to be dropped on the Converse path: only
+    the text block reached Bedrock, so the model answered about nothing while
+    `usage.prompt_tokens` stayed at the text-only count.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    clip_b64 = _video_clip_b64()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this video."},
+                {
+                    "type": "video_url",
+                    "video_url": {"url": f"data:video/mp4;base64,{clip_b64}"},
+                },
+            ],
+        }
+    ]
+
+    translated = _bedrock_converse_messages_pt(
+        messages=messages, model="amazon.nova-pro-v1:0", llm_provider="bedrock"
+    )
+
+    blocks = translated[0]["content"]
+    assert [next(iter(block)) for block in blocks] == ["text", "video"]
+    video_block = blocks[1]["video"]
+    assert video_block["format"] == "mp4"
+    assert video_block["source"]["bytes"] == clip_b64
+
+
+def test_bedrock_converse_user_video_url_str_form_becomes_video_block():
+    """`video_url` may also be a bare data uri instead of a mapping."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    clip_b64 = _video_clip_b64()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": f"data:video/webm;base64,{clip_b64}",
+                },
+            ],
+        }
+    ]
+
+    translated = _bedrock_converse_messages_pt(
+        messages=messages, model="amazon.nova-pro-v1:0", llm_provider="bedrock"
+    )
+
+    blocks = translated[0]["content"]
+    assert [next(iter(block)) for block in blocks] == ["video"]
+    assert blocks[0]["video"]["format"] == "webm"
+    assert blocks[0]["video"]["source"]["bytes"] == clip_b64
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_user_video_url_becomes_video_block_async():
+    """The async (acompletion) message path must map video_url the same way."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+    )
+
+    clip_b64 = _video_clip_b64()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this video."},
+                {
+                    "type": "video_url",
+                    "video_url": {"url": f"data:video/mp4;base64,{clip_b64}"},
+                },
+            ],
+        }
+    ]
+
+    translated = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="amazon.nova-pro-v1:0",
+            llm_provider="bedrock",
+        )
+    )
+
+    blocks = translated[0]["content"]
+    assert [next(iter(block)) for block in blocks] == ["text", "video"]
+    assert blocks[1]["video"]["format"] == "mp4"
+
+
+async def test_bedrock_converse_user_video_url_str_form_becomes_video_block_async():
+    """A bare string video_url must survive the async (acompletion) path too."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+    )
+
+    clip_b64 = _video_clip_b64()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this video."},
+                {
+                    "type": "video_url",
+                    "video_url": f"data:video/mp4;base64,{clip_b64}",
+                },
+            ],
+        }
+    ]
+
+    translated = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="amazon.nova-pro-v1:0",
+            llm_provider="bedrock",
+        )
+    )
+
+    blocks = translated[0]["content"]
+    assert [next(iter(block)) for block in blocks] == ["text", "video"]
+    assert blocks[1]["video"]["format"] == "mp4"
+
+
+def test_bedrock_converse_image_url_still_becomes_image_block():
+    """The video_url branch must not hijack ordinary image parts."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    png_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{png_b64}"},
+                },
+            ],
+        }
+    ]
+
+    translated = _bedrock_converse_messages_pt(
+        messages=messages, model="amazon.nova-pro-v1:0", llm_provider="bedrock"
+    )
+
+    blocks = translated[0]["content"]
+    assert [next(iter(block)) for block in blocks] == ["text", "image"]
+    assert blocks[1]["image"]["format"] == "png"
+
+
+def test_bedrock_converse_transform_request_keeps_video_url():
+    """End-to-end request build: the video block survives into the wire body."""
+    clip_b64 = _video_clip_b64()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this video."},
+                {
+                    "type": "video_url",
+                    "video_url": {"url": f"data:video/mp4;base64,{clip_b64}"},
+                },
+            ],
+        }
+    ]
+
+    body = AmazonConverseConfig().transform_request(
+        model="amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    blocks = body["messages"][0]["content"]
+    assert [next(iter(block)) for block in blocks] == ["text", "video"]
+    assert blocks[1]["video"]["source"]["bytes"] == clip_b64

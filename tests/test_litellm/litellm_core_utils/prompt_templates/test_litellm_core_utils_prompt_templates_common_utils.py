@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
+    infer_content_type_from_url_and_content,
     is_encrypted_reasoning_block,
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
@@ -1813,3 +1814,39 @@ class TestEncryptedReasoningReplay:
         strip_encrypted_reasoning_from_messages(messages)
 
         assert messages == before
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://example.com/clip.mp4", "video/mp4"),
+        ("https://example.com/clip.webm?X-Amz-Signature=abc123", "video/webm"),
+        ("https://example.com/clip.mov", "video/mov"),
+        ("https://example.com/clip.mkv", "video/mkv"),
+        ("https://example.com/clip.3gp", "video/3gp"),
+        ("https://example.com/clip.flv", "video/flv"),
+        ("https://example.com/clip.mpeg", "video/mpeg"),
+        ("https://example.com/clip.mpg", "video/mpg"),
+        ("https://example.com/clip.wmv", "video/wmv"),
+    ],
+)
+def test_infer_video_content_type_from_url_extension(url, expected):
+    assert (
+        infer_content_type_from_url_and_content(
+            url=url,
+            content=b"\x00\x00\x00\x18ftypmp42",
+            current_content_type="binary/octet-stream",
+        )
+        == expected
+    )
+
+
+def test_infer_video_content_type_from_url_extension_without_header():
+    assert (
+        infer_content_type_from_url_and_content(
+            url="https://example.com/clip.mp4",
+            content=b"\x00\x00\x00\x18ftypmp42",
+            current_content_type=None,
+        )
+        == "video/mp4"
+    )
