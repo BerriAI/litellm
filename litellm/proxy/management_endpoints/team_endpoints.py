@@ -783,10 +783,7 @@ async def get_all_team_memberships(
         include={"litellm_budget_table": True},
     )
 
-    return [
-        _with_total_spend_floor(LiteLLM_TeamMembership.model_validate(tm.model_dump()))
-        for tm in team_memberships
-    ]
+    return [_with_total_spend_floor(LiteLLM_TeamMembership.model_validate(tm.model_dump())) for tm in team_memberships]
 
 
 def _with_total_spend_floor(tm: LiteLLM_TeamMembership) -> LiteLLM_TeamMembership:
