@@ -34,6 +34,7 @@ import { AgentModel, fetchAvailableAgentModels, MCPToolEntry } from "../../llm_c
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import ComplianceUI from "../complianceUI/ComplianceUI";
 import ChatUI from "./ChatUI";
+import { type AgentTab, NEW_AGENT_ID, useAgentBuilderUrlState } from "./useAgentBuilderUrlState";
 
 export interface AgentBuilderViewProps {
   accessToken: string | null;
@@ -49,9 +50,7 @@ export interface AgentBuilderViewProps {
   customProxyBaseUrl?: string;
 }
 
-const NEW_AGENT_ID = "__new__";
-
-type AgentTab = "configure" | "chat" | "test" | "connect";
+const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
 
 function getConnectTabBaseUrl(
   proxySettings: AgentBuilderViewProps["proxySettings"],
@@ -197,9 +196,9 @@ export default function AgentBuilderView({
   const [agentModels, setAgentModels] = useState<AgentModel[]>([]);
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<AgentTab>("configure");
-  const { onTabChange, hasVisited } = useVisitedTabs("configure");
+  const { selectedId, isNewAgent, selectAgent, keepValidSelection, activeTab, setActiveTab } =
+    useAgentBuilderUrlState();
+  const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
   const goToTab = (tab: AgentTab) => {
     setActiveTab(tab);
     onTabChange(tab);
@@ -225,7 +224,6 @@ export default function AgentBuilderView({
   const effectiveApiKey = apiKey || accessToken || "";
   const selectedAgent =
     selectedId === NEW_AGENT_ID ? null : agentModels.find((a) => getAgentSelectionKey(a) === selectedId) ?? null;
-  const isNewAgent = selectedId === NEW_AGENT_ID;
   const selectedAgentModelId = selectedAgent ? getAgentModelId(selectedAgent) : null;
 
   const loadAgents = useCallback(async (): Promise<AgentModel[]> => {
@@ -234,9 +232,7 @@ export default function AgentBuilderView({
     try {
       const list = await fetchAvailableAgentModels(accessToken, userID, userRole);
       setAgentModels(list);
-      if (!selectedId || (selectedId !== NEW_AGENT_ID && !list.some((a) => getAgentSelectionKey(a) === selectedId))) {
-        setSelectedId(list.length > 0 ? getAgentSelectionKey(list[0]) : null);
-      }
+      keepValidSelection(list.map(getAgentSelectionKey));
       return list;
     } catch (e) {
       console.error(e);
@@ -245,7 +241,7 @@ export default function AgentBuilderView({
     } finally {
       setLoadingAgents(false);
     }
-  }, [accessToken, userID, userRole]);
+  }, [accessToken, userID, userRole, keepValidSelection]);
 
   const loadModels = useCallback(async () => {
     if (!effectiveApiKey) return;
@@ -290,9 +286,20 @@ export default function AgentBuilderView({
     setCreatedKeyValue(null);
   }, [selectedId]);
 
+  const resetDraft = () => {
+    setDraftName("");
+    setDraftSystemPrompt(DEFAULT_SYSTEM_PROMPT);
+    setDraftUnderlyingModel(modelGroups[0]?.model_group);
+    setDraftTemperature(0.7);
+    setDraftMaxTokens(4096);
+    setDraftTools([]);
+  };
+
   // Sync draft fields when selecting an existing agent
   useEffect(() => {
-    if (selectedAgent && !isNewAgent) {
+    if (isNewAgent) {
+      resetDraft();
+    } else if (selectedAgent) {
       setDraftName(selectedAgent.model_name);
       setDraftSystemPrompt(selectedAgent.litellm_params?.litellm_system_prompt ?? "");
       const underlying = parseUnderlyingModel(selectedAgent.litellm_params?.model);
@@ -321,13 +328,8 @@ export default function AgentBuilderView({
   };
 
   const handleAddAgent = () => {
-    setSelectedId(NEW_AGENT_ID);
-    setDraftName("");
-    setDraftSystemPrompt("You are a helpful assistant.");
-    setDraftUnderlyingModel(modelGroups[0]?.model_group);
-    setDraftTemperature(0.7);
-    setDraftMaxTokens(4096);
-    setDraftTools([]);
+    selectAgent(NEW_AGENT_ID);
+    resetDraft();
     goToTab("configure");
   };
 
@@ -357,7 +359,7 @@ export default function AgentBuilderView({
       const created = createdId
         ? list.find((a) => getAgentModelId(a) === createdId) ?? list.find((a) => a.model_name === draftName.trim())
         : list.find((a) => a.model_name === draftName.trim());
-      setSelectedId(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
+      selectAgent(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
       goToTab("chat");
     } catch (e) {
       toast.fromError("Failed to save agent");
@@ -392,7 +394,7 @@ export default function AgentBuilderView({
       const list = await loadAgents();
       const stillSelected = list.find((a) => getAgentModelId(a) === selectedAgentModelId);
       const target = stillSelected ?? list[0];
-      setSelectedId(target ? getAgentSelectionKey(target) : null);
+      selectAgent(target ? getAgentSelectionKey(target) : null);
     } catch (e) {
       toast.fromError("Failed to update agent");
     } finally {
@@ -436,7 +438,7 @@ export default function AgentBuilderView({
       toast.success("Agent deleted");
       const list = await loadAgents();
       const remaining = list.filter((a) => getAgentModelId(a) !== selectedAgentModelId);
-      setSelectedId(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null);
+      selectAgent(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null);
     } catch (e) {
       toast.fromError("Failed to delete agent");
     } finally {
@@ -502,7 +504,7 @@ export default function AgentBuilderView({
                     <button
                       key={key}
                       type="button"
-                      onClick={() => setSelectedId(key)}
+                      onClick={() => selectAgent(key)}
                       className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
                         selectedId === key ? "border-info bg-info/10 text-info" : "border-transparent hover:bg-accent"
                       }`}
@@ -547,7 +549,7 @@ export default function AgentBuilderView({
                     <MessageSquare />
                     Chat
                   </TabsTrigger>
-                  <TabsTrigger value="test" disabled={isNewAgent} className="flex-none rounded-none px-4 py-2">
+                  <TabsTrigger value="batch" disabled={isNewAgent} className="flex-none rounded-none px-4 py-2">
                     <FlaskConical />
                     Batch Test
                   </TabsTrigger>
@@ -698,7 +700,7 @@ export default function AgentBuilderView({
                     )}
                   </div>
                 </TabsContent>
-                <TabsContent value="test" keepMounted={hasVisited("test")} className="min-h-0 overflow-hidden">
+                <TabsContent value="batch" keepMounted={hasVisited("batch")} className="min-h-0 overflow-hidden">
                   <div className="flex h-full flex-col min-h-0">
                     {selectedAgent ? (
                       <ComplianceUI
@@ -707,6 +709,7 @@ export default function AgentBuilderView({
                         backendMode="chat_completions"
                         fixedModel={selectedAgent.model_name}
                         proxySettings={proxySettings}
+                        persistInUrl={false}
                       />
                     ) : (
                       <div className="flex flex-1 items-center justify-center text-muted-foreground">

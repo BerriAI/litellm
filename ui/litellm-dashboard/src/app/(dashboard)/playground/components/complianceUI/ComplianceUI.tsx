@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import Papa from "papaparse";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useComplianceUrlState } from "./useComplianceUrlState";
 
 const CATEGORY_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   lock: Lock,
@@ -101,7 +102,6 @@ interface QuickTestMessage {
 }
 
 type ResultFilter = "all" | "matches" | "mismatches" | "pending";
-type RightPanelTab = "quick-test" | "batch-results";
 
 interface GuardrailOption {
   id: string;
@@ -121,6 +121,8 @@ interface ComplianceUIProps {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
   };
+  /** When false, keep the tab and selections in local state instead of the URL (e.g. embedded in Agent Builder). */
+  persistInUrl?: boolean;
 }
 
 export default function ComplianceUI({
@@ -129,14 +131,22 @@ export default function ComplianceUI({
   backendMode = "policies",
   fixedModel,
   proxySettings,
+  persistInUrl = true,
 }: ComplianceUIProps) {
   const canViewPolicies = useCan("viewPolicies");
   const frameworks = getFrameworks();
 
   const [policyValueToLabel, setPolicyValueToLabel] = useState<Map<string, string>>(new Map());
   const [guardrailOptions, setGuardrailOptions] = useState<GuardrailOption[]>([]);
-  const [selectedPolicies, setSelectedPolicies] = useState<string[]>([]);
-  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
+  const {
+    rightTab,
+    selectedPolicies,
+    selectedGuardrails,
+    setRightTab,
+    setSelectedPolicies,
+    toggleGuardrail,
+    clearSelection,
+  } = useComplianceUrlState(persistInUrl);
   const [showGuardrailDropdown, setShowGuardrailDropdown] = useState(false);
 
   const [selectedPromptIds, setSelectedPromptIds] = useState<Set<string>>(new Set());
@@ -149,7 +159,6 @@ export default function ComplianceUI({
   const [newPromptText, setNewPromptText] = useState("");
   const [newPromptExpected, setNewPromptExpected] = useState<"fail" | "pass">("fail");
 
-  const [rightTab, setRightTab] = useState<RightPanelTab>("quick-test");
   const [quickTestInput, setQuickTestInput] = useState("");
   const [quickTestMessages, setQuickTestMessages] = useState<QuickTestMessage[]>([]);
   const [isQuickTesting, setIsQuickTesting] = useState(false);
@@ -270,10 +279,6 @@ export default function ComplianceUI({
   };
 
   const deselectAll = () => setSelectedPromptIds(new Set());
-
-  const toggleGuardrail = (id: string) => {
-    setSelectedGuardrails((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]));
-  };
 
   const addCustomPrompt = () => {
     if (!newPromptText.trim()) return;
@@ -543,7 +548,7 @@ export default function ComplianceUI({
     const signal = controller.signal;
     setIsRunning(true);
     setResultFilter("all");
-    setRightTab("batch-results");
+    setRightTab("batch");
     const allPrompts = allFrameworks.flatMap((fw) => fw.categories.flatMap((c) => c.prompts));
     const selected = allPrompts.filter((p) => selectedPromptIds.has(p.id));
     const allTexts = selected.map((p) => p.prompt);
@@ -629,6 +634,7 @@ export default function ComplianceUI({
     selectedPromptIds,
     selectedPolicies,
     selectedGuardrails,
+    setRightTab,
     allFrameworks,
     backendMode,
     fixedModel,
@@ -794,7 +800,7 @@ export default function ComplianceUI({
                         key={id}
                         className="inline-flex items-center gap-1 text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-sm font-medium dark:bg-indigo-950 dark:text-indigo-300"
                       >
-                        {g?.name}
+                        {g?.name ?? id}
                         <button
                           type="button"
                           onClick={() => toggleGuardrail(id)}
@@ -837,8 +843,7 @@ export default function ComplianceUI({
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedPolicies([]);
-                  setSelectedGuardrails([]);
+                  clearSelection();
                   setTestResults([]);
                   setQuickTestMessages([]);
                 }}
@@ -1184,18 +1189,18 @@ export default function ComplianceUI({
               <div className="flex items-center gap-0">
                 <button
                   type="button"
-                  onClick={() => setRightTab("quick-test")}
-                  className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${rightTab === "quick-test" ? "text-info" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => setRightTab("quick")}
+                  className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${rightTab === "quick" ? "text-info" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   <MessageSquare className="w-3.5 h-3.5" /> Quick Test
-                  {rightTab === "quick-test" && (
+                  {rightTab === "quick" && (
                     <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-info rounded-t" />
                   )}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRightTab("batch-results")}
-                  className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${rightTab === "batch-results" ? "text-info" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => setRightTab("batch")}
+                  className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${rightTab === "batch" ? "text-info" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   <ListChecks className="w-3.5 h-3.5" /> Batch Results
                   {testResults.length > 0 && (
@@ -1203,14 +1208,14 @@ export default function ComplianceUI({
                       {testResults.length}
                     </span>
                   )}
-                  {rightTab === "batch-results" && (
+                  {rightTab === "batch" && (
                     <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-info rounded-t" />
                   )}
                 </button>
               </div>
             </div>
 
-            {rightTab === "quick-test" && (
+            {rightTab === "quick" && (
               <div className="flex-1 flex flex-col overflow-hidden min-h-0">
                 <div className="px-5 pt-4 pb-2 shrink-0">
                   {hasAnyConfig ? (
@@ -1228,7 +1233,7 @@ export default function ComplianceUI({
                             key={id}
                             className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-sm font-medium dark:bg-indigo-950 dark:text-indigo-300"
                           >
-                            {g?.name}
+                            {g?.name ?? id}
                           </span>
                         );
                       })}
@@ -1325,7 +1330,7 @@ export default function ComplianceUI({
               </div>
             )}
 
-            {rightTab === "batch-results" && (
+            {rightTab === "batch" && (
               <div className="flex-1 flex flex-col overflow-hidden bg-card min-h-0">
                 <div className="px-5 py-3 border-b border-border shrink-0">
                   <div className="flex items-center justify-between mb-2">

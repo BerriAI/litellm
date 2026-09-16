@@ -70,6 +70,7 @@ import RealtimePlayground from "./RealtimePlayground";
 import { MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
+import { dropUnlistedModel, toEndpointType, useChatUrlState } from "../../hooks/useChatUrlState";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -199,19 +200,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string | null | undefined>(simplified ? fixedModel : null);
+  const { selectedModel, endpointType, setSelection } = useChatUrlState({ simplified, fixedModel });
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelLoadError, setModelLoadError] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
+  const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelection({ model: value }), {
     wait: CUSTOM_MODEL_DEBOUNCE_WAIT_MS,
   });
-  const [endpointType, setEndpointType] = useState<string | null>(
-    () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
-  );
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>(() => {
@@ -309,14 +307,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   };
 
-  // When simplified, keep selectedModel and endpointType in sync with fixedModel / chat-only
-  useEffect(() => {
-    if (simplified && fixedModel) {
-      setSelectedModel(fixedModel);
-      setEndpointType(EndpointType.CHAT);
-    }
-  }, [simplified, fixedModel]);
-
   // Fetch tools for a specific server
   const loadServerTools = async (serverId: string) => {
     const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
@@ -386,8 +376,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     } catch {
       // Storage full or unavailable — non-critical, skip persisting.
     }
-    if (endpointType === null) sessionStorage.removeItem("endpointType");
-    else sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
@@ -399,19 +387,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     if (!simplified) {
       sessionStorage.setItem("streamingEnabled", JSON.stringify(streamingEnabled));
-      if (selectedModel) {
-        sessionStorage.setItem("selectedModel", selectedModel);
-      } else {
-        sessionStorage.removeItem("selectedModel");
-      }
     }
     // Note: codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
   }, [
     simplified,
     apiKeySource,
     apiKey,
-    selectedModel,
-    endpointType,
     selectedTags,
     selectedVectorStores,
     selectedGuardrails,
@@ -444,10 +425,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         }
 
         setModelInfo(uniqueModels);
-
-        setSelectedModel((currentModel) =>
-          uniqueModels.some((model) => model.model_group === currentModel) ? currentModel : undefined,
-        );
+        setSelection(dropUnlistedModel(uniqueModels));
       } catch (error) {
         if (cancelled) {
           return;
@@ -470,7 +448,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [accessToken, apiKeySource, apiKey, simplified]);
+  }, [accessToken, apiKeySource, apiKey, simplified, setSelection]);
 
   // Load tools when MCP direct mode has a server (or toolset) selected
   useEffect(() => {
@@ -629,9 +607,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleEndpointChange = (value: string | null) => {
-    setEndpointType(value);
+    setSelection({ endpoint: toEndpointType(value), model: null });
     setGeneratedCode("");
-    setSelectedModel(null);
     setSelectedAgent(null);
     setShowCustomModelInput(false);
     setSelectedMCPDirectTool(undefined);
@@ -1179,13 +1156,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const onModelChange = (value: string | null) => {
-    setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
-
     const model = modelInfo.find((option) => option.model_group === value);
-    if (model?.mode && !isModelCompatibleWithEndpoint(model, endpointType as EndpointType)) {
-      setEndpointType(getEndpointType(model.mode));
-    }
+    const endpointUpdate =
+      model?.mode && !isModelCompatibleWithEndpoint(model, endpointType as EndpointType)
+        ? { endpoint: getEndpointType(model.mode) }
+        : {};
+    setSelection({ model: value, ...endpointUpdate });
   };
 
   // Check if the selected model is a chat model

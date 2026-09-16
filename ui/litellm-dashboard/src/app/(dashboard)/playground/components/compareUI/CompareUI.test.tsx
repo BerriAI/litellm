@@ -1,11 +1,17 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import CompareUI from "./CompareUI";
+import { chooseSelectOption, renderWithProviders as render } from "@/../tests/test-utils";
+import CompareUI, { type ComparisonInstance } from "./CompareUI";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([{ model_group: "gpt-4" }, { model_group: "gpt-3.5-turbo" }]),
+}));
+
+vi.mock("../../llm_calls/fetch_agents", () => ({
+  fetchAvailableAgents: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@/components/llm_calls/chat_completion", () => ({
@@ -41,10 +47,21 @@ vi.mock("../chat_ui/ChatImageUtils", () => ({
 }));
 
 vi.mock("./components/ComparisonPanel", () => ({
-  ComparisonPanel: ({ comparison, onRemove }: { comparison: any; onRemove: () => void }) => (
-    <div data-testid={`comparison-panel-${comparison.id}`}>
+  ComparisonPanel: ({
+    comparison,
+    onRemove,
+    onUpdate,
+  }: {
+    comparison: ComparisonInstance;
+    onRemove: () => void;
+    onUpdate: (updates: Partial<ComparisonInstance>) => void;
+  }) => (
+    <div data-testid={`comparison-panel-${comparison.id}`} data-model={comparison.model}>
       <button data-testid={`remove-${comparison.id}`} onClick={onRemove}>
         Remove
+      </button>
+      <button data-testid={`pick-${comparison.id}`} onClick={() => onUpdate({ model: "gpt-3.5-turbo" })}>
+        Pick
       </button>
     </div>
   ),
@@ -87,6 +104,18 @@ beforeEach(() => {
   capturedOnImageUpload = null;
   vi.clearAllMocks();
 });
+
+const renderCompare = (options: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) =>
+  render(<CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />, options);
+
+const panelModels = () =>
+  screen.queryAllByTestId(/^comparison-panel-/).map((panel) => panel.getAttribute("data-model"));
+
+const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => {
+  const update = onUrlUpdate.mock.calls.at(-1)?.[0];
+  if (!update) throw new Error("expected a URL update");
+  return update;
+};
 
 describe("CompareUI", () => {
   it("should render", () => {
@@ -146,6 +175,102 @@ describe("CompareUI", () => {
 
     await waitFor(() => {
       expect(makeOpenAIChatCompletionRequest).toHaveBeenCalled();
+    });
+  });
+
+  describe("URL state", () => {
+    it("fills two panels with the loaded models when the URL is empty", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderCompare({ onUrlUpdate });
+
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-4", "gpt-3.5-turbo"]));
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("opens one panel per model listed in the URL, in order", async () => {
+      renderCompare({ searchParams: "?cmp_models=gpt-3.5-turbo,gpt-4,gpt-3.5-turbo" });
+
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-3.5-turbo", "gpt-4", "gpt-3.5-turbo"]));
+      expect(screen.getByRole("button", { name: /Add Comparison/i })).toBeDisabled();
+    });
+
+    it("opens a single panel for a single URL model", async () => {
+      renderCompare({ searchParams: "?cmp_models=gpt-3.5-turbo" });
+
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-3.5-turbo"]));
+    });
+
+    it("swaps a URL model the key cannot use for an available one", async () => {
+      renderCompare({ searchParams: "?cmp_models=gpt-3.5-turbo,retired-model" });
+
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-3.5-turbo", "gpt-3.5-turbo"]));
+    });
+
+    it("writes a picked model into its panel's slot", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderCompare({ searchParams: "?cmp_models=gpt-3.5-turbo,gpt-4,gpt-4", onUrlUpdate });
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-3.5-turbo", "gpt-4", "gpt-4"]));
+
+      await user.click(screen.getAllByTestId(/^pick-/)[1]);
+
+      await waitFor(() =>
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("cmp_models")).toBe("gpt-3.5-turbo,gpt-3.5-turbo,gpt-4"),
+      );
+      expect(panelModels()).toEqual(["gpt-3.5-turbo", "gpt-3.5-turbo", "gpt-4"]);
+    });
+
+    it("appends the new panel's model when a comparison is added", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderCompare({ onUrlUpdate });
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-4", "gpt-3.5-turbo"]));
+
+      await user.click(screen.getByRole("button", { name: /Add Comparison/i }));
+
+      await waitFor(() =>
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("cmp_models")).toBe("gpt-4,gpt-3.5-turbo,gpt-4"),
+      );
+      expect(panelModels()).toEqual(["gpt-4", "gpt-3.5-turbo", "gpt-4"]);
+    });
+
+    it("drops the removed panel's slot and keeps the others", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderCompare({ searchParams: "?cmp_models=gpt-4,gpt-3.5-turbo,gpt-4", onUrlUpdate });
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-4", "gpt-3.5-turbo", "gpt-4"]));
+
+      await user.click(screen.getByTestId("remove-1"));
+
+      await waitFor(() =>
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("cmp_models")).toBe("gpt-3.5-turbo,gpt-4"),
+      );
+      expect(panelModels()).toEqual(["gpt-3.5-turbo", "gpt-4"]);
+      expect(screen.getByTestId("comparison-panel-2")).toBeInTheDocument();
+      expect(screen.getByTestId("comparison-panel-3")).toBeInTheDocument();
+    });
+
+    it("opens the endpoint named in the URL", async () => {
+      renderCompare({ searchParams: "?cmp_endpoint=/a2a" });
+
+      expect(await screen.findByRole("combobox", { name: "Endpoint" })).toHaveTextContent("/a2a (Agents)");
+    });
+
+    it("ignores an unknown URL endpoint", async () => {
+      renderCompare({ searchParams: "?cmp_endpoint=/v1/unknown" });
+
+      expect(await screen.findByRole("combobox", { name: "Endpoint" })).toHaveTextContent("/v1/chat/completions");
+    });
+
+    it("writes the chosen endpoint to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderCompare({ onUrlUpdate });
+
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: "Endpoint" }), "/a2a (Agents)");
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("cmp_endpoint")).toBe("/a2a"));
+      expect(screen.getByRole("combobox", { name: "Endpoint" })).toHaveTextContent("/a2a (Agents)");
     });
   });
 });

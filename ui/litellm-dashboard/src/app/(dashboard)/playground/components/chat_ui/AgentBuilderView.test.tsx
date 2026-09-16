@@ -1,9 +1,12 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { type PropsWithChildren, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentBuilderView from "./AgentBuilderView";
 import type { AgentModel } from "../../llm_calls/fetch_agents";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 
 const modelCreateCall = vi.fn().mockResolvedValue({ model_id: "id-new" });
 const modelPatchUpdateCall = vi.fn().mockResolvedValue({});
@@ -70,7 +73,28 @@ const props = {
 const controlUnder = (label: string): HTMLElement =>
   within(screen.getByText(label).parentElement!).getByRole("combobox");
 
-const renderView = () => render(<AgentBuilderView {...props} />);
+const renderView = (options: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) =>
+  renderWithProviders(<AgentBuilderView {...props} />, options);
+
+const renderViewKeepingMountUpdates = (searchParams: string, onUrlUpdate: OnUrlUpdateFunction) => {
+  const Providers = ({ children }: PropsWithChildren) => (
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+  return render(<AgentBuilderView {...props} />, { wrapper: Providers });
+};
+
+const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => {
+  const update = onUrlUpdate.mock.calls.at(-1)?.[0];
+  if (!update) throw new Error("expected a URL update");
+  return update;
+};
 
 const waitForRoster = async () => {
   await screen.findByRole("button", { name: "support-agent litellm_agent" });
@@ -99,7 +123,7 @@ beforeEach(() => {
 
 describe("AgentBuilderView", () => {
   it("asks the visitor to sign in when there is no session", () => {
-    render(<AgentBuilderView accessToken={null} token={null} userID={null} userRole={null} />);
+    renderWithProviders(<AgentBuilderView accessToken={null} token={null} userID={null} userRole={null} />);
 
     expect(screen.getByText("Sign in to use Agent Builder.")).toBeInTheDocument();
     expect(fetchAvailableAgentModels).not.toHaveBeenCalled();
@@ -312,5 +336,110 @@ describe("AgentBuilderView", () => {
       "href",
       "mailto:product@berri.ai",
     );
+  });
+
+  describe("URL state", () => {
+    it("opens the agent and tab named in the URL", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ searchParams: "?agent_id=agent-2&agent_tab=connect", onUrlUpdate });
+      await waitForRoster();
+
+      expect(screen.getByRole("tab", { name: /Connect/i })).toHaveAttribute("aria-selected", "true");
+      expect(await screen.findByTestId("code-block")).toHaveTextContent('"model": "research-agent"');
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("pushes the picked agent into the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ searchParams: "?agent_id=agent-1", onUrlUpdate });
+      await waitForRoster();
+
+      await user.click(screen.getByRole("button", { name: "research-agent litellm_agent" }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("agent-2"));
+      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("push");
+      expect(await screen.findByDisplayValue("research-agent")).toBeInTheDocument();
+    });
+
+    it("records the first agent in the URL without adding a history entry", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ onUrlUpdate });
+      await waitForRoster();
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("agent-1"));
+      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
+    });
+
+    it("replaces an unknown agent in the URL with the first agent", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ searchParams: "?agent_id=deleted-agent", onUrlUpdate });
+      await waitForRoster();
+
+      expect(await screen.findByDisplayValue("support-agent")).toBeInTheDocument();
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("agent-1"));
+      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
+    });
+
+    it("writes the chosen tab to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ searchParams: "?agent_id=agent-1", onUrlUpdate });
+      await waitForRoster();
+
+      await user.click(screen.getByRole("tab", { name: /Batch Test/i }));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_tab")).toBe("batch"));
+
+      await user.click(screen.getByRole("tab", { name: /Configure/i }));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("agent_tab")).toBe(false));
+    });
+
+    it("keeps the tab opened from the URL alive after the user leaves it", async () => {
+      const user = userEvent.setup();
+      renderView({ searchParams: "?agent_id=agent-1&agent_tab=chat" });
+      await waitForRoster();
+
+      fireEvent.change(await screen.findByLabelText("chat scratch"), { target: { value: "draft question" } });
+      await user.click(screen.getByRole("tab", { name: /Configure/i }));
+      await screen.findByDisplayValue("support-agent");
+      await user.click(screen.getByRole("tab", { name: /Chat/i }));
+
+      expect(await screen.findByLabelText("chat scratch")).toHaveValue("draft question");
+    });
+
+    it("opens a blank draft on the configure tab for a new agent link", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderViewKeepingMountUpdates("?agent_id=__new__&agent_tab=connect", onUrlUpdate);
+      await waitForRoster();
+
+      expect(screen.getByRole("button", { name: /Save Agent/i })).toBeInTheDocument();
+      expect(screen.getByDisplayValue("You are a helpful assistant.")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /Configure/i })).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("agent_tab")).toBe(false));
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("__new__");
+    });
+
+    it("moves the URL to the saved agent's chat tab", async () => {
+      const user = userEvent.setup();
+      const saved: AgentModel = {
+        model_name: "billing-agent",
+        litellm_params: { model: "litellm_agent/gpt-4o" },
+        model_info: { id: "id-new" },
+      };
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ onUrlUpdate });
+      await waitForRoster();
+
+      await user.click(screen.getByRole("button", { name: /New agent/i }));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("__new__"));
+
+      fetchAvailableAgentModels.mockResolvedValue([...AGENTS, saved]);
+      fireEvent.change(screen.getByPlaceholderText("My Agent"), { target: { value: "billing-agent" } });
+      await user.click(screen.getByRole("button", { name: /Save Agent/i }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("id-new"));
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_tab")).toBe("chat");
+      expect(screen.getByRole("tab", { name: /Chat/i })).toHaveAttribute("aria-selected", "true");
+    });
   });
 });

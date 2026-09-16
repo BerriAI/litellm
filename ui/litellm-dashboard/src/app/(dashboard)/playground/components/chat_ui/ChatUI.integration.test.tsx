@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders as render } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
@@ -54,6 +55,25 @@ async function selectComboboxOption(placeholder: string, optionLabel: string) {
   await openComboboxByPlaceholder(placeholder);
   const option = await screen.findByText(optionLabel);
   await user.click(option);
+}
+
+function renderChatWithUrl(options: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction }) {
+  return render(
+    <ChatUI
+      accessToken="1234567890"
+      token="1234567890"
+      userRole="user"
+      userID="1234567890"
+      disabledPersonalKeyCreation={false}
+    />,
+    options,
+  );
+}
+
+function lastUrlUpdate(onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) {
+  const update = onUrlUpdate.mock.calls.at(-1)?.[0];
+  if (!update) throw new Error("expected a URL update");
+  return update;
 }
 
 describe("ChatUI", () => {
@@ -789,6 +809,175 @@ describe("ChatUI", () => {
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
+    });
+  });
+
+  describe("URL state", () => {
+    it("prefers the model in the URL over the one saved in the session", async () => {
+      sessionStorage.setItem("selectedModel", "Model 2");
+
+      renderChatWithUrl({ searchParams: "?chat_model=Model+1" });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("Select a Model")).toHaveValue("Model 1");
+      });
+      expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/chat/completions");
+      expect(sessionStorage.getItem("selectedModel")).toBe("Model 1");
+    });
+
+    it("restores the model and endpoint saved in the session when the URL has none", async () => {
+      sessionStorage.setItem("selectedModel", "Model 2");
+      sessionStorage.setItem("endpointType", "responses");
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      renderChatWithUrl({ onUrlUpdate });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("Select a Model")).toHaveValue("Model 2");
+      });
+      expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/responses");
+      expect(sessionStorage.getItem("selectedModel")).toBe("Model 2");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+
+      await selectComboboxOption("Select a Model", "Model 3");
+
+      await waitFor(() => {
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_model")).toBe("Model 3");
+      });
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_endpoint")).toBe("responses");
+    });
+
+    it("keeps the URL model while the model list is still loading", async () => {
+      (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockImplementation(
+        () => new Promise(() => {}),
+      );
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      renderChatWithUrl({ searchParams: "?chat_model=Model+3", onUrlUpdate });
+
+      expect(await screen.findByPlaceholderText("Loading models...")).toHaveValue("Model 3");
+      expect(sessionStorage.getItem("selectedModel")).toBe("Model 3");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("clears the model once the loaded model list does not contain it", async () => {
+      sessionStorage.setItem("selectedModel", "Retired Model");
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      renderChatWithUrl({ searchParams: "?chat_model=Retired+Model", onUrlUpdate });
+
+      await waitFor(() => {
+        expect(onUrlUpdate).toHaveBeenCalled();
+      });
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.has("chat_model")).toBe(false);
+      expect(screen.getByPlaceholderText("Select a Model")).toHaveValue("");
+      expect(sessionStorage.getItem("selectedModel")).toBeNull();
+    });
+
+    it("writes the picked model and endpoint to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      renderChatWithUrl({ onUrlUpdate });
+
+      await selectComboboxOption("Select a Model", "Model 2");
+      await waitFor(() => {
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_model")).toBe("Model 2");
+      });
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.has("chat_endpoint")).toBe(false);
+      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
+
+      await selectComboboxOption("Select an endpoint", "/v1/responses");
+      await waitFor(() => {
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_endpoint")).toBe("responses");
+      });
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.has("chat_model")).toBe(false);
+
+      await user.click(screen.getByRole("button", { name: "Clear" }));
+      await waitFor(() => {
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_endpoint")).toBe("none");
+      });
+      expect(sessionStorage.getItem("endpointType")).toBeNull();
+    });
+
+    it("writes a typed custom model to the URL and keeps the URL endpoint", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      renderChatWithUrl({ searchParams: "?chat_endpoint=responses", onUrlUpdate });
+
+      await selectComboboxOption("Select a Model", "Enter custom model");
+      fireEvent.change(await screen.findByPlaceholderText("Enter custom model name"), {
+        target: { value: "my-custom-model" },
+      });
+
+      await waitFor(
+        () => {
+          expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_model")).toBe("my-custom-model");
+        },
+        { timeout: 3000 },
+      );
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_endpoint")).toBe("responses");
+    });
+
+    it("opens the endpoint named in the URL", async () => {
+      renderChatWithUrl({ searchParams: "?chat_endpoint=responses" });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/responses");
+      });
+    });
+
+    it("shows no endpoint when the URL says it was cleared", async () => {
+      renderChatWithUrl({ searchParams: "?chat_endpoint=none" });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("");
+      });
+      expect(sessionStorage.getItem("endpointType")).toBeNull();
+    });
+
+    it("ignores an unknown URL endpoint and keeps the one saved in the session", async () => {
+      sessionStorage.setItem("endpointType", "responses");
+
+      renderChatWithUrl({ searchParams: "?chat_endpoint=bogus" });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
+      });
+      expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/responses");
+    });
+
+    it("uses the fixed model and leaves the URL alone in simplified mode", async () => {
+      sessionStorage.setItem("selectedModel", "Model 3");
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      render(
+        <ChatUI
+          accessToken="1234567890"
+          token="1234567890"
+          userRole="user"
+          userID="1234567890"
+          disabledPersonalKeyCreation={false}
+          simplified
+          fixedModel="Model 1"
+        />,
+        { searchParams: "?chat_model=Model+2&chat_endpoint=responses", onUrlUpdate },
+      );
+
+      const messageInput = await screen.findByPlaceholderText("Type your message... (Shift+Enter for new line)");
+      await act(async () => {
+        fireEvent.change(messageInput, { target: { value: "hello" } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+      });
+
+      await waitFor(() => {
+        expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
+      });
+      expect(vi.mocked(makeOpenAIChatCompletionRequest).mock.calls[0][2]).toBe("Model 1");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("selectedModel")).toBe("Model 3");
     });
   });
 });

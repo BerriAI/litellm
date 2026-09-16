@@ -21,7 +21,6 @@ import { makeA2AStreamMessageRequest } from "../../llm_calls/a2a_send_message";
 import { ComparisonPanel } from "./components/ComparisonPanel";
 import { MessageInput } from "./components/MessageInput";
 import {
-  EndpointId,
   EndpointIdType,
   getAvailableEndpoints,
   getEndpointConfig,
@@ -30,6 +29,7 @@ import {
   modelOptionsToSelectorOptions,
   agentOptionsToSelectorOptions,
 } from "./endpoint_config";
+import { MAX_COMPARISONS, useCompareUrlState } from "./useCompareUrlState";
 export interface ComparisonInstance {
   id: string;
   model: string;
@@ -56,45 +56,41 @@ const GENERIC_FOLLOW_UPS = [
   "What are the next steps?",
 ];
 const SUGGESTED_PROMPTS = ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"];
-const DEFAULT_ENDPOINT = EndpointId.CHAT_COMPLETIONS;
+const createComparison = (id: string, agent = ""): ComparisonInstance => ({
+  id,
+  model: "",
+  agent,
+  messages: [],
+  isLoading: false,
+  tags: [],
+  mcpTools: [],
+  vectorStores: [],
+  guardrails: [],
+  temperature: 1,
+  maxTokens: 2048,
+  applyAcrossModels: false,
+  useAdvancedParams: false,
+});
 export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: CompareUIProps) {
-  const [comparisons, setComparisons] = useState<ComparisonInstance[]>([
-    {
-      id: "1",
-      model: "",
-      agent: "",
-      messages: [],
-      isLoading: false,
-      tags: [],
-      mcpTools: [],
-      vectorStores: [],
-      guardrails: [],
-      temperature: 1,
-      maxTokens: 2048,
-      applyAcrossModels: false,
-      useAdvancedParams: false,
-    },
-    {
-      id: "2",
-      model: "",
-      agent: "",
-      messages: [],
-      isLoading: false,
-      tags: [],
-      mcpTools: [],
-      vectorStores: [],
-      guardrails: [],
-      temperature: 1,
-      maxTokens: 2048,
-      applyAcrossModels: false,
-      useAdvancedParams: false,
-    },
-  ]);
+  const [panelStates, setComparisons] = useState<ComparisonInstance[]>(() =>
+    Array.from({ length: MAX_COMPARISONS }, (_, index) => createComparison(String(index + 1))),
+  );
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [agentOptions, setAgentOptions] = useState<Agent[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isLoadingAgents, setIsLoadingAgents] = useState(false);
-  const [selectedEndpoint, setSelectedEndpoint] = useState<EndpointIdType>(DEFAULT_ENDPOINT);
+  const {
+    endpoint: selectedEndpoint,
+    panelModels,
+    setEndpoint,
+    setPanelModel,
+    addPanel,
+    removePanel,
+  } = useCompareUrlState(modelOptions);
+  const comparisons = useMemo(
+    () => panelModels.map((model, index) => ({ ...panelStates[index], model })),
+    [panelModels, panelStates],
+  );
 
   // Derived state from endpoint config
   const endpointConfig = getEndpointConfig(selectedEndpoint);
@@ -191,64 +187,38 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     };
   }, [effectiveApiKey, isA2AMode]);
 
-  useEffect(() => {
-    if (modelOptions.length === 0) {
-      return;
-    }
-    setComparisons((prev) =>
-      prev.map((comparison, index) => {
-        return {
-          ...comparison,
-          temperature: comparison.temperature ?? 1,
-          maxTokens: comparison.maxTokens ?? 2048,
-          applyAcrossModels: comparison.applyAcrossModels ?? false,
-          useAdvancedParams: comparison.useAdvancedParams ?? false,
-          ...(comparison.model
-            ? {}
-            : {
-                model: modelOptions[index % modelOptions.length] ?? "",
-              }),
-        };
-      }),
-    );
-  }, [modelOptions]);
-  const maxComparisons = 3;
+  const maxComparisons = MAX_COMPARISONS;
   const addComparison = () => {
     if (comparisons.length >= maxComparisons) {
       return;
     }
-    const fallbackModel = modelOptions[comparisons.length % (modelOptions.length || 1)] ?? "";
-    const fallbackAgent = agentOptions[comparisons.length % (agentOptions.length || 1)]?.agent_name ?? "";
-    const newComparison: ComparisonInstance = {
-      id: Date.now().toString(),
-      model: fallbackModel,
-      agent: fallbackAgent,
-      messages: [],
-      isLoading: false,
-      tags: [],
-      mcpTools: [],
-      vectorStores: [],
-      guardrails: [],
-      temperature: 1,
-      maxTokens: 2048,
-      applyAcrossModels: false,
-      useAdvancedParams: false,
-    };
-    setComparisons((prev) => [...prev, newComparison]);
+    const newIndex = comparisons.length;
+    const fallbackModel = modelOptions[newIndex % (modelOptions.length || 1)] ?? "";
+    const fallbackAgent = agentOptions[newIndex % (agentOptions.length || 1)]?.agent_name ?? "";
+    const newComparison = createComparison(uuidv4(), fallbackAgent);
+    addPanel(fallbackModel);
+    setComparisons((prev) => prev.map((panel, index) => (index === newIndex ? newComparison : panel)));
   };
   const removeComparison = (id: string) => {
-    if (comparisons.length > 1) {
-      setComparisons((prev) => {
-        const next = prev.filter((c) => c.id !== id);
-        return next;
-      });
+    const index = comparisons.findIndex((c) => c.id === id);
+    if (comparisons.length > 1 && index !== -1) {
+      removePanel(index);
+      setComparisons((prev) => [...prev.filter((c) => c.id !== id), createComparison(uuidv4())]);
     }
   };
   type UpdateOptions = {
     applyToAll?: boolean;
     keysToApply?: (keyof ComparisonInstance)[];
   };
-  const updateComparison = (id: string, updates: Partial<ComparisonInstance>, options?: UpdateOptions) => {
+  const updateComparison = (id: string, allUpdates: Partial<ComparisonInstance>, options?: UpdateOptions) => {
+    const { model, ...panelUpdates } = allUpdates;
+    const updates: Partial<ComparisonInstance> = panelUpdates;
+    if (model !== undefined) {
+      setPanelModel(
+        comparisons.findIndex((c) => c.id === id),
+        model,
+      );
+    }
     setComparisons((prev) => {
       if (options?.applyToAll && options.keysToApply?.length) {
         const sharedUpdates: Partial<ComparisonInstance> = {};
@@ -720,7 +690,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-muted-foreground">Endpoint</span>
-              <Select value={selectedEndpoint} onValueChange={(value) => setSelectedEndpoint(value as EndpointIdType)}>
+              <Select value={selectedEndpoint} onValueChange={(value) => setEndpoint(value as EndpointIdType)}>
                 <SelectTrigger className="w-56" aria-label="Endpoint">
                   <SelectValue>{endpointConfig.label}</SelectValue>
                 </SelectTrigger>
