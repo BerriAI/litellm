@@ -1675,3 +1675,30 @@ async def test_bounded_get_closes_stream_on_cancellation(respx_mock, monkeypatch
     finally:
         await handler.close()
     assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_http2_flag_bypasses_aiohttp_transport(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
+
+    monkeypatch.setattr(litellm, "http2", True)
+    assert AsyncHTTPHandler._should_use_aiohttp_transport() is False
+    assert AsyncHTTPHandler._create_async_transport() is None
+
+    monkeypatch.setattr(litellm, "http2", False)
+    monkeypatch.setenv("LITELLM_HTTP2", "True")
+    assert AsyncHTTPHandler._should_use_aiohttp_transport() is False
+    assert AsyncHTTPHandler._create_async_transport() is None
+
+
+@pytest.mark.asyncio
+async def test_http2_disabled_by_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "http2", False)
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+
+    assert AsyncHTTPHandler._should_use_aiohttp_transport() is True

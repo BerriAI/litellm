@@ -5,7 +5,6 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-
 REPO_ROOT: Final = Path(__file__).parents[2]
 
 CostMap = dict[str, dict[str, object]]

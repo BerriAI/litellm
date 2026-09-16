@@ -41,6 +41,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     ESTIMATED_OUTPUT_TOKENS_FIELD,
     get_estimated_output_tokens,
+    get_key_own_model_rate_limit,
     get_key_tag_rpm_limit,
     get_model_rate_limit_from_metadata,
 )
@@ -2892,41 +2893,67 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return batch_limiter
         return None
 
+    def _key_owns_model_limit(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str,
+        rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    ) -> bool:
+        key_own_limits: Final = get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)
+        return key_own_limits is not None and key_own_limits.get(requested_model) is not None
+
+    def _inherited_team_model_limit(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str,
+        rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    ) -> int | None:
+        team_limits: Final = get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", rate_limit_key)
+        team_limit: Final = team_limits.get(requested_model) if team_limits else None
+        if team_limit is None:
+            return None
+        if self._key_owns_model_limit(user_api_key_dict, requested_model, rate_limit_key):
+            return None
+        return team_limit
+
+    def _key_owns_model_tpm_limit_from_request_metadata(
+        self,
+        request_metadata: Mapping[str, object],
+        model_group: str | None,
+    ) -> bool:
+        if model_group is None:
+            return False
+        key_view: Final = UserAPIKeyAuth.model_validate(
+            {
+                "metadata": request_metadata.get("user_api_key_metadata") or {},
+                "model_max_budget": request_metadata.get("user_api_key_model_max_budget") or {},
+            }
+        )
+        return self._key_owns_model_limit(key_view, model_group, "model_tpm_limit")
+
     def _add_team_model_rate_limit_descriptor_from_metadata(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         requested_model: str | None,
         descriptors: list[RateLimitDescriptor],
     ) -> None:
-        """Add team model rate limit descriptor from team_metadata if applicable."""
-        if (
-            get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_rpm_limit") is not None
-            or get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit") is not None
-        ):
-            _tpm_limit_for_team_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit") or {}
+        if requested_model is None:
+            return
+        team_rpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, requested_model, "model_rpm_limit")
+        team_tpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, requested_model, "model_tpm_limit")
+        if team_rpm_limit is None and team_tpm_limit is None:
+            return
+        descriptors.append(
+            RateLimitDescriptor(
+                key="model_per_team",
+                value=f"{user_api_key_dict.team_id}:{requested_model}",
+                rate_limit={
+                    "requests_per_unit": team_rpm_limit,
+                    "tokens_per_unit": team_tpm_limit,
+                    "window_size": self.window_size,
+                },
             )
-            _rpm_limit_for_team_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_rpm_limit") or {}
-            )
-            should_check_rate_limit: Final = (
-                requested_model in _tpm_limit_for_team_model or requested_model in _rpm_limit_for_team_model
-            )
-
-            if should_check_rate_limit and requested_model is not None:
-                model_specific_tpm_limit: Final = _tpm_limit_for_team_model.get(requested_model)
-                model_specific_rpm_limit: Final = _rpm_limit_for_team_model.get(requested_model)
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_team",
-                        value=f"{user_api_key_dict.team_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
+        )
 
     def _add_project_model_rate_limit_descriptor_from_metadata(
         self,
@@ -4459,6 +4486,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             kwargs=kwargs,
             model_group=reconcile_model,
         )
+        charged_targets: Final = (
+            [target for target in targets if target[0] != "model_per_team"]
+            if self._key_owns_model_tpm_limit_from_request_metadata(request_metadata, reconcile_model)
+            else targets
+        )
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
                 "Releasing unused TPM budget on success: reserved=%s, actual=%s, release=%s",
@@ -4468,7 +4500,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         pipeline_operations.extend(
             self._build_reservation_aware_tpm_ops(
-                targets=targets,
+                targets=charged_targets,
                 reserved_scopes=reserved_scopes,
                 actual_tokens=total_tokens,
                 reserved_tokens=reserved_tokens,

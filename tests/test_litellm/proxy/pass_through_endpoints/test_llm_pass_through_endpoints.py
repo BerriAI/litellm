@@ -41,6 +41,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
+    relay_nvidia_nim_request,
     openai_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
@@ -5666,6 +5667,186 @@ class TestRouterModelRelayUpstreamContract:
         assert result.status_code == 404
         assert json.loads(result.body) == upstream_body
         assert result.headers["x-ms-request-id"] == "req-1"
+
+
+NIM_INFER_BODY = {
+    "input": [
+        {"type": "image_url", "url": "data:image/png;base64,AAAA"},
+        {"type": "image_url", "url": "data:image/png;base64,BBBB"},
+    ]
+}
+
+
+class TestNvidiaNimProxyRoute:
+    def _request(self) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+        return request
+
+    def _recording_router(self, captured: list[dict], deployments: dict[str, str]):
+        class RecordingRouter:
+            def get_model_list(self):
+                return [{"model_name": name, "litellm_params": {"model": model}} for name, model in deployments.items()]
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(
+                    200, json={"data": [{"index": 0, "bounding_boxes": {}}]}, headers={"x-nim-request": "r1"}
+                )
+
+        return RecordingRouter()
+
+    async def _relay(self, llm_router, endpoint: str, body: dict, user_api_key_dict=None) -> Response:
+        return await relay_nvidia_nim_request(
+            llm_router=llm_router,
+            endpoint=endpoint,
+            request=self._request(),
+            request_body=dict(body),
+            user_api_key_dict=user_api_key_dict or UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_group_in_the_path_selects_the_deployment_and_the_body_stays_model_free(self):
+        captured: list[dict] = []
+        router = self._recording_router(
+            captured,
+            {
+                "nim-page-elements": "nvidia_nim/nvidia/nemoretriever-page-elements-v2",
+                "nim-table": "nvidia_nim/nvidia/nemoretriever-table-structure-v1",
+            },
+        )
+
+        result = await self._relay(
+            router,
+            "nim-page-elements/v1/infer",
+            NIM_INFER_BODY,
+            UserAPIKeyAuth(api_key="hashed-token", team_id="team-1"),
+        )
+
+        (relay,) = captured
+        assert relay["model"] == "nim-page-elements"
+        assert relay["endpoint"] == "nim-page-elements/v1/infer"
+        assert relay["method"] == "POST"
+        assert relay["json"] == NIM_INFER_BODY
+        assert "model" not in relay["json"]
+        assert relay["litellm_metadata"]["user_api_key_team_id"] == "team-1"
+        assert result.status_code == 200
+        assert json.loads(result.body) == {"data": [{"index": 0, "bounding_boxes": {}}]}
+        assert result.headers["x-nim-request"] == "r1"
+
+    @pytest.mark.asyncio
+    async def test_model_group_with_a_slash_is_matched_as_the_longest_leading_path(self):
+        captured: list[dict] = []
+        router = self._recording_router(
+            captured, {"nvidia/nemoretriever-page-elements-v2": "nvidia_nim/nvidia/nemoretriever-page-elements-v2"}
+        )
+
+        await self._relay(router, "nvidia/nemoretriever-page-elements-v2/v1/infer", NIM_INFER_BODY)
+
+        assert captured[0]["model"] == "nvidia/nemoretriever-page-elements-v2"
+
+    @pytest.mark.asyncio
+    async def test_custom_llm_provider_marks_a_deployment_as_nim_without_the_model_prefix(self):
+        captured: list[dict] = []
+
+        class ProviderRouter:
+            def get_model_list(self):
+                return [
+                    {
+                        "model_name": "page-elements",
+                        "litellm_params": {
+                            "model": "nvidia/nemoretriever-page-elements-v2",
+                            "custom_llm_provider": "nvidia_nim",
+                        },
+                    }
+                ]
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"data": []})
+
+        await self._relay(ProviderRouter(), "page-elements/v1/infer", NIM_INFER_BODY)
+
+        assert captured[0]["model"] == "page-elements"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["v1/infer", "unknown-group/v1/infer", "nim-page-elements-v2/v1/infer", "gpt-4o/v1/infer"],
+    )
+    async def test_path_without_a_nim_model_group_is_rejected_before_any_upstream_call(self, endpoint):
+        captured: list[dict] = []
+        router = self._recording_router(
+            captured,
+            {"nim-page-elements": "nvidia_nim/nvidia/nemoretriever-page-elements-v2", "gpt-4o": "openai/gpt-4o"},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._relay(router, endpoint, NIM_INFER_BODY)
+
+        assert exc_info.value.status_code == 400
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_a_group_mixing_nim_and_other_deployments_is_rejected_before_any_upstream_call(self):
+        captured: list[dict] = []
+
+        class MixedRouter:
+            def get_model_list(self):
+                return [
+                    {
+                        "model_name": "detect",
+                        "litellm_params": {"model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2"},
+                    },
+                    {"model_name": "detect", "litellm_params": {"model": "openai/gpt-4o"}},
+                ]
+
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"data": []})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._relay(MixedRouter(), "detect/v1/infer", NIM_INFER_BODY)
+
+        assert exc_info.value.status_code == 400
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_no_router_is_rejected_before_any_upstream_call(self):
+        with pytest.raises(HTTPException) as exc_info:
+            await self._relay(None, "nim-page-elements/v1/infer", NIM_INFER_BODY)
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_upstream_rejection_is_relayed_with_its_status_body_and_headers(self):
+        upstream_body = {"detail": "input[0].url must be a data URL"}
+
+        class RejectingRouter:
+            def get_model_list(self):
+                return [
+                    {
+                        "model_name": "nim-page-elements",
+                        "litellm_params": {"model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2"},
+                    }
+                ]
+
+            async def allm_passthrough_route(self, **kwargs):
+                upstream_request = httpx.Request("POST", "http://nim.internal:8000/v1/infer")
+                upstream = httpx.Response(
+                    422, json=upstream_body, headers={"x-nim-request": "r2"}, request=upstream_request
+                )
+                raise httpx.HTTPStatusError("422", request=upstream_request, response=upstream)
+
+        result = await self._relay(
+            RejectingRouter(), "nim-page-elements/v1/infer", {"input": [{"type": "image_url", "url": "x"}]}
+        )
+
+        assert result.status_code == 422
+        assert json.loads(result.body) == upstream_body
+        assert result.headers["x-nim-request"] == "r2"
 
 
 @pytest.mark.asyncio

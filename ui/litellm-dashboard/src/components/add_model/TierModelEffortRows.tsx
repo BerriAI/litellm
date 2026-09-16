@@ -23,6 +23,12 @@ interface TierModelEffortRowsProps {
   onFastModeChange: (model: string, enabled: boolean) => void;
 }
 
+const canEditFastMode = (
+  model: string,
+  fastModeByModel: TierModelEffortRowsProps["fastModeByModel"],
+  paramsByModel: TierModelEffortRowsProps["paramsByModel"],
+): boolean => fastModeByModel?.[model] === true || paramsByModel?.[model]?.speed === "fast";
+
 export interface TierEffortRow {
   model: string;
   effort: ReasoningEffort | undefined;
@@ -49,7 +55,7 @@ export const tierEffortRows = ({
       const listed = effort !== undefined && !supported.includes(effort) ? [...supported, effort] : supported;
       return { model, effort, options: Array.from(new Set(listed)) };
     })
-    .filter(({ model, options }) => options.length > 0 || fastModeByModel?.[model] === true);
+    .filter(({ model, options }) => options.length > 0 || canEditFastMode(model, fastModeByModel, paramsByModel));
 
 const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = (props) => {
   const { tierLabel, paramsByModel, onEffortChange, fastModeByModel, onFastModeChange } = props;
@@ -101,7 +107,7 @@ const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = (props) => {
                 </SelectContent>
               </Select>
             )}
-            {fastModeByModel?.[model] === true && (
+            {canEditFastMode(model, fastModeByModel, paramsByModel) && (
               <SimpleTooltip content="Fast mode has higher pricing and requires an eligible provider account. Off removes this tier's speed override and inherits the request or provider default">
                 <label
                   className="flex items-center gap-2 text-xs"
