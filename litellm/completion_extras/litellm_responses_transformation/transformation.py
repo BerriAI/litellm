@@ -502,7 +502,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = text_format
+                    existing_text = cast("dict[str, object]", responses_api_request["text"] if "text" in responses_api_request else {})
+                    responses_api_request["text"] = cast("ResponseText", {**existing_text, **text_format})
+            elif key == "verbosity":
+                existing_text = cast("dict[str, object]", responses_api_request["text"] if "text" in responses_api_request else {})
+                responses_api_request["text"] = cast("ResponseText", {**existing_text, "verbosity": value})
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
             elif key == "stream_options":
